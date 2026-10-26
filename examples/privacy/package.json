@@ -16,11 +16,13 @@
         "lint:eslint:fix": "eslint . --fix"
     },
     "dependencies": {
+        "@lunora/auth": "workspace:*",
         "@lunora/privacy": "workspace:*",
         "@lunora/react": "workspace:*",
         "@lunora/scheduler": "workspace:*",
         "@lunora/vite": "workspace:*",
         "@lunora/workflow": "workspace:*",
+        "better-auth": "catalog:auth",
         "lunorash": "workspace:*",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend"

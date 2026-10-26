@@ -51,7 +51,7 @@ const action = (): DatabaseWriterLike => createShardContextDatabase({ clock: () 
 const tableExists = (name: string): boolean => harness.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", name).toArray().length > 0;
 
 const seqOf = async (writer: DatabaseWriterLike, table: string, id: string): Promise<unknown> => {
-    const row = await writer.get(id, table);
+    const row = await writer.get(table, id);
 
     return row?.["_commitSeq"];
 };
@@ -187,7 +187,7 @@ describe("ctx-db commit sequence", () => {
 
         // The row survives (soft delete), and its sequence moved — otherwise a
         // changefeed paging on `_commitSeq` would never learn about the delete.
-        const row = await remover.get("e1", "events");
+        const row = await remover.get("events", "e1");
 
         expect(row?.["deletedAt"]).toBe(1_700_000_000_000);
         expect(row?.["_commitSeq"]).toBe(2);
@@ -235,7 +235,7 @@ describe("ctx-db commit sequence", () => {
         // changefeed sees the row stop appearing without ever being told it went
         // away. This is why `.commitOrdered()` wants `.softDelete()` whenever the
         // feed has to express deletes.
-        await expect(mutation().get("e1", "events")).resolves.toBeNull();
+        await expect(mutation().get("events", "e1")).resolves.toBeNull();
         expect(readCommitSeq(harness.sql)).toBe(cursor);
 
         const feed = await mutation().findMany("events", { orderBy: [{ _commitSeq: "asc" }], where: { _commitSeq: { gt: cursor } } });

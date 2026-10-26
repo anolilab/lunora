@@ -165,7 +165,7 @@ describe("ttl sweep", () => {
             expect(liveOtps.map((row) => row["_id"])).toStrictEqual(["o_future"]);
 
             // …but the expired otp is only soft-deleted — still physically present with its marker set.
-            const softDeleted = await writer.get("o_past");
+            const softDeleted = await writer.get("otps", "o_past");
 
             expect(softDeleted).not.toBeNull();
             expect(softDeleted?.["deletedAt"]).toStrictEqual(expect.any(Number));

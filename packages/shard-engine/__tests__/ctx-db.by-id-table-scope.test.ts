@@ -52,11 +52,11 @@ describe("by-id table scoping (IDOR)", () => {
         const userId = await db.insert("users", { email: "victim@example.com" });
 
         // The posts facade asking for a users id must not read the users row.
-        await expect(db.get(userId, "posts")).resolves.toBeNull();
+        await expect(db.get("posts", userId)).resolves.toBeNull();
         // The correct table still resolves it.
-        await expect(db.get(userId, "users")).resolves.toMatchObject({ email: "victim@example.com" });
-        // An unscoped lookup (no bound table) keeps its global behaviour.
-        await expect(db.get(userId)).resolves.toMatchObject({ email: "victim@example.com" });
+        await expect(db.get("users", userId)).resolves.toMatchObject({ email: "victim@example.com" });
+        // Both arguments are strings, so a swapped `(id, table)` call type-checks; it must fail loudly.
+        await expect(db.get(userId, "users")).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
 
     it("lookupById resolves { row, tableName }; a foreign id scopes to null (same IDOR guard as get)", async () => {
@@ -106,7 +106,7 @@ describe("by-id table scoping (IDOR)", () => {
 
         await db.delete(userId, "posts");
 
-        await expect(db.get(userId, "users")).resolves.toMatchObject({ email: "victim@example.com" });
+        await expect(db.get("users", userId)).resolves.toMatchObject({ email: "victim@example.com" });
     });
 
     it("patch/replace(foreignId, boundTable) fail closed and do not mutate the foreign row", async () => {
@@ -121,7 +121,7 @@ describe("by-id table scoping (IDOR)", () => {
         await expect(db.patch(userId, { email: "attacker@example.com" }, "posts")).rejects.toThrow(/document not found/);
         await expect(db.replace(userId, { email: "attacker@example.com" }, "posts")).rejects.toThrow(/document not found/);
 
-        await expect(db.get(userId, "users")).resolves.toMatchObject({ email: "victim@example.com" });
+        await expect(db.get("users", userId)).resolves.toMatchObject({ email: "victim@example.com" });
     });
 
     it("deleteMany([foreignId], …, boundTable) scopes every id; the foreign row survives", async () => {
@@ -137,7 +137,7 @@ describe("by-id table scoping (IDOR)", () => {
         const result = await db.deleteMany!([userId], undefined, "posts");
 
         expect(result).toStrictEqual({ deleted: 1 });
-        await expect(db.get(userId, "users")).resolves.toMatchObject({ email: "victim@example.com" });
+        await expect(db.get("users", userId)).resolves.toMatchObject({ email: "victim@example.com" });
     });
 
     it("patchMany([{ foreignId }], …, boundTable) fails closed; the foreign row is untouched", async () => {
@@ -148,7 +148,7 @@ describe("by-id table scoping (IDOR)", () => {
 
         await expect(db.patchMany!([{ id: userId, patch: { email: "attacker@example.com" } }], undefined, "posts")).rejects.toThrow(/document not found/);
 
-        await expect(db.get(userId, "users")).resolves.toMatchObject({ email: "victim@example.com" });
+        await expect(db.get("users", userId)).resolves.toMatchObject({ email: "victim@example.com" });
     });
 });
 
@@ -201,8 +201,8 @@ describe("the RLS guard batch id→table probe (deleteMany/patchMany)", () => {
         await expect(db.deleteMany!([publicId, protectedId, "totally-absent-id"])).rejects.toThrow(/\.rls\("required"\)/);
 
         // Deny-before-delegate: neither row was actually removed.
-        await expect(admin.get(publicId, "stats")).resolves.not.toBeNull();
-        await expect(admin.get(protectedId, "posts")).resolves.not.toBeNull();
+        await expect(admin.get("stats", publicId)).resolves.not.toBeNull();
+        await expect(admin.get("posts", protectedId)).resolves.not.toBeNull();
     });
 
     it("resolves a bare-id batch spanning multiple PUBLIC tables; the absent id is a no-op", async () => {
@@ -224,8 +224,8 @@ describe("the RLS guard batch id→table probe (deleteMany/patchMany)", () => {
         const result = await db.deleteMany!([idA, idB, "totally-absent-id"]);
 
         expect(result).toStrictEqual({ deleted: 3 });
-        await expect(db.get(idA, "a")).resolves.toBeNull();
-        await expect(db.get(idB, "b")).resolves.toBeNull();
+        await expect(db.get("a", idA)).resolves.toBeNull();
+        await expect(db.get("b", idB)).resolves.toBeNull();
     });
 
     it("resolves ids correctly across chunk boundaries on a wide (many-table) schema", async () => {

@@ -1,3 +1,84 @@
+## @lunora/cli [1.0.0-alpha.433](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.432...@lunora/cli@1.0.0-alpha.433) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.258
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.355
+* **@lunora/config:** upgraded to 1.0.0-alpha.409
+* **@lunora/d1:** upgraded to 1.0.0-alpha.208
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.264
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.240
+* **@lunora/seed:** upgraded to 1.0.0-alpha.257
+* **@lunora/testing:** upgraded to 1.0.0-alpha.304
+
+## @lunora/cli [1.0.0-alpha.432](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.431...@lunora/cli@1.0.0-alpha.432) (2026-10-26)
+
+### Bug Fixes
+
+* **seed:** validator bounds, unique indexes and dangling FKs ([#1284](https://github.com/anolilab/lunora/issues/1284)) ([8ede8ab](https://github.com/anolilab/lunora/commit/8ede8abc2e7434bc71443ad95388315ff4ec7dee))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.354
+* **@lunora/config:** upgraded to 1.0.0-alpha.408
+* **@lunora/seed:** upgraded to 1.0.0-alpha.256
+* **@lunora/testing:** upgraded to 1.0.0-alpha.303
+
+## @lunora/cli [1.0.0-alpha.431](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.430...@lunora/cli@1.0.0-alpha.431) (2026-10-26)
+
+### Features
+
+* **studio:** import a CSV file into a table ([#1321](https://github.com/anolilab/lunora/issues/1321)) ([360930a](https://github.com/anolilab/lunora/commit/360930a9edc00a56f90c5cdf6a9d3218e428aeea))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.257
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.135
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.353
+* **@lunora/config:** upgraded to 1.0.0-alpha.407
+* **@lunora/container:** upgraded to 1.0.0-alpha.92
+* **@lunora/d1:** upgraded to 1.0.0-alpha.207
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.263
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.239
+* **@lunora/seed:** upgraded to 1.0.0-alpha.255
+* **@lunora/testing:** upgraded to 1.0.0-alpha.302
+
+## @lunora/cli [1.0.0-alpha.430](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.429...@lunora/cli@1.0.0-alpha.430) (2026-10-25)
+
+### Bug Fixes
+
+* **config:** celld audit fixes ([#1283](https://github.com/anolilab/lunora/issues/1283)) ([6fd7854](https://github.com/anolilab/lunora/commit/6fd78547928d41d3569ba71cf94683dac7f49b94))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.256
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.134
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.352
+* **@lunora/config:** upgraded to 1.0.0-alpha.406
+* **@lunora/d1:** upgraded to 1.0.0-alpha.206
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.262
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.238
+* **@lunora/seed:** upgraded to 1.0.0-alpha.254
+* **@lunora/testing:** upgraded to 1.0.0-alpha.301
+
+## @lunora/cli [1.0.0-alpha.429](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.428...@lunora/cli@1.0.0-alpha.429) (2026-10-25)
+
+### Bug Fixes
+
+* **cli:** type the codegen-watch fs mock so lint passes ([#1335](https://github.com/anolilab/lunora/issues/1335)) ([f6be37c](https://github.com/anolilab/lunora/commit/f6be37cc4a23d5d995cd9f11c5ae09e3e41dd260))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.405
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.261
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.237
+
 ## @lunora/cli [1.0.0-alpha.428](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.427...@lunora/cli@1.0.0-alpha.428) (2026-10-25)
 
 ### Bug Fixes

@@ -106,8 +106,8 @@ export const ADMIN_FUNCTIONS = {
     writeRow: "__lunora_admin__:writeRow",
 } as const;
 
-/** Comparison a {@link FilterClause} applies, mirroring `@lunora/do`'s `FilterOperator`. `contains` is a substring (LIKE). */
-export type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
+/** Comparison a {@link FilterClause} applies, mirroring `@lunora/do`'s `FilterOperator`. `contains` is a substring (LIKE); `has` is membership in a JSON array. */
+export type FilterOperator = "contains" | "eq" | "gt" | "gte" | "has" | "lt" | "lte" | "ne";
 
 /**
  * One structured column filter passed to `readTablePage`, mirroring `@lunora/do`'s
@@ -117,6 +117,8 @@ export type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "
 export interface FilterClause {
     column: string;
     operator: FilterOperator;
+    /** Field names nested under a document `column`, outermost first (`["city"]` addresses `column.city`). */
+    path?: string[];
     value?: unknown;
 }
 

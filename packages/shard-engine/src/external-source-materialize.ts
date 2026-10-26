@@ -96,7 +96,7 @@ const materializeExternalRowsIncremental = async (
 
         if (deletedIds?.has(id)) {
             // eslint-disable-next-line no-await-in-loop -- one point read per pulled row; the slice is small and the read gates the delete/CDC append below.
-            const existing = await writer.get(id, table);
+            const existing = await writer.get(table, id);
 
             // Skip a re-pulled boundary tombstone whose row is already absent
             // locally (mirrors the upsert path's byte-identical short-circuit
@@ -110,7 +110,7 @@ const materializeExternalRowsIncremental = async (
         }
 
         // eslint-disable-next-line no-await-in-loop -- one point read per pulled row; the slice is small and the read gates the far more expensive upsert/broadcast below.
-        const stored = await writer.get(id, table);
+        const stored = await writer.get(table, id);
 
         // Skip a re-pulled boundary row whose stored content is byte-identical (no
         // change since the watermark) — avoids the spurious broadcast/CDC/re-embed.

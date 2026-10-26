@@ -1,3 +1,30 @@
+## @lunora/shard-engine [1.0.0-alpha.160](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.159...@lunora/shard-engine@1.0.0-alpha.160) (2026-10-26)
+
+### Features
+
+* **studio:** filter a table by a cell value, including NULL ([#1318](https://github.com/anolilab/lunora/issues/1318)) ([e5c3f4b](https://github.com/anolilab/lunora/commit/e5c3f4bff3d4335ba33de46952c0039e9d057f4c))
+
+## @lunora/shard-engine [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.158...@lunora/shard-engine@1.0.0-alpha.159) (2026-10-26)
+
+### Features
+
+* **studio:** import a CSV file into a table ([#1321](https://github.com/anolilab/lunora/issues/1321)) ([360930a](https://github.com/anolilab/lunora/commit/360930a9edc00a56f90c5cdf6a9d3218e428aeea))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.135
+* **@lunora/values:** upgraded to 1.0.0-alpha.81
+
+## @lunora/shard-engine [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.157...@lunora/shard-engine@1.0.0-alpha.158) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.75
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.134
+
 ## @lunora/shard-engine [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.156...@lunora/shard-engine@1.0.0-alpha.157) (2026-10-25)
 
 ### Bug Fixes

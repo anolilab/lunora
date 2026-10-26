@@ -58,7 +58,7 @@ describe("insert applies an object default without sharing it", () => {
         (seen?.["tags"] as string[]).push("leaked");
 
         const id = await writer.insert("notes", { title: "second" });
-        const row = await writer.get(id);
+        const row = await writer.get("notes", id);
 
         expect(row?.["tags"]).toStrictEqual([]);
         expect(seen?.["tags"]).toStrictEqual([]);
@@ -68,7 +68,7 @@ describe("insert applies an object default without sharing it", () => {
         expect.assertions(4);
 
         const id = await writer.insert("links", { title: "x" });
-        const row = await writer.get(id);
+        const row = await writer.get("links", id);
 
         expect(row?.["target"]).toBeInstanceOf(URL);
         expect((row?.["target"] as URL).href).toBe("https://example.com/a?b=1");
@@ -80,7 +80,7 @@ describe("insert applies an object default without sharing it", () => {
         expect.assertions(2);
 
         const id = await writer.insert("links", { title: "x" });
-        const row = await writer.get(id);
+        const row = await writer.get("links", id);
 
         expect(row?.["at"]).toBeInstanceOf(Date);
         expect((row?.["at"] as Date).getTime()).toBe(1_700_000_000_000);

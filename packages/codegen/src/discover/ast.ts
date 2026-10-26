@@ -642,7 +642,7 @@ type ChainEnd = { root: Node | undefined; verdict?: never } | { root?: never; ve
 /**
  * Walk `value`'s member / call chain to its leftmost operand: through property
  * and element access, the callee side of calls, `await`, parentheses and
- * casts (`(await ctx.db.get(id)).owner` → `ctx`). `settle` is asked at each
+ * casts (`(await ctx.db.get("t", id)).owner` → `ctx`). `settle` is asked at each
  * call on the way and may end the walk with a verdict.
  */
 const walkChain = (value: Node | undefined, settle?: (call: CallExpression) => boolean | undefined): ChainEnd => {

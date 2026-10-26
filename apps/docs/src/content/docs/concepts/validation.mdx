@@ -97,7 +97,7 @@ export const getProfile = query
     .input({ userId: v.id("users") })
     .output(v.object({ id: v.id("users"), name: v.string() }))
     .query(async ({ ctx, args }) => {
-        const user = await ctx.db.get(args.userId);
+        const user = await ctx.db.get("users", args.userId);
         return { id: user._id, name: user.name };
     });
 ```
@@ -112,7 +112,7 @@ undeclared keys instead:
 ```ts
 .output(v.object({ id: v.id("users"), name: v.string() }))
 .query(async ({ ctx, args }) => {
-    const user = await ctx.db.get(args.userId);
+    const user = await ctx.db.get("users", args.userId);
 
     return user; // ← 500: "object has 3 undeclared key(s): email, createdAt, …"
 });
@@ -130,7 +130,7 @@ Trimming an internal field off a row before it reaches a client is a real use of
 
 ```ts
 .output(v.object({ id: v.id("users"), name: v.string() }).strip())
-.query(async ({ ctx, args }) => ctx.db.get(args.userId)); // email, passwordHash dropped
+.query(async ({ ctx, args }) => ctx.db.get("users", args.userId)); // email, passwordHash dropped
 ```
 
 `.strip()` returns a **new** validator, so calling it on a shared const does not

@@ -162,7 +162,7 @@ describe("ctx-db triggers", () => {
 
             expect(events.map((e) => e.phase)).toEqual(["before", "after"]);
             expect((events[0]!.previous as Record<string, unknown>)["body"]).toBe("hi");
-            await expect(writer.get("m1")).resolves.toBeNull();
+            await expect(writer.get("messages", "m1")).resolves.toBeNull();
         });
 
         it("a throwing beforeDelete aborts the delete — the row survives", async () => {
@@ -192,7 +192,7 @@ describe("ctx-db triggers", () => {
             await writer.insert("messages", { _id: "m1", body: "hi", locked: true }, { allowExplicitId: true });
 
             await expect(writer.delete("m1")).rejects.toThrow(/row is locked/);
-            await expect(writer.get("m1")).resolves.not.toBeNull();
+            await expect(writer.get("messages", "m1")).resolves.not.toBeNull();
         });
 
         it("an afterInsert handler writing another table via ctx.db persists", async () => {

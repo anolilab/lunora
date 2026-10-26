@@ -29,7 +29,7 @@ export interface MigrationReader {
     count: (table: string, where?: Record<string, unknown>) => Promise<number>;
     findFirst: (table: string, args?: Record<string, unknown>) => Promise<MigrationDocument | null>;
     findMany: (table: string, args?: Record<string, unknown>) => Promise<{ isDone: boolean; page: MigrationDocument[] }>;
-    get: (id: string, expectedTable?: string) => Promise<MigrationDocument | null>;
+    get: (table: string, id: string) => Promise<MigrationDocument | null>;
 }
 
 /** The context handed to a transform alongside the row. */

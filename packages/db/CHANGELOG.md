@@ -1,3 +1,32 @@
+## @lunora/db [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.251...@lunora/db@1.0.0-alpha.252) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.251
+
+## @lunora/db [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.250...@lunora/db@1.0.0-alpha.251) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.250
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+
+## @lunora/db [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.249...@lunora/db@1.0.0-alpha.250) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.249
+
+## @lunora/db [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.248...@lunora/db@1.0.0-alpha.249) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.248
+
 ## @lunora/db [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.247...@lunora/db@1.0.0-alpha.248) (2026-10-25)
 
 ### Bug Fixes

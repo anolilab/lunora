@@ -13,9 +13,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MutationCtx } from "../lunora/_generated/server.js";
 import { listOpenPrivacyRequests, restorePrivacyErasures, retryPrivacyRequest } from "../lunora/admin";
 import { privacyFor, privacyWorkflows } from "../lunora/privacy";
-import { cancelRequest, downloadUrl, myRequests, privacyPort, requestErasure } from "../lunora/requests";
+import { fileResponse } from "../lunora/privacy-files";
+import { cancelRequest, downloadLink, myRequests, privacyPort, readExportFile, requestErasure } from "../lunora/requests";
 import schema from "../lunora/schema";
 import { addTask, myTasks } from "../lunora/tasks";
+import { d1Double, seedSignIn } from "./d1-double";
 import type { RunHooks } from "./workflow-context";
 import { tombstoneNamespace, workflowContext } from "./workflow-context";
 
@@ -28,8 +30,12 @@ type Context = WorkflowRunContext<{ requestId: string }>;
  */
 const appCtx = (ctx: unknown): MutationCtx => ctx as MutationCtx;
 
-const DOWNLOAD_PATH = /\/privacy\/files\//u;
+const DOWNLOAD_PATH = /^\/privacy\/files\?/u;
+const ZIP_NAME = /export\.zip$/u;
 const NO_WORKFLOWS = /ctx\.workflows/u;
+
+/** The D1 double each test seeds and reads. Set in `beforeEach`, and read by the context helper below. */
+let d1: ReturnType<typeof d1Double>;
 
 /**
  * A workflow context over the harness. `run` calls the app's internal `privacyPort` mutation,
@@ -38,7 +44,7 @@ const NO_WORKFLOWS = /ctx\.workflows/u;
 const contextFor = (t: Harness, requestId: string, tombstones: ReturnType<typeof tombstoneNamespace>, hooks: RunHooks = {}): Context =>
     workflowContext(
         {
-            env: { PRIVACY_TOMBSTONES: tombstones },
+            env: { DB: d1.db, PRIVACY_TOMBSTONES: tombstones },
             params: { requestId },
             run: async (_reference, args) => t.run(async (ctx) => appCtx(ctx).runMutation(privacyPort, args)),
         },
@@ -65,6 +71,9 @@ describe("privacy example", () => {
     beforeEach(async () => {
         t = lunoraTest(schema);
         tombstones = tombstoneNamespace();
+        d1 = d1Double();
+        seedSignIn(d1.tables, SUBJECT.userId);
+        seedSignIn(d1.tables, OTHER.userId);
 
         await t.withIdentity(SUBJECT).mutation(addTask, { title: "book flights" });
         await t.withIdentity(SUBJECT).mutation(addTask, { title: "renew passport" });
@@ -127,8 +136,56 @@ describe("privacy example", () => {
 
         await privacyWorkflows.exportHandler(contextFor(t, request.id, tombstones));
 
-        await expect(t.withIdentity(SUBJECT).query(downloadUrl, { requestId: request.id })).resolves.toMatch(DOWNLOAD_PATH);
-        await expect(t.withIdentity(OTHER).query(downloadUrl, { requestId: request.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
+        await expect(t.withIdentity(SUBJECT).mutation(downloadLink, { requestId: request.id })).resolves.toMatch(DOWNLOAD_PATH);
+        await expect(t.withIdentity(OTHER).mutation(downloadLink, { requestId: request.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("serves the archive through the subject's link, and answers 404 to an edited one", async () => {
+        expect.assertions(4);
+
+        const request = await t.run(async (ctx) => privacyFor(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
+
+        await privacyWorkflows.exportHandler(contextFor(t, request.id, tombstones));
+
+        const link = new URL(await t.withIdentity(SUBJECT).mutation(downloadLink, { requestId: request.id }), "http://localhost");
+        const served = (params: URLSearchParams) =>
+            fileResponse({ exp: params.get("exp"), key: params.get("key"), sig: params.get("sig") }, Date.now(), async (key) =>
+                t.run(async (ctx) => readExportFile(appCtx(ctx), key)),
+            );
+
+        const response = await served(link.searchParams);
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toBe("application/zip");
+
+        const tampered = new URLSearchParams(link.searchParams);
+
+        // Only the expiry changes, so the file exists and only the signature can refuse the link.
+        tampered.set("exp", String(Number(link.searchParams.get("exp")) + 3600));
+
+        const forged = await served(tampered);
+        const absent = await served(new URLSearchParams());
+
+        expect(forged.status).toBe(404);
+        expect(absent.status).toBe(404);
+    });
+
+    it("erases the subject's verification records, and leaves a record whose value only matches the subject id", async () => {
+        expect.assertions(2);
+
+        const verification = d1.tables.get("verification") ?? [];
+
+        verification.push(
+            { id: "u1-reset", identifier: "reset-password:token", value: SUBJECT.userId },
+            { id: "magic-link", identifier: "magic-link:token", value: SUBJECT.userId },
+        );
+
+        const request = await openErasure(t, SUBJECT.userId);
+
+        await privacyWorkflows.erasureHandler(contextFor(t, request.id, tombstones));
+
+        expect((d1.tables.get("verification") ?? []).map((row) => row.identifier)).toStrictEqual([`${OTHER.userId}@example.test`, "magic-link:token"]);
+        expect((d1.tables.get("user") ?? []).map((row) => row.id)).toStrictEqual([OTHER.userId]);
     });
 
     it("erases the subject's rows through the erasure workflow, and only theirs", async () => {
@@ -189,7 +246,7 @@ describe("privacy example", () => {
 
         const reerased = await privacyWorkflows.restoreHandler(
             workflowContext({
-                env: { PRIVACY_TOMBSTONES: tombstones },
+                env: { DB: d1.db, PRIVACY_TOMBSTONES: tombstones },
                 params: { restoredSubjectIds: [SUBJECT.userId, OTHER.userId] },
                 run: async (_reference, args) => t.run(async (ctx) => appCtx(ctx).runMutation(privacyPort, args)),
             }),
@@ -241,7 +298,47 @@ describe("privacy example", () => {
             ]);
         });
 
-        it("re-runs a failed export through the package's retry", async () => {
+        it("stops serving an export's file once the export's window has closed, even under a link still valid", async () => {
+            expect.assertions(2);
+
+            const request = await t.run(async (ctx) => privacyFor(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
+
+            await privacyWorkflows.exportHandler(contextFor(t, request.id, tombstones));
+
+            // The archive is written under its run's prefix, so the key is the one the request records.
+            const key = await t.run(async (ctx) => {
+                const row = await appCtx(ctx)
+                    .db.query("privacy_requests")
+                    .withIndex("byRequestId", (q) => q.eq("requestId", request.id))
+                    .first();
+
+                if (row?.storageKey === undefined) {
+                    throw new Error(`No archive key on privacy request ${request.id}.`);
+                }
+
+                return row.storageKey;
+            });
+
+            await expect(t.run(async (ctx) => readExportFile(appCtx(ctx), key))).resolves.toMatchObject({ name: expect.stringMatching(ZIP_NAME) });
+
+            await t.run(async (ctx) => {
+                const database = appCtx(ctx).db;
+                const row = await database
+                    .query("privacy_requests")
+                    .withIndex("byRequestId", (q) => q.eq("requestId", request.id))
+                    .first();
+
+                if (row === null) {
+                    throw new Error(`No privacy request row for ${request.id}.`);
+                }
+
+                await database.patch(row._id, { expiresAt: Date.now() - 1000 });
+            });
+
+            await expect(t.run(async (ctx) => readExportFile(appCtx(ctx), key))).resolves.toBeNull();
+        });
+
+        it("re-runs a failed export in its workflow, which alone reads the sign-in tables", async () => {
             expect.assertions(2);
 
             const request = await t.run(async (ctx) => privacyFor(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
@@ -251,10 +348,10 @@ describe("privacy example", () => {
             // The retry hands the export to its workflow, as an erasure's retry does; the harness has no `ctx.workflows`.
             await expect(retry(request.id)).rejects.toThrow(NO_WORKFLOWS);
 
-            // The workflow runs the export, the only place a read of the tombstone store is available.
+            // The workflow runs the export: the only place the tombstone store and the sign-in tables are reachable.
             await privacyWorkflows.exportHandler(contextFor(t, request.id, tombstones));
 
-            await expect(t.withIdentity(SUBJECT).query(downloadUrl, { requestId: request.id })).resolves.toMatch(DOWNLOAD_PATH);
+            await expect(t.withIdentity(SUBJECT).mutation(downloadLink, { requestId: request.id })).resolves.toMatch(DOWNLOAD_PATH);
         });
 
         it("hands a failed export to its workflow without reading the tombstone store in the mutation", async () => {

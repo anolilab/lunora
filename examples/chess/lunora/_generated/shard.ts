@@ -19,7 +19,7 @@ interface FunctionReference {
 const LUNORA_TABLE_REFS = ((): (() => Record<string, Record<string, string>>) => { let cached: Record<string, Record<string, string>> | undefined; return () => (cached ??= JSON.parse("{\"lobbies\":{\"gameId\":\"games\"},\"moves\":{\"gameId\":\"games\"}}") as Record<string, Record<string, string>>); })();
 
 /** Declared indexes per table (secondary, search, geo, rank, vector) for the schema viewer. */
-const LUNORA_TABLE_INDEXES = ((): (() => Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>) => { let cached: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> | undefined; return () => (cached ??= JSON.parse("{\"profiles\":[{\"fields\":[\"rating\"],\"name\":\"by_rating\",\"type\":\"index\"},{\"fields\":[\"userId\"],\"name\":\"by_user\",\"type\":\"index\",\"unique\":true}],\"lobbies\":[{\"fields\":[\"isPrivate\",\"isOpen\",\"createdAt\"],\"name\":\"by_open_public\",\"type\":\"index\"},{\"fields\":[\"inviteCode\"],\"name\":\"by_invite_code\",\"type\":\"index\"},{\"fields\":[\"guestId\"],\"name\":\"by_guest\",\"type\":\"index\"},{\"fields\":[\"hostId\"],\"name\":\"by_host\",\"type\":\"index\",\"unique\":true}],\"games\":[{\"fields\":[\"blackId\"],\"name\":\"by_black\",\"type\":\"index\"},{\"fields\":[\"whiteId\"],\"name\":\"by_white\",\"type\":\"index\"},{\"fields\":[\"status\"],\"name\":\"by_status\",\"type\":\"index\"}],\"moves\":[{\"fields\":[\"gameId\",\"turnNumber\"],\"name\":\"by_game_turn\",\"type\":\"index\",\"unique\":true}],\"ratelimit_buckets\":[{\"fields\":[\"key\"],\"name\":\"by_key\",\"type\":\"index\"}]}") as Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>); })();
+const LUNORA_TABLE_INDEXES = ((): (() => Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>) => { let cached: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> | undefined; return () => (cached ??= JSON.parse("{\"profiles\":[{\"fields\":[\"userId\"],\"name\":\"by_user\",\"type\":\"index\",\"unique\":true},{\"fields\":[\"rating\"],\"name\":\"by_rating\",\"type\":\"index\"}],\"lobbies\":[{\"fields\":[\"hostId\"],\"name\":\"by_host\",\"type\":\"index\",\"unique\":true},{\"fields\":[\"guestId\"],\"name\":\"by_guest\",\"type\":\"index\"},{\"fields\":[\"inviteCode\"],\"name\":\"by_invite_code\",\"type\":\"index\"},{\"fields\":[\"isPrivate\",\"isOpen\",\"createdAt\"],\"name\":\"by_open_public\",\"type\":\"index\"}],\"games\":[{\"fields\":[\"status\"],\"name\":\"by_status\",\"type\":\"index\"},{\"fields\":[\"whiteId\"],\"name\":\"by_white\",\"type\":\"index\"},{\"fields\":[\"blackId\"],\"name\":\"by_black\",\"type\":\"index\"}],\"moves\":[{\"fields\":[\"gameId\",\"turnNumber\"],\"name\":\"by_game_turn\",\"type\":\"index\",\"unique\":true}],\"ratelimit_buckets\":[{\"fields\":[\"key\"],\"name\":\"by_key\",\"type\":\"index\"}]}") as Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>); })();
 
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via `__lunora_admin__:describeTable`. */
 const LUNORA_TABLE_COLUMNS = ((): (() => Record<
@@ -848,7 +848,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         }
 
         protected override async runShardImport(args: RunShardImportArgs): Promise<ImportShardResult> {
-            this.ensureMigrated();
+            // A dry run checks row shapes and never writes. Migrating first would write the schema ledger and create tables on a cold shard.
+            if (args.dryRun !== true) {
+                this.ensureMigrated();
+            }
 
             const writer = this.adminWriter();
 

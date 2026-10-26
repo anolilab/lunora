@@ -30,7 +30,7 @@ describe("ctx.random in the harness", () => {
 
         const t = start();
         const id = await t.mutation(draw, {});
-        const row = await t.run(async (ctx) => await ctx.db.get(id));
+        const row = await t.run(async (ctx) => await ctx.db.get("draws", id));
 
         expect(row).toMatchObject({ value: 0.25 });
     });

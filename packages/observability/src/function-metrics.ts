@@ -521,12 +521,14 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
 
     // Bounded retention: keep only the most recent buckets for this path — run
     // once per window instead of on every dispatch. The marker is scoped to
-    // `input.path` because the delete below is too: a handle-wide marker would
+    // this path because the delete below is too: a handle-wide marker would
     // let the window's first writer claim it for every path while pruning only
     // its own, and a path that never lands a window's first write would then
-    // never be pruned at all. `admitPath` above caps the distinct paths, so the
-    // marker's key space is bounded by that cap.
-    pruneOncePerWindow(sql, bucket, input.path, () => {
+    // never be pruned at all. The `fn:` prefix keeps the key out of the other
+    // recorders' namespaces, so a function path cannot claim their window (a
+    // path of `request-log` or `""` would otherwise). `admitPath` above caps the
+    // distinct paths, so the marker's key space is bounded by that cap.
+    pruneOncePerWindow(sql, bucket, `fn:${input.path}`, () => {
         runSql(
             sql,
             `DELETE FROM "${FUNCTION_METRICS_BUCKETS_TABLE}"

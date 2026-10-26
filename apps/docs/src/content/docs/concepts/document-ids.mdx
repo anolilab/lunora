@@ -76,17 +76,19 @@ export const byAuthor = query.input({ authorId: v.id("users") }).query(async ({ 
 
 ## Reading and following ids
 
-`ctx.db.get(id)` resolves a single row, returning `null` when it is absent. The
-id is all it needs: the branded `Id<"table">` type already carries the table, so
-following a reference is just another `get`:
+`ctx.db.get(table, id)` resolves a single row, returning `null` when it is absent.
+Name the table first: row ids are opaque, so the lookup can't work it out from
+the id, and naming it is what keeps a `.global()` read to one query. The branded
+`Id<"table">` type checks that the id belongs to that table:
 
 ```ts
-const message = await ctx.db.get(messageId);
-const author = message ? await ctx.db.get(message.authorId) : null;
+const message = await ctx.db.get("messages", messageId);
+const author = message ? await ctx.db.get("users", message.authorId) : null;
 ```
 
-The same holds for the write side: `patch`, `replace`, and `delete` take an id
-and no table name. Only `insert` names a table, because there is no id yet.
+The write side is unchanged: `patch`, `replace`, and `delete` take an id and no
+table name. `get` and `insert` name the table, because `get` needs it to read and
+`insert` has no id yet.
 
 For loading many related rows at once, and for declaring the relationship so the
 studio and the advisors understand it, see [Relations](/docs/concepts/relations).

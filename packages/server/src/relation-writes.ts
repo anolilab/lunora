@@ -67,7 +67,7 @@ interface RelationWriteWriterLike {
     assertPatchAllowed?: (id: string, expectedTable?: string) => Promise<void>;
     delete: (id: string, expectedTable?: string) => Promise<void>;
     findMany: (tableName: string, args?: unknown) => Promise<unknown>;
-    get: (id: string, expectedTable?: string) => Promise<unknown>;
+    get: (table: string, id: string) => Promise<unknown>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
 }
@@ -288,7 +288,7 @@ const assertNoRelationWrites = (tableName: string, infos: RelationWriteInfosLike
 
 /** A row the caller can see, or `NOT_FOUND` naming the operator that asked for it. */
 const loadRow = async (writer: RelationWriteWriterLike, name: string, operator: string, table: string, id: string): Promise<Record<string, unknown>> => {
-    const row = (await writer.get(id, table)) as Record<string, unknown> | null;
+    const row = (await writer.get(table, id)) as Record<string, unknown> | null;
 
     if (row === null) {
         fail("NOT_FOUND", `${name}.${operator}: no "${table}" row with id "${id}"`);
@@ -532,7 +532,7 @@ const parentValueFor =
             return written[references];
         }
 
-        return ((await writer.get(id, tableName)) as Record<string, unknown> | null)?.[references];
+        return ((await writer.get(tableName, id)) as Record<string, unknown> | null)?.[references];
     };
 
 /**
@@ -589,7 +589,7 @@ const patchWithRelations = async (
     if (Object.keys(columns).length > 0) {
         await writer.patch(id, columns, tableName);
     } else {
-        if ((await writer.get(id, tableName)) === null) {
+        if ((await writer.get(tableName, id)) === null) {
             throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
         }
 

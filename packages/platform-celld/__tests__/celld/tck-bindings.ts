@@ -5,9 +5,11 @@
  * rest on. The other `native` ratings — D1, KV, R2, Queues, Workflows, Cron
  * Triggers — rest on celld bindings (and Discord channel verification on its
  * Web Crypto, `sqliteVectorStore`'s vec0 index on its `sqlite_vec` flag, and
- * `jsCodeTool` on its Dynamic Workers), so each check here drives the binding
+ * `jsCodeTool` on its Dynamic Workers, and the dynamic shard registry on a
+ * `ShardRegistryDO` cell), so each check here drives the binding
  * through Lunora's own adapter where there is one (`D1Client`, `createKv`,
- * `createStorage`, `createQueues` + `dispatchQueueBatch`), in the call shapes
+ * `createStorage`, `createQueues` + `dispatchQueueBatch`,
+ * `createDynamicShardRegistry`), in the call shapes
  * the runtime actually uses (see each check). Checks that complete
  * asynchronously (a queue delivery, a workflow run, a cron tick) record what
  * they observed in KV under `tck:*`, and the node side polls for it.
@@ -21,6 +23,8 @@ import { D1Client } from "@lunora/d1";
 import type { D1DatabaseLike, KVNamespaceLike, QueueBindingLike, R2BucketLike } from "@lunora/platform";
 import type { QueueDefinition } from "@lunora/queue";
 import { createQueues, defineQueue, dispatchQueueBatch } from "@lunora/queue";
+import type { ShardNamespaceLike } from "@lunora/runtime";
+import { createDynamicShardRegistry } from "@lunora/runtime";
 import { createStorage } from "@lunora/storage";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { WorkflowEntrypoint } from "cloudflare:workers";
@@ -37,7 +41,9 @@ type BindingEnv = {
     JOBS: QueueBindingLike;
     KV: KVNamespaceLike;
     LOADER: unknown;
+    LUNORA_RELAY_SECRET: string;
     R2: R2BucketLike;
+    SHARD_REGISTRY: ShardNamespaceLike;
     TCK_FLOW: Workflow;
     VECTORS: DurableObjectNamespace;
 };
@@ -315,6 +321,41 @@ const checkWorkerLoader = async (env: BindingEnv): Promise<void> => {
     check(typeof busy.error === "string", `a busy loop is stopped: ${JSON.stringify(busy)}`);
 };
 
+/**
+ * The dynamic shard registry the query coordinator fans out over: shard keys
+ * registered through `createDynamicShardRegistry` persist in the
+ * `ShardRegistryDO` cell, so a second client (another isolate, after a
+ * restart) lists what the first one wrote. A registry of its own per run, so
+ * a rerun against the same local state starts empty.
+ */
+const checkShardRegistry = async (env: BindingEnv): Promise<void> => {
+    const options = { cacheTtlMs: 0, env, instanceName: `tck-${crypto.randomUUID()}`, namespace: env.SHARD_REGISTRY };
+    const writer = createDynamicShardRegistry(options);
+
+    await writer.register("messages", "tenant-a");
+    await writer.register("messages", "tenant-b");
+    // Idempotent: a second registration of a key lists it once.
+    await writer.register("messages", "tenant-a");
+    await writer.register("channels", "general");
+
+    const reader = createDynamicShardRegistry(options);
+
+    same(
+        [...(await reader.listShardKeys("messages"))].toSorted((left, right) => left.localeCompare(right)),
+        ["tenant-a", "tenant-b"],
+        "listed shard keys",
+    );
+
+    await writer.unregister("messages", "tenant-b");
+
+    same([...(await reader.listShardKeys("messages"))], ["tenant-a"], "shard keys after unregister");
+    same(await reader.listShardKeys("unknown"), [], "an unknown table's shard keys");
+
+    const snapshot = await reader.snapshot();
+
+    same({ channels: snapshot["channels"], messages: snapshot["messages"] }, { channels: ["general"], messages: ["tenant-a"] }, "registry snapshot");
+};
+
 /** What `scheduled()` hands `runCronJobs` and the backup cron: `cron` and `scheduledTime`. */
 const recordCron = async (controller: ScheduledController, env: BindingEnv): Promise<void> => {
     await env.KV.put("tck:cron", JSON.stringify({ cron: controller.cron, scheduledTime: controller.scheduledTime }));
@@ -349,6 +390,7 @@ const BINDING_ROUTES: Record<string, (env: BindingEnv, id: string) => Promise<Bi
     "queue/start": async (env, id) => passed(startQueue(env, id)),
     "queue/status": async (env, id) => recorded(env, `tck:queue:${id}`),
     r2: async (env) => passed(checkR2(env)),
+    registry: async (env) => passed(checkShardRegistry(env)),
     vec: async (env) => passed(checkVectorIndex(env)),
     "workflow/event": async (env, id) => passed(env.TCK_FLOW.get(id).then(async (instance) => instance.sendEvent({ payload: { ok: true }, type: "approve" }))),
     "workflow/start": async (env, id) => {

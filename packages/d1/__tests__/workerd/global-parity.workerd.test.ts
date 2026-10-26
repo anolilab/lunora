@@ -75,7 +75,7 @@ describe("v.bytes() on a real D1 .global() table", () => {
         expect.assertions(2);
 
         const { db, ids } = await seeded();
-        const document = await db.get(ids[2] as string);
+        const document = await db.get("blobs", ids[2] as string);
 
         expect(bytesOf(document?.["blob"])).toStrictEqual([4, 5, 6]);
         expect(() => shape.blob.parse(document?.["blob"])).not.toThrow();
@@ -86,7 +86,7 @@ describe("v.bytes() on a real D1 .global() table", () => {
 
         const { db, ids } = await seeded();
         const id = ids[0] as string;
-        const document = await db.get(id);
+        const document = await db.get("blobs", id);
 
         await db.replace(id, { blob: document?.["blob"], label: "renamed" });
 
@@ -94,7 +94,7 @@ describe("v.bytes() on a real D1 .global() table", () => {
 
         expect(stored).toStrictEqual({ h: "0102", t: "blob" });
 
-        const reread = await db.get(id);
+        const reread = await db.get("blobs", id);
 
         expect(bytesOf(reread?.["blob"])).toStrictEqual([1, 2]);
     });
@@ -194,7 +194,14 @@ describe("a required column that accepts null, on a real D1 .global() table", ()
         const db = createD1CtxDb({ exec, idGenerator: () => crypto.randomUUID(), schema });
         const id = await db.insert("nullables", { anything: null, literalNull: null, note: null, nullableMember: null, onlyNull: null, title: "t" });
 
-        await expect(db.get(id)).resolves.toMatchObject({ anything: null, literalNull: null, note: null, nullableMember: null, onlyNull: null, title: "t" });
+        await expect(db.get("nullables", id)).resolves.toMatchObject({
+            anything: null,
+            literalNull: null,
+            note: null,
+            nullableMember: null,
+            onlyNull: null,
+            title: "t",
+        });
 
         // A column that rejects null keeps the engine-level guard.
         const columns = await env.DB.prepare("SELECT name, \"notnull\" AS nn FROM pragma_table_info('nullables')").all<{ name: string; nn: number }>();
@@ -230,7 +237,7 @@ describe("a string holding U+0000, on a real D1 .global() table", () => {
         await env.DB.prepare(`INSERT INTO texts (id, "_creationTime", body, n) VALUES (?, 1, ?, 1)`).bind(id, "a\u0000b").run();
         await db.patch(id, { n: 2 });
 
-        const stored = await db.get(id);
+        const stored = await db.get("texts", id);
 
         expect(stored).toMatchObject({ body: "a\u0000b", n: 2 });
 

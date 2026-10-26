@@ -2457,7 +2457,7 @@ export default schema;
 
             // The regex used to be `[!=]==?`, which also matched `!==`. An
             // inequality filter is "every row except this one" — not something
-            // `ctx.db.get(id)` can express — so flagging it inverted the query.
+            // `ctx.db.get(table, id)` can express — so flagging it inverted the query.
             writeFileSync(
                 join(workdir, "lunora", "reads.ts"),
                 `import { query, v } from "./_generated/server.js";
@@ -3308,7 +3308,7 @@ export { createPost as makePost };
             // per-procedure lint must see it too: a newly callable endpoint must not
             // get weaker coverage than the keyword-exported twin below.
             const body = `mutation.input({ id: v.any(), note: v.string() }).mutation(async ({ ctx, args }) => {
-    const row = await ctx.db.get(args.id);
+    const row = await ctx.db.get("posts", args.id);
     await ctx.db.insert("posts", { userId: args.id, title: String(Math.random()) });
     return row;
 })`;
@@ -4386,6 +4386,54 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // optional on insert and must NOT be offered a control that writes null.
             expect(columns.get("slug")).toHaveProperty("optional", true);
             expect(columns.get("slug")).not.toHaveProperty("nullable");
+        });
+
+        it("reports v.union(<scalar>, v.null()) as the scalar's kind and nullable, the way .nullable() is", () => {
+            expect.assertions(8);
+
+            const output = emitShard({
+                schema: {
+                    tables: [
+                        {
+                            indexes: [],
+                            name: "posts",
+                            rankIndexes: [],
+                            relations: [],
+                            searchIndexes: [],
+                            shape: {
+                                // Either order, and `v.literal(null)` spells the null member too.
+                                score: { kind: "union", members: [{ kind: "number" }, { kind: "null" }] },
+                                shown: { kind: "union", members: [{ kind: "literal", literalValue: "null" }, { kind: "boolean" }] },
+                                // `v.union(v.optional(v.number()), v.null())`: the scalar sits inside an optional member.
+                                rating: { kind: "union", members: [{ inner: { kind: "number" }, kind: "optional" }, { kind: "null" }] },
+                                // The wrapper may be the field's own too; the field stays insert-optional.
+                                maybe: {
+                                    inner: { kind: "union", members: [{ kind: "null" }, { inner: { kind: "timestamp" }, kind: "optional" }] },
+                                    kind: "optional",
+                                },
+                                // Not a nullable scalar: a string accepts the text a number cell would be turned from.
+                                label: { kind: "union", members: [{ kind: "string" }, { kind: "null" }] },
+                                // Two non-null members: the column holds more than one type.
+                                mixed: { kind: "union", members: [{ kind: "number" }, { kind: "string" }] },
+                            },
+                            shardMode: "root",
+                            vectorIndexes: [],
+                        },
+                    ],
+                    vectorIndexes: [],
+                },
+            });
+
+            const columns = columnsOf(output, "posts");
+
+            expect(columns.get("score")).toMatchObject({ nullable: true, type: "number" });
+            expect(columns.get("shown")).toMatchObject({ nullable: true, type: "boolean" });
+            expect(columns.get("rating")).toMatchObject({ nullable: true, optional: false, type: "number" });
+            expect(columns.get("maybe")).toMatchObject({ nullable: true, optional: true, type: "timestamp" });
+            expect(columns.get("label")).toMatchObject({ type: "union" });
+            expect(columns.get("label")).not.toHaveProperty("nullable");
+            expect(columns.get("mixed")).toMatchObject({ type: "union" });
+            expect(columns.get("mixed")).not.toHaveProperty("nullable");
         });
 
         it("names the bucket a v.storage(bucket) column's keys live in", () => {

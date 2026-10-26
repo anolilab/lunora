@@ -92,7 +92,7 @@ const createSplitWriter = (seed: ReadonlyArray<SeedRow>) => {
         },
         // `get` reaches BOTH backends — the writer falls back to the global one.
 
-        async get(id: string) {
+        async get(_table: string, id: string) {
             return rows.get(id) ?? null;
         },
 
@@ -178,7 +178,9 @@ describe("rls — .global() rows addressed by id", () => {
         expect.assertions(1);
 
         const database = createSplitWriter(seed);
-        const handler = lunora.query.use(rlsForTest<TestContext>(readOnlyPolicies)).query(async ({ ctx }) => (ctx as TestContext & { db: any }).db.get("p1"));
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>(readOnlyPolicies))
+            .query(async ({ ctx }) => (ctx as TestContext & { db: any }).db.get("profiles", "p1"));
 
         await expect(handler.handler(makeContext(database.writer, "attacker"), {})).resolves.toMatchObject({ _id: "p1", userId: "victim" });
     });
@@ -235,7 +237,7 @@ describe("rls — .global() rows addressed by id", () => {
             }),
         ];
         const database = createSplitWriter(seed);
-        const handler = lunora.query.use(rlsForTest<TestContext>(scoped)).query(async ({ ctx }) => (ctx as TestContext & { db: any }).db.get("p1"));
+        const handler = lunora.query.use(rlsForTest<TestContext>(scoped)).query(async ({ ctx }) => (ctx as TestContext & { db: any }).db.get("profiles", "p1"));
 
         await expect(handler.handler(makeContext(database.writer, "attacker"), {})).resolves.toBeNull();
     });
@@ -253,7 +255,9 @@ describe("rls — .global() rows addressed by id", () => {
                 return database.writer.findFirst(tableName, args);
             },
         };
-        const handler = lunora.query.use(rlsForTest<TestContext>(readOnlyPolicies)).query(async ({ ctx }) => (ctx as TestContext & { db: any }).db.get("s1"));
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>(readOnlyPolicies))
+            .query(async ({ ctx }) => (ctx as TestContext & { db: any }).db.get("profiles", "s1"));
 
         await expect(handler.handler(makeContext(spied, "attacker"), {})).resolves.toMatchObject({ _id: "s1" });
 
@@ -290,10 +294,10 @@ describe("rls — probe scope on chunked erases", () => {
             probes,
             writer: {
                 ...database.writer,
-                get: async (id: string) => {
+                get: async (table: string, id: string) => {
                     probes.push(`get:${id}`);
 
-                    return database.writer.get(id);
+                    return database.writer.get(table, id);
                 },
                 findFirst: async (tableName: string, args?: { where?: { _id?: string } }) => {
                     probes.push(tableName);

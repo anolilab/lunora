@@ -169,7 +169,7 @@ Templates also map `#lunora/*` to `./lunora/*` in `package.json` `imports`, so
 Reads:
 
 ```ts
-await ctx.db.get(id);                                  // one row by id (or null)
+await ctx.db.get("table", id);                        // one row by id (or null)
 ctx.db.query("t").withIndex("by_x", (q) => q.eq("x", v)); // indexed query
   .order("asc" | "desc")  // by the active index (or _creationTime)
   .filter((doc) => …)     // JS predicate, applied after the index range

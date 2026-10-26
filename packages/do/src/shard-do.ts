@@ -283,7 +283,6 @@ import {
 } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { decodeIdentityExpiryHeader, decodeUserIdHeader, dropExpiredCredentialSocket, isIdentityExpired } from "../../../shared/identity-header";
-import { SHARD_REGISTRY_SECRET_ENV } from "../../../shared/internal-secret";
 import { jsonResponse } from "../../../shared/json-response";
 import {
     encodeLiveFrame,
@@ -405,10 +404,16 @@ import type { InFlightClaim } from "./in-flight-claims";
 import { InFlightClaims } from "./in-flight-claims";
 import { ensureScheduleRateTable, readScheduleRateWindow, scheduleRateLimitFrom, writeScheduleRateWindow } from "./schedule-rate-breaker";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
-import { registerShardKey, SHARD_REGISTRY_DO_NAME, unregisterShardKey } from "./shard-registry-do";
+import { isRegistryNamespace, isRegistryRpc, registerShardKey, SHARD_REGISTRY_DO_NAME, unregisterShardKey } from "./shard-registry-do";
 import type { SubscriptionMemo } from "./socket-table-index";
 import { SocketTableIndex } from "./socket-table-index";
 import SubscriptionFailureLatch from "./subscription-backoff";
+
+/** The registry writes a shard makes, whether they reach a namespace or an entrypoint. */
+interface RegistryWriter {
+    register: (table: string, shardKey: string) => Promise<void>;
+    unregister: (table: string, shardKey: string) => Promise<void>;
+}
 
 // Admin-only (Studio AI actions): kept out of the always-loaded class chunk, fetched on first use.
 const loadSqlAssistant = () => import("./sql-assistant");
@@ -10741,6 +10746,29 @@ abstract class ShardDO {
     }
 
     /**
+     * The `importShard` admin op: a dry run is answered without touching storage,
+     * a real import flushes live subscribers and is audited.
+     */
+    private async importAdminShard(args: Record<string, unknown>): Promise<Response> {
+        const parsed = parseImportShardArgs(args);
+        const result = await this.runShardImport({ dryRun: parsed.dryRun, rows: parsed.rows, startLine: parsed.startLine });
+
+        // A dry run writes nothing, so there is no table to flush and no change to audit. The echo is how a client tells a shard that
+        // honoured the flag from one built before it existed, which ignores the flag, writes the rows and answers the same body.
+        if (parsed.dryRun) {
+            return adminResponse({ ...result, dryRun: true });
+        }
+
+        // The import inserts rows through the writer, which records touched tables;
+        // flush so live subscribers re-run.
+        await this.flushChangedTables();
+
+        this.recordAudit("importShard", { detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted } });
+
+        return adminResponse(result);
+    }
+
+    /**
      * Serve a reserved admin-introspection RPC (`__lunora_admin__:*`) for the
      * data browser. Gated by `env.LUNORA_ADMIN_TOKEN`: introspection is
      * **disabled unless the token is configured**, and when it is, the request
@@ -10797,16 +10825,8 @@ abstract class ShardDO {
             }
 
             if (functionPath === ADMIN_FUNCTIONS.importShard) {
-                const parsed = parseImportShardArgs(args);
-                const result = await this.runShardImport({ rows: parsed.rows, startLine: parsed.startLine });
-
-                // The import inserts rows through the writer, which records
-                // touched tables; flush so live subscribers re-run.
-                await this.flushChangedTables();
-
-                this.recordAudit("importShard", { detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted } });
-
-                return adminResponse(result);
+                // Awaited so a rejected import reaches the catch below and answers with the structured error envelope.
+                return await this.importAdminShard(args);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.writeRow) {
@@ -11849,8 +11869,19 @@ abstract class ShardDO {
 
         const table = typeof args["table"] === "string" ? args["table"] : "";
         const columns = table === "" ? [] : this.tableColumns(table).map((column) => column.name);
+        // The storage-level names, which the filter compiler treats as physical; the
+        // suggestion is validated against the same set it will be compiled against.
+        const physical =
+            columns.length === 0
+                ? []
+                : (this.sql as SqlExec)
+                      .exec<{ name: string }>(`PRAGMA table_info(${quoteIdentifier(table)})`)
+                      .toArray()
+                      .map((column) => column.name);
+        // The declared kinds the filter compiler binds through, so a suggestion it would refuse is never offered.
+        const kinds = this.columnKinds(table) ?? {};
         const { generateFilter } = await loadSqlAssistant();
-        const result = await generateFilter((this.env as Record<string, unknown> | undefined)?.["AI"], args, columns);
+        const result = await generateFilter((this.env as Record<string, unknown> | undefined)?.["AI"], args, columns, physical, kinds);
 
         if (result.degraded && result.reason !== "no-ai-binding") {
             this.recordAudit("aiTableFilter", { detail: { reason: result.reason, table } });
@@ -13109,16 +13140,44 @@ abstract class ShardDO {
         return run;
     }
 
-    /** The `SHARD_REGISTRY_DO_SECRET` the registry requires of its callers, when one is provisioned. */
-    private registrySecret(): string | undefined {
-        const secret = (this.env as Record<string, unknown> | undefined)?.[SHARD_REGISTRY_SECRET_ENV];
-
-        return typeof secret === "string" ? secret : undefined;
-    }
-
     /** The registry stub, pinned to this DO's own jurisdiction — the subnamespace the worker pins the registry it reads. */
     private registryStub(namespace: unknown): ReturnType<typeof stubByName> {
         return stubByName(namespace, SHARD_REGISTRY_DO_NAME, this.state.id?.jurisdiction);
+    }
+
+    /**
+     * Where this shard's registry writes go. A Durable Object namespace is this app's own
+     * registry: signed directly with this worker's secret. Anything else is the RPC surface of
+     * the worker that hosts the registry, reached through its service binding, so the binding
+     * itself is the capability and no secret is needed. `undefined` when a namespace is not in
+     * this shard's jurisdiction.
+     */
+    private registryWriter(binding: unknown): RegistryWriter | undefined {
+        if (!isRegistryNamespace(binding)) {
+            if (!isRegistryRpc(binding)) {
+                return undefined;
+            }
+
+            const host = binding;
+
+            return {
+                register: async (table, shardKey) => host.register(table, shardKey),
+                unregister: async (table, shardKey) => host.unregister(table, shardKey),
+            };
+        }
+
+        const stub = this.registryStub(binding);
+
+        if (stub === undefined) {
+            return undefined;
+        }
+
+        const secret = siblingSecretOf(this.env);
+
+        return {
+            register: async (table, shardKey) => registerShardKey(stub, table, shardKey, secret),
+            unregister: async (table, shardKey) => unregisterShardKey(stub, table, shardKey, secret),
+        };
     }
 
     /**
@@ -13155,12 +13214,12 @@ abstract class ShardDO {
                 return;
             }
 
-            const stub = this.registryStub(registry.namespace);
+            const writer = this.registryWriter(registry.namespace);
 
-            if (stub === undefined) {
+            if (writer === undefined) {
                 // eslint-disable-next-line no-console -- server-side diagnostic: a misbound registry leaves this shard out of every fan-out
                 console.error(
-                    `[@lunora/do] shard registry binding is not a Durable Object namespace in this shard's jurisdiction; shard "${shardKey}" is not registered`,
+                    `[@lunora/do] shard registry binding is neither a Durable Object namespace in this shard's jurisdiction nor a registry entrypoint; shard "${shardKey}" is not registered`,
                 );
 
                 return;
@@ -13171,7 +13230,7 @@ abstract class ShardDO {
                     this.registeredTables.add(table);
 
                     try {
-                        await registerShardKey(stub, table, shardKey, this.registrySecret());
+                        await writer.register(table, shardKey);
                     } catch (error: unknown) {
                         this.registeredTables.delete(table);
                         this.registryRetryAt = Date.now() + SHARD_REGISTRY_RETRY_MS;
@@ -13205,9 +13264,9 @@ abstract class ShardDO {
 
         const result = await this.serializeRegistry(async () => {
             const registry = this.shardRegistry();
-            const stub = registry === undefined ? undefined : this.registryStub(registry.namespace);
+            const writer = registry === undefined ? undefined : this.registryWriter(registry.namespace);
 
-            if (registry === undefined || stub === undefined) {
+            if (registry === undefined || writer === undefined) {
                 throw new LunoraError("BAD_REQUEST", "releaseShardRegistration: this shard has no shard registry bound", { status: 400 });
             }
 
@@ -13223,7 +13282,7 @@ abstract class ShardDO {
 
                 if (!dryRun) {
                     // eslint-disable-next-line no-await-in-loop -- one small round trip per table this shard is listed for; ordered with the rest of the chain
-                    await unregisterShardKey(stub, table, shardKey, this.registrySecret());
+                    await writer.unregister(table, shardKey);
                     this.registeredTables.delete(table);
                 }
 

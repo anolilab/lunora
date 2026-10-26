@@ -57,7 +57,7 @@ export const list = query
 
 export const get = query
     .input({ id: v.id("feedback") })
-    .query(async ({ args: { id }, ctx }): Promise<Document_<"feedback"> | null> => (await ctx.db.get(id)) ?? null);
+    .query(async ({ args: { id }, ctx }): Promise<Document_<"feedback"> | null> => (await ctx.db.get("feedback", id)) ?? null);
 
 export const comments = query.input({ feedbackId: v.id("feedback") }).query(async ({ args: { feedbackId }, ctx }): Promise<Document_<"comments">[]> => {
     const rows = await ctx.db
@@ -115,7 +115,7 @@ export const toggleVote = mutation
     .use(rateLimit(limiter, "write", byCaller))
     .input({ feedbackId: v.id("feedback"), voterEmail: v.string().max(254) })
     .mutation(async ({ args: { feedbackId, voterEmail }, ctx }): Promise<{ voted: boolean }> => {
-        const post = await ctx.db.get(feedbackId);
+        const post = await ctx.db.get("feedback", feedbackId);
 
         if (!post) {
             throw new LunoraError("NOT_FOUND", "feedback not found");
@@ -151,7 +151,7 @@ export const addComment = mutation
         isOfficial: v.optional(v.boolean()),
     })
     .mutation(async ({ args: { authorEmail, authorName, content, feedbackId, isOfficial }, ctx }): Promise<Id<"comments">> => {
-        const post = await ctx.db.get(feedbackId);
+        const post = await ctx.db.get("feedback", feedbackId);
 
         if (!post) {
             throw new LunoraError("NOT_FOUND", "feedback not found");

@@ -54,7 +54,7 @@ ${options.tables.map((table) => `            [${JSON.stringify(table.name)}, ${s
               `        const shardRegistry = this.shardRegistrySelector?.(env);
 
         if (shardRegistry) {
-            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ ${options.jurisdiction ? `jurisdiction: ${JSON.stringify(options.jurisdiction)}, ` : ""}namespace: shardRegistry, secret: (env as { SHARD_REGISTRY_DO_SECRET?: string }).SHARD_REGISTRY_DO_SECRET }) });
+            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ ${options.jurisdiction ? `jurisdiction: ${JSON.stringify(options.jurisdiction)}, ` : ""}env, namespace: shardRegistry }) });
         }`,
           ]
         : []),
@@ -148,6 +148,8 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 // plane: the rows \`resolveTableSharding\` classifies as \`.global()\`
                 // land here, and without it they are reported, not written.
                 options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
+                // The importer above skips the write for a dry run.
+                options.importGlobalsSupportsDryRun = true;
                 // The read/replay half of the same admin plane. Each one is the
                 // only reason its endpoint can see the global storage plane at
                 // all, and every one of them fails SILENTLY when unset — export

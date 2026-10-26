@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { recordFunctionMetric } from "../../src/function-metrics";
 import { upsertIssueState } from "../../src/issue-state";
 import {
     appendRequestLogEntry,
@@ -315,6 +316,30 @@ const runRequestLogScenarios = (factory: () => SqlHarness): void => {
                 appendRequestLogEntry(database.sql, entry({ functionPath: "fn:3", ts: 61_000 }), { retention: 1 });
 
                 expect(readRequestLog(database.sql, { limit: 100 }).map((row) => row.functionPath)).toEqual(["fn:3"]);
+            } finally {
+                database.close();
+            }
+        });
+
+        it("a function path named request-log does not skip the request-log trim", () => {
+            expect.assertions(1);
+
+            const database = createHarness();
+
+            try {
+                // Seed through a second handle so the window's once-per-window claim is still free on `database.sql`.
+                const seeder = freshHandleOver(database);
+
+                for (let index = 0; index < 3; index += 1) {
+                    appendRequestLogEntry(seeder, entry({ functionPath: `fn:${String(index)}`, ts: 1000 + index }));
+                }
+
+                // The function recorder claims the window first. Both recorders' buckets are 0 here, so a shared key would make the request-log trim skip.
+                recordFunctionMetric(database.sql, { durationMs: 10, errored: false, path: "request-log", ts: 1000 });
+
+                appendRequestLogEntry(database.sql, entry({ functionPath: "fn:3", ts: 1003 }), { retention: 1 });
+
+                expect(readRequestLog(database.sql, { limit: 100 })).toHaveLength(1);
             } finally {
                 database.close();
             }

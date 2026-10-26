@@ -9,7 +9,7 @@ import type { Id } from "./dataModel.js";
 export interface ApiTypes {
     requests: {
         cancelRequest: FunctionReference<"mutation", { requestId: string }, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;
-        downloadUrl: FunctionReference<"query", { requestId: string }, string>;
+        downloadLink: FunctionReference<"mutation", { requestId: string }, string>;
         myRequests: FunctionReference<"query", {}, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }[]>;
         requestErasure: FunctionReference<"mutation", {}, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;
         requestExport: FunctionReference<"mutation", {}, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;
@@ -23,7 +23,7 @@ export interface ApiTypes {
 export const api: ApiTypes = {
     requests: {
         cancelRequest: { __lunoraRef: "requests:cancelRequest" },
-        downloadUrl: { __lunoraRef: "requests:downloadUrl" },
+        downloadLink: { __lunoraRef: "requests:downloadLink" },
         myRequests: { __lunoraRef: "requests:myRequests" },
         requestErasure: { __lunoraRef: "requests:requestErasure" },
         requestExport: { __lunoraRef: "requests:requestExport" },

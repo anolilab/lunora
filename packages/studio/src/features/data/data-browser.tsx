@@ -41,6 +41,57 @@ const BACK_RELATIONS_KEY = "lunora-studio-back-relations";
 const uniqueColumnsFor = (indexes: ReadonlyArray<TableIndexInfo> | undefined): ReadonlySet<string> =>
     new Set((indexes ?? []).filter((index) => index.unique === true && index.fields.length === 1).map((index) => index.fields[0] ?? ""));
 
+/**
+ * Whether a cell's stored value can be turned into a facet-style equality filter.
+ * Limited to the scalars an equality comparison matches faithfully: a SQLite
+ * scalar or a JSON boolean (which binds as 0/1 against `json_extract`). A NaN or
+ * infinite number survives the wire codec but is stored in its tagged form, which
+ * the bound number never equals, so it is withheld too. `undefined`
+ * is a field absent from this document, which the filter reads as NULL, so it
+ * qualifies too. An object, array or blob would bind as serialised text that the
+ * stored form never equals, so the action is withheld rather than filtering to
+ * zero rows. A bigint qualifies only in a field declared `bigint`: a top-level bigint is
+ * stored as a sort key whatever the field's declared type, and the decimal text the action
+ * sends matches that key only where the declared kind binds it. Elsewhere it would match nothing.
+ */
+const isFilterableCellValue = (value: unknown, declaredType: string | undefined): boolean =>
+    value === undefined ||
+    value === null ||
+    typeof value === "string" ||
+    (typeof value === "number" && Number.isFinite(value)) ||
+    typeof value === "boolean" ||
+    (typeof value === "bigint" && declaredType === "bigint");
+
+/**
+ * The box text and pinned literal for an AI-suggested value. Membership is pinned: `has`
+ * reads unquoted box text by type, so the model's `"10"` would search for the number 10. A
+ * text value is shown in quotes, the form the box reads as text. A null equality is pinned as
+ * null, since a blank box would test for the empty string. A boolean is pinned for every
+ * operator, since the box sends `true` as text and a stored boolean never equals text. Other
+ * operators keep the box's own coercion, since a model that writes `18` for a numeric bound
+ * means a number. A text value under `eq` or `ne` is pinned as text, so the model's `"10"` is
+ * not coerced to the number 10.
+ */
+const suggestedValue = (operator: FilterClause["operator"], raw: unknown): { literal?: [unknown]; value: string } => {
+    if (raw === null && (operator === "eq" || operator === "ne")) {
+        return { literal: [null], value: "null" };
+    }
+
+    if (typeof raw !== "string" && typeof raw !== "number" && typeof raw !== "boolean") {
+        return { value: "" };
+    }
+
+    if (typeof raw === "string" && (operator === "eq" || operator === "ne")) {
+        return { literal: [raw], value: raw };
+    }
+
+    if (operator !== "has" && typeof raw !== "boolean") {
+        return { value: String(raw) };
+    }
+
+    return { literal: [raw], value: typeof raw === "string" ? `"${raw}"` : String(raw) };
+};
+
 /** Hoisted empty schema map so an unresolved `describeTables` doesn't churn the resolver's identity. */
 const EMPTY_COLUMNS_BY_TABLE: Readonly<Record<string, ColumnMeta[]>> = {};
 
@@ -287,10 +338,13 @@ export const DataBrowser = ({
                     clauses.map((clause) => {
                         // The wire value is `unknown`; a filter row is a string
                         // input, so only scalars round-trip meaningfully.
-                        const raw: unknown = clause.value;
-                        const value = typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean" ? String(raw) : "";
+                        const { literal, value } = suggestedValue(clause.operator, clause.value);
 
-                        return { column: clause.column, operator: clause.operator, value };
+                        // The validated clause may address a field nested under the column;
+                        // without its path the row would test the parent column instead.
+                        const nested = clause.path === undefined || clause.path.length === 0 ? {} : { path: clause.path.join("."), pathSegments: clause.path };
+
+                        return { column: clause.column, operator: clause.operator, ...nested, ...(literal === undefined ? {} : { literal }), value };
                     }),
                 );
             }
@@ -338,7 +392,7 @@ export const DataBrowser = ({
 
     // Which overlay is open. Separate from the render preferences above: these five
     // fields are read here and nowhere else, and `onInspect` is read only by the page.
-    const inspection = useRowInspection();
+    const inspection = useRowInspection(JSON.stringify([selectedTable, queryShardKey]));
 
     // The row awaiting a cascade-impact confirmation, or null when none is open.
     const [cascadePreviewRowId, setCascadePreviewRowId] = useState<null | string>(null);
@@ -581,6 +635,14 @@ export const DataBrowser = ({
                     bucket={storageColumns.get(expandedCell.column)}
                     column={expandedCell.column}
                     onClose={closeExpandedCell}
+                    onFilter={
+                        isFilterableCellValue(expandedCell.storedValue, editorColumnMeta[expandedCell.column]?.type)
+                            ? () => {
+                                  facetFilter(expandedCell.column, expandedCell.storedValue ?? null);
+                                  closeExpandedCell();
+                              }
+                            : undefined
+                    }
                     resolveUrl={storageColumns.has(expandedCell.column) ? resolveStorageUrl : undefined}
                     value={expandedCell.value}
                 />

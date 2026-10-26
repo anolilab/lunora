@@ -1012,7 +1012,7 @@ interface RowValidatorOptions {
     /**
      * The row being overwritten (`patch` and `replace`), read lazily. A transform
      * column whose value deep-equals the stored one is that stored OUTPUT handed
-     * back — `{ ...(await db.get(id)), x: 1 }` — so it is passed through unparsed;
+     * back — `{ ...(await db.get("table", id)), x: 1 }` — so it is passed through unparsed;
      * only a value that differs from what is stored is treated as new input. That cannot tell
      * a read-back spread from an explicit re-entry of the same value, so for a non-idempotent
      * transform an explicit write equal to the stored output is kept as is, not re-parsed.

@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 
-import { findTsconfig, fingerprintSchemaSources, PROJECT_CONFIG_FILENAMES, projectConfigCandidatePaths } from "@lunora/codegen";
+import { findTsconfig, fingerprintSchemaSources, listLunoraSourceFiles, PROJECT_CONFIG_FILENAMES, projectConfigCandidatePaths } from "@lunora/codegen";
 import {
     AGENT_RULES_HINT,
     claimAgentRulesHint,
@@ -67,6 +67,77 @@ const readFileOrEmpty = (path: string): string => {
         return "";
     }
 };
+
+/**
+ * `path` resolved through symlinks, or `path` itself when that fails. The watcher
+ * reports a changed file under its real path (on macOS the temp directory alone is
+ * a symlink), so an input is matched in both forms. A path that does not exist yet
+ * gets its directory resolved instead.
+ */
+const realPathOf = (path: string): string => {
+    try {
+        return existsSync(path) ? realpathSync(path) : join(realpathSync(dirname(path)), basename(path));
+    } catch {
+        return path;
+    }
+};
+
+/**
+ * The `tsconfig.json` paths `findTsconfig` tries before reaching `found`, or up to the
+ * filesystem root when it found none. Creating one switches the tsconfig codegen
+ * resolves, so each is watched as a missing file.
+ */
+const nearerTsconfigPaths = (schemaDirectory: string, found: string | undefined): string[] => {
+    const paths: string[] = [];
+
+    for (let directory = schemaDirectory; directory !== dirname(directory); directory = dirname(directory)) {
+        const candidate = join(directory, "tsconfig.json");
+
+        if (candidate === found) {
+            break;
+        }
+
+        paths.push(candidate);
+    }
+
+    return paths;
+};
+
+/**
+ * The `package.json` and `.git` paths that decide where `projectConfigCandidatePaths`
+ * stops: one of each in every directory it walks. Creating or removing a `package.json`
+ * moves that boundary and so changes which `lunora.config.*` codegen reads.
+ *
+ * ponytail: an existing `.git` is left out, since everything git does happens inside
+ * it; deleting one is not seen until the next `lunora/` edit. Watch its parent
+ * directory if that ever matters.
+ */
+const projectBoundaryMarkers = (schemaDirectory: string): string[] =>
+    [...new Set(projectConfigCandidatePaths(schemaDirectory).map((path) => dirname(path)))].flatMap((directory) => {
+        const git = join(directory, ".git");
+
+        return existsSync(git) ? [join(directory, "package.json")] : [join(directory, "package.json"), git];
+    });
+
+/**
+ * The real paths of schema sources that are symlinks to files outside the schema
+ * directory. Codegen reads them through the link, but the watcher reports their edits
+ * under the target, which the directory watch does not cover.
+ */
+const linkedSourceTargets = (schemaDirectory: string): string[] => {
+    if (!existsSync(schemaDirectory)) {
+        return [];
+    }
+
+    const realDirectory = realPathOf(schemaDirectory);
+
+    return [...listLunoraSourceFiles(schemaDirectory, { includeSkipped: true }), join(schemaDirectory, "schema.ts")]
+        .map((path) => realPathOf(path))
+        .filter((path) => !path.startsWith(`${realDirectory}${sep}`));
+};
+
+/** Whether `changed` is `input`, lies under it, or is a directory holding it — all three mean the input may have moved. */
+const touches = (changed: string, input: string): boolean => changed === input || changed.startsWith(`${input}${sep}`) || input.startsWith(`${changed}${sep}`);
 
 /** Everything the plugin prints goes through the badge, so its lines read like `lunora dev`'s. */
 const consoleLogger: CodegenLogger = {
@@ -171,6 +242,16 @@ class LunoraRspackPlugin {
     /** The in-flight pass, so concurrent compilers share one instead of racing. */
     #inFlight: Promise<void> | undefined;
 
+    /**
+     * Every path a pass reads, in both the form registered and its real form, as of
+     * the last `afterCompile`: the schema directory and each watched config file.
+     * What {@link #untouched} matches a rebuild's changed files against.
+     */
+    #inputs: string[] = [];
+
+    /** {@link linkedSourceTargets} as of the last pass that ran; only a pass can change which sources are linked. */
+    #linkedSources: string[] = [];
+
     public constructor(options: ResolvedLunoraRspackOptions) {
         this.#options = options;
         this.#schemaDirectory = resolve(options.projectRoot, options.schemaDir);
@@ -233,7 +314,17 @@ class LunoraRspackPlugin {
             // `watchMode` is read HERE, not at tap time: `apply()` runs inside
             // `createCompiler()`, before `compiler.watch()` assigns it, so at tap
             // time it is always `false`.
-            await this.#run(compiler.watchMode === true);
+            const watching = compiler.watchMode === true;
+
+            // Ahead of the skip below: the warning is asked on every compile until it
+            // has fired, and `cloudflare.config.ts` is no input of the pass.
+            this.#announce();
+
+            if (watching && this.#untouched(compiler.modifiedFiles, compiler.removedFiles)) {
+                return;
+            }
+
+            await this.#run(watching);
         });
 
         compiler.hooks.afterCompile.tapPromise(PLUGIN_NAME, (compilation: CompilationLike) => {
@@ -264,6 +355,9 @@ class LunoraRspackPlugin {
                 ...WRANGLER_FILES.map((name) => resolve(this.#options.projectRoot, name)),
                 ...PROJECT_CONFIG_FILENAMES.map((name) => resolve(this.#options.projectRoot, name)),
                 ...projectConfigCandidatePaths(this.#schemaDirectory),
+                ...projectBoundaryMarkers(this.#schemaDirectory),
+                ...nearerTsconfigPaths(this.#schemaDirectory, tsconfigPath),
+                ...this.#linkedSources,
             ];
 
             for (const path of new Set(watched)) {
@@ -273,6 +367,10 @@ class LunoraRspackPlugin {
                     compilation.missingDependencies.add(path);
                 }
             }
+
+            const inputs = [this.#schemaDirectory, ...(tsconfigPath === undefined ? [] : [tsconfigPath]), ...watched];
+
+            this.#inputs = [...new Set([...inputs, ...inputs.map((path) => realPathOf(path))])];
 
             for (const finding of this.#findings) {
                 compilation.errors.push(finding);
@@ -294,6 +392,39 @@ class LunoraRspackPlugin {
         });
 
         await this.#inFlight;
+    }
+
+    /**
+     * Whether a watch rebuild changed nothing a pass reads, so it can skip the pass
+     * without even fingerprinting, which reads and hashes every `lunora/` source.
+     *
+     * Conservative on every axis; any doubt runs the pass, whose fingerprint then
+     * decides as before. It runs when there are no change sets (a one-shot build, the
+     * first watch compilation) or no compilation has registered the inputs yet; when
+     * no clean pass is on record, or a failing one is still being retried — that retry
+     * exists because the repair can be external, so it must not wait for an edit; when
+     * another compiler's pass is in flight, which this one must wait for; and when any
+     * changed or removed path touches an input. Rspack reports an edit under a context
+     * dependency as the DIRECTORY, so the schema directory itself is an input.
+     */
+    #untouched(modified: ReadonlySet<string> | undefined, removed: ReadonlySet<string> | undefined): boolean {
+        if (
+            modified === undefined ||
+            this.#inputs.length === 0 ||
+            this.#lastFingerprint === undefined ||
+            this.#failure !== undefined ||
+            this.#inFlight !== undefined
+        ) {
+            return false;
+        }
+
+        for (const changed of [...modified, ...(removed ?? [])]) {
+            if (this.#inputs.some((input) => touches(changed, input))) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -373,6 +504,7 @@ class LunoraRspackPlugin {
             return;
         }
 
+        this.#linkedSources = linkedSourceTargets(this.#schemaDirectory);
         this.#findings = [];
 
         try {

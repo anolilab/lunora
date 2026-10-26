@@ -210,6 +210,7 @@ interface CelldDevSession {
 interface CelldDevSessionOptions {
     log: (line: string, origin: CelldLineOrigin) => void;
     port: number;
+    probe?: () => Promise<CelldToolchainProbe>;
     projectRoot: string;
     spawn?: DevProcessSpawner;
 }
@@ -221,6 +222,26 @@ interface CelldDevSessionOptions {
 interface CelldLineOrigin {
     stream: "stderr" | "stdout";
     tag: string;
+}
+```
+
+### `CelldToolchainProbe` (interface)
+
+```ts
+interface CelldToolchainProbe {
+    errors: string[];
+    warnings: string[];
+}
+```
+
+### `CelldToolchainProbeOptions` (interface)
+
+```ts
+interface CelldToolchainProbeOptions {
+    dryRun?: boolean;
+    env?: Readonly<Record<string, string | undefined>>;
+    purpose: "deploy" | "dev";
+    run?: CelldCommandRunner;
 }
 ```
 
@@ -280,6 +301,12 @@ interface ContainerLogStreamOptions {
     onUnavailable?: (message: string) => void;
     pollIntervalMs?: number;
 }
+```
+
+### `D1_PLACEHOLDER_ID` (const)
+
+```ts
+const D1_PLACEHOLDER_ID = "<replace-with-d1-create-id>";
 ```
 
 ### `DEFAULT_BUNDLE_META_PATH` (const)
@@ -739,6 +766,7 @@ interface InferredBindings {
     containers: InferredContainer[];
     durableObjects: DurableObjectSpec[];
     flagshipBinding?: string;
+    hostsShardRegistry: boolean;
     jurisdiction?: SchemaInfo["jurisdiction"];
     needsD1: boolean;
     queues: InferredQueue[];
@@ -1011,6 +1039,7 @@ interface PostCodegenHookResult {
 interface ProjectedConfig {
     configPath: string;
     dropped: ReadonlyArray<string>;
+    vars: Readonly<Record<string, unknown>>;
     write: () => void;
 }
 ```
@@ -1438,6 +1467,12 @@ const ensureDevVariablesExample: (cwd: string, packageNames: ReadonlyArray<strin
 const ensureDevWorkerEnv: (projectRoot: string, info: (message: string) => void) => void;
 ```
 
+### `ensureGitignoreEntries` (const)
+
+```ts
+const ensureGitignoreEntries: (directory: string, patterns: ReadonlyArray<string>) => string[];
+```
+
 ### `escapeRegExp` (const)
 
 ```ts
@@ -1535,7 +1570,7 @@ const isMergedRoleModule: (module: string) => boolean;
 ### `isMintableSecretKey` (const)
 
 ```ts
-const isMintableSecretKey: (key: string) => boolean;
+const isMintableSecretKey: (key: string, value: string) => boolean;
 ```
 
 ### `isPlaceholderValue` (const)
@@ -1566,6 +1601,12 @@ const isRunnableTarget: (target: string) => boolean;
 
 ```ts
 const lunoraLine: (message: string) => string;
+```
+
+### `mintableSecretKeysFor` (const)
+
+```ts
+const mintableSecretKeysFor: (packageNames: ReadonlyArray<string>) => ReadonlySet<string>;
 ```
 
 ### `padBadge` (const)
@@ -1634,6 +1675,12 @@ const planDevVariablesScaffold: (input: {
 
 ```ts
 const planToolchainInvocation: (driver: DeployDriver, projectRoot: string, purpose: ProjectionPurpose, build: (configPath: string | undefined) => ToolchainCommand) => ToolchainInvocation;
+```
+
+### `probeCelldToolchain` (const)
+
+```ts
+const probeCelldToolchain: (options: CelldToolchainProbeOptions) => Promise<CelldToolchainProbe>;
 ```
 
 ### `projectUsesUmbrella` (const)
@@ -1889,6 +1936,15 @@ const wireRlsIntoProcedure: (source: string, edit: WireRlsEdit, serverModule: st
 
 ```ts
 const writeApiSpecMarker: (projectRoot: string, apiSpec: MarkedApiSpec | undefined) => void;
+```
+
+### `writeCelldDevProjection` (const)
+
+```ts
+const writeCelldDevProjection: (options: {
+    probe?: () => Promise<CelldToolchainProbe>;
+    projectRoot: string;
+}) => Promise<string[]>;
 ```
 
 ### `writeDevServerState` (const)
@@ -3422,6 +3478,22 @@ interface BindingEntry {
     id?: unknown;
     remote?: boolean;
 }
+```
+
+### `CelldCommandResult` (interface)
+
+```ts
+interface CelldCommandResult {
+    code: number;
+    error?: string;
+    stdout: string;
+}
+```
+
+### `CelldCommandRunner` (type)
+
+```ts
+type CelldCommandRunner = (command: string, args: ReadonlyArray<string>) => Promise<CelldCommandResult | undefined>;
 ```
 
 ### `DockerLogStream` (interface)
