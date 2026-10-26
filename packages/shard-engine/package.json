@@ -1,6 +1,6 @@
 {
     "name": "@lunora/shard-engine",
-    "version": "1.0.0-alpha.161",
+    "version": "1.0.0-alpha.162",
     "description": "Host-neutral reactive engine for Lunora: per-shard state, OCC, CDC, reactive subscriptions, and the poke protocol. Consumes @lunora/platform host contracts and can be mounted on any platform host.",
     "keywords": [
         "cloudflare",
@@ -72,9 +72,9 @@
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/bindings": "1.0.0-alpha.135",
+        "@lunora/bindings": "1.0.0-alpha.136",
         "@lunora/search-core": "workspace:*",
-        "@lunora/values": "1.0.0-alpha.81",
+        "@lunora/values": "1.0.0-alpha.82",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
