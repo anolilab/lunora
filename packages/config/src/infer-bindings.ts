@@ -654,10 +654,13 @@ const EVENT_LOG_PACKAGE = "@lunora/replica";
 /** The source extension a `.js`-style relative specifier names, so it can be probed against the `.ts` file. */
 const SOURCE_SPECIFIER_EXTENSION = /\.[cm]?[jt]sx?$/u;
 
+/** Barrel source extensions in probe order: TypeScript first, so a `.js` specifier resolves to its `.ts` source. */
+const BARREL_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+
 /**
- * The file a relative star re-export names: a `.js` specifier resolves to its `.ts` source and a
- * directory to its `index`. A bare specifier is left undefined; the caller matches
- * {@link EVENT_LOG_PACKAGE} by name before asking.
+ * The file a relative star re-export names: its specifier's extension is dropped and each supported
+ * source extension is probed, then a directory's `index`. A bare specifier is left undefined; the caller
+ * matches {@link EVENT_LOG_PACKAGE} by name before asking.
  */
 const resolveBarrel = (fromFile: string, specifier: string): string | undefined => {
     if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
@@ -665,10 +668,10 @@ const resolveBarrel = (fromFile: string, specifier: string): string | undefined 
     }
 
     const stem = join(dirname(fromFile), specifier.replace(SOURCE_SPECIFIER_EXTENSION, ""));
+    const files = BARREL_SOURCE_EXTENSIONS.map((extension) => `${stem}${extension}`);
+    const indexes = BARREL_SOURCE_EXTENSIONS.map((extension) => join(stem, `index${extension}`));
 
-    return [`${stem}.ts`, `${stem}.tsx`, `${stem}.mts`, `${stem}.js`, join(stem, "index.ts"), join(stem, "index.js")].find((candidate) =>
-        existsSync(candidate),
-    );
+    return [...files, ...indexes].find((candidate) => existsSync(candidate));
 };
 
 /**
