@@ -900,6 +900,34 @@ Re-exported from `@lunora/config` — signature tracked at its source.
 const validatorKindToSqlType: (kind: string) => ColumnSnapshot["sqlType"];
 ```
 
+## `@lunora/cli/cli`
+
+### `COMMANDS` (const)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
+### `CommandName` (type)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
+### `REGISTERED_COMMAND_NAMES` (const)
+
+```ts
+const REGISTERED_COMMAND_NAMES: ReadonlyArray<string>;
+```
+
+### `RunCliOptions` (interface)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
+### `VERSION` (const)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
+### `runCli` (const)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
 ## Referenced internal declarations
 
 Not exported, and reachable only through a signature above. Their members

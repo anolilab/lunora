@@ -45,6 +45,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./cli": {
+            "types": "./dist/cli.d.ts",
+            "import": "./dist/cli.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
