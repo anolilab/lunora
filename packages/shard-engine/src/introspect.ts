@@ -1466,8 +1466,7 @@ const buildNestedLeafClause = (clause: FilterClause, expression: string, pathPar
     const { operator } = clause;
 
     if (operator === "gt" || operator === "gte" || operator === "lt" || operator === "lte") {
-        // A bound compares only with leaves of its own JSON type. A boolean reads as 1 or 0 under
-        // json_extract, so it must not be taken for a number here.
+        // json_extract reads a boolean as 1 or 0, so a boolean bound must not take a number.
         let leafClass = "'integer', 'real'";
 
         if (typeof clause.value === "string") {
