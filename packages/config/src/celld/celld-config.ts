@@ -28,7 +28,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { MissingBuildOutputError } from "../build-output-error";
-import { D1_PLACEHOLDER_ID } from "../cloudflare/reconcile-bindings";
+import { D1_PLACEHOLDER_ID } from "../cloudflare/placeholder-ids";
 import { findWranglerFile, readWranglerJsonc } from "../cloudflare/wrangler-path";
 import type { ProjectedConfig, ProjectionPurpose } from "../deploy-driver";
 import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
