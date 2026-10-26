@@ -23,6 +23,7 @@ interface ToolInputSchema {
  */
 interface ToolOutputSchema {
     $defs?: Record<string, unknown>;
+    additionalProperties?: boolean;
     anyOf?: ReadonlyArray<object>;
     definitions?: Record<string, unknown>;
     properties?: Record<string, unknown>;

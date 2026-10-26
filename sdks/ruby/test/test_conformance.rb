@@ -243,6 +243,7 @@ class TestWsFrames < Minitest::Test
 
     resent = []
     client.attach_socket(->(frame) { resent << frame })
+    assert_equal "connect", resent.shift["type"], "attach sends connect before anything else"
     client.resend_subscriptions
 
     # BOTH registries. A resend that walks only the queries leaves every shape
@@ -509,9 +510,9 @@ class TestClientConcurrency < Minitest::Test
     reading = false
     reader.join
 
-    # Attached only now, so the count below sees resend frames alone.
+    # Attached only now, and counting subscribe frames alone: attach's connect is not a resend.
     resent = 0
-    client.attach_socket(->(_frame) { resent += 1 })
+    client.attach_socket(->(frame) { resent += 1 if frame["type"] == "subscribe" })
     client.resend_subscriptions
 
     assert_equal THREADS * PER_THREAD, resent, "every concurrent subscribe survived with a distinct id"

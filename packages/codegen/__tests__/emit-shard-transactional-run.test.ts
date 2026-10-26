@@ -162,7 +162,7 @@ describe("emitShard — deferred scheduling", () => {
 });
 
 describe("emitShard — ctx.run* caller guard", () => {
-    it("refuses a mutation or action composed from a query context", () => {
+    it("refuses a mutation or action composed from a query or stream context", () => {
         expect.assertions(2);
 
         const emitted = shard();
@@ -170,7 +170,7 @@ describe("emitShard — ctx.run* caller guard", () => {
         // The ctx installs `run*` on every kind (one object shape), so the TYPE is
         // all that stops a read-only handler from writing — and a cast walks past
         // it, inside a subscription re-run that may execute many times per write.
-        expect(emitted).toContain('if (callerKind === "query" && expected !== "query") {');
+        expect(emitted).toContain('if ((callerKind === "query" || callerKind === "stream") && expected !== "query") {');
         expect(emitted).toContain('throw new LunoraError(\n            "RUN_KIND_FORBIDDEN",');
     });
 
@@ -191,7 +191,7 @@ describe("emitShard — ctx.run* caller guard", () => {
 
         const emitted = shard();
         const dispatch = emitted.indexOf("const dispatchRun = async (");
-        const guard = emitted.indexOf('if (callerKind === "query" && expected !== "query")', dispatch);
+        const guard = emitted.indexOf('if ((callerKind === "query" || callerKind === "stream") && expected !== "query")', dispatch);
         // eslint-disable-next-line no-secrets/no-secrets -- matching an emitted TypeScript statement, not a credential
         const lookup = emitted.indexOf("const registered = LUNORA_FUNCTIONS[functionPath];", dispatch);
 

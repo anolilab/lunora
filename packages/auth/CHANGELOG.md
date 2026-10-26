@@ -1,3 +1,61 @@
+## @lunora/auth [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.230...@lunora/auth@1.0.0-alpha.231) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.406
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.238
+* **@lunora/server:** upgraded to 1.0.0-alpha.237
+
+## @lunora/auth [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.229...@lunora/auth@1.0.0-alpha.230) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/values:** upgraded to 1.0.0-alpha.80
+* **@lunora/config:** upgraded to 1.0.0-alpha.404
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.236
+* **@lunora/server:** upgraded to 1.0.0-alpha.236
+
+## @lunora/auth [1.0.0-alpha.229](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.228...@lunora/auth@1.0.0-alpha.229) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/values:** upgraded to 1.0.0-alpha.79
+* **@lunora/config:** upgraded to 1.0.0-alpha.403
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.235
+* **@lunora/server:** upgraded to 1.0.0-alpha.235
+
+## @lunora/auth [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.227...@lunora/auth@1.0.0-alpha.228) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.401
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.234
+* **@lunora/server:** upgraded to 1.0.0-alpha.234
+
+## @lunora/auth [1.0.0-alpha.227](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.226...@lunora/auth@1.0.0-alpha.227) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.400
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.233
+* **@lunora/server:** upgraded to 1.0.0-alpha.233
+
+## @lunora/auth [1.0.0-alpha.226](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.225...@lunora/auth@1.0.0-alpha.226) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.399
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.232
+* **@lunora/server:** upgraded to 1.0.0-alpha.232
+
 ## @lunora/auth [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.224...@lunora/auth@1.0.0-alpha.225) (2026-10-22)
 
 

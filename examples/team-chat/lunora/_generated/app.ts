@@ -7,7 +7,7 @@ import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
 import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
 import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
-import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
+import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, ShardRegistryRpc, WorkerOptions } from "lunorash/runtime";
 import { createCrossShardRelationCapabilities, createDynamicShardRegistry, createQueryCoordinator, createWorker, resolveLogArchiveFromEnv, memoizeIdentity } from "lunorash/runtime";
 
 import schema from "../schema.js";
@@ -88,7 +88,7 @@ class AppBuilder<Env extends object> {
     private globalDeclaration?: GlobalDeclaration<Env>;
     private httpRouterApp?: HttpRouterLike;
     private readonly routeMap: Record<string, Route> = {};
-    private shardRegistrySelector?: Selector<Env, ShardNamespaceLike>;
+    private shardRegistrySelector?: Selector<Env, ShardNamespaceLike | ShardRegistryRpc>;
     private shardSelector?: Selector<Env, ShardNamespaceLike>;
     private storageDeclaration?: StorageDeclaration<Env>;
 
@@ -224,7 +224,7 @@ class AppBuilder<Env extends object> {
     }
 
     /** The `ShardRegistryDO` namespace (typically `env.SHARD_REGISTRY`). Each shard registers itself for the `.shardBy()` tables it writes, and cross-shard export, CDC sync and migrations fan out to the shards it lists. Without it they refuse a `.shardBy()` table. */
-    public shardRegistry(selector: Selector<Env, ShardNamespaceLike>): this {
+    public shardRegistry(selector: Selector<Env, ShardNamespaceLike | ShardRegistryRpc>): this {
         this.shardRegistrySelector = selector;
 
         return this;
@@ -527,7 +527,7 @@ class AppBuilder<Env extends object> {
         const shardRegistry = this.shardRegistrySelector?.(env);
 
         if (shardRegistry) {
-            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ namespace: shardRegistry }) });
+            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ env, namespace: shardRegistry }) });
         }
 
         if (this.globalDeclaration) {

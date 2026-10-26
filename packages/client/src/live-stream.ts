@@ -23,7 +23,7 @@
 import { decodeWire } from "@lunora/wire";
 
 import { LIVE_CONNECTION_HEADER, LIVE_EVENT_NAME } from "../../../shared/live-stream";
-import { SOCKET_STABLE_MS } from "./client-tuning";
+import { RESUBSCRIBE_CONCURRENCY, SOCKET_STABLE_MS } from "./client-tuning";
 import { createReconnect } from "./reconnect";
 import readOrIdle from "./stream-idle";
 
@@ -325,32 +325,67 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
     };
 
     /**
-     * Re-register every active subscription on the current connection id. The control calls go out together:
-     * `control` already queues calls per subscription id, so each id still sees one call at a time. A transient
+     * Re-register every active subscription on the current connection id, at most {@link RESUBSCRIBE_CONCURRENCY}
+     * at a time: a client with many topics would otherwise send one POST per topic in the same tick. A transient
      * failure (no reply, 5xx, 404 or 401) aborts the connection, so the reconnect loop registers them again; a
      * refusal is final, as with a fresh subscribe. Statuses are judged in subscription order, as before.
+     *
+     * Resolves `true` only when every active subscription was registered on the connection this call started
+     * on. A connection change stops the workers early; the replacement connection's own resubscribe covers the rest.
      */
-    const resubscribeAll = async (): Promise<void> => {
-        const replies = await Promise.all(
-            [...subscriptions].map(async ([id, entry]) => {
-                const status = await control(id, { action: "subscribe", connectionId, subscriptionId: id, topic: entry.topic });
+    const resubscribeAll = async (): Promise<boolean> => {
+        // The drain can outlive this connection: a paced call is claimed later, so it must name the id captured now.
+        const sentOn = connectionId;
+        const sentAborter = aborter;
+        const pending = [...subscriptions];
+        const replies = pending.map((): { entry: LiveSubscription; id: string; status: number | undefined } | undefined => undefined);
+        // Every worker pulls from this one iterator, so each subscription is claimed by exactly one of them.
+        const queue = pending.entries();
 
-                return { entry, id, status };
-            }),
-        );
+        const drain = async (): Promise<void> => {
+            for (const [index, [id, entry]] of queue) {
+                // The stream dropped or reconnected: the new connection's resubscribe registers what is still active.
+                if (connectionId !== sentOn) {
+                    return;
+                }
 
-        for (const { entry, id, status } of replies) {
+                // Unsubscribed or replaced while it waited for a slot: a subscribe now would re-register a topic the caller dropped.
+                if (subscriptions.get(id) === entry) {
+                    // eslint-disable-next-line no-await-in-loop -- each worker sends its own calls in turn; the worker count is the concurrency
+                    const status = await control(id, { action: "subscribe", connectionId: sentOn, subscriptionId: id, topic: entry.topic });
+
+                    replies[index] = { entry, id, status };
+                }
+            }
+        };
+
+        await Promise.all(Array.from({ length: Math.min(RESUBSCRIBE_CONCURRENCY, pending.length) }, drain));
+
+        // The connection changed: its replies need no action, because the replacement registers everything again.
+        if (connectionId !== sentOn) {
+            return false;
+        }
+
+        for (const reply of replies) {
+            if (reply === undefined) {
+                continue;
+            }
+
+            const { entry, id, status } = reply;
+
             // No reply, a server error, a missing connection, or an expired credential: reconnect and register again.
             if (status === undefined || status >= 500 || status === 404 || status === 401) {
-                aborter?.abort();
+                sentAborter?.abort();
 
-                return;
+                return false;
             }
 
             if (status >= 400) {
                 refuse(id, entry, status);
             }
         }
+
+        return true;
     };
 
     const pump = async (response: Response): Promise<void> => {
@@ -370,12 +405,19 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
         // The body is read meanwhile: a slow control POST must not hold the
         // stream's bytes unread.
         const registered = (async (): Promise<void> => {
+            let complete: boolean;
+
             try {
-                await resubscribeAll();
+                complete = await resubscribeAll();
             } catch {
                 // Registration failed outright: reconnect and register again rather than leave `ready` pending.
                 aborter?.abort();
 
+                return;
+            }
+
+            // Not every subscription reached this connection: leave `ready` pending for the replacement connection.
+            if (!complete) {
                 return;
             }
 
@@ -386,8 +428,11 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
 
         const reader = response.body?.getReader();
 
+        // The connection has ended: its drain must not hold up the reconnect. With the connection id cleared, the drain
+        // stops claiming controls, and a drain that finishes later cannot resolve `ready` for a connection that is gone.
         if (reader === undefined) {
-            await registered;
+            connectionId = undefined;
+            registered.catch(() => undefined);
 
             return;
         }
@@ -434,7 +479,8 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
             }
         }
 
-        await registered;
+        connectionId = undefined;
+        registered.catch(() => undefined);
     };
 
     const run = async (): Promise<void> => {

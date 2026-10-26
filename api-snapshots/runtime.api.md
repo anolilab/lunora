@@ -590,9 +590,10 @@ interface DynamicShardRegistry extends ShardRegistry {
 ```ts
 interface DynamicShardRegistryOptions {
     cacheTtlMs?: number;
+    env?: unknown;
     instanceName?: string;
     jurisdiction?: DurableObjectJurisdiction;
-    namespace: ShardNamespaceLike;
+    namespace: ShardNamespaceLike | ShardRegistryRpc;
 }
 ```
 
@@ -2073,6 +2074,17 @@ interface ShardRegistry {
 }
 ```
 
+### `ShardRegistryRpc` (interface)
+
+```ts
+interface ShardRegistryRpc {
+    listShardKeys: (table: string) => Promise<string[]>;
+    register: (table: string, shardKey: string) => Promise<void>;
+    snapshot: () => Promise<Record<string, string[]>>;
+    unregister: (table: string, shardKey: string) => Promise<void>;
+}
+```
+
 ### `ShardTrafficEntry` (interface)
 
 ```ts
@@ -2329,6 +2341,7 @@ interface WorkerOptions {
     jurisdiction?: DurableObjectJurisdiction;
     kvIntrospector?: KvIntrospector;
     listSchemaTables?: () => ReadonlyArray<string>;
+    liveStreamRoutes?: ReadonlyArray<string>;
     liveStreams?: boolean;
     logArchive?: LogArchiveConfig;
     notifySubscriptionStore?: NotifySubscriptionStoreLike;

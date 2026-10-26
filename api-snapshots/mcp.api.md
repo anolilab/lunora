@@ -47,6 +47,22 @@ interface CallAgentToolOptions {
 const DEFAULT_MAX_REQUEST_BYTES: number;
 ```
 
+### `FunctionMcpServerOptions` (interface)
+
+```ts
+interface FunctionMcpServerOptions {
+    allowWrites?: boolean;
+    fetch?: typeof fetch;
+    name?: string;
+    onReloadError?: (error: unknown) => void;
+    openRpcSpec: unknown;
+    token?: string;
+    url: string | (() => string | undefined);
+    version?: string;
+    WebSocket?: typeof WebSocket;
+}
+```
+
 ### `LOCAL_SERVER_NAME` (const)
 
 Re-exported from `@lunora/mcp/node` — signature tracked in that section.
@@ -207,6 +223,7 @@ interface ToolInputSchema {
 ```ts
 interface ToolOutputSchema {
     $defs?: Record<string, unknown>;
+    additionalProperties?: boolean;
     anyOf?: ReadonlyArray<object>;
     definitions?: Record<string, unknown>;
     properties?: Record<string, unknown>;
@@ -248,6 +265,10 @@ const callAgentTool: (client: LunoraClient, name: string, input: Record<string, 
 
 Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
+### `connectFunctionStdio` (const)
+
+Re-exported from `@lunora/mcp/node` — signature tracked in that section.
+
 ### `connectLocalStdio` (const)
 
 Re-exported from `@lunora/mcp/node` — signature tracked in that section.
@@ -259,6 +280,12 @@ Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 ### `createAuthedMcpFetchHandler` (const)
 
 Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
+
+### `createFunctionMcpServer` (const)
+
+```ts
+const createFunctionMcpServer: (options: FunctionMcpServerOptions) => Server;
+```
 
 ### `createLocalMcpServer` (const)
 
@@ -565,6 +592,12 @@ Re-exported from `@lunora/mcp` — signature tracked in that section.
 const NO_DEPLOYMENT_MESSAGE = "no Lunora dev server is running for this project — start one with `lunora dev`, then call this tool again (call lunora_dev_status to check).";
 ```
 
+### `connectFunctionStdio` (const)
+
+```ts
+const connectFunctionStdio: (options: FunctionMcpServerOptions) => Promise<Server>;
+```
+
 ### `connectLocalStdio` (const)
 
 ```ts
@@ -628,6 +661,10 @@ type AuthedMcpServerOptions = ((claims: McpAccessTokenClaims) => LunoraMcpServer
 Re-exported from `@lunora/mcp` — signature tracked in that section.
 
 ### `DEFAULT_MAX_REQUEST_BYTES` (const)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `FunctionMcpServerOptions` (interface)
 
 Re-exported from `@lunora/mcp` — signature tracked in that section.
 
@@ -792,6 +829,10 @@ const callTool: (client: LunoraClient, name: string, input: Record<string, unkno
 ```ts
 const createAuthedMcpFetchHandler: (options: AuthedMcpFetchHandlerOptions) => McpFetchHandler;
 ```
+
+### `createFunctionMcpServer` (const)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
 
 ### `createMcpFetchHandler` (const)
 

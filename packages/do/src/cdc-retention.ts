@@ -55,6 +55,10 @@ const DEFAULT_CDC_LOG_RETENTION_ROWS = 1_000_000;
  *
  * A malformed value reads as the default rather than as a tighter window — the
  * strict whole-string parse is what stops `10k` becoming "keep 10 rows".
+ *
+ * `LUNORA_CDC_PAYLOAD_RETENTION` does not change this: compaction strips payloads
+ * but keeps every row, so a payload window on its own would leave the log growing
+ * without bound. Only an explicit `off` removes the row window.
  * @returns the row count to keep, or `undefined` when row retention is switched off
  */
 const resolveCdcLogRetention = (environment: unknown): number | undefined => {
@@ -193,7 +197,8 @@ class CdcRetentionRunner {
      * `LUNORA_CDC_LOG_RETENTION` deletes rows outright past N, which is the
      * level that destroys information and the one the archive exists for. It
      * defaults to {@link DEFAULT_CDC_LOG_RETENTION_ROWS} so the log is bounded
-     * out of the box, and `off` restores the unbounded log.
+     * out of the box, whether or not a payload window is set; `off` restores the
+     * unbounded log.
      *
      * Both levels are enforced on the READ paths, not merely intended here —
      * `evaluateResume` and `computeOpLogShapeSeed` gate on `minCdcSeq`, and

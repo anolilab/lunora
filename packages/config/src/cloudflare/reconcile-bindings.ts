@@ -22,6 +22,7 @@ import type { DefaultScheduledContainerIR, DurableObjectScheduledContainerIR } f
 import { containerBuildTag } from "@lunora/container";
 import { readJsonSync } from "@visulima/fs";
 
+import celldBindingId from "../celld/celld-binding-id";
 import type { InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "../infer-bindings";
 import { applyModify } from "../jsonc-edit";
 import type { DurableObjectSpec, GeneratedClassModule } from "../worker-entry";
@@ -222,7 +223,25 @@ const reconcileDurableObjects = (text: string, parsed: WranglerShape, required: 
     return { added, text: nextText };
 };
 
-/** Add the `DB` D1 binding for `.global()` schemas, if absent. Pure. */
+/**
+ * Whether reconcile may add the KV and Hyperdrive bindings: their resources are created by
+ * wrangler and `lunora deploy`, which only a Cloudflare target runs. An omitted target is
+ * the default, Cloudflare.
+ */
+const createsCloudflareResources = (target: string | undefined): boolean => target === undefined || target === "cloudflare";
+
+/** The placeholder-id advisory for a DB binding reconcile just wrote. Cloudflare only: celld projects the placeholder onto the database name. */
+const placeholderWarnings = (added: ReadonlyArray<string>, target: string | undefined): string[] =>
+    added.includes("DB (D1)") && createsCloudflareResources(target)
+        ? [`wrote a DB binding with a placeholder database_id ("${D1_PLACEHOLDER_ID}") — run \`wrangler d1 create <name>\` and replace it before deploying.`]
+        : [];
+
+/**
+ * Add the `DB` D1 binding for `.global()` schemas, if absent. Pure. Every target
+ * writes the placeholder `wrangler d1 create` replaces: the file outlives the target,
+ * and a later switch to Cloudflare must find a placeholder, not a fake id. celld
+ * derives the database's identity from the placeholder when it projects the config.
+ */
 const reconcileD1 = (text: string, parsed: WranglerShape): ReconcileStep => {
     const d1Bindings = parsed.d1_databases ?? [];
 
@@ -348,13 +367,6 @@ const nameTakenWarning = (key: string, name: string, owner: string): string =>
     `${key}: not adding "${name}" — the name is already bound by \`${owner}\` in wrangler.jsonc. Add a ${key} entry under another binding name and point the matching \`defineApp()\` override at it.`;
 
 /**
- * Whether reconcile may add the KV and Hyperdrive bindings: their resources are created by
- * wrangler and `lunora deploy`, which only a Cloudflare target runs. An omitted target is
- * the default, Cloudflare.
- */
-const createsCloudflareResources = (target: string | undefined): boolean => target === undefined || target === "cloudflare";
-
-/**
  * Add a `HYPERDRIVE` binding when the project binds none, carrying the placeholder id. It makes
  * `ctx.sql` work in dev at once (an embedded Postgres), and `lunora deploy` creates the
  * Hyperdrive config from the connection string it is given. Pure.
@@ -376,16 +388,21 @@ const reconcileHyperdrive = (text: string, parsed: WranglerShape, target: string
     };
 };
 
+/** The targets that serve a `KV` namespace binding; the others have no KV for `ctx.kv` to bind. */
+const KV_TARGETS: ReadonlySet<string> = new Set(["celld", "cloudflare"]);
+
 /**
  * Add an id-less `KV` namespace binding when the project binds none. Wrangler
  * creates the namespace on the first deploy and writes its id back, so nothing
- * here mints it. A project that already binds a namespace (under any name) is
- * left alone: `createKv()` is handed whichever binding the app chose. Not run
- * for a jurisdiction-pinned schema: a namespace wrangler creates is unrestricted
- * and cannot be moved, so that app creates it itself. Pure.
+ * here mints it. celld needs an id, but its projection derives one
+ * (`projectCelldConfig`), so the config never carries a celld-only id into a
+ * later Cloudflare deploy. A project that already binds a namespace (under any
+ * name) is left alone: `createKv()` is handed whichever binding the app chose. Not run for a
+ * jurisdiction-pinned schema: a namespace wrangler creates is unrestricted and
+ * cannot be moved, so that app creates it itself. Pure.
  */
 const reconcileKv = (text: string, parsed: WranglerShape, jurisdiction: InferredBindings["jurisdiction"], target: string | undefined): ReconcileStep => {
-    if (!createsCloudflareResources(target) || jurisdiction !== undefined || (parsed.kv_namespaces?.length ?? 0) > 0) {
+    if ((target !== undefined && !KV_TARGETS.has(target)) || jurisdiction !== undefined || (parsed.kv_namespaces?.length ?? 0) > 0) {
         return { added: [], text };
     }
 
@@ -395,7 +412,10 @@ const reconcileKv = (text: string, parsed: WranglerShape, jurisdiction: Inferred
         return { added: [], text, warnings: [nameTakenWarning("kv_namespaces", "KV", owner)] };
     }
 
-    return { added: ["KV (Workers KV, created on deploy)"], text: applyModify(text, ["kv_namespaces"], [{ binding: "KV" }]) };
+    // celld creates nothing on deploy: the label names the id its projection derives.
+    const label = target === "celld" ? `KV (Workers KV, celld namespace ${celldBindingId(parsed.name, "KV")})` : "KV (Workers KV, created on deploy)";
+
+    return { added: [label], text: applyModify(text, ["kv_namespaces"], [{ binding: "KV" }]) };
 };
 
 /**
@@ -1002,9 +1022,10 @@ const reconcileWranglerBindings = (
     // Self-describing bindings (SELF_DESCRIBING_BINDINGS, plus the array-shaped
     // ai_search_namespaces and analytics_engine_datasets) auto-write here;
     // kv is written without a remote id (wrangler creates the namespace on
-    // deploy), hyperdrive with a placeholder id that deploy replaces once it has
-    // a connection string, and artifacts with the Worker's name as its namespace;
-    // all only for a Cloudflare target. Pipelines stays a hint: it carries an
+    // deploy; the celld projection derives one), hyperdrive with a
+    // placeholder id that deploy replaces once it has a connection string, and
+    // artifacts with the Worker's name as its namespace; hyperdrive and artifacts
+    // only for a Cloudflare target. Pipelines stays a hint: it carries an
     // un-mintable remote resource.
     const pipeline: ReadonlyArray<{ enabled: boolean; run: (text: string) => ReconcileStep }> = [
         { enabled: true, run: (text) => reconcileDurableObjects(text, parsed, requiredDurableObjects) },
@@ -1180,11 +1201,7 @@ const reconcileWranglerBindings = (
     // user runs `wrangler d1 create` before the deploy reaches wrangler (which
     // would otherwise fail late on the literal placeholder). `reconcileD1` is the
     // only step that emits this label.
-    if (added.includes("DB (D1)")) {
-        warnings.push(
-            `wrote a DB binding with a placeholder database_id ("${D1_PLACEHOLDER_ID}") — run \`wrangler d1 create <name>\` and replace it before deploying.`,
-        );
-    }
+    warnings.push(...placeholderWarnings(added, target));
 
     if (text === original) {
         recordOwnership(false);
@@ -1199,4 +1216,4 @@ const reconcileWranglerBindings = (
 };
 
 export type { ExportGap, ReconcileBindingsResult };
-export { collectExportGaps, HYPERDRIVE_PLACEHOLDER_ID, reconcileWranglerBindings };
+export { collectExportGaps, D1_PLACEHOLDER_ID, HYPERDRIVE_PLACEHOLDER_ID, reconcileWranglerBindings };

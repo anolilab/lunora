@@ -72,6 +72,12 @@ const CORE_SECRETS: ReadonlyArray<SecretEntry> = [
     },
 ];
 
+/** The relay secret's key, and the registry sources that declare it: the host mints it, a client takes the host's value. */
+const SHARD_RELAY_SECRET_KEY = "LUNORA_RELAY_SECRET";
+/** The value a host's `.dev.vars` carries for the relay key until it is generated. A client's line carries its angle-bracket template instead, so it is never generated. */
+const SHARD_RELAY_HOST_PLACEHOLDER = "replace-with-openssl-rand-hex-32";
+const SHARD_REGISTRY_HOST_SOURCE = "@lunora/do:shardRegistry";
+
 /**
  * Secret keys Lunora mints locally that no PACKAGE declares, so
  * {@link MINTABLE_SECRET_KEYS} cannot derive them from the map below: they
@@ -125,6 +131,18 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             docsUrl: "https://lunora.sh/docs/packages/agent#secret-values",
             key: "LUNORA_SECRET_VALUE_KEY",
             placeholderValue: "<your-base64-32-byte-key>",
+        },
+    ],
+    // Keyed `<package>:<detail>` because nothing imports it: `ShardRegistryDO` is bound by
+    // wrangler and called from generated code, so `secretSourcesFromBindings` reports it
+    // off the registry binding (`hostsShardRegistry`).
+    "@lunora/do:shardRegistry": [
+        {
+            description:
+                "Signs every request to ShardRegistryDO, which refuses unsigned ones, and the shard-to-shard control channel. Set the same value on the worker and every Durable Object. Generate with: openssl rand -hex 32",
+            docsUrl: "https://lunora.sh/docs/concepts/sharding#the-shard-registry",
+            key: SHARD_RELAY_SECRET_KEY,
+            placeholderValue: SHARD_RELAY_HOST_PLACEHOLDER,
         },
     ],
     // Keyed by the SUBPATH, because that is what `FLAG_PACKAGES` reports for
@@ -290,7 +308,9 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
  * Every secret key Lunora can mint a value for locally (a random 32-byte hex,
  * like `openssl rand -hex 32`) — the registry entries whose placeholder is that
  * marker rather than an angle-bracket `<your-…>` one (which means the value comes
- * from a provider's dashboard), plus {@link EXTRA_MINTABLE_SECRET_KEYS}.
+ * from a provider's dashboard), plus {@link EXTRA_MINTABLE_SECRET_KEYS}. The relay
+ * key is left out: only the worker that hosts the registry mints it, see
+ * {@link mintableSecretKeysFor}.
  *
  * This set, not a key's NAME, is what makes a value safe to generate. A
  * secret-LOOKING key nothing here declares (`OPENAI_API_KEY`, a project's own
@@ -301,9 +321,17 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
 const MINTABLE_SECRET_KEYS: ReadonlySet<string> = new Set([
     ...EXTRA_MINTABLE_SECRET_KEYS,
     ...[...CORE_SECRETS, ...Object.values(PACKAGE_SECRETS_REGISTRY).flat()]
-        .filter((entry) => isSecretKeyName(entry.key) && !entry.placeholderValue.startsWith("<"))
+        .filter((entry) => isSecretKeyName(entry.key) && !entry.placeholderValue.startsWith("<") && entry.key !== SHARD_RELAY_SECRET_KEY)
         .map((entry) => entry.key),
 ]);
+
+/**
+ * The keys a project may mint, given its secret sources. The relay key is minted only
+ * when this project hosts the registry: a worker that calls another worker's registry
+ * must take the host's value, so a fresh one would only be refused.
+ */
+const mintableSecretKeysFor = (packageNames: ReadonlyArray<string>): ReadonlySet<string> =>
+    packageNames.includes(SHARD_REGISTRY_HOST_SOURCE) ? new Set([...MINTABLE_SECRET_KEYS, SHARD_RELAY_SECRET_KEY]) : MINTABLE_SECRET_KEYS;
 
 const secretsForPackages = (packageNames: ReadonlyArray<string>): SecretEntry[] => {
     const result: SecretEntry[] = [];
@@ -320,4 +348,12 @@ const secretsForPackages = (packageNames: ReadonlyArray<string>): SecretEntry[] 
 };
 
 export type { SecretEntry };
-export { CORE_SECRETS, MINTABLE_SECRET_KEYS, PACKAGE_SECRETS_REGISTRY, secretsForPackages };
+export {
+    CORE_SECRETS,
+    MINTABLE_SECRET_KEYS,
+    mintableSecretKeysFor,
+    PACKAGE_SECRETS_REGISTRY,
+    secretsForPackages,
+    SHARD_RELAY_HOST_PLACEHOLDER,
+    SHARD_RELAY_SECRET_KEY,
+};

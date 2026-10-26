@@ -76,8 +76,13 @@ export interface OptimisticLayer {
 }
 
 export interface SubscriptionState {
-    /** True once the server has acked the subscription on the current socket. */
-    acked: boolean;
+    /**
+     * Where this subscription's `subscribe` frame stands on the current socket:
+     * none outstanding (`"idle"`), sent and not yet answered (`"inflight"`, so a
+     * second subscriber joins it instead of sending another), or acknowledged by
+     * the server (`"acked"`). Written only through {@link setSubscriptionAck}.
+     */
+    ack: "acked" | "idle" | "inflight";
     readonly args: Record<string, unknown>;
 
     /**
@@ -263,6 +268,25 @@ export class SubscriptionRegistry {
         this.byId.clear();
     }
 }
+
+/**
+ * Move `state`'s {@link SubscriptionState.ack} to `next`. The one writer of the
+ * field, shared by the client and the cross-tab leadership hooks.
+ */
+export const setSubscriptionAck = (state: SubscriptionState, next: SubscriptionState["ack"]): void => {
+    // eslint-disable-next-line no-param-reassign -- the shared subscription state is advanced in place
+    state.ack = next;
+};
+
+/**
+ * Stand `state`'s outstanding `subscribe` frame down without an answer, so the
+ * next `subscribe` may send again. An acknowledged subscription stays acknowledged.
+ */
+export const releaseSubscribeFrame = (state: SubscriptionState): void => {
+    if (state.ack === "inflight") {
+        setSubscriptionAck(state, "idle");
+    }
+};
 
 /**
  * Wrap a subscriber's callback in a fresh closure, so registering it in a

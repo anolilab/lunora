@@ -401,11 +401,23 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `LiveRouterApp` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveRouterFallback` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `LiveStream` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `LiveStreamConfig` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveStreamMount` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1502,6 +1514,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `lastEventId` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `liveStreamRouter` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -2785,6 +2801,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `ShardRegistryRpc` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `SourceClientLike` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -2932,6 +2952,10 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 ### `exportShardRows` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `hostedShardRegistry` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `importShardRows` (const)
 
@@ -4985,6 +5009,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `ShardRegistryRpc` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `ShardTrafficEntry` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -5719,11 +5747,23 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `LiveRouterApp` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveRouterFallback` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `LiveStream` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `LiveStreamConfig` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveStreamMount` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6820,6 +6860,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `lastEventId` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `liveStreamRouter` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

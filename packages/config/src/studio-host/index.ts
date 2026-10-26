@@ -13,9 +13,10 @@
  * config injected, resolve the admin token the same way the worker does, gate
  * the transport, and load the prebuilt asset bytes.
  */
-export { parseDevVariable, resolveAdminToken } from "./admin-token";
+export { devVariablesStamp, parseDevVariable, resolveAdminToken } from "./admin-token";
 export { applyStudioAssetCache, sendStudioDocument } from "./asset-cache";
 export { assetContentType, isStandaloneModulePath, loadStudioAssets, readStandaloneAsset, resolveStandaloneDirectory, studioAssetsStamp } from "./assets";
+export { default as createStudioDocumentCache } from "./document-cache";
 export type { StudioMiddlewareOptions } from "./middleware";
 export { createStudioMiddleware, isNonLoopbackHost, requestPathname, STUDIO_PATH, STUDIO_SCRIPT_PATH, STUDIO_STYLE_PATH, studioMountPath } from "./middleware";
 export type { PolicyScaffoldBody, PolicyScaffoldRequest, PolicyScaffoldResponse, WirePolicyEdit } from "./policy-scaffold-handler";
@@ -29,5 +30,6 @@ export type { LocalEndpointContext, LocalEndpointHandler, LocalEndpointRequest, 
 // `serveJsonHandler` applies the shared CSRF gate itself, so a host gets that
 // defense by routing through it — no per-host copy of the check to drift.
 export { serveJsonHandler } from "./serve-json-handler";
+export { consumeStudioWrite, STUDIO_WRITE_TEMP_SUFFIX } from "./studio-writes";
 export { ALLOW_FORWARDED_ENV, headerValue, isLoopbackAddress, transportRejectionReason } from "./transport-guard";
 export type { StudioAssets, StudioHtmlConfig, WarnLogger } from "./types";

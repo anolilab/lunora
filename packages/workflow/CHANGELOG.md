@@ -1,3 +1,25 @@
+## @lunora/workflow [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.93...@lunora/workflow@1.0.0-alpha.94) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/values:** upgraded to 1.0.0-alpha.80
+* **@lunora/server:** upgraded to 1.0.0-alpha.236
+
+## @lunora/workflow [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.92...@lunora/workflow@1.0.0-alpha.93) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/values:** upgraded to 1.0.0-alpha.79
+* **@lunora/server:** upgraded to 1.0.0-alpha.235
+
 ## @lunora/workflow [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.91...@lunora/workflow@1.0.0-alpha.92) (2026-10-20)
 
 

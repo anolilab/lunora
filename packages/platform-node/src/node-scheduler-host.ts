@@ -69,10 +69,36 @@ const DEFAULT_RETRY = {
  */
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
+/**
+ * How long a claimed job stays invisible to other processes sharing the
+ * database file. A claimer that dies mid-dispatch leaves its row claimed; once
+ * the lease lapses the next construction (or a waiting process's re-arm)
+ * delivers it again, which is the at-least-once contract.
+ */
+const CLAIM_LEASE_MS = 60_000;
+// Renewed well inside the lease, so a handler that runs past it keeps the row.
+const CLAIM_RENEW_MS = CLAIM_LEASE_MS / 3;
+// A claim that throws (SQLITE_BUSY while another process holds the write lock) is retried after this.
+const CLAIM_RETRY_MS = 1000;
+
+// Migrating a database written by an older build: a locked file is retried with back-off, bounded.
+const MIGRATION_RETRY_LIMIT = 5;
+const MIGRATION_RETRY_BASE_MS = 20;
+
+/**
+ * How long a timer-driven statement waits before looking again when another
+ * task holds a transaction open on the shared connection. The shard host's
+ * single-writer lock does not cover these timers, so a claim, renewal or
+ * settlement run then would join that `BEGIN` and be undone by its rollback
+ * while this host's claim stamp had already moved on.
+ */
+const FOREIGN_TRANSACTION_RETRY_MS = 10;
+
 /** Row shape of `_lunora_scheduler_jobs`. */
 interface JobRow {
     args: Buffer;
     attempts: number;
+    claimed_at: number | null;
     function_path: string;
     id: string;
     retry: Buffer | null;
@@ -162,6 +188,48 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             state TEXT NOT NULL DEFAULT 'pending'
         )`,
     );
+
+    // Databases created before the claim lease existed lack the column.
+    const hasClaimColumn = (): boolean =>
+        database
+            .prepare<[], { name: string }>("PRAGMA table_info(_lunora_scheduler_jobs)")
+            .all()
+            .some((column) => column.name === "claimed_at");
+
+    // Construction is synchronous, so the back-off blocks the thread for the wait: bounded, and short.
+    const sleepSync = (ms: number): void => {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    };
+
+    const addClaimColumn = (): void => {
+        for (let attempt = 0; ; attempt += 1) {
+            try {
+                database.exec("ALTER TABLE _lunora_scheduler_jobs ADD COLUMN claimed_at INTEGER");
+
+                return;
+            } catch (error) {
+                // Another process sharing the file added it between our check and
+                // our ALTER: nothing left to do.
+                if (hasClaimColumn()) {
+                    return;
+                }
+
+                // A lock held by a process still migrating is transient; anything else is a real failure.
+                const busy = error instanceof Error && "code" in error && error.code === "SQLITE_BUSY";
+
+                if (!busy || attempt >= MIGRATION_RETRY_LIMIT) {
+                    throw error;
+                }
+
+                sleepSync(MIGRATION_RETRY_BASE_MS * 2 ** attempt);
+            }
+        }
+    };
+
+    if (!hasClaimColumn()) {
+        addClaimColumn();
+    }
+
     database.exec(
         `CREATE TABLE IF NOT EXISTS _lunora_scheduler_crons (
             key TEXT PRIMARY KEY,
@@ -176,10 +244,27 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     );
     const selectJob = database.prepare<[string], JobRow>("SELECT * FROM _lunora_scheduler_jobs WHERE id = ?");
     const selectByState = database.prepare<[string], JobRow>("SELECT * FROM _lunora_scheduler_jobs WHERE state = ? ORDER BY scheduled_for");
-    const deleteJob = database.prepare<[string]>("DELETE FROM _lunora_scheduler_jobs WHERE id = ?");
     const deletePendingJob = database.prepare<[string]>("DELETE FROM _lunora_scheduler_jobs WHERE id = ? AND state = 'pending'");
-    const updateAttempt = database.prepare<[number, number, string]>("UPDATE _lunora_scheduler_jobs SET attempts = ?, scheduled_for = ? WHERE id = ?");
-    const parkJob = database.prepare<[number, string]>("UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ? WHERE id = ?");
+    const parkJob = database.prepare<[number, string]>("UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ?, claimed_at = NULL WHERE id = ?");
+    // Settlement and renewal are conditional on still holding the claim: a handler
+    // that outlived its lease must not delete or re-arm a row another host took.
+    const deleteClaimedJob = database.prepare<[string, number]>("DELETE FROM _lunora_scheduler_jobs WHERE id = ? AND claimed_at = ?");
+    const renewClaimedJob = database.prepare<[number, string, number]>(
+        "UPDATE _lunora_scheduler_jobs SET claimed_at = ? WHERE id = ? AND claimed_at = ? AND state = 'pending'",
+    );
+    const updateClaimedAttempt = database.prepare<[number, number, string, number]>(
+        "UPDATE _lunora_scheduler_jobs SET attempts = ?, scheduled_for = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ?",
+    );
+    const parkClaimedJob = database.prepare<[number, string, number]>(
+        "UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ?",
+    );
+    // One statement, so two processes on one file cannot both take the row: the
+    // loser's WHERE no longer matches and it gets zero rows back. `scheduled_for`
+    // is checked too: another process's retry may have pushed the row past the
+    // time this host's timer was armed for.
+    const claimJob = database.prepare<[number, string, number, number], JobRow>(
+        "UPDATE _lunora_scheduler_jobs SET claimed_at = ? WHERE id = ? AND state = 'pending' AND scheduled_for <= ? AND (claimed_at IS NULL OR claimed_at < ?) RETURNING *",
+    );
     const requeueJob = database.prepare<[number, string]>(
         "UPDATE _lunora_scheduler_jobs SET state = 'pending', attempts = 0, scheduled_for = ? WHERE id = ? AND state = 'dead'",
     );
@@ -201,6 +286,9 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
      */
     const isOpen = (): boolean => database.open;
 
+    /** Whether any task holds a transaction open on the shared connection, read live for the same reason as {@link isOpen}. */
+    const inTransaction = (): boolean => database.inTransaction;
+
     /**
      * Decode a job's stored retry policy. `null` is SQLite's own NULL arriving
      * through better-sqlite3's nullable-column mapping, not a value this
@@ -219,6 +307,23 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
      * keeps the connection open for other work.
      */
     let closed = false;
+
+    /**
+     * Resolve once no transaction is open on the shared connection, or the host
+     * shut down while waiting. Unref'd, so a wait cut short by `dispose()` never
+     * holds the process open.
+     */
+    const outsideForeignTransaction = async (): Promise<void> => {
+        if (closed || !isOpen() || !inTransaction()) {
+            return;
+        }
+
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, FOREIGN_TRANSACTION_RETRY_MS).unref();
+        });
+
+        await outsideForeignTransaction();
+    };
 
     /** Armed one-shot job timers, keyed by job id. */
     const jobTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -275,6 +380,100 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     };
 
     /**
+     * Re-arm a job this host failed to claim. It is gone, not pending, not yet
+     * due, or held by another process. Held: wait out its lease so a claimer that
+     * died does not strand the row. Not yet due (another process rescheduled a
+     * retry): wait for its new time.
+     */
+    const followUnclaimedJob = (id: string): void => {
+        const held = selectJob.get(id);
+
+        if (!closed && held?.state === "pending") {
+            armJob(id, held.claimed_at === null ? held.scheduled_for : held.claimed_at + CLAIM_LEASE_MS);
+        }
+    };
+
+    /**
+     * Claim a job whose timer just fired, or re-arm it and answer `undefined`
+     * when this host cannot take it right now.
+     */
+    const claimDue = (id: string, now: number): JobRow | undefined => {
+        if (inTransaction()) {
+            if (!closed) {
+                armJob(id, now + FOREIGN_TRANSACTION_RETRY_MS);
+            }
+
+            return undefined;
+        }
+
+        try {
+            const row = claimJob.get(now, id, now, now - CLAIM_LEASE_MS);
+
+            if (row === undefined) {
+                followUnclaimedJob(id);
+            }
+
+            return row;
+        } catch {
+            // The timer is already spent and the row is still pending, so without a re-arm nothing
+            // would run it again until the next construction.
+            if (!closed && isOpen()) {
+                armJob(id, Date.now() + CLAIM_RETRY_MS);
+            }
+
+            return undefined;
+        }
+    };
+
+    /**
+     * Keep this host's claim on `id` alive while its handler runs, renewing well
+     * inside the lease. Every settlement is conditional on the stamp this
+     * returns. A renewal that comes due while another task holds a transaction
+     * open waits for it to end: run inside it, a rollback would revert the
+     * renewal after the stamp had moved, and no settlement would match the row.
+     */
+    const holdClaim = (id: string, claimedAt: number): { release: () => void; stamp: () => number } => {
+        let claimStamp = claimedAt;
+        let renewTimer: ReturnType<typeof setTimeout> | undefined;
+
+        const renewAfter = (ms: number): void => {
+            renewTimer = setTimeout(() => {
+                if (!isOpen()) {
+                    return;
+                }
+
+                if (inTransaction()) {
+                    renewAfter(FOREIGN_TRANSACTION_RETRY_MS);
+
+                    return;
+                }
+
+                const renewedAt = Date.now();
+
+                try {
+                    if (renewClaimedJob.run(renewedAt, id, claimStamp).changes === 1) {
+                        claimStamp = renewedAt;
+                    }
+                } catch {
+                    // A thrown renewal is a missed tick, not a lost claim: the next tick retries before the lease expires.
+                }
+
+                renewAfter(CLAIM_RENEW_MS);
+            }, ms);
+            renewTimer.unref();
+        };
+
+        renewAfter(CLAIM_RENEW_MS);
+
+        return {
+            release: () => {
+                clearTimeout(renewTimer);
+            },
+            stamp: () => claimStamp,
+        };
+    };
+
+    /**
      * Deliver one job, then settle its row: removed on success, re-armed with
      * backoff while attempts remain, parked in `dead` once they are exhausted.
      *
@@ -282,7 +481,8 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
      * outlive a `close()` the caller made in between (shutdown, test cleanup)
      * and a statement against a closed better-sqlite3 connection throws
      * synchronously inside the timer callback, where no caller's try/catch can
-     * reach it.
+     * reach it. None of them runs while another task holds a transaction open
+     * either; see {@link FOREIGN_TRANSACTION_RETRY_MS}.
      */
     const deliver = async (id: string): Promise<void> => {
         jobTimers.delete(id);
@@ -291,22 +491,27 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             return;
         }
 
-        const row = selectJob.get(id);
+        const now = Date.now();
+        const row = claimDue(id, now);
 
-        if (row?.state !== "pending") {
+        if (row === undefined) {
             return;
         }
 
         const attempts = row.attempts + 1;
         const retry = decodeRetry(row.retry);
+        const claim = holdClaim(id, now);
 
         try {
             await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, { attempts, id });
+            await outsideForeignTransaction();
 
-            if (isOpen()) {
-                deleteJob.run(id);
+            if (isOpen() && !inTransaction()) {
+                deleteClaimedJob.run(id, claim.stamp());
             }
         } catch {
+            await outsideForeignTransaction();
+
             // Delivery failed. The catch is bare because *why* it failed is the
             // handler's business; all this loop decides is whether any budget is
             // left. `closed` is checked too: `dispose()` cleared `jobTimers` and
@@ -319,15 +524,18 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             const maxAttempts = retry?.maxAttempts ?? DEFAULT_RETRY.maxAttempts;
 
             if (attempts >= maxAttempts) {
-                parkJob.run(attempts, id);
+                parkClaimedJob.run(attempts, id, claim.stamp());
 
                 return;
             }
 
             const nextAt = Date.now() + backoffFor(attempts, retry);
 
-            updateAttempt.run(attempts, nextAt, id);
-            armJob(id, nextAt);
+            if (updateClaimedAttempt.run(attempts, nextAt, id, claim.stamp()).changes === 1) {
+                armJob(id, nextAt);
+            }
+        } finally {
+            claim.release();
         }
     };
 

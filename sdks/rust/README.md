@@ -39,8 +39,10 @@ client.set_identity(Some(current_user_id));
 let messages = client.query("messages:list", &args, None)?;
 client.mutation("messages:send", &args, None, None)?;
 
-// Live subscription: attach your socket, then feed it frames.
-client.attach_socket(Box::new(|frame| conn.send_json(frame)));
+// Live subscription: set the WebSocket session credential, then attach your socket.
+// Attaching sends `connect` first; subscribe after it.
+client.set_session_token(Some(session));
+client.attach_socket(Box::new(|frame| conn.send_json(frame)), None);
 let id = client.subscribe("messages:list", args, on_data, on_error);
 ```
 
@@ -66,15 +68,36 @@ it delivered the refused rows — is not spliced on: the view is emptied, its
 re-seeds it (a `reset` part is exempt: it replaces the view anyway). A frame shaped like no
 server frame is ignored, and a `cursor` that is not an integer never replaces
 the tracked one.
-Send `build_connect_frame(client_id, context, token)` as the first frame on every open,
-before `resend_subscriptions()`. A deployment with `LUNORA_WS_BEARER` closes a socket
-whose first frame is not that `connect` with a matching `token` (close code 4003). The
-session credential never goes in the socket URL; `ws_url` carries only an admin ticket.
+`attach_socket(send, context)` opens the channel on each socket. It sends `connect` as the
+first frame, carrying the client id, `context` when given, and the session credential set
+with `set_session_token`; then it rejoins the whisper topics. Call `resend_subscriptions()`
+after it. A deployment with `LUNORA_WS_BEARER` closes a socket whose first frame is not that
+`connect` with a matching `token` (close code 4003). The session credential never goes in
+the socket URL, the RPC bearer never goes in `connect`, and `ws_url` carries only an admin
+ticket. A caller that still writes its own `connect` now opens the socket with two; delete
+that line. `build_connect_frame` is the builder `attach_socket` uses; it stays public for the
+golden tests.
+
+`detach_socket(close_code, reason)` ends the channel. Pass the close frame's code and reason,
+or `None` for a close that sent no frame. It notifies the `on_token_expired` listeners on a
+4001 close, on a 4003 refusal of the session credential (once per credential, and never for a
+socket that opened under a credential since replaced), and on a `TOKEN_EXPIRED` error frame,
+which is never routed to its subscription. A 4003 whose reason is exactly `connect deadline`
+refuses no credential and notifies nothing. An `UNAUTHENTICATED` frame is routed like any
+other error. A listener is `Fn()` and cannot reach the client, so it hands the refresh to
+your loop over a channel and the loop calls `set_session_token`.
+
+Whispers: `whisper_subscribe(topic, listener)` joins a topic and returns a `ListenerId`, and
+`whisper_unsubscribe(id)` removes it; removing a topic's last listener leaves the topic. Each
+attach rejoins every topic straight after `connect`. `whisper(topic, data)` returns `false`,
+and queues nothing, when no socket is attached. `connect_room(name, listener)` joins
+`room:<name>` and returns a `Room`, whose `send(&client, &data)` and `close(&mut client)` act
+on it. A room join is never acknowledged, so `send` may follow at once.
 
 Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
-(`handle_frame` returns the frame's type). Each new socket sends `connect` first, then
-resubscribes and flushes that shard's offline queue; if the connect write or the resend
-fails, the socket is dropped and the loop backs off.
+(`handle_frame` returns the frame's type). Each new socket attaches (which sends `connect`
+first), then resubscribes and flushes that shard's offline queue; if the attach or the
+resend fails, the socket is dropped and the loop backs off.
 
 The loop owns the client. A reader thread forwards inbound frames to it over a channel,
 and so do the flush timers, so the client is never shared across threads. `handle_frame`
@@ -89,7 +112,8 @@ which ends the reader and so the run.
 enum Event {
     Frame(String),
     Flush, // a flush timer fired
-    Closed, // the reader hit end of stream or an error
+    // the reader hit end of stream or an error; the close frame's code and reason, if it sent one
+    Closed(Option<u16>, Option<String>),
 }
 
 fn schedule_flush(tx: mpsc::Sender<Event>, retry_after_ms: Option<u64>, backoff: u64) {
@@ -104,6 +128,7 @@ let mut client = client; // owned by this loop; no shared lock
 let mut attempt = 0u32;
 loop {
     let mut resend_error = None;
+    let mut close: (Option<u16>, Option<String>) = (None, None);
     if let Ok((mut reader, writer)) = dial() { // your socket library: split read / write halves
         let writer = Arc::new(Mutex::new(writer));
         let failed = Arc::new(AtomicBool::new(false)); // set by a failed socket write
@@ -113,49 +138,55 @@ loop {
             while let Ok(raw) = reader.recv() {
                 if reader_tx.send(Event::Frame(raw)).is_err() { return; }
             }
-            let _ = reader_tx.send(Event::Closed);
+            let (code, reason) = reader.close_frame(); // your socket library: the close code and reason, `None` when none arrived
+            let _ = reader_tx.send(Event::Closed(code, reason));
         });
-        if writer.lock().unwrap().send_json(&build_connect_frame(Some(&client.client_id), None, Some(session))).is_ok() {
-            let (w, f) = (Arc::clone(&writer), Arc::clone(&failed));
-            client.attach_socket(Box::new(move |frame: &Value| {
-                let sent = w.lock().unwrap().send_json(frame).is_ok();
-                if !sent {
-                    f.store(true, Ordering::SeqCst);
-                    w.lock().unwrap().shutdown(); // your socket library: must unblock the reader, and tolerate repeat calls
-                }
-            }));
+        let (w, f) = (Arc::clone(&writer), Arc::clone(&failed));
+        // `attach_socket` writes `connect` before anything else. Its sender cannot return an
+        // error, so a failed write is recorded here and the socket is shut down.
+        client.attach_socket(Box::new(move |frame: &Value| {
+            let sent = w.lock().unwrap().send_json(frame).is_ok();
+            if !sent {
+                f.store(true, Ordering::SeqCst);
+                w.lock().unwrap().shutdown(); // your socket library: must unblock the reader, and tolerate repeat calls
+            }
+        }), None);
+        if !failed.load(Ordering::SeqCst) {
             if let Err(err) = client.resend_subscriptions() {
                 // A subscription whose arguments the wire cannot encode fails every resend
                 // the same way: remove it with `unsubscribe`, then restart this loop.
                 resend_error = Some(err);
             }
-            if resend_error.is_none() && !failed.load(Ordering::SeqCst) {
-                let mut flush_backoff = 1000u64;
-                let report = client.flush_offline_queue(None);
-                if !report.requeued.is_empty() || report.retry_after_ms.is_some() {
-                    schedule_flush(tx.clone(), report.retry_after_ms.map(|ms| ms as u64), flush_backoff);
-                }
-                while let Ok(event) = rx.recv() {
-                    match event {
-                        Event::Frame(raw) => match client.handle_frame(&raw) {
-                            Ok(kind) if kind.as_deref() == Some("ack") => attempt = 0,
-                            Ok(_) => {}
-                            Err(_) => break, // ends this run; the cleanup below still runs
-                        },
-                        Event::Flush => {
-                            let next = client.flush_offline_queue(None);
-                            if !next.requeued.is_empty() || next.retry_after_ms.is_some() {
-                                flush_backoff = (flush_backoff * 2).min(30_000);
-                                schedule_flush(tx.clone(), next.retry_after_ms.map(|ms| ms as u64), flush_backoff);
-                            }
+        }
+        if resend_error.is_none() && !failed.load(Ordering::SeqCst) {
+            let mut flush_backoff = 1000u64;
+            let report = client.flush_offline_queue(None);
+            if !report.requeued.is_empty() || report.retry_after_ms.is_some() {
+                schedule_flush(tx.clone(), report.retry_after_ms.map(|ms| ms as u64), flush_backoff);
+            }
+            while let Ok(event) = rx.recv() {
+                match event {
+                    Event::Frame(raw) => match client.handle_frame(&raw) {
+                        Ok(kind) if kind.as_deref() == Some("ack") => attempt = 0,
+                        Ok(_) => {}
+                        Err(_) => break, // ends this run; the cleanup below still runs
+                    },
+                    Event::Flush => {
+                        let next = client.flush_offline_queue(None);
+                        if !next.requeued.is_empty() || next.retry_after_ms.is_some() {
+                            flush_backoff = (flush_backoff * 2).min(30_000);
+                            schedule_flush(tx.clone(), next.retry_after_ms.map(|ms| ms as u64), flush_backoff);
                         }
-                        Event::Closed => break,
                     }
-                    if failed.load(Ordering::SeqCst) { break; }
+                    Event::Closed(code, reason) => {
+                        close = (code, reason);
+                        break;
+                    }
                 }
+                if failed.load(Ordering::SeqCst) { break; }
             }
         }
-        client.detach_socket();
+        client.detach_socket(close.0, close.1.as_deref());
         if let Some(err) = resend_error {
             eprintln!("lunora: stopping the reconnect loop, a subscription cannot be resent: {err:?}");
             break;

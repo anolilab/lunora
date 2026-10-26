@@ -54,6 +54,7 @@ export interface Doc_payment_sessions {
     refundedMinor: number;
     state: string;
     subscriptionId?: string;
+    revision?: number;
     updatedAt: number;
 }
 
@@ -72,6 +73,7 @@ export interface Doc_payment_subscriptions {
     quantity: number;
     referenceId: string;
     state: string;
+    revision?: number;
     updatedAt: number;
 }
 
@@ -194,6 +196,7 @@ export interface Insert_payment_sessions {
     refundedMinor: number;
     state: string;
     subscriptionId?: string;
+    revision?: number;
     updatedAt: number;
 }
 
@@ -212,6 +215,7 @@ export interface Insert_payment_subscriptions {
     quantity: number;
     referenceId: string;
     state: string;
+    revision?: number;
     updatedAt: number;
 }
 

@@ -41,6 +41,9 @@ export type { AuthedMcpFetchHandlerOptions, AuthedMcpServerOptions, McpAccessTok
 export { createAuthedMcpFetchHandler, mcpTokenScopes } from "./authed-http";
 export type { McpServerInfo, McpTool } from "./compose";
 export { createToolServer } from "./compose";
+export type { FunctionMcpServerOptions } from "./function-server";
+export { createFunctionMcpServer } from "./function-server";
+export { default as connectFunctionStdio } from "./function-stdio";
 export type { McpFetchHandler, McpFetchHandlerOptions, ServeStatelessOptions } from "./http";
 export { createMcpFetchHandler, DEFAULT_MAX_REQUEST_BYTES, serveStateless } from "./http";
 export type { LocalDeployment, LocalDeploymentSource, LocalMcpServerOptions } from "./local";
