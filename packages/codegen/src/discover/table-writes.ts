@@ -203,9 +203,11 @@ const writeOf = (call: CallExpression): Write | undefined => {
  * Discover every table write besides a plain `ctx.db.insert("table", …)` (that is
  * `discoverInserts`): by-id writes (`patch`/`replace`/`delete`/…), batch writes,
  * and the `ctx.db.<table>.*` facade, each with its `CallSiteScope`. A
- * `ctx.db.<method>(table, …)` write takes its table from the first argument when
- * that argument is a string literal or a constant of literal type; anything else
- * is recorded with `table: ""`.
+ * `ctx.db.<method>(table, …)` write takes its tables from the first argument: a
+ * string literal, a `const` bound to one, or an expression typed as a literal or a
+ * union of literals (one record per member). An `as const` or `satisfies` wrapper is
+ * looked through; any other assertion, and any expression with no literal type, is
+ * recorded with `table: ""`.
  */
 const discoverTableWrites = (project: Project, lunoraDirectory: string): TableWriteIR[] =>
     collectCallRows(project, lunoraDirectory, (call, file): TableWriteIR[] | undefined => {
