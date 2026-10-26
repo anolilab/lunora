@@ -363,6 +363,12 @@ interface SqlCtxDbOptions {
      * isolate is no longer healed by the next request, since the entry lives as
      * long as the scope does.
      *
+     * The aggregate-counter and rank-companion rebuilds share the scope too, so
+     * a counter skewed by a lost companion write heals on the next isolate
+     * rather than the next request. The per-write deltas keep it exact between
+     * rebuilds, and a rebuild racing another isolate's write is itself what
+     * skews it, so rebuilding less often is the safer direction.
+     *
      * Omit it and the memo stays per ctx-db — slower, never wrong, and what the
      * tests want (they pair a fresh database with a reused schema object).
      */
@@ -472,15 +478,8 @@ const createTableNameCache = (): {
     };
 };
 
-/**
- * Cache keys for resolved ids. The two kinds sit under different prefixes, so an unpinned key can never equal a pinned
- * one, whatever characters an explicit id holds. A pinned key separates the table from the id with a NUL, which no table
- * name can contain, so it parses back unambiguously.
- *
- * A pinned resolution is cached on its own, because it saw one table and may not be the id's first match in schema order.
- */
-const unpinnedCacheKey = (id: string): string => `u${id}`;
-const pinnedCacheKey = (tableName: string, id: string): string => `p${tableName}\u0000${id}`;
+/** Whether rows of this table live in the `.global()` store (unmarked legacy schemas count, see `tableNameFromId`). */
+const holdsGlobalRows = (definition: TableDefinitionLike): boolean => definition.shardMode === undefined || definition.shardMode.kind === "global";
 
 /**
  * Probe each table for `id`, mirroring the DO's id-only `get`/`patch`/`delete`
@@ -499,10 +498,8 @@ const tableNameFromId = async (
     schema: SchemaLike,
     id: string,
     cache: ReturnType<typeof createTableNameCache>,
-    expectedTable?: string,
 ): Promise<string | undefined> => {
-    const key = expectedTable === undefined ? unpinnedCacheKey(id) : pinnedCacheKey(expectedTable, id);
-    const cached = cache.get(key);
+    const cached = cache.get(id);
 
     if (cached !== undefined) {
         return cached;
@@ -514,11 +511,9 @@ const tableNameFromId = async (
     // before the `.global()` flag existed don't set shardMode at all — preserve
     // the legacy "probe every table" behaviour there so existing fixtures keep
     // working.)
-    // A pinned `expectedTable` narrows the probe to that one table; the caller still rejects any other owner.
     const candidates = Object.entries(schema.tables)
-        .filter(([, definition]) => definition.shardMode === undefined || definition.shardMode.kind === "global")
-        .map(([tableName]) => tableName)
-        .filter((tableName) => expectedTable === undefined || tableName === expectedTable);
+        .filter(([, definition]) => holdsGlobalRows(definition))
+        .map(([tableName]) => tableName);
 
     // Fire every probe at once; the first non-empty result wins.
     const probes = await Promise.all(
@@ -531,9 +526,7 @@ const tableNameFromId = async (
 
     for (const result of probes) {
         if (result.found) {
-            // A pinned resolution is cached under its own key: it saw one table, so it may not be the id's first match in
-            // schema order, and an unpinned read must not take it.
-            cache.set(key, result.tableName);
+            cache.set(id, result.tableName);
 
             return result.tableName;
         }
@@ -1555,6 +1548,16 @@ const mapWriteError = (dialect: SqlDialect, error: unknown, table: string): neve
 const provisioningByScope = new WeakMap<object, Promise<void>>();
 
 /**
+ * The aggregate-counter and rank-companion rebuilds per {@link SqlCtxDbOptions.provisionScope}, keyed by
+ * companion. Each rebuild reads the whole source table and rewrites the companion, so keyed per ctx-db it
+ * ran on the first aggregate read or write of EVERY request (hosts build one ctx-db per request): on a
+ * 20k-row table, 95 statements where the counter lookup itself is one. Shared like provisioning, it runs
+ * once per isolate. The value is the run itself, so concurrent first callers share one rebuild instead of
+ * interleaving two DELETE-then-INSERT passes over the same companion.
+ */
+const companionBackfillsByScope = new WeakMap<object, Map<string, Promise<boolean>>>();
+
+/**
  * The server `in` renderer, with one change for path values. Their items are SQL fragments (see
  * `serializeFieldValue`), which the column form's wide branch cannot unpack, so a list holding one goes to
  * {@link pathInList} whatever its length.
@@ -1765,10 +1768,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // Per-ctx-db LRU bounding the `id → tableName` resolution cost. See
     // {@link createTableNameCache} for the size cap rationale.
     const tableNameCache = createTableNameCache();
-    // Only the tables an id is probed against can hold a pinned entry for it, so a physical delete clears just these.
-    const probedTables = Object.entries(schema.tables)
-        .filter(([, definition]) => definition.shardMode === undefined || definition.shardMode.kind === "global")
-        .map(([tableName]) => tableName);
 
     let triggerDepth = 0;
 
@@ -1838,28 +1837,58 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * first (memoized), so the per-table probe always hits existing tables: the
      * tables are a hard precondition, not a maybe, which is why `tableNameFromId`
      * needs no missing-table handling.
+     *
+     * A pinned table is returned without probing for the id: every caller reads
+     * the row next (`rawRow`) and treats an absent one as not found, so the
+     * `SELECT 1` probe was a second round trip for the same answer.
      */
     const resolveTableName = async (id: string, expectedTable?: string): Promise<string | undefined> => {
         await ensureMigrated();
 
-        const tableName = await tableNameFromId(exec, dialect, schema, id, tableNameCache, expectedTable);
-
-        // When the caller pins a table (the `ctx.db.<table>.get/delete/...`
-        // by-id facade forwards its bound name), an id that resolves to a
-        // different table is treated as absent — a foreign id can never read or
-        // mutate cross-table through a branded `Id<"posts">` (IDOR).
-        if (expectedTable !== undefined && tableName !== expectedTable) {
-            return undefined;
+        if (expectedTable === undefined) {
+            return tableNameFromId(exec, dialect, schema, id, tableNameCache);
         }
 
-        return tableName;
+        // The caller pinned a table (the `ctx.db.<table>.get/delete/...` by-id
+        // facade forwards its bound name), so the row is only ever read from
+        // that table: a foreign id finds nothing there and is treated as absent,
+        // and can never read or mutate cross-table through a branded
+        // `Id<"posts">` (IDOR).
+        const pinned = Object.hasOwn(schema.tables, expectedTable) ? schema.tables[expectedTable] : undefined;
+
+        return pinned !== undefined && holdsGlobalRows(pinned) ? expectedTable : undefined;
     };
 
-    // Per-(table, index) backfill state. The map records the outcome of the
-    // probe: `true` once the counter companion table was found and rebuilt;
-    // `false` once we've checked and the user hasn't materialized it, so we
-    // know to skip the indexed path on every subsequent read for this ctx-db.
-    const backfilled = new Map<string, boolean>();
+    // Per-companion backfill state, shared across the ctx-dbs of one
+    // `provisionScope` (see `companionBackfillsByScope`). Each entry resolves
+    // to `true` once the companion was found and rebuilt, or `false` once we
+    // know it is missing, so the indexed path is skipped from then on.
+    let companionBackfills = companionBackfillsByScope.get(provisionScope);
+
+    if (companionBackfills === undefined) {
+        companionBackfills = new Map();
+        companionBackfillsByScope.set(provisionScope, companionBackfills);
+    }
+
+    const backfills = companionBackfills;
+
+    /** Run `rebuild` once per scope for `key`; a rejected run is evicted so the next caller retries it. */
+    const backfillOnce = (key: string, rebuild: () => Promise<boolean>): Promise<boolean> => {
+        const cached = backfills.get(key);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const run = rebuild().catch((error: unknown) => {
+            backfills.delete(key);
+            throw error;
+        });
+
+        backfills.set(key, run);
+
+        return run;
+    };
 
     /**
      * Whether `table` has a corresponding `__agg_<index>` companion table on
@@ -1876,33 +1905,16 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
-     * Rebuild a counter from a paged table scan. Cheap to call (cache-guarded);
-     * idempotent — TRUNCATE then re-tally so a previously-skewed counter heals.
-     * Pages via a keyset cursor on `id` (the table's primary key) with a fixed
-     * batch size, so a large global table never has to fit in a single result
-     * buffer.
+     * Rebuild a counter from a paged table scan. Cheap to call (memoised per
+     * scope); idempotent — TRUNCATE then re-tally so a previously-skewed
+     * counter heals on the next isolate. Pages via a keyset cursor on `id` (the
+     * table's primary key) with a fixed batch size, so a large global table
+     * never has to fit in a single result buffer.
      */
-    const ensureBackfilled = async (tableName: string, index: AggregateIndexDefinitionLike): Promise<boolean> => {
-        const cacheKey = `${tableName}::${index.name}`;
-        const cached = backfilled.get(cacheKey);
-
-        if (cached !== undefined) {
-            return cached;
-        }
-
-        const exists = await counterTableExists(tableName, index.name);
-
-        if (!exists) {
-            backfilled.set(cacheKey, false);
-
-            return false;
-        }
-
+    const rebuildCounter = async (tableName: string, index: AggregateIndexDefinitionLike): Promise<boolean> => {
         const definition = schema.tables[tableName];
 
-        if (!definition) {
-            backfilled.set(cacheKey, false);
-
+        if (!definition || !(await counterTableExists(tableName, index.name))) {
             return false;
         }
 
@@ -1940,10 +1952,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         // matter); a sequential `run()` loop otherwise.
         await queryBatch(exec, dialect, inserts);
 
-        backfilled.set(cacheKey, true);
-
         return true;
     };
+
+    const ensureBackfilled = (tableName: string, index: AggregateIndexDefinitionLike): Promise<boolean> =>
+        backfillOnce(`${tableName}::${index.name}`, () => rebuildCounter(tableName, index));
 
     /**
      * Reduce one group's extreme in JS, off the decoded rows, for a column
@@ -2226,7 +2239,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
     /* eslint-enable sonarjs/cognitive-complexity */
 
-    /** Pre-write hook: rebuild counters once per ctx-db before the row mutation. */
+    /** Pre-write hook: rebuild counters once per scope before the row mutation. */
     const ensureBackfilledForTable = async (tableName: string): Promise<void> => {
         const indexes = schema.tables[tableName]?.aggregateIndexes;
 
@@ -2257,14 +2270,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // Skip when the user hasn't materialized the counter companion
             // table — the SCAN fallback still answers correctly. The pre-write
             // `ensureBackfilledForTable` hook always runs immediately before
-            // this sync (see insert/patch/replace/delete), populating
-            // `backfilled` with the authoritative existence answer under the
-            // same cache key. Read that instead of re-probing `sqlite_master`
-            // on the hot path; fall back to a fresh probe only on a Map miss.
-            const cacheKey = `${tableName}::${index.name}`;
-            const cached = backfilled.get(cacheKey);
-            // eslint-disable-next-line no-await-in-loop -- probe runs only on a cache miss, sequentially on the single shared D1 connection so the -prev/+next writes don't interleave across indexes.
-            const exists = cached ?? (await counterTableExists(tableName, index.name));
+            // this sync (see insert/patch/replace/delete), so this reads its
+            // memoised answer rather than re-probing `sqlite_master`.
+            // eslint-disable-next-line no-await-in-loop -- resolves from the memo, sequentially so the -prev/+next writes don't interleave across indexes.
+            const exists = await ensureBackfilled(tableName, index);
 
             if (!exists) {
                 continue;
@@ -2277,11 +2286,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         return statements;
     };
 
-    // Per-(table, rankIndex) backfill state, same shape as aggregate
-    // counters. `true` ⇒ companion exists and has been rebuilt; `false` ⇒
-    // companion missing (skip indexed path forever for this ctx-db).
-    const rankBackfilled = new Map<string, boolean>();
-
     const rankTableExists = async (table: string, indexName: string): Promise<boolean> => {
         const rankTable = rankTableName(table, indexName);
         const rows = await queryAll(exec, dialect, dialect.tableExists(rankTable));
@@ -2291,34 +2295,17 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
     /**
      * Lazy backfill of a rank companion. Mirrors the aggregate counter twin —
-     * `ensureBackfilled`. TRUNCATE then re-insert; cached per ctx-db.
+     * `rebuildCounter`. TRUNCATE then re-insert; memoised per scope.
      *
      * Bounded end to end, not just on the read: the source table is paged by
      * keyset cursor on `id`, and the tuples that page produces are flushed
      * before the next one is read, so neither the buffered `SQL` objects nor the
      * dispatched batch ever grows to the row count.
      */
-    const ensureRankBackfilled = async (tableName: string, index: RankIndexDefinitionLike): Promise<boolean> => {
-        const cacheKey = `${tableName}::rank::${index.name}`;
-        const cached = rankBackfilled.get(cacheKey);
-
-        if (cached !== undefined) {
-            return cached;
-        }
-
-        const exists = await rankTableExists(tableName, index.name);
-
-        if (!exists) {
-            rankBackfilled.set(cacheKey, false);
-
-            return false;
-        }
-
+    const rebuildRankCompanion = async (tableName: string, index: RankIndexDefinitionLike): Promise<boolean> => {
         const definition = schema.tables[tableName];
 
-        if (!definition) {
-            rankBackfilled.set(cacheKey, false);
-
+        if (!definition || !(await rankTableExists(tableName, index.name))) {
             return false;
         }
 
@@ -2377,12 +2364,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         await flush();
 
-        rankBackfilled.set(cacheKey, true);
-
         return true;
     };
 
-    /** Pre-write hook: rebuild rank companions once per ctx-db. */
+    const ensureRankBackfilled = (tableName: string, index: RankIndexDefinitionLike): Promise<boolean> =>
+        backfillOnce(`${tableName}::rank::${index.name}`, () => rebuildRankCompanion(tableName, index));
+
+    /** Pre-write hook: rebuild rank companions once per scope. */
     const ensureRankBackfilledForTable = async (tableName: string): Promise<void> => {
         const indexes = schema.tables[tableName]?.rankIndexes;
 
@@ -2442,14 +2430,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             // eslint-disable-next-line no-secrets/no-secrets -- false positive: this is a function name referenced in a comment, not a secret.
             // The pre-write `ensureRankBackfilledForTable` hook always runs
-            // immediately before this sync, populating `rankBackfilled` with
-            // the authoritative existence answer under the same cache key.
-            // Read that instead of re-probing `sqlite_master` on the hot path;
-            // fall back to a fresh probe only on a Map miss.
-            const cacheKey = `${tableName}::rank::${index.name}`;
-            const cached = rankBackfilled.get(cacheKey);
-            // eslint-disable-next-line no-await-in-loop -- probe runs only on a cache miss, sequentially on the single shared D1 connection so DELETE/INSERT pairs don't interleave across indexes.
-            const exists = cached ?? (await rankTableExists(tableName, index.name));
+            // immediately before this sync, so this reads its memoised answer
+            // rather than re-probing `sqlite_master`.
+            // eslint-disable-next-line no-await-in-loop -- resolves from the memo, sequentially so DELETE/INSERT pairs don't interleave across indexes.
+            const exists = await ensureRankBackfilled(tableName, index);
 
             if (!exists) {
                 continue;
@@ -3194,6 +3178,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             }
 
             const snapshot = await rawRow(tableName, id);
+
+            // An absent row is a no-op, before any trigger or cascade: a pinned
+            // table is not probed for the id, so this read is the existence check.
+            if (snapshot === undefined) {
+                return;
+            }
+
             const existing = decodeRow(definition, snapshot);
             // Soft delete unless `hard` was forced; `softField` undefined ⇒ legacy
             // physical path. A delete cascades as a delete (soft→soft, hard→hard).
@@ -3292,11 +3283,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // The id no longer lives in `tableName`; drop the stale cache entry
             // so a later re-insert of the same id into a different global table
             // re-probes instead of resolving to the now-empty original table.
-            tableNameCache.delete(unpinnedCacheKey(id));
-
-            for (const table of probedTables) {
-                tableNameCache.delete(pinnedCacheKey(table, id));
-            }
+            tableNameCache.delete(id);
 
             await runCompanionStatements([
                 ...(await aggregateStatements(tableName, existing ?? undefined, undefined)),
@@ -3664,7 +3651,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // random and never pre-seeded, so this only matters for the
             // explicit-id import path.)
             if (usedExplicitId) {
-                tableNameCache.set(unpinnedCacheKey(id), tableName);
+                tableNameCache.set(id, tableName);
             }
 
             await runCompanionStatements([
@@ -3784,8 +3771,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         async restore(id, expectedTable) {
             const tableName = await resolveTableName(id, expectedTable);
+            // Snapshot the raw row before the patch so we know whether it was
+            // actually soft-deleted (drives the rank re-add) and have its sort
+            // fields to rebuild the rank-companion entry. Read before the table
+            // check because a pinned table is not probed for the id, and an
+            // absent row reports as not found whatever its table.
+            const snapshot = tableName === undefined ? undefined : await rawRow(tableName, id);
 
-            if (!tableName) {
+            if (!tableName || snapshot === undefined) {
                 throw new LunoraError("INTERNAL", `document not found: ${id}`);
             }
 
@@ -3796,11 +3789,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 throw new LunoraError("INTERNAL", `ctx.db.restore: table "${tableName}" is not a .softDelete() table`);
             }
 
-            // Snapshot the raw row before the patch so we know whether it was
-            // actually soft-deleted (drives the rank re-add) and have its sort
-            // fields to rebuild the rank-companion entry.
-            const snapshot = await rawRow(tableName, id);
-            const wasDeleted = snapshot?.[field] !== null && snapshot?.[field] !== undefined;
+            const wasDeleted = snapshot[field] !== null && snapshot[field] !== undefined;
 
             // eslint-disable-next-line unicorn/no-null -- clearing the soft-delete marker writes SQL NULL into the column
             await writer.patch(id, { [field]: null }, expectedTable);
