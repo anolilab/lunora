@@ -193,8 +193,8 @@ const createCsvScanner = (): CsvScanner => {
  * RFC 4180 records, CRLF or LF. A quoted field may hold commas, doubled quotes and newlines. A leading byte-order mark is dropped, since
  * spreadsheet exports write one.
  *
- * A record whose every field is an unquoted empty field is blank and is left out of the result, whatever its column count: a line of commas, or a
- * one-column empty line. A quoted `""` is a value, so it is kept.
+ * A record whose every field is an unquoted empty field is blank and is left out of the result, whatever its column count: a line of
+ * commas, or a one-column empty line. A quoted `""` is a value, so it is kept.
  */
 const parseCsvRecords = (text: string): CsvRecord[] => {
     const scanner = createCsvScanner();
@@ -482,8 +482,9 @@ const carriedByWire = (value: bigint): boolean => {
 
 /**
  * Read one cell's text as its column kind. A number takes a decimal, and a timestamp or date takes whole-number epoch milliseconds or an
- * ISO-8601 date or date-time, read as UTC when it names no offset. Every kind but text is trimmed of surrounding whitespace first. Booleans take `true` or `false` in any case. Bigints take
- * the integer text and keep it exact. Any other kind stays text, and the server validator decides what it accepts.
+ * ISO-8601 date or date-time, read as UTC when it names no offset. Every kind but text is trimmed of surrounding whitespace first.
+ * Booleans take `true` or `false` in any case. Bigints take the integer text and keep it exact. Any other kind stays text, and the
+ * server validator decides what it accepts.
  */
 const coerceCell = (text: string, kind: string | undefined): CoercedCell => {
     if (kind === "bigint") {
@@ -658,4 +659,4 @@ export {
     readCsvDocuments,
     readCsvRecords,
 };
-export type { CellType, CoercedDocument, CsvCell, CsvDocument, CsvProblem, CsvRecord, CsvValue };
+export type { CsvProblem, CsvRecord };
