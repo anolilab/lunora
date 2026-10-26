@@ -47,14 +47,24 @@ interface FieldSpec {
     optional: boolean;
     /** True when the column carries `.unique()` — generated values must not collide across rows. */
     unique: boolean;
+    /** True when `unique` comes only from a single-column unique index, not a `.unique()` declaration. */
+    uniqueFromIndex: boolean;
     /** The validator to generate a value from (the inner one when optional). */
     validator: Validator;
+}
+
+/** A multi-column `unique` index, named by its member columns in declaration order. */
+interface UniqueIndexSpec {
+    fields: ReadonlyArray<string>;
+    name: string;
 }
 
 /** A table reduced to its seedable columns. */
 interface TableSpec {
     fields: ReadonlyArray<FieldSpec>;
     name: string;
+    /** Table-level `unique` indexes over two or more columns (single-column ones mark the column `unique`). */
+    uniqueIndexes: ReadonlyArray<UniqueIndexSpec>;
 }
 
 /** True when a column (or the column it wraps via optional) has a server-applied default. */
@@ -88,18 +98,35 @@ const describeField = (name: string, validator: Validator): FieldSpec => {
         nullable: meta.column?.notNull === false,
         optional: validator.kind === "optional",
         unique: meta.column?.unique === true,
+        uniqueFromIndex: false,
         validator: inner,
     };
 };
 
-/** Reduce a `defineSchema` result to a {@link TableSpec} per table. */
+/**
+ * Reduce a `defineSchema` result to a {@link TableSpec} per table. A single-column
+ * `unique` index makes that column `unique`, exactly as `.unique()` would, but
+ * is flagged `uniqueFromIndex` so the planner can tell it from an explicit `.unique()`.
+ */
 const introspectSchema = (schema: Schema): ReadonlyArray<TableSpec> => {
     const { tables } = schema;
 
     return Object.entries(tables).map(([name, table]) => {
+        const unique = table.indexes.filter((index) => index.unique);
+        const singles = new Set(unique.filter((index) => index.fields.length === 1).map((index) => index.fields[0]));
+
         return {
-            fields: Object.entries(table.shape).map(([fieldName, validator]) => describeField(fieldName, validator)),
+            fields: Object.entries(table.shape).map(([fieldName, validator]) => {
+                const field = describeField(fieldName, validator);
+
+                return singles.has(fieldName) && !field.unique ? { ...field, unique: true, uniqueFromIndex: true } : field;
+            }),
             name,
+            uniqueIndexes: unique
+                .filter((index) => index.fields.length > 1)
+                .map((index) => {
+                    return { fields: index.fields, name: index.name };
+                }),
         };
     });
 };
@@ -108,8 +135,12 @@ const introspectSchema = (schema: Schema): ReadonlyArray<TableSpec> => {
  * Order `selected` tables so a table's foreign-key parents are inserted first.
  * Edges are the `v.id("parent")` columns whose parent is also selected;
  * self-references and edges into unselected tables are ignored for ordering
- * (the plan resolves those FKs against whatever rows exist, or null). Cycles
- * across tables are broken by emitting remaining tables in declaration order.
+ * (the plan resolves those FKs against whatever rows exist, or refuses). A
+ * table cycle is broken at the first pending table that lies ON a cycle; the plan
+ * assigns the ids of the parents its cycle edges point at ahead of their rows.
+ * A table that only hangs off a cycle is never the one emitted early, so which
+ * table breaks the cycle — and with it the result — does not depend on
+ * declaration order.
  */
 const orderTables = (specs: ReadonlyArray<TableSpec>, selected: ReadonlySet<string>): ReadonlyArray<string> => {
     const byName = new Map(specs.map((spec) => [spec.name, spec]));
@@ -135,11 +166,33 @@ const orderTables = (specs: ReadonlyArray<TableSpec>, selected: ReadonlySet<stri
     const placed = new Set<string>();
     const pending = [...selected].filter((name) => byName.has(name));
 
-    // Repeatedly emit any pending table whose parents are all placed. When a full
-    // pass places nothing (a cycle), emit the first remaining table to break it.
+    // Whether `start` reaches itself through parents not yet placed.
+    const onCycle = (start: string): boolean => {
+        const seen = new Set<string>();
+        const stack = [...parentsOf(start)];
+
+        while (stack.length > 0) {
+            const name = stack.pop() as string;
+
+            if (name === start) {
+                return true;
+            }
+
+            if (!placed.has(name) && !seen.has(name)) {
+                seen.add(name);
+                stack.push(...parentsOf(name));
+            }
+        }
+
+        return false;
+    };
+
+    // Repeatedly emit any pending table whose parents are all placed. When none is
+    // ready, every pending table has an unplaced parent, so following parents must
+    // loop and some pending table is on a cycle: emit the first such one.
     while (pending.length > 0) {
         const readyIndex = pending.findIndex((name) => [...parentsOf(name)].every((parent) => placed.has(parent)));
-        const index = readyIndex === -1 ? 0 : readyIndex;
+        const index = readyIndex === -1 ? pending.findIndex((name) => onCycle(name)) : readyIndex;
         const [name] = pending.splice(index, 1);
 
         if (name === undefined) {
@@ -200,4 +253,4 @@ const fkParentClosure = (specs: ReadonlyArray<TableSpec>, roots: Iterable<string
 };
 
 export { fkParentClosure, introspectSchema, metaOf, orderTables, unwrapOptional };
-export type { FieldSpec };
+export type { FieldSpec, TableSpec, UniqueIndexSpec };

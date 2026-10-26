@@ -611,7 +611,9 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
         }
 
         case "index": {
-            accumulator.indexes.push(parseIndexCall(args));
+            // The chain is unwound outermost-first, so each index is prepended to land in declaration order: the
+            // planner lets an earlier index claim a shared column, so the order is part of the schema.
+            accumulator.indexes.unshift(parseIndexCall(args));
 
             break;
         }
