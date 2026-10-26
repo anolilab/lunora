@@ -118,8 +118,8 @@ Each is available both flat and per-table:
 ```ts
 // flat
 const ids = await ctx.db.insertMany("messages", [{ body: "a" }, { body: "b" }]);
-await ctx.db.patchMany([{ id: ids[0], patch: { body: "edited" } }]);
-await ctx.db.deleteMany([ids[1]]);
+await ctx.db.patchMany("posts", [{ id: ids[0], patch: { body: "edited" } }]);
+await ctx.db.deleteMany("posts", [ids[1]]);
 
 // per-table (scopes every id to this table)
 await ctx.db.messages.deleteMany([ids[0]]);

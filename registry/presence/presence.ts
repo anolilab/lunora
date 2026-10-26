@@ -134,7 +134,7 @@ export const heartbeat = mutation
             ...(userId === undefined ? {} : { userId }),
         };
 
-        await (existing ? ctx.db.patch(existing["_id"] as never, row) : ctx.db.insert(PRESENCE_TABLE, row));
+        await (existing ? ctx.db.patch(PRESENCE_TABLE, existing["_id"] as never, row) : ctx.db.insert(PRESENCE_TABLE, row));
 
         return { lastSeen };
     });
@@ -189,7 +189,7 @@ export const sweep = internalMutation.input({ roomId: v.string() }).mutation(asy
 
     // One room's expired members is a small set sharing the mutation's
     // snapshot — fire the deletes together.
-    await Promise.all(stale.map((row) => ctx.db.delete(row["_id"] as never)));
+    await Promise.all(stale.map((row) => ctx.db.delete(PRESENCE_TABLE, row["_id"] as never)));
 
     return { deleted: stale.length };
 });

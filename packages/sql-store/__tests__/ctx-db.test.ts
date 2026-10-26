@@ -166,7 +166,7 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
         const writer = makeWriter();
         const id = await writer.insert("notes", { archived: false, body: "x", priority: 1, slug: "c" });
 
-        await writer.patch(id, { body: "patched" });
+        await writer.patch("notes", id, { body: "patched" });
 
         const doc = await writer.get("notes", id);
 
@@ -184,8 +184,8 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
         const writer = makeWriter();
         const id = await writer.insert("notes", { archived: false, body: "keep-me", priority: 1, slug: "u" });
 
-        await expect(writer.patch(id, { body: undefined })).rejects.toThrow(/Cannot patch field 'body' to undefined/u);
-        await expect(writer.replace(id, { archived: false, body: undefined, priority: 1, slug: "u" })).rejects.toThrow(
+        await expect(writer.patch("notes", id, { body: undefined })).rejects.toThrow(/Cannot patch field 'body' to undefined/u);
+        await expect(writer.replace("notes", id, { archived: false, body: undefined, priority: 1, slug: "u" })).rejects.toThrow(
             /Cannot replace field 'body' to undefined/u,
         );
 
@@ -199,7 +199,7 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
         const writer = makeWriter();
         const id = await writer.insert("notes", { archived: false, body: "x", priority: 1, slug: "d" });
 
-        await writer.delete(id);
+        await writer.delete("notes", id);
 
         await expect(writer.get("notes", id)).resolves.toBeNull();
     });
@@ -404,12 +404,12 @@ describe("createSqlCtxDb — the column ceiling", () => {
 
         bound.length = 0;
 
-        await writer.patch(softId, { f0: "changed" });
-        await writer.replace(softId, row);
+        await writer.patch("wide", softId, { f0: "changed" });
+        await writer.replace("wide", softId, row);
         // Soft delete (the marker field is declared) and a forced hard delete —
         // both route through the same guard.
-        await writer.delete(softId);
-        await writer.delete(hardId, undefined, { hard: true });
+        await writer.delete("wide", softId);
+        await writer.delete("wide", hardId, { hard: true });
 
         expect(Math.max(...bound)).toBeLessThanOrEqual(100);
         // …and the writes actually landed rather than being silently skipped.
@@ -640,7 +640,7 @@ describe("createSqlCtxDb — soft-delete + rank companion", () => {
         const target = await writer.findFirst("notes", { where: { slug: "a" } });
 
         // Soft delete drops the row's rank companion entry.
-        await writer.delete(String(target?._id));
+        await writer.delete("notes", String(target?._id));
 
         const afterDelete = await writer.rankPage("notes", "byPriority", { take: 10 });
 
@@ -648,7 +648,7 @@ describe("createSqlCtxDb — soft-delete + rank companion", () => {
 
         // Previously restore()'s forced re-add double-inserted the companion row
         // and threw a raw UNIQUE-constraint (PRIMARY KEY `__id__`) violation.
-        await expect(writer.restore?.(String(target?._id))).resolves.toBeUndefined();
+        await expect(writer.restore?.("notes", String(target?._id))).resolves.toBeUndefined();
 
         const afterRestore = await writer.rankPage("notes", "byPriority", { take: 10 });
 
@@ -665,11 +665,11 @@ describe("createSqlCtxDb — soft-delete + rank companion", () => {
 
         const target = await writer.findFirst("notes", { where: { slug: "a" } });
 
-        await writer.delete(String(target?._id));
+        await writer.delete("notes", String(target?._id));
 
         // An admin/cascade patch touches a RANK field (priority) of the still
         // soft-deleted row — it must NOT re-add the row to the rank companion.
-        await writer.patch(String(target?._id), { priority: 99 });
+        await writer.patch("notes", String(target?._id), { priority: 99 });
 
         const page = await writer.rankPage("notes", "byPriority", { take: 10 });
 
@@ -821,7 +821,7 @@ describe("createSqlCtxDb — aggregate + rank backfills route through batch when
             const id = await writer.insert("notes", { archived: false, priority: 1, slug: "a" });
             const batch = vi.spyOn(harness.exec, "batch");
 
-            await writer.patch(id, { archived: true, priority: 2 });
+            await writer.patch("notes", id, { archived: true, priority: 2 });
 
             expect(batch).toHaveBeenCalledTimes(1);
             // Aggregate: -1 old group, +1 new group, two prunes; rank: DELETE + INSERT; CDC: one append.
@@ -976,7 +976,7 @@ describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
         const { exec, statements } = recordingExec([snapshotRow]);
         const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(engine), exec, schema });
 
-        await writer.patch("row1", { body: "y" });
+        await writer.patch("notes", "row1", { body: "y" });
 
         const guarded = statements.find((statement) => /update .*notes.* set/iu.test(statement));
 
@@ -1163,7 +1163,7 @@ describe("createSqlCtxDb — _creationTime is server-authoritative", () => {
         const { calls, exec } = recordingExecWithParams([snapshotRow]);
         const writer = createSqlCtxDb({ clock: () => CLOCK, dialect: makeSqliteDialect(), exec, schema });
 
-        await writer.replace("row1", { _creationTime: 5, archived: false, body: "y", priority: 7, slug: "s" });
+        await writer.replace("notes", "row1", { _creationTime: 5, archived: false, body: "y", priority: 7, slug: "s" });
 
         const update = calls.find((call) => /update .*notes.* set/iu.test(call.sql));
 
@@ -1180,7 +1180,7 @@ describe("createSqlCtxDb — _creationTime is server-authoritative", () => {
         const { calls, exec } = recordingExecWithParams([snapshotRow]);
         const writer = createSqlCtxDb({ clock: () => CLOCK, dialect: makeSqliteDialect(), exec, schema });
 
-        await writer.replace("row1", { _creationTime: 5, archived: false, body: "y", priority: 7, slug: "s" }, undefined, { allowExplicitId: true });
+        await writer.replace("notes", "row1", { _creationTime: 5, archived: false, body: "y", priority: 7, slug: "s" }, { allowExplicitId: true });
 
         const update = calls.find((call) => /update .*notes.* set/iu.test(call.sql));
 
@@ -1942,11 +1942,11 @@ describe("createSqlCtxDb — min/max companion over a bigint column", () => {
         await expect(writer.aggregate("payments", { op: "min", field: "amount", where: { tenant: "a" } })).resolves.toBe(7);
 
         // Deleting the row that IS the stored extreme is what forces the recompute.
-        await writer.delete(lowest);
+        await writer.delete("payments", lowest);
 
         await expect(writer.aggregate("payments", { op: "min", field: "amount", where: { tenant: "a" } })).resolves.toBe(42);
 
-        await writer.delete(highest);
+        await writer.delete("payments", highest);
 
         await expect(writer.aggregate("payments", { op: "max", field: "amount", where: { tenant: "a" } })).resolves.toBe(900);
 
@@ -1967,7 +1967,7 @@ describe("createSqlCtxDb — min/max companion over a bigint column", () => {
             const batch = vi.spyOn(batchHarness.exec, "batch");
             const run = vi.spyOn(batchHarness.exec, "run");
 
-            await writer.delete(lowest);
+            await writer.delete("payments", lowest);
 
             // The min/max recompute, group update and prune all commit with the batch, so a
             // failed batch cannot leave the extreme companion behind the other aggregates.
@@ -2157,12 +2157,12 @@ describe("createSqlCtxDb — a bigint in an untyped column", () => {
         await writer.insert("payments", { amount: 900n, tenant: "a" });
 
         // Removing the row that IS the stored extreme is what forces the recompute.
-        await writer.delete(lowest);
+        await writer.delete("payments", lowest);
 
         await expect(writer.aggregate("payments", { field: "amount", op: "min", where: { tenant: "a" } })).resolves.toBe(42);
         await expect(writer.aggregate("payments", { field: "amount", op: "max", where: { tenant: "a" } })).resolves.toBe(1234);
 
-        await writer.delete(highest);
+        await writer.delete("payments", highest);
 
         await expect(writer.aggregate("payments", { field: "amount", op: "max", where: { tenant: "a" } })).resolves.toBe(900);
         await expect(writer.aggregate("payments", { field: "amount", op: "min", where: { tenant: "a" } })).resolves.toBe(42);
@@ -2245,7 +2245,7 @@ describe("createSqlCtxDb — recomputing an extreme over a large group", () => {
         widest = 0;
 
         // Removing the row that IS the stored extreme is what forces the recompute.
-        await writer.delete(lowest);
+        await writer.delete("payments", lowest);
 
         await expect(writer.aggregate("payments", { field: "amount", op: "min", where: { tenant: "a" } })).resolves.toBe(2);
         expect(widest).toBeLessThanOrEqual(BACKFILL_BATCH_SIZE);
@@ -3005,7 +3005,7 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
             const writer = makeWriter();
             const id = await writer.insert("counters", { name: "a", value: 5 });
 
-            await writer.patch(id, { value: { increment: 3 } });
+            await writer.patch("counters", id, { value: { increment: 3 } });
 
             await expect(writer.get("counters", id)).resolves.toMatchObject({ value: 8 });
         });
@@ -3016,7 +3016,7 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
             const writer = makeWriter();
             const id = await writer.insert("counters", { name: "a", value: 0 });
 
-            await Promise.all(Array.from({ length: 10 }, async () => writer.patch(id, { value: { increment: 1 } })));
+            await Promise.all(Array.from({ length: 10 }, async () => writer.patch("counters", id, { value: { increment: 1 } })));
 
             await expect(writer.get("counters", id)).resolves.toMatchObject({ value: 10 });
         });
@@ -3027,7 +3027,7 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
             const { updates, writer } = contendedWriter();
             const id = await makeWriter().insert("counters", { name: "a", value: 0 });
 
-            await expect(writer.patch(id, { value: { increment: 1 } })).rejects.toMatchObject({ code: "CONFLICT" });
+            await expect(writer.patch("counters", id, { value: { increment: 1 } })).rejects.toMatchObject({ code: "CONFLICT" });
             expect(updates()).toBe(16);
         });
 
@@ -3037,7 +3037,7 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
             const { updates, writer } = contendedWriter();
             const id = await makeWriter().insert("counters", { name: "a", value: 0 });
 
-            await expect(writer.patch(id, { value: 1 })).rejects.toMatchObject({ code: "CONFLICT" });
+            await expect(writer.patch("counters", id, { value: 1 })).rejects.toMatchObject({ code: "CONFLICT" });
             expect(updates()).toBe(1);
         });
 
@@ -3061,7 +3061,7 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
 
             // 3 - 2 = 1 passes on the first read; after the lost race the row holds 1 and 1 - 2 = -1 must not land.
             await expect(
-                makeWriter(makeSqliteDialect(), racing).patch(id, { value: { decrement: 2 } }, undefined, { verify: nonNegative }),
+                makeWriter(makeSqliteDialect(), racing).patch("counters", id, { value: { decrement: 2 } }, { verify: nonNegative }),
             ).rejects.toMatchObject({
                 code: "FORBIDDEN",
             });
@@ -3075,7 +3075,7 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
             const writer = makeWriter();
             const id = await writer.insert("counters", { name: "a", value: 1 });
 
-            await expect(writer.patch(id, { value: { divide: 0 } })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+            await expect(writer.patch("counters", id, { value: { divide: 0 } })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
         });
     });
 });
@@ -3265,7 +3265,7 @@ describe("createSqlCtxDb — dotted paths into an object column", () => {
 
             const writer = await seed();
 
-            await writer.patch("a", { "profile.plan": "team" });
+            await writer.patch("users", "a", { "profile.plan": "team" });
 
             const row = await writer.get("users", "a");
             const untouched = await writer.get("users", "b");
@@ -3279,7 +3279,7 @@ describe("createSqlCtxDb — dotted paths into an object column", () => {
 
             const writer = await seed();
 
-            await writer.patch("d", { "profile.plan": "pro" });
+            await writer.patch("users", "d", { "profile.plan": "pro" });
 
             const row = await writer.get("users", "d");
 
@@ -3309,7 +3309,7 @@ describe("createSqlCtxDb — dotted paths into an object column", () => {
             };
             const writer = await seed(makeSqliteDialect(), contended);
 
-            await writer.patch("a", { "profile.plan": "team" });
+            await writer.patch("users", "a", { "profile.plan": "team" });
 
             const row = await writer.get("users", "a");
 
@@ -3326,7 +3326,7 @@ describe("createSqlCtxDb — dotted paths into an object column", () => {
 
             const writer = await seed();
 
-            await expect(writer.patch("a", patch as never)).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+            await expect(writer.patch("users", "a", patch as never)).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
 
             const row = await writer.get("users", "a");
 
@@ -3384,7 +3384,7 @@ describe("createSqlCtxDb — $onUpdateFn on a .global() table", () => {
         const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: touchedSchema });
         const id = await writer.insert("notes", { slug: "a" });
 
-        await writer.delete(id);
+        await writer.delete("notes", id);
 
         const row = await writer.findFirst("notes", { includeDeleted: true, where: { slug: "a" } });
 

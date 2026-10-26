@@ -44,12 +44,12 @@ export const toggle = mutation
     .use(rateLimit(limiter, "write", byCaller))
     .input({ id: v.id("todos"), done: v.boolean() })
     .mutation(async ({ args: { id, done }, ctx }): Promise<void> => {
-        await ctx.db.patch(id, { done });
+        await ctx.db.patch("todos", id, { done });
     });
 
 export const remove = mutation
     .use(rateLimit(limiter, "write", byCaller))
     .input({ id: v.id("todos") })
     .mutation(async ({ args: { id }, ctx }): Promise<void> => {
-        await ctx.db.delete(id);
+        await ctx.db.delete("todos", id);
     });

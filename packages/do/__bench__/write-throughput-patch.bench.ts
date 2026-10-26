@@ -38,6 +38,6 @@ beforeAll(async () => {
 describe("write throughput — bare patch", () => {
     bench("bare: patch (single-field update on seed row)", async () => {
         counter += 1;
-        await writer.patch(SEED_ID, { seq: counter });
+        await writer.patch("todos", SEED_ID, { seq: counter });
     });
 });

@@ -88,7 +88,7 @@ describe("v.bytes() on a real D1 .global() table", () => {
         const id = ids[0] as string;
         const document = await db.get("blobs", id);
 
-        await db.replace(id, { blob: document?.["blob"], label: "renamed" });
+        await db.replace("blobs", id, { blob: document?.["blob"], label: "renamed" });
 
         const stored = await env.DB.prepare("SELECT typeof(blob) AS t, hex(blob) AS h FROM blobs WHERE id = ?").bind(id).first();
 
@@ -235,13 +235,13 @@ describe("a string holding U+0000, on a real D1 .global() table", () => {
         const id = "t1";
 
         await env.DB.prepare(`INSERT INTO texts (id, "_creationTime", body, n) VALUES (?, 1, ?, 1)`).bind(id, "a\u0000b").run();
-        await db.patch(id, { n: 2 });
+        await db.patch("texts", id, { n: 2 });
 
         const stored = await db.get("texts", id);
 
         expect(stored).toMatchObject({ body: "a\u0000b", n: 2 });
 
-        await db.delete(id);
+        await db.delete("texts", id);
 
         await expect(db.insert("texts", stored as never, { allowExplicitId: true })).resolves.toBe(id);
     });

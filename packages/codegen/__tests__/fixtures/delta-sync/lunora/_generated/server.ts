@@ -254,7 +254,7 @@ export const internalAction = lunoraBuilders.internalAction as unknown as Intern
  * @example
  * export const setText = defineMutator({
  *     args: { id: v.id("nodes"), text: v.string() },
- *     server: async (ctx, args) => { await ctx.db.patch(args.id, { text: args.text }); },
+ *     server: async (ctx, args) => { await ctx.db.patch("nodes", args.id, { text: args.text }); },
  * });
  */
 export const defineMutator = defineMutatorBase as unknown as <Args extends Record<string, Validator> = Record<string, Validator>, ClientTx = unknown, R = unknown>(

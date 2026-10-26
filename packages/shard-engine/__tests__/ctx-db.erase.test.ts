@@ -102,7 +102,7 @@ describe("ctx-db.deleteAll", () => {
             ["p2", { _id: "p2", userId: "u2" }],
         ]);
         const globalDb = {
-            delete: async (id: string) => {
+            delete: async (_table: string, id: string) => {
                 rows.delete(id);
             },
             findMany: async () => {
@@ -141,10 +141,10 @@ describe("ctx-db.deleteAll", () => {
             ["p2", { _id: "p2", userId: "u2" }],
         ]);
         const globalDb = {
-            delete: async (id: string) => {
+            delete: async (_table: string, id: string) => {
                 rows.delete(id);
             },
-            deleteMany: async (ids: ReadonlyArray<string>) => {
+            deleteMany: async (_table: string, ids: ReadonlyArray<string>) => {
                 for (const id of ids) {
                     rows.delete(id);
                 }
@@ -197,8 +197,8 @@ describe("ctx-db.deleteAll", () => {
         ]);
         const pinned: (string | undefined)[] = [];
         const globalDb = {
-            delete: async (id: string, expectedTable?: string) => {
-                pinned.push(expectedTable);
+            delete: async (table: string, id: string) => {
+                pinned.push(table);
                 rows.delete(id);
             },
             findMany: async () => {
@@ -227,8 +227,8 @@ describe("ctx-db.deleteAll", () => {
 
         const batchTables: (string | undefined)[] = [];
         const batchDb = {
-            deleteMany: async (ids: ReadonlyArray<string>, _options?: unknown, expectedTable?: string) => {
-                batchTables.push(expectedTable);
+            deleteMany: async (table: string, ids: ReadonlyArray<string>) => {
+                batchTables.push(table);
 
                 return { deleted: ids.length };
             },
@@ -238,8 +238,8 @@ describe("ctx-db.deleteAll", () => {
         } as unknown as DatabaseWriterLike;
         const perIdTables: (string | undefined)[] = [];
         const perIdDb = {
-            delete: async (_id: string, expectedTable?: string) => {
-                perIdTables.push(expectedTable);
+            delete: async (table: string, _id: string) => {
+                perIdTables.push(table);
             },
             findMany: async () => {
                 return { continueCursor: null, isDone: true, page: [{ _id: "p1", userId: "u1" }] };

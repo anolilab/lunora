@@ -821,18 +821,18 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // A single-row `writeRow` delete never carries it, so it keeps the
             // table's declared `.softDelete()` behaviour.
             if (args.op === "delete") {
-                await writer.delete(args.id ?? "", args.table, { hard: args.hard === true });
+                await writer.delete(args.table, args.id ?? "", { hard: args.hard === true });
 
                 return { id: args.id ?? null, op: "delete" };
             }
 
             if (args.op === "replace") {
-                await writer.replace(args.id ?? "", args.doc ?? {}, args.table);
+                await writer.replace(args.table, args.id ?? "", args.doc ?? {});
 
                 return { id: args.id ?? null, op: "replace" };
             }
 
-            await writer.patch(args.id ?? "", args.doc ?? {}, args.table);
+            await writer.patch(args.table, args.id ?? "", args.doc ?? {});
 
             return { id: args.id ?? null, op: "patch" };
         }

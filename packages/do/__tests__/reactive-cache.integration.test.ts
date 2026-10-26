@@ -113,7 +113,7 @@ describe("ctx-db + reactiveCache integration", () => {
         });
         await cache.run("scan", new Set(["users:*scan"]), async () => [{ name: "alice" }]);
 
-        await writer.patch(u1, { name: "ALICE" });
+        await writer.patch("users", u1, { name: "ALICE" });
 
         // Both go: per-id (u1 was patched) and *scan (predicate might flip).
         expect(cache.size().entries).toBe(0);
@@ -132,7 +132,7 @@ describe("ctx-db + reactiveCache integration", () => {
         });
         await cache.run("scan", new Set(["users:*scan"]), async () => [{ name: "alice" }]);
 
-        await writer.delete(u1);
+        await writer.delete("users", u1);
 
         expect(cache.size().entries).toBe(0);
     });

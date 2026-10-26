@@ -157,10 +157,10 @@ describe("createNodeGlobalStore", () => {
                 },
             };
 
-            const writerA = createSqlCtxDb({ dialect: sqliteDialect, exec: gated, schema: searchSchema }).patch("x", { body: "two" });
+            const writerA = createSqlCtxDb({ dialect: sqliteDialect, exec: gated, schema: searchSchema }).patch("docs", "x", { body: "two" });
 
             await reachedHold;
-            await createSqlCtxDb({ dialect: sqliteDialect, exec, schema: searchSchema }).patch("x", { body: "three" });
+            await createSqlCtxDb({ dialect: sqliteDialect, exec, schema: searchSchema }).patch("docs", "x", { body: "three" });
             release();
             await writerA;
 

@@ -143,13 +143,13 @@ const runRankScenarios = (factory: () => SqlHarness): void => {
                 await expect(writer.rank("messages", "byChannel", { row: "m2" })).resolves.toEqual({ position: 2, total: 2 });
 
                 // Move m2 to channel c2 — position resets within c2; c1 now has just m1.
-                await writer.patch("m2", { channelId: "c2" });
+                await writer.patch("messages", "m2", { channelId: "c2" });
 
                 await expect(writer.rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 1 });
                 await expect(writer.rank("messages", "byChannel", { row: "m2" })).resolves.toEqual({ position: 1, total: 1 });
 
                 // Delete m1.
-                await writer.delete("m1");
+                await writer.delete("messages", "m1");
 
                 await expect(writer.rank("messages", "byChannel", { row: "m1" })).resolves.toBeNull();
                 await expect(writer.rank("messages", "byChannel", { row: "m2" })).resolves.toEqual({ position: 1, total: 1 });
@@ -169,7 +169,7 @@ const runRankScenarios = (factory: () => SqlHarness): void => {
                 await expect(writer.rank("messages", "activeByChannel", { row: "m3" })).resolves.toEqual({ position: 2, total: 2 });
 
                 // Archive m1 — drops out of the index; m3 now position 1 of 1.
-                await writer.patch("m1", { archived: true });
+                await writer.patch("messages", "m1", { archived: true });
 
                 await expect(writer.rank("messages", "activeByChannel", { row: "m1" })).resolves.toBeNull();
                 await expect(writer.rank("messages", "activeByChannel", { row: "m3" })).resolves.toEqual({ position: 1, total: 1 });
@@ -739,13 +739,13 @@ const runRankScenarios = (factory: () => SqlHarness): void => {
             };
 
             await seed(schema);
-            await freshWriter(schema).delete("m3", "messages");
+            await freshWriter(schema).delete("messages", "m3");
             // Force the next touch to rebuild over a table holding a soft-deleted row.
             clearCompanionSignatures(harness.sql);
 
             await expect(freshWriter(schema).rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 2 });
 
-            await freshWriter(schema).restore!("m3", "messages");
+            await freshWriter(schema).restore!("messages", "m3");
 
             await expect(freshWriter(schema).rank("messages", "byChannel", { row: "m3" })).resolves.toEqual({ position: 3, total: 3 });
         });

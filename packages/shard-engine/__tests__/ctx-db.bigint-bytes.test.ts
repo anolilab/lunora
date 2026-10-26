@@ -167,7 +167,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             const writer = setup();
 
             await writer.insert("paymentSessions", { _id: "a1", amountMinor: 10n, currency: "usd" }, { allowExplicitId: true });
-            await writer.patch("a1", { currency: "eur" });
+            await writer.patch("paymentSessions", "a1", { currency: "eur" });
 
             const row = await writer.get("paymentSessions", "a1");
 
@@ -180,7 +180,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             const writer = setup();
 
             await writer.insert("paymentSessions", { _id: "a1", currency: "usd" }, { allowExplicitId: true });
-            await writer.patch("a1", { capturedMinor: 99n });
+            await writer.patch("paymentSessions", "a1", { capturedMinor: 99n });
 
             const row = await writer.get("paymentSessions", "a1");
 
@@ -397,7 +397,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
 
             await expect(writer.aggregate("paymentSessions", { field: "amountMinor", op: "max", where: { currency: "usd" } })).resolves.toBe(10);
 
-            await writer.delete("s10", "paymentSessions");
+            await writer.delete("paymentSessions", "s10");
 
             await expect(writer.aggregate("paymentSessions", { field: "amountMinor", op: "max", where: { currency: "usd" } })).resolves.toBe(9);
         });
@@ -599,7 +599,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
 
             const first = await writer.get("paymentSessions", "a1");
 
-            await writer.replace("a1", { currency: first?.["currency"], receipt: first?.["receipt"] });
+            await writer.replace("paymentSessions", "a1", { currency: first?.["currency"], receipt: first?.["receipt"] });
 
             const second = await writer.get("paymentSessions", "a1");
 
@@ -613,7 +613,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             const writer = setup();
 
             await writer.insert("paymentSessions", { _id: "a1", currency: "usd", receipt: new Uint8Array([9, 8, 7]).buffer }, { allowExplicitId: true });
-            await writer.patch("a1", { currency: "eur" });
+            await writer.patch("paymentSessions", "a1", { currency: "eur" });
 
             const row = await writer.get("paymentSessions", "a1");
 
@@ -626,7 +626,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             const writer = setup();
 
             await writer.insert("paymentSessions", { _id: "a1", currency: "usd", receipt: new Uint8Array([0]).buffer }, { allowExplicitId: true });
-            await writer.replace("a1", { currency: "usd", receipt: new Uint8Array([1, 1, 2, 3, 5]).buffer });
+            await writer.replace("paymentSessions", "a1", { currency: "usd", receipt: new Uint8Array([1, 1, 2, 3, 5]).buffer });
 
             const row = await writer.get("paymentSessions", "a1");
 
@@ -639,7 +639,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             const writer = setup();
 
             await writer.insert("receipts", { _id: "a1", payload: new Uint8Array([42, 42]).buffer }, { allowExplicitId: true });
-            await writer.delete("a1", "receipts");
+            await writer.delete("receipts", "a1");
 
             const row = await writer.get("receipts", "a1");
 
@@ -819,7 +819,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
 
             // A single-field patch is enough: `patch` merges over the DECODED
             // document and re-encodes the whole blob.
-            await writer.patch("tagged-1", { currency: "eur" });
+            await writer.patch("paymentSessions", "tagged-1", { currency: "eur" });
 
             const after = await writer.findMany("paymentSessions", { where: { amountMinor: 10n } });
             const stored = JSON.parse(harness.raw(`SELECT __doc__ FROM paymentSessions WHERE id = 'tagged-1'`)[0]?.["__doc__"] as string) as Record<

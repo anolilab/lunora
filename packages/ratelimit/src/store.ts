@@ -172,7 +172,7 @@ interface RateLimitDatabaseReader {
  * free of a runtime dependency on `@lunora/server`.
  */
 interface RateLimitDatabase extends RateLimitDatabaseReader {
-    delete: <T extends string>(id: Id<T>) => Promise<void>;
+    delete: <T extends string>(table: T, id: Id<T>) => Promise<void>;
 
     /**
      * Used by `sweep` only: rows matching `where`, at most `limit`. Optional in the
@@ -348,7 +348,7 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
             const id = await resolveId(storageKey);
 
             if (id !== undefined) {
-                await db.delete(id);
+                await db.delete(table, id);
             }
 
             idCache.delete(storageKey);
@@ -442,7 +442,7 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
                     const current = await db.findFirst(table, { where: { _id: row["_id"], prev: row["prev"] ?? null, ts: row["ts"], value: row["value"] } });
 
                     if (current !== null) {
-                        await db.delete(row["_id"] as Id<string>);
+                        await db.delete(table, row["_id"] as Id<string>);
                     }
                 }),
             );

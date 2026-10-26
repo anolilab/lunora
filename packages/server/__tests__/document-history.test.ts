@@ -111,7 +111,7 @@ const createMemoryDb = () => {
     };
 
     return {
-        delete: async (id: string) => {
+        delete: async (_table: string, id: string) => {
             rows.delete(id);
         },
         takes,

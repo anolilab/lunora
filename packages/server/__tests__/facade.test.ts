@@ -6,7 +6,7 @@ import { bindTableFacade } from "../src/facade";
 
 /**
  * `bindTableFacade` pins a `tableName` on the structural writer so the per-table
- * accessor (`ctx.db.<table>.*`) forwards it as `expectedTable` on by-id calls —
+ * accessor (`ctx.db.<table>.*`) forwards it as the table on by-id calls —
  * the IDOR guard. These tests assert the batch forms (added alongside `insertMany`)
  * forward the bound table, and that `patchMany` maps the facade's `values` payload
  * onto the writer's `{ id, patch }` shape.
@@ -57,14 +57,14 @@ const makeWriter = () => {
 };
 
 describe("bindTableFacade — per-table batch forms", () => {
-    it("deleteMany(ids) forwards the bound table as expectedTable", async () => {
+    it("deleteMany(ids) forwards the bound table first", async () => {
         expect.assertions(1);
 
         const { deleteMany, entry } = makeWriter();
 
         await entry.deleteMany(["a", "b"], { limit: 5 });
 
-        expect(deleteMany).toHaveBeenCalledWith(["a", "b"], { limit: 5 }, "messages");
+        expect(deleteMany).toHaveBeenCalledWith("messages", ["a", "b"], { limit: 5 });
     });
 
     it("deleteMany({ where }) routes to the writer's deleteWhere with the bound table", async () => {
@@ -84,7 +84,7 @@ describe("bindTableFacade — per-table batch forms", () => {
 
         await entry.patchMany([{ id: "a", values: { body: "x" } }], { limit: 5 });
 
-        expect(patchMany).toHaveBeenCalledWith([{ id: "a", patch: { body: "x" } }], { limit: 5 }, "messages");
+        expect(patchMany).toHaveBeenCalledWith("messages", [{ id: "a", patch: { body: "x" } }], { limit: 5 });
     });
 
     it("patchMany({ where, values }) routes to the writer's patchWhere with the bound table", async () => {
@@ -115,8 +115,8 @@ describe("bindTableFacade — per-table batch forms", () => {
         await entry.delete("a");
         await entry.patch("a", { body: "x" });
 
-        expect(deleteOne).toHaveBeenCalledWith("a", "messages");
-        expect(patchOne).toHaveBeenCalledWith("a", { body: "x" }, "messages");
+        expect(deleteOne).toHaveBeenCalledWith("messages", "a");
+        expect(patchOne).toHaveBeenCalledWith("messages", "a", { body: "x" });
     });
 });
 
@@ -234,7 +234,7 @@ describe("bindTableFacade — upsert / upsertMany", () => {
         await expect(entry.upsert({ create: { email: "a@b.c", name: "new" }, target: "email" })).resolves.toStrictEqual({ created: false, id: "u1" });
         // The lookup uses the target value from `create`; the patch scopes to the bound table.
         expect(findFirst).toHaveBeenCalledWith("users", { where: { email: "a@b.c" } });
-        expect(patch).toHaveBeenCalledWith("u1", { email: "a@b.c", name: "new" }, "users");
+        expect(patch).toHaveBeenCalledWith("users", "u1", { email: "a@b.c", name: "new" });
         expect(insert).not.toHaveBeenCalled();
     });
 
@@ -247,7 +247,7 @@ describe("bindTableFacade — upsert / upsertMany", () => {
 
         await entry.upsert({ create: { email: "a@b.c", name: "n" }, target: "email", update: { name: "patched" } });
 
-        expect(patch).toHaveBeenCalledWith("u1", { name: "patched" }, "users");
+        expect(patch).toHaveBeenCalledWith("users", "u1", { name: "patched" });
     });
 
     it("inserts and reports created:true when no row matches", async () => {

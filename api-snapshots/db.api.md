@@ -341,11 +341,11 @@ interface PlanPatch {
 
 ```ts
 interface PlanWriter {
-    delete: (id: never) => Promise<void>;
+    delete: (table: never, id: never) => Promise<void>;
     insert: (tableName: never, document: Record<string, unknown>, options?: {
         clientId?: string;
     }) => Promise<unknown>;
-    patch: (id: never, patch: Record<string, unknown>) => Promise<void>;
+    patch: (table: never, id: never, patch: Record<string, unknown>) => Promise<void>;
 }
 ```
 

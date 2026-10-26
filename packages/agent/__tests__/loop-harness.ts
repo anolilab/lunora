@@ -438,13 +438,11 @@ export const fakeDatabase = (): { database: Record<string, unknown>; rows: Map<s
     };
 
     const database = {
-        delete: async (id: string) => {
-            for (const [table, tableContent] of rows) {
-                rows.set(
-                    table,
-                    tableContent.filter((row) => row["_id"] !== id),
-                );
-            }
+        delete: async (table: string, id: string) => {
+            rows.set(
+                table,
+                tableRows(table).filter((row) => row["_id"] !== id),
+            );
         },
         insert: async (table: string, document: Record<string, unknown>) => {
             const id = `id-${String(nextId)}`;
@@ -454,15 +452,13 @@ export const fakeDatabase = (): { database: Record<string, unknown>; rows: Map<s
 
             return id;
         },
-        patch: async (id: string, patch: Record<string, unknown>) => {
+        patch: async (table: string, id: string, patch: Record<string, unknown>) => {
             assertNoExplicitUndefined(patch);
 
-            for (const tableContent of rows.values()) {
-                const row = tableContent.find((candidate) => candidate["_id"] === id);
+            const row = tableRows(table).find((candidate) => candidate["_id"] === id);
 
-                if (row) {
-                    Object.assign(row, patch);
-                }
+            if (row) {
+                Object.assign(row, patch);
             }
         },
         query: (table: string) => {

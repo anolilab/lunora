@@ -60,7 +60,7 @@ interface PaymentPage {
  * Minimal write/read surface this store needs; `ctx.db` satisfies it structurally.
  */
 interface PaymentDatabase {
-    delete: (id: string) => Promise<void>;
+    delete: (table: string, id: string) => Promise<void>;
     findFirst: (table: string, where: Record<string, unknown>) => Promise<PaymentRow | null>;
 
     /**
@@ -70,7 +70,7 @@ interface PaymentDatabase {
      */
     findMany: (table: string, where: Record<string, unknown>, page?: PaymentPageArgs) => Promise<PaymentPage>;
     insert: (table: string, document: Record<string, unknown>) => Promise<string>;
-    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<void>;
 
     /**
      * Applies `patch` to row `id` only if the row still matches `where`, in one atomic step, and says
@@ -294,7 +294,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
         const existing = await database.findFirst(table, where);
 
         if (existing) {
-            await database.patch(existing._id, row);
+            await database.patch(table, existing._id, row);
 
             return;
         }
@@ -338,7 +338,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
         }
 
         if (guard === undefined) {
-            await database.patch(existing._id, revised);
+            await database.patch(table, existing._id, revised);
 
             return true;
         }
@@ -461,7 +461,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             const existing = await database.findFirst(PAYMENT_TABLES.events, { provider, providerEventId: eventId });
 
             if (existing) {
-                await database.delete(existing._id);
+                await database.delete(PAYMENT_TABLES.events, existing._id);
             }
         },
 
@@ -469,7 +469,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             const existing = await database.findFirst(PAYMENT_TABLES.usageEvents, { idempotencyKey, provider });
 
             if (existing) {
-                await database.patch(existing._id, { reportedToProvider: true });
+                await database.patch(PAYMENT_TABLES.usageEvents, existing._id, { reportedToProvider: true });
             }
         },
 

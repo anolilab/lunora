@@ -160,12 +160,12 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
                 await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
                 await expect(writer.count("todos", { projectId: "p2" })).resolves.toBe(1);
 
-                await writer.patch("t4", { projectId: "p1" });
+                await writer.patch("todos", "t4", { projectId: "p1" });
 
                 await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(5);
                 await expect(writer.count("todos", { projectId: "p2" })).resolves.toBe(0);
 
-                await writer.delete("t1");
+                await writer.delete("todos", "t1");
 
                 await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
             });
@@ -177,7 +177,7 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
 
                 await seed(writer);
 
-                await writer.replace("t1", { archived: false, projectId: "p3", seq: 99 });
+                await writer.replace("todos", "t1", { archived: false, projectId: "p3", seq: 99 });
 
                 await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(3);
                 await expect(writer.count("todos", { projectId: "p3" })).resolves.toBe(1);
@@ -200,7 +200,7 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
                 await expect(writer.count("todos", { archived: false, projectId: "p1" })).resolves.toBe(3);
                 await expect(writer.count("todos", { archived: false, projectId: "p2" })).resolves.toBe(1);
 
-                await writer.patch("t1", { archived: true });
+                await writer.patch("todos", "t1", { archived: true });
 
                 await expect(writer.count("todos", { archived: false, projectId: "p1" })).resolves.toBe(2);
             });
@@ -214,7 +214,7 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
 
                 await expect(writer.count("todos")).resolves.toBe(5);
 
-                await writer.delete("t3");
+                await writer.delete("todos", "t3");
 
                 await expect(writer.count("todos")).resolves.toBe(4);
             });
@@ -314,7 +314,7 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
 
                 // `deletedAt` is absent on every seeded row except the last.
                 await seed(writer);
-                await writer.patch("t5", { deletedAt: 1 });
+                await writer.patch("todos", "t5", { deletedAt: 1 });
 
                 await expect(writer.count("todos", { deletedAt: null, projectId: "p1" })).resolves.toBe(3);
 
@@ -508,7 +508,7 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
                 const writer = setupWriter(makeSchema(byProject, sumSeqByProject));
 
                 await seed(writer);
-                await writer.delete("t4"); // p2's only row → the group empties
+                await writer.delete("todos", "t4"); // p2's only row → the group empties
 
                 // Force the indexed walk: with the source table gone, only the
                 // companion can answer — so a surviving phantom row would show up.
@@ -549,15 +549,15 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
 
                     await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(6);
 
-                    await writer.patch("t1", { seq: 10 }); // p1: 6 - 1 + 10 = 15
+                    await writer.patch("todos", "t1", { seq: 10 }); // p1: 6 - 1 + 10 = 15
 
                     await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(15);
 
-                    await writer.replace("t2", { archived: false, projectId: "p1", seq: 5 }); // p1: 15 - 2 + 5 = 18
+                    await writer.replace("todos", "t2", { archived: false, projectId: "p1", seq: 5 }); // p1: 15 - 2 + 5 = 18
 
                     await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(18);
 
-                    await writer.delete("t3"); // p1: 18 - 3 = 15
+                    await writer.delete("todos", "t3"); // p1: 18 - 3 = 15
 
                     await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(15);
                 });
@@ -569,7 +569,7 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
 
                     await seed(writer);
 
-                    await writer.patch("t4", { projectId: "p1" }); // p2 → p1: p1 6+4=10, p2 empty
+                    await writer.patch("todos", "t4", { projectId: "p1" }); // p2 → p1: p1 6+4=10, p2 empty
 
                     await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(10);
 
@@ -606,7 +606,7 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
 
                     await expect(writer.aggregate("todos", { field: "seq", op: "sum" })).resolves.toBe(10);
 
-                    await writer.delete("t4"); // 10 - 4 = 6
+                    await writer.delete("todos", "t4"); // 10 - 4 = 6
 
                     await expect(writer.aggregate("todos", { field: "seq", op: "sum" })).resolves.toBe(6);
                 });
@@ -633,11 +633,11 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
 
                     await seed(writer);
 
-                    await writer.delete("t4"); // p2 now empty
+                    await writer.delete("todos", "t4"); // p2 now empty
 
                     await expect(writer.aggregate("todos", { field: "seq", op: "avg", where: { projectId: "p2" } })).resolves.toBeNull();
 
-                    await writer.patch("t1", { seq: 7 }); // p1 seqs 7,2,3,0 → avg 3
+                    await writer.patch("todos", "t1", { seq: 7 }); // p1 seqs 7,2,3,0 → avg 3
 
                     await expect(writer.aggregate("todos", { field: "seq", op: "avg", where: { projectId: "p1" } })).resolves.toBe(3);
                 });
@@ -664,7 +664,7 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
 
                     await seed(writer);
 
-                    await writer.delete("t2"); // p1 drops seq 2 — neither the min (0) nor max (3)
+                    await writer.delete("todos", "t2"); // p1 drops seq 2 — neither the min (0) nor max (3)
 
                     await expect(writer.aggregate("todos", { field: "seq", op: "min", where: { projectId: "p1" } })).resolves.toBe(0);
                     await expect(writer.aggregate("todos", { field: "seq", op: "max", where: { projectId: "p1" } })).resolves.toBe(3);
@@ -677,8 +677,8 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
 
                     await seed(writer);
 
-                    await writer.delete("t5"); // removes seq 0 (the p1 min) → new min is 1
-                    await writer.delete("t3"); // removes seq 3 (the p1 max) → new max is 2
+                    await writer.delete("todos", "t5"); // removes seq 0 (the p1 min) → new min is 1
+                    await writer.delete("todos", "t3"); // removes seq 3 (the p1 max) → new max is 2
 
                     await expect(writer.aggregate("todos", { field: "seq", op: "min", where: { projectId: "p1" } })).resolves.toBe(1);
                     await expect(writer.aggregate("todos", { field: "seq", op: "max", where: { projectId: "p1" } })).resolves.toBe(2);
@@ -691,11 +691,11 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
 
                     await seed(writer);
 
-                    await writer.patch("t3", { seq: 1 }); // the stored p1 max (3) shrinks to 1 → new max is 2
+                    await writer.patch("todos", "t3", { seq: 1 }); // the stored p1 max (3) shrinks to 1 → new max is 2
 
                     await expect(writer.aggregate("todos", { field: "seq", op: "max", where: { projectId: "p1" } })).resolves.toBe(2);
 
-                    await writer.patch("t1", { seq: 9 }); // a growing update wins the fast path
+                    await writer.patch("todos", "t1", { seq: 9 }); // a growing update wins the fast path
 
                     await expect(writer.aggregate("todos", { field: "seq", op: "max", where: { projectId: "p1" } })).resolves.toBe(9);
                 });
@@ -707,7 +707,7 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
 
                     await seed(writer);
 
-                    await writer.delete("t4"); // p2's only row
+                    await writer.delete("todos", "t4"); // p2's only row
 
                     await expect(writer.aggregate("todos", { field: "seq", op: "min", where: { projectId: "p2" } })).resolves.toBeNull();
                 });
@@ -722,7 +722,7 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
                     // t5 carries p1's min (seq 0); move it to p2. p1's min must
                     // recompute (the stored extreme left), and p2 must seed the new
                     // value — exercising recompute-on-old + seed-on-new across groups.
-                    await writer.patch("t5", { projectId: "p2" });
+                    await writer.patch("todos", "t5", { projectId: "p2" });
 
                     await expect(writer.aggregate("todos", { field: "seq", op: "min", where: { projectId: "p1" } })).resolves.toBe(1);
                     await expect(writer.aggregate("todos", { field: "seq", op: "max", where: { projectId: "p1" } })).resolves.toBe(3);
@@ -784,7 +784,7 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
                     const writer = setupWriter(makeSchema(minSeqByProject, maxSeqByProject));
 
                     await seed(writer);
-                    await writer.delete("t4"); // p2's only row → the min/max group empties
+                    await writer.delete("todos", "t4"); // p2's only row → the min/max group empties
 
                     // Force the indexed walk: a leftover NULL-valued companion row
                     // would surface p2 as a phantom group here.

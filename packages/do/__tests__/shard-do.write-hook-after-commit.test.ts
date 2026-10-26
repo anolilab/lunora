@@ -155,7 +155,7 @@ describe("shardDO.runInTransaction — external write hooks", () => {
 
         await expect(
             shard.run(async () => {
-                await db.patch(id, { body: "doomed" });
+                await db.patch("notes", id, { body: "doomed" });
 
                 throw new Error("boom after patch");
             }),
@@ -175,7 +175,7 @@ describe("shardDO.runInTransaction — external write hooks", () => {
 
         await expect(
             shard.run(async () => {
-                await db.delete(id);
+                await db.delete("notes", id);
 
                 throw new Error("boom after delete");
             }),
@@ -230,8 +230,8 @@ describe("shardDO.runInTransaction — external write hooks", () => {
 
         // Both queue on the gate before either commits, so they commit in call
         // order: `"v1"` first, with the slow hook, then `"v2"` with a fast one.
-        const first = shard.run(async () => db.patch(id, { body: "v1" }));
-        const second = shard.run(async () => db.patch(id, { body: "v2" }));
+        const first = shard.run(async () => db.patch("notes", id, { body: "v1" }));
+        const second = shard.run(async () => db.patch("notes", id, { body: "v2" }));
 
         // Long enough for the second transaction to commit and, if nothing held
         // it, to run its hook to completion while the first is still in flight.
@@ -289,7 +289,7 @@ describe("shardDO.runInTransaction — external write hooks", () => {
                 // Never settles.
             });
 
-        const stalled = shard.run(async () => db.patch(id, { body: "v1" }));
+        const stalled = shard.run(async () => db.patch("notes", id, { body: "v1" }));
 
         // This transaction queued no hooks at all, so it has nothing to order
         // against the stalled one and must not inherit its wait. Before the wait
@@ -326,8 +326,8 @@ describe("shardDO.runInTransaction — external write hooks", () => {
                 }
             };
 
-            const first = shard.run(async () => db.patch(id, { body: "v1" }));
-            const second = shard.run(async () => db.patch(id, { body: "v2" }));
+            const first = shard.run(async () => db.patch("notes", id, { body: "v1" }));
+            const second = shard.run(async () => db.patch("notes", id, { body: "v2" }));
 
             // Well past the deadline. Both dispatches answer without their hooks.
             await vi.advanceTimersByTimeAsync(60_000);
@@ -367,7 +367,7 @@ describe("shardDO.runInTransaction — external write hooks", () => {
                     // Never settles.
                 });
 
-            const stalled = shard.run(async () => db.patch(id, { body: "v1" }));
+            const stalled = shard.run(async () => db.patch("notes", id, { body: "v1" }));
 
             await vi.advanceTimersByTimeAsync(60_000);
             await stalled;
@@ -379,7 +379,7 @@ describe("shardDO.runInTransaction — external write hooks", () => {
             //
             // Timers stay frozen from here: this await can only return on a
             // wait-free path, and hangs the test if a second deadline is armed.
-            await shard.run(async () => db.patch(id, { body: "v2" }));
+            await shard.run(async () => db.patch("notes", id, { body: "v2" }));
 
             // Linked, not abandoned — nothing has landed behind the stuck hook.
             expect(shard.events).toStrictEqual([]);

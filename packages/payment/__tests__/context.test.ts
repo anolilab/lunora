@@ -12,7 +12,7 @@ const makeDb = (): LunoraDatabaseLike => {
         Object.entries(where ?? {}).every(([key, value]) => row[key] === value);
 
     return {
-        delete: async (id) => {
+        delete: async (_table, id) => {
             rows.delete(id);
         },
         findFirst: async (_table, args) => [...rows.values()].find((row) => matches(row, args?.where)) ?? null,
@@ -31,7 +31,7 @@ const makeDb = (): LunoraDatabaseLike => {
 
             return id;
         },
-        patch: async (id, patch) => {
+        patch: async (_table, id, patch) => {
             // Mirror shard-engine's `assertNoExplicitUndefined`: `ctx.db.patch` rejects a key whose
             // value is explicitly `undefined` rather than silently dropping (i.e. deleting) it. A
             // permissive `{ ...row, ...patch }` double is how a store that throws on every second

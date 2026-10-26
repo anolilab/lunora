@@ -75,7 +75,7 @@ export const save = mutation
                 throw new LunoraError("NOT_FOUND", "draft not found");
             }
 
-            await ctx.db.patch(id, { title, body, updatedAt: Date.now() });
+            await ctx.db.patch("drafts", id, { title, body, updatedAt: Date.now() });
 
             return id;
         }

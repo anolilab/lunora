@@ -69,10 +69,10 @@ const buildUpsertWhere = (
 export interface FacadeWriterLike {
     aggregate(tableName: string, options: unknown): Promise<unknown>;
     count(tableName: string, where?: unknown): Promise<number>;
-    delete(id: string, expectedTable?: string, options?: { hard?: boolean }): Promise<void>;
+    delete(table: string, id: string, options?: { hard?: boolean }): Promise<void>;
     // Optional: some writers (e.g. the `.global()` path) have no batch method and
     // delete row-by-row instead, mirroring `@lunora/do`'s `DatabaseWriterLike`.
-    deleteMany?(ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string): Promise<{ deleted: number }>;
+    deleteMany?(table: string, ids: ReadonlyArray<string>, options?: { limit?: number }): Promise<{ deleted: number }>;
     deleteWhere?(tableName: string, where: Record<string, unknown>, options?: { limit?: number }): Promise<{ deleted: number }>;
     explain(tableName: string, args?: unknown): Promise<unknown>;
     findFirst(tableName: string, args?: unknown): Promise<unknown>;
@@ -89,12 +89,12 @@ export interface FacadeWriterLike {
         documents: ReadonlyArray<Record<string, unknown>>,
         options?: { limit?: number; skipDuplicates?: boolean },
     ): Promise<(string | null)[]>;
-    patch(id: string, patch: Record<string, unknown>, expectedTable?: string): Promise<void>;
+    patch(table: string, id: string, patch: Record<string, unknown>): Promise<void>;
     // Optional: see `deleteMany` above.
     patchMany?(
+        table: string,
         patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
         options?: { limit?: number },
-        expectedTable?: string,
     ): Promise<{ patched: number }>;
     patchWhere?(
         tableName: string,
@@ -109,9 +109,9 @@ export interface FacadeWriterLike {
     rankPage(tableName: string, indexName: string, options?: unknown): Promise<unknown>;
     /** Per-relation facts for nested relation writes, published by the engine's writer; absent on a writer that declares none. */
     readonly relationWrites?: Readonly<Record<string, RelationWriteInfosLike>>;
-    replace(id: string, document: Record<string, unknown>, expectedTable?: string): Promise<void>;
+    replace(table: string, id: string, document: Record<string, unknown>): Promise<void>;
     // Optional: only writers over a `.softDelete()` schema implement it.
-    restore?(id: string, expectedTable?: string): Promise<void>;
+    restore?(table: string, id: string): Promise<void>;
 }
 /* eslint-enable @typescript-eslint/method-signature-style */
 
@@ -289,7 +289,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
     return {
         aggregate: (options) => writer.aggregate(tableName, options),
         count: (where) => writer.count(tableName, where),
-        delete: (id) => writer.delete(id, tableName),
+        delete: (id) => writer.delete(tableName, id),
         // `deleteMany`/`patchMany` forward the bound `tableName` as `expectedTable`
         // for id-based calls (threaded through the writer + the RLS middleware's
         // per-id gate) so every batched id is scoped to this table — the same IDOR
@@ -303,7 +303,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
                     throw new LunoraError("INTERNAL", `ctx.db.${tableName}.deleteMany is unavailable: this writer has no batch delete`);
                 }
 
-                return writer.deleteMany(first, options, tableName);
+                return writer.deleteMany(tableName, first, options);
             }
 
             if (writer.deleteWhere === undefined) {
@@ -326,7 +326,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         get: (id) => writer.get(tableName, id),
         groupBy: (options) => writer.groupBy(tableName, options),
         // Physical removal — bypasses `.softDelete()`. RLS gates it as a delete.
-        hardDelete: (id) => writer.delete(id, tableName, { hard: true }),
+        hardDelete: (id) => writer.delete(tableName, id, { hard: true }),
         insert,
         insertMany: (documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => {
             for (const document of documents) {
@@ -360,11 +360,11 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
                 }
 
                 return writer.patchMany(
+                    tableName,
                     first.map((entry: { id: string; values: Record<string, unknown> }) => {
                         return { id: entry.id, patch: entry.values };
                     }),
                     options,
-                    tableName,
                 );
             }
 
@@ -381,14 +381,14 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         replace: (id, document) => {
             assertNoRelationWrites(tableName, relationInfos, document, "replace");
 
-            return writer.replace(id, document, tableName);
+            return writer.replace(tableName, id, document);
         },
         restore: async (id) => {
             if (!writer.restore) {
                 throw new LunoraError("INTERNAL", `ctx.db.${tableName}.restore is unavailable: this writer has no restore (is the table .softDelete()?)`);
             }
 
-            await writer.restore(id, tableName);
+            await writer.restore(tableName, id);
         },
         upsert,
         upsertMany: async ({ rows, target }) => {

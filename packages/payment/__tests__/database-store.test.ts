@@ -70,7 +70,7 @@ const makeDb = (): ProbedDatabase => {
     };
 
     return {
-        delete: async (id) => {
+        delete: async (_table, id) => {
             for (const rows of tables.values()) {
                 if (rows.delete(id)) {
                     return;
@@ -106,17 +106,14 @@ const makeDb = (): ProbedDatabase => {
 
             return id;
         },
-        patch: async (id, patch) => {
+        patch: async (table, id, patch) => {
             assertNoExplicitUndefined(patch);
 
-            for (const rows of tables.values()) {
-                const row = rows.get(id);
+            const rows = tableOf(table);
+            const row = rows.get(id);
 
-                if (row) {
-                    rows.set(id, { ...row, ...patch });
-
-                    return;
-                }
+            if (row) {
+                rows.set(id, { ...row, ...patch });
             }
         },
         patchIf: async (table, id, where, patch) => {
@@ -159,14 +156,14 @@ const makeValidatingDb = (): ProbedDatabase => {
 
             return id;
         },
-        patch: async (id, patch) => {
+        patch: async (table, id, patch) => {
             const shape = shapeOf(tableById.get(id) ?? "");
 
             for (const [field, value] of Object.entries(patch)) {
                 shape[field]?.parse(value);
             }
 
-            return db.patch(id, patch);
+            return db.patch(table, id, patch);
         },
     };
 };
@@ -356,7 +353,7 @@ describe("createDatabasePaymentStore", () => {
 
         const row = await db.findFirst("payment_sessions", { provider: "stripe", providerSessionId: "pi_1" });
 
-        await db.patch(row!._id, { capturedMinor: 1.5 });
+        await db.patch("payment_sessions", row!._id, { capturedMinor: 1.5 });
 
         await expect(store.getPaymentSession("stripe", "pi_1")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
         await expect(store.getPaymentSession("stripe", "pi_1")).rejects.toThrow("`capturedMinor` is not a safe integer");
@@ -372,7 +369,7 @@ describe("createDatabasePaymentStore", () => {
 
         const row = await db.findFirst("payment_sessions", { provider: "stripe", providerSessionId: "pi_1" });
 
-        await db.patch(row!._id, { capturedMinor: null });
+        await db.patch("payment_sessions", row!._id, { capturedMinor: null });
 
         await expect(store.getPaymentSession("stripe", "pi_1")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     });

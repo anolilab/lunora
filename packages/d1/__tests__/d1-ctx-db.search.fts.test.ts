@@ -230,7 +230,7 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
 
         const before = statements.length;
 
-        await writer.delete("d1");
+        await writer.delete("docs", "d1");
 
         const ftsWritesAfter = statements.slice(before).filter((statement) => statement.sql.includes("docs__fts_by_body"));
 

@@ -93,12 +93,12 @@ describe("ctx.db enforces v.id foreign keys on the same shard", () => {
         const customer = await writer.insert("customers", { name: "ada" });
         const order = await writer.insert("orders", { customerId: customer, note: "x" });
 
-        await expect(writer.patch(order, { customerId: "ghost" })).rejects.toThrow(/orders\.customerId/u);
-        await expect(writer.patch(order, { note: "y" })).resolves.toBeUndefined();
+        await expect(writer.patch("orders", order, { customerId: "ghost" })).rejects.toThrow(/orders\.customerId/u);
+        await expect(writer.patch("orders", order, { note: "y" })).resolves.toBeUndefined();
 
         const other = await writer.insert("customers", { name: "grace" });
 
-        await expect(writer.patch(order, { customerId: other })).resolves.toBeUndefined();
+        await expect(writer.patch("orders", order, { customerId: other })).resolves.toBeUndefined();
     });
 
     it("patch of an unrelated field does not re-check a reference the row already held", async () => {
@@ -107,7 +107,7 @@ describe("ctx.db enforces v.id foreign keys on the same shard", () => {
         // A row written before the check existed, or by a trusted import, may point nowhere.
         const order = await writer.insert("orders", { _id: "o1", customerId: "ghost", note: "x" }, { allowExplicitId: true });
 
-        await expect(writer.patch(order, { note: "y" })).resolves.toBeUndefined();
+        await expect(writer.patch("orders", order, { note: "y" })).resolves.toBeUndefined();
     });
 
     it("a child the framework left dangling stays patchable and replaceable, but cannot be pointed at another missing row", async () => {
@@ -117,16 +117,16 @@ describe("ctx.db enforces v.id foreign keys on the same shard", () => {
         const order = await writer.insert("orders", { customerId: customer, note: "x" });
 
         // A bare `v.id` declares no `onDelete`, so deleting the parent leaves the child behind.
-        await writer.delete(customer);
+        await writer.delete("customers", customer);
 
         // A spread rewrite sets the reference to the value it already held.
-        await expect(writer.replace(order, { customerId: customer, note: "edited" })).resolves.toBeUndefined();
-        await expect(writer.patch(order, { customerId: customer, note: "again" })).resolves.toBeUndefined();
+        await expect(writer.replace("orders", order, { customerId: customer, note: "edited" })).resolves.toBeUndefined();
+        await expect(writer.patch("orders", order, { customerId: customer, note: "again" })).resolves.toBeUndefined();
         await expect(writer.get("orders", order)).resolves.toMatchObject({ customerId: customer, note: "again" });
 
         // Changing it to a row that does not exist is still refused.
-        await expect(writer.replace(order, { customerId: "ghost", note: "x" })).rejects.toThrow(/orders\.customerId/u);
-        await expect(writer.patch(order, { customerId: "ghost" })).rejects.toThrow(/orders\.customerId/u);
+        await expect(writer.replace("orders", order, { customerId: "ghost", note: "x" })).rejects.toThrow(/orders\.customerId/u);
+        await expect(writer.patch("orders", order, { customerId: "ghost" })).rejects.toThrow(/orders\.customerId/u);
     });
 
     it("replace rejects a dangling reference", async () => {
@@ -135,7 +135,7 @@ describe("ctx.db enforces v.id foreign keys on the same shard", () => {
         const customer = await writer.insert("customers", { name: "ada" });
         const order = await writer.insert("orders", { customerId: customer, note: "x" });
 
-        await expect(writer.replace(order, { customerId: "ghost", note: "x" })).rejects.toThrow(/orders\.customerId/u);
+        await expect(writer.replace("orders", order, { customerId: "ghost", note: "x" })).rejects.toThrow(/orders\.customerId/u);
     });
 
     it("a trusted import (allowExplicitId) may write a child before its parent", async () => {

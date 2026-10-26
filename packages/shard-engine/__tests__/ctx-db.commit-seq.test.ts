@@ -163,13 +163,13 @@ describe("ctx-db commit sequence", () => {
 
         const patcher = mutation();
 
-        await patcher.patch("e1", { kind: "b" });
+        await patcher.patch("events", "e1", { kind: "b" });
 
         await expect(seqOf(patcher, "events", "e1")).resolves.toBe(2);
 
         const replacer = mutation();
 
-        await replacer.replace("e1", { kind: "c" });
+        await replacer.replace("events", "e1", { kind: "c" });
 
         await expect(seqOf(replacer, "events", "e1")).resolves.toBe(3);
     });
@@ -183,7 +183,7 @@ describe("ctx-db commit sequence", () => {
 
         const remover = mutation();
 
-        await remover.delete("e1");
+        await remover.delete("events", "e1");
 
         // The row survives (soft delete), and its sequence moved — otherwise a
         // changefeed paging on `_commitSeq` would never learn about the delete.
@@ -210,7 +210,7 @@ describe("ctx-db commit sequence", () => {
 
         const next = mutation();
 
-        await next.patch("e1", { kind: "a2" });
+        await next.patch("events", "e1", { kind: "a2" });
 
         const changed = await mutation().findMany("events", { orderBy: [{ _commitSeq: "asc" }], where: { _commitSeq: { gt: cursor } } });
 
@@ -228,7 +228,7 @@ describe("ctx-db commit sequence", () => {
 
         const cursor = readCommitSeq(harness.sql);
 
-        await mutation().delete("e1", undefined, { hard: true });
+        await mutation().delete("events", "e1", { hard: true });
 
         // `_commitSeq` lives ON the row, so a physical removal takes it along.
         // No image is left to stamp, the counter therefore does not move, and a

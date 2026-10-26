@@ -765,7 +765,7 @@ export interface DatabaseWriterLike {
      * gate its parent row, which it never writes. Optional: the RLS middleware evaluates the update policy here, and
      * a writer with no policy layer has no update rule to check. The guard gates only the table.
      */
-    assertPatchAllowed?: (id: string, expectedTable?: string) => Promise<void>;
+    assertPatchAllowed?: (table: string, id: string) => Promise<void>;
 
     /**
      * Which tables this store's change-data-capture log recorded a write to
@@ -815,11 +815,11 @@ export interface DatabaseWriterLike {
         | undefined
     >;
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
-    delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
+    delete: (table: string, id: string, options?: { hard?: boolean }) => Promise<void>;
 
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
 
-    deleteMany?: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
+    deleteMany?: (table: string, ids: ReadonlyArray<string>, options?: { limit?: number }) => Promise<{ deleted: number }>;
 
     /**
      * Tables whose rows can change under a chunked delete between the page read and the delete: `.global()` tables
@@ -880,7 +880,7 @@ export interface DatabaseWriterLike {
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     normalizeId: (tableName: string, id: string) => null | string;
 
-    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: PatchWriteOptions) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>, options?: PatchWriteOptions) => Promise<void>;
 
     /**
      * Conditional patch: apply `patch` to row `id` of `tableName` only while the
@@ -908,9 +908,9 @@ export interface DatabaseWriterLike {
     ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
 
     patchMany?: (
+        table: string,
         patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
         options?: { limit?: number },
-        expectedTable?: string,
     ) => Promise<{ patched: number }>;
     patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: WhereInput }, options?: { limit?: number }) => Promise<{ patched: number }>;
     query: (tableName: string) => TableReaderLike;
@@ -957,8 +957,8 @@ export interface DatabaseWriterLike {
     /** Per-relation facts the table facade needs for nested relation writes (`connect`/`disconnect`/`set`). */
     relationWrites?: RelationWriteMap;
 
-    replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: { allowExplicitId?: boolean }) => Promise<void>;
-    restore?: (id: string, expectedTable?: string) => Promise<void>;
+    replace: (table: string, id: string, document: Record<string, unknown>, options?: { allowExplicitId?: boolean }) => Promise<void>;
+    restore?: (table: string, id: string) => Promise<void>;
 
     /**
      * Soft-delete marker column per table, for tables declared `.softDelete()`. The writer's `delete`
