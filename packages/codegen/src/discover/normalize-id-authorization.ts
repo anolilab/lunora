@@ -156,12 +156,9 @@ const idSinkMethod = (handler: InspectableHandler, name: string): NormalizeIdAut
         // both positions, so neither spelling hides the id from the sink.
         const idPositions = genericDatabase && method === "get" ? 2 : 1;
 
-        if (
-            call
-                .getArguments()
-                .slice(0, idPositions)
-                .some((argument) => Node.isIdentifier(argument) && argument.getText() === name)
-        ) {
+        const idArguments = call.getArguments().slice(0, idPositions);
+
+        if (idArguments.some((argument) => Node.isIdentifier(argument) && argument.getText() === name)) {
             return method;
         }
     }
