@@ -1,10 +1,10 @@
-import { useLunora } from "@lunora/react";
 import type { QueryKey } from "@tanstack/react-query";
 import { keepPreviousData as keepPreviousDataPlaceholder, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../lib/internal";
 import { operationLog } from "../lib/operation-log";
+import useStudioClient from "./use-studio-client";
 
 /**
  * The TanStack Query key for a reserved admin RPC read. Stable + structural:
@@ -180,7 +180,7 @@ const noteQueryFetch = (key: string): void => {
  */
 // eslint-disable-next-line func-style -- a generic arrow `<T>(…) =>` is misread as a JSX element by packem's Babel (`.ts` compiled with the React preset); a function declaration is the unambiguous form.
 function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, options: UseClientQueryOptions = {}): AdminQueryResult<T> {
-    const client = useLunora();
+    const client = useStudioClient();
     const { enabled = true, keepPreviousData = false, staleTime = 0 } = options;
 
     // Scoped here rather than in each caller's key literal: this is the one place
@@ -244,7 +244,7 @@ function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, 
  */
 // eslint-disable-next-line func-style -- a generic arrow `<T>(…) =>` is misread as a JSX element by packem's Babel (`.ts` compiled with the React preset); a function declaration is the unambiguous form.
 function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: UseAdminQueryOptions = {}): AdminQueryResult<T> {
-    const client = useLunora();
+    const client = useStudioClient();
     const queryClient = useQueryClient();
 
     const { enabled = true, keepPreviousData = false, live = false, shardKey = "", staleTime } = options;

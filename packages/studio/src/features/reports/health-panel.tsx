@@ -1,5 +1,4 @@
 import type { SchedulerStatus } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -8,6 +7,7 @@ import { LiveError } from "../../components/live-status";
 import { Badge } from "../../components/ui/badge";
 import { Card } from "../../components/ui/card";
 import { useAdminQuery } from "../../hooks/use-admin-query";
+import useStudioClient from "../../hooks/use-studio-client";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import type { AuthMetrics, FunctionCallStat, LogEntry, LogsResult, MetricsSnapshot, MigrationStatusRow } from "../../lib/admin";
@@ -187,7 +187,7 @@ interface SloData {
  * failing the pull. `metricsError` is set only when NOT one shard returned
  * metrics, carrying the root shard's reason.
  */
-const loadSloData = async (client: ReturnType<typeof useLunora>, rootShard: string, shards: ReadonlyArray<string>): Promise<SloData> => {
+const loadSloData = async (client: ReturnType<typeof useStudioClient>, rootShard: string, shards: ReadonlyArray<string>): Promise<SloData> => {
     const perShardSettled = await Promise.all(
         shards.map((shard) => {
             const shardOptions = callOptions(shard);
@@ -261,7 +261,7 @@ const authSeries = (auth: AuthMetrics | null | undefined): { attempts: number[];
  */
 // react-doctor-disable-next-line react-doctor/prefer-useReducer -- the eight values are independent reads that arrive from separate queries at separate times, so one reducer would serialise updates that genuinely are not one transition
 export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [entries, setEntries] = useState<LogEntry[]>([]);

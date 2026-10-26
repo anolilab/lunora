@@ -1,4 +1,4 @@
-import type { LunoraClient } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 import { describe, expect, it, vi } from "vitest";
 
 import { ERROR_REFERENCE_URL, ERROR_TOOL_DEFINITIONS } from "../src/error-tools";
@@ -11,12 +11,12 @@ import { callTool, toolDefinitions } from "../src/tools";
  * quietly become deployment-dependent — and `callTool` would report that as a
  * plain `isError`, which every assertion below would otherwise sail past.
  */
-const forbiddenClient = (): LunoraClient => {
+const forbiddenClient = (): LunoraAdminClient => {
     const reject = vi.fn<() => Promise<never>>(async () => {
         throw new Error("lunora_explain_error must not reach the deployment");
     });
 
-    return { action: reject, listFunctions: reject, listGlobalTables: reject, mutation: reject, query: reject } as unknown as LunoraClient;
+    return { action: reject, listFunctions: reject, listGlobalTables: reject, mutation: reject, query: reject } as unknown as LunoraAdminClient;
 };
 
 /** The `structuredContent` shape this tool emits. */

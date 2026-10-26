@@ -13,7 +13,7 @@
 // `LunoraClient` surface, yet returns fixed data synchronously — so a blanket
 // require-await disable is intentional here, not a smell.
 /* eslint-disable @typescript-eslint/require-await -- mock implements an async client interface with synchronous fixtures */
-import type { LunoraClient } from "@lunora/studio";
+import type { LunoraAdminClient } from "@lunora/studio";
 import { ADMIN_FUNCTIONS } from "@lunora/studio";
 
 interface Ref {
@@ -600,8 +600,8 @@ const dataFor = (reference: string, args: unknown): unknown => {
 
 const noop = (): void => {};
 
-/** A plain mock client cast to {@link LunoraClient}, for the dev harness only. */
-const createDevMockClient = (): LunoraClient =>
+/** A plain mock client cast to {@link LunoraAdminClient}, for the dev harness only. */
+const createDevMockClient = (): LunoraAdminClient =>
     ({
         action: async (): Promise<unknown> => {
             return {};
@@ -922,6 +922,6 @@ const createDevMockClient = (): LunoraClient =>
 
             return noop;
         },
-    }) as unknown as LunoraClient;
+    }) as unknown as LunoraAdminClient;
 
 export default createDevMockClient;

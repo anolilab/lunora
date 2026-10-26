@@ -1,7 +1,7 @@
-import { useLunora } from "@lunora/react";
 import { useEffect, useRef } from "react";
 
 import { isTerminalPollError } from "../lib/internal";
+import useStudioClient from "./use-studio-client";
 
 /** The longest a failing poll backs off to, in milliseconds. */
 const MAX_BACKOFF_MS = 60_000;
@@ -36,7 +36,7 @@ export const DEFAULT_AUTO_REFRESH_MS = 5000;
  * timer is cleared on disable and unmount.
  */
 export const useAutoRefresh = (onTick: () => unknown, enabled: boolean, intervalMs: number = DEFAULT_AUTO_REFRESH_MS): void => {
-    const client = useLunora();
+    const client = useStudioClient();
     const tickRef = useRef(onTick);
 
     // Keep the latest `onTick` in a ref via an effect rather than a render-phase

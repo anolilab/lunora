@@ -694,6 +694,10 @@ interface LogsResult {
 }
 ```
 
+### `LunoraAdminClient` (class)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `LunoraClient` (class)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1072,7 +1076,7 @@ interface StudioAppProps {
     readonly adminToken?: string;
     readonly basePath?: string;
     readonly baseUrl?: string;
-    readonly client?: LunoraClient;
+    readonly client?: LunoraAdminClient;
     readonly locale?: string;
     readonly rulesInstalled?: boolean;
     readonly studio?: Omit<StudioProps, "children" | "chrome" | "i18n" | "locale">;

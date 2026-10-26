@@ -1,5 +1,4 @@
 import type { SchedulerStatus } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 
 import { Card, CardContent } from "../../components/ui/card";
@@ -7,6 +6,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 
 interface SchedulerPoolsPanelProps {
@@ -34,7 +34,7 @@ const StatTile = ({ label, testId, value }: { label: string; testId: string; val
  * which don't cover the SchedulerDO. Polls on the shared auto-refresh interval.
  */
 export const SchedulerPoolsPanel = ({ loadStatus }: SchedulerPoolsPanelProps = {}): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     // The scheduler status is HTTP-only (no admin-RPC path), so it's a

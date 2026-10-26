@@ -1,9 +1,9 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 
 import { explainQueryPlan } from "../../../../../shared/sql-readonly";
 import { classifyOne, splitStatements } from "../../../../../shared/sql-split-statements";
+import useStudioClient from "../../hooks/use-studio-client";
 import type { SqlConsoleResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { usePersistedValue } from "../../lib/browser-storage";
@@ -72,7 +72,7 @@ const useRunGenerations = (): { readonly advance: (tabId: string) => void; reado
  * tables (use the Data grid's inline edit for mutations).
  */
 export const SqlEditorPanel = ({ initialShardKey, now = defaultNow }: SqlEditorPanelProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
 
     // Multiple editor tabs: each persisted tab owns its draft + the saved-query it
     // mirrors, plus an ephemeral per-tab output, so a reload restores the open tabs

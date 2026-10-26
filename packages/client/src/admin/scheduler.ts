@@ -12,8 +12,8 @@ import {
     WORKFLOWS_INSTANCES_PATH,
     WORKFLOWS_STATUS_PATH,
 } from "../client-paths";
-import type { LunoraClient } from "../lunora-client";
 import type { ScheduleRecord, SchedulerStatus, WorkflowInstanceDetail, WorkflowInstancePage, WorkflowInstanceStatus } from "../types";
+import type { LunoraAdminClient } from "./admin-client";
 import type { AdminHost } from "./host";
 
 /**
@@ -30,7 +30,7 @@ import type { AdminHost } from "./host";
 export const decodeRecordArgs = (record: ScheduleRecord): ScheduleRecord =>
     "args" in record ? { ...record, args: decodeWire(record.args) as Record<string, unknown> } : record;
 
-export const listScheduledJobs = async (host: AdminHost): ReturnType<LunoraClient["listScheduledJobs"]> => {
+export const listScheduledJobs = async (host: AdminHost): ReturnType<LunoraAdminClient["listScheduledJobs"]> => {
     host.assertOpen();
 
     const body = (await host.adminFetch(SCHEDULED_PATH, "GET")) as { records?: ScheduleRecord[] };
@@ -38,7 +38,7 @@ export const listScheduledJobs = async (host: AdminHost): ReturnType<LunoraClien
     return (body.records ?? []).map((record) => decodeRecordArgs(record));
 };
 
-export const schedulerStatus = async (host: AdminHost): ReturnType<LunoraClient["schedulerStatus"]> => {
+export const schedulerStatus = async (host: AdminHost): ReturnType<LunoraAdminClient["schedulerStatus"]> => {
     host.assertOpen();
 
     const body = (await host.adminFetch(SCHEDULED_STATUS_PATH, "GET")) as Partial<SchedulerStatus>;
@@ -52,8 +52,8 @@ export const schedulerStatus = async (host: AdminHost): ReturnType<LunoraClient[
 
 export const cancelScheduledJob = async (
     host: AdminHost,
-    id: Parameters<LunoraClient["cancelScheduledJob"]>[0],
-): ReturnType<LunoraClient["cancelScheduledJob"]> => {
+    id: Parameters<LunoraAdminClient["cancelScheduledJob"]>[0],
+): ReturnType<LunoraAdminClient["cancelScheduledJob"]> => {
     host.assertOpen();
 
     const body = (await host.adminFetch(SCHEDULED_CANCEL_PATH, "POST", { id })) as { cancelled?: boolean };
@@ -61,7 +61,7 @@ export const cancelScheduledJob = async (
     return { cancelled: body.cancelled === true };
 };
 
-export const listDeadJobs = async (host: AdminHost): ReturnType<LunoraClient["listDeadJobs"]> => {
+export const listDeadJobs = async (host: AdminHost): ReturnType<LunoraAdminClient["listDeadJobs"]> => {
     host.assertOpen();
 
     // Walk every page. `/dead` became a bounded, cursored read so a shard
@@ -83,7 +83,7 @@ export const listDeadJobs = async (host: AdminHost): ReturnType<LunoraClient["li
     return records.map((record) => decodeRecordArgs(record));
 };
 
-export const retryDeadJob = async (host: AdminHost, id: Parameters<LunoraClient["retryDeadJob"]>[0]): ReturnType<LunoraClient["retryDeadJob"]> => {
+export const retryDeadJob = async (host: AdminHost, id: Parameters<LunoraAdminClient["retryDeadJob"]>[0]): ReturnType<LunoraAdminClient["retryDeadJob"]> => {
     host.assertOpen();
 
     const body = (await host.adminFetch(SCHEDULED_DEAD_RETRY_PATH, "POST", { id })) as { retried?: boolean };
@@ -91,7 +91,7 @@ export const retryDeadJob = async (host: AdminHost, id: Parameters<LunoraClient[
     return { retried: body.retried === true };
 };
 
-export const removeDeadJob = async (host: AdminHost, id: Parameters<LunoraClient["removeDeadJob"]>[0]): ReturnType<LunoraClient["removeDeadJob"]> => {
+export const removeDeadJob = async (host: AdminHost, id: Parameters<LunoraAdminClient["removeDeadJob"]>[0]): ReturnType<LunoraAdminClient["removeDeadJob"]> => {
     host.assertOpen();
 
     const body = (await host.adminFetch(SCHEDULED_DEAD_CANCEL_PATH, "POST", { id })) as { removed?: boolean };
@@ -101,8 +101,8 @@ export const removeDeadJob = async (host: AdminHost, id: Parameters<LunoraClient
 
 export const listWorkflowInstances = async (
     host: AdminHost,
-    options: Parameters<LunoraClient["listWorkflowInstances"]>[0],
-): ReturnType<LunoraClient["listWorkflowInstances"]> => {
+    options: Parameters<LunoraAdminClient["listWorkflowInstances"]>[0],
+): ReturnType<LunoraAdminClient["listWorkflowInstances"]> => {
     host.assertOpen();
 
     const query = new URLSearchParams({ name: options.name });
@@ -132,8 +132,8 @@ export const listWorkflowInstances = async (
 
 export const getWorkflowInstance = async (
     host: AdminHost,
-    options: Parameters<LunoraClient["getWorkflowInstance"]>[0],
-): ReturnType<LunoraClient["getWorkflowInstance"]> => {
+    options: Parameters<LunoraAdminClient["getWorkflowInstance"]>[0],
+): ReturnType<LunoraAdminClient["getWorkflowInstance"]> => {
     host.assertOpen();
 
     const query = new URLSearchParams({ id: options.id, name: options.name });
@@ -154,8 +154,8 @@ export const getWorkflowInstance = async (
 
 export const setWorkflowInstanceStatus = async (
     host: AdminHost,
-    options: Parameters<LunoraClient["setWorkflowInstanceStatus"]>[0],
-): ReturnType<LunoraClient["setWorkflowInstanceStatus"]> => {
+    options: Parameters<LunoraAdminClient["setWorkflowInstanceStatus"]>[0],
+): ReturnType<LunoraAdminClient["setWorkflowInstanceStatus"]> => {
     host.assertOpen();
 
     const body = (await host.adminFetch(WORKFLOWS_STATUS_PATH, "POST", { action: options.action, id: options.id, name: options.name })) as {

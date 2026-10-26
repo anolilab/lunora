@@ -1,5 +1,4 @@
 import type { WorkflowInstanceAction, WorkflowInstanceDetail, WorkflowInstanceStatus, WorkflowInstanceSummary } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
@@ -8,6 +7,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, jsonRowReplacer } from "../../lib/internal";
 
@@ -111,7 +111,7 @@ const formatStepPayload = (step: { error?: unknown; output?: unknown }): string 
  * loader props to override the transport (a custom `loadInstances` ⇒ read-only).
  */
 export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, runAction, workflowName }: WorkflowInstanceHistoryProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [instances, setInstances] = useState<null | WorkflowInstanceSummary[]>(null);

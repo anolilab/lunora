@@ -1,8 +1,8 @@
 import type { GlobalTableInfo } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useShardKey } from "../../../hooks/use-shard-key";
+import useStudioClient from "../../../hooks/use-studio-client";
 import type { ColumnMeta, TableIndexesResult, TableIndexInfo, TableInfo, TablePage, TablesColumnsResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../../lib/internal";
@@ -67,7 +67,7 @@ interface SchemaExplorer {
  * both table lists, so separating them would mean threading one into the other.
  */
 const useSchemaExplorer = ({ initialShardKey, initialTable }: { initialShardKey?: string; initialTable?: string }): SchemaExplorer => {
-    const client = useLunora();
+    const client = useStudioClient();
     const [view, setView] = useState<SchemaView>("graph");
     const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
     const [tableFilter, setTableFilter] = useState<string>("");

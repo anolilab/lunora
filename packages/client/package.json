@@ -64,6 +64,10 @@
             "types": "./dist/service.d.ts",
             "import": "./dist/service.mjs"
         },
+        "./admin": {
+            "types": "./dist/admin/index.d.ts",
+            "import": "./dist/admin/index.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {

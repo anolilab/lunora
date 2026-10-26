@@ -12,7 +12,6 @@ import type {
     KvKeyListResult,
     KvNamespaceSummary,
     KvValueResult,
-    LunoraClient,
     PipelineLogPage,
     PipelineLogQuery,
     ScheduleRecord,
@@ -21,13 +20,14 @@ import type {
     VectorIndexSummary,
     VectorQueryMatch,
 } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 import { vi } from "vitest";
 
 interface MockClientHooks {
     action: ReturnType<typeof vi.fn>;
     addAuthOrgMember: ReturnType<typeof vi.fn>;
     addAuthOrgTeamMember: ReturnType<typeof vi.fn>;
-    asClient: LunoraClient;
+    asClient: LunoraAdminClient;
     banAuthUser: ReturnType<typeof vi.fn>;
     cancelAuthOrgInvitation: ReturnType<typeof vi.fn>;
     cancelScheduledJob: ReturnType<typeof vi.fn>;
@@ -519,7 +519,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         /** The worker origin a REST try-it request is resolved against. */
         url: "http://127.0.0.1:8787",
         ...authAdminMethods,
-    } as unknown as LunoraClient;
+    } as unknown as LunoraAdminClient;
 
     return {
         action,

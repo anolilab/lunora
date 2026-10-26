@@ -1,8 +1,8 @@
 import type { StorageListPage, StorageObject } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAutoRefresh } from "../../../hooks/use-auto-refresh";
+import useStudioClient from "../../../hooks/use-studio-client";
 import type { DanglingReference, DanglingReferenceResult, StorageReference, StorageReferenceResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, copyToClipboard, errorMessage, fireAndForget } from "../../../lib/internal";
@@ -186,7 +186,7 @@ const triggerDownload = (url: string, filename: string): void => {
 const keyOf = (object: StorageObject): string => object.key;
 
 const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): FileBrowserModel => {
-    const client = useLunora();
+    const client = useStudioClient();
 
     // The loaded prefix (drives deriveEntries + name-slicing) vs. the draft the
     // input edits live — kept apart so typing never garbles the loaded rows.

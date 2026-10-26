@@ -1,5 +1,4 @@
 import type { AuthCapabilities, AuthUser } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useState } from "react";
 
@@ -9,6 +8,7 @@ import { Card, CardContent } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { ModalShell } from "../../components/ui/modal-shell";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, formatCell, formatTimestamp } from "../../lib/internal";
 import { UserAccountsPanel, UserSecurityPanel, UserSessionsPanel } from "./user-related-panels";
@@ -129,7 +129,7 @@ const formatField = (key: string, value: unknown): string => {
  * panels refetch on success and the parent list is notified via `onChanged`.
  */
 export const UserDetailDrawer = ({ capabilities, onChanged, onClose, user }: UserDetailDrawerProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const banned = user.banned === true;

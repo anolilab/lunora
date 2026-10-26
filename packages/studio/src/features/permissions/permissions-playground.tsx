@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import { decodeWire } from "@lunora/wire";
 import type { ChangeEvent, ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -11,6 +10,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Textarea } from "../../components/ui/textarea";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, jsonRowReplacer } from "../../lib/internal";
 import type { FunctionDescriptor } from "../../lib/types";
@@ -55,7 +55,7 @@ const formatValue = (value: unknown): string => (value === undefined ? "undefine
  * still renders but the run button is disabled.
  */
 export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAsIdentity = false }: PermissionsPlaygroundProps = {}): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
     const probe = useRunAsProbe();
 

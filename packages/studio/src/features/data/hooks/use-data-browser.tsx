@@ -1,5 +1,4 @@
 import type { FunctionReference } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import { decodeDocument, decodeWire, encodeWire, isPlainObject } from "@lunora/wire";
 import type { OnChangeFn, SortingState } from "@tanstack/react-table";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -11,6 +10,7 @@ import { drainBulkOp } from "../../../../../../shared/bulk-drain";
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import useDebounced from "../../../hooks/use-debounced";
 import useMirroredRef from "../../../hooks/use-mirrored-ref";
+import useStudioClient from "../../../hooks/use-studio-client";
 import type { BulkRowOpResult, FacetResult, FilterClause, TableInfo, TablePage, WriteRowResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, facetFilterValue, fireAndForget, formatCell } from "../../../lib/internal";
@@ -414,7 +414,7 @@ const useDataBrowser = ({
     /** The table named in the URL — drives the selection so browser back/forward works. */
     tableParam: string | undefined;
 }): DataBrowserModel => {
-    const client = useLunora();
+    const client = useStudioClient();
 
     // Rows-per-page is user-adjustable (the pagination footer's selector); the
     // prop seeds the initial value. Changing it re-fetches the first page.

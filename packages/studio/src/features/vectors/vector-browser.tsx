@@ -1,5 +1,4 @@
 import type { VectorIndexSummary, VectorQueryMatch } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
@@ -8,6 +7,7 @@ import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, formatCell } from "../../lib/internal";
 
@@ -50,7 +50,7 @@ const Detail = ({ label, value }: { readonly label: string; readonly value: numb
  */
 
 export const VectorBrowser = ({ loadIndexes, runQuery }: VectorBrowserProps = {}): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [indexes, setIndexes] = useState<VectorIndexSummary[] | null>(null);

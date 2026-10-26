@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
 import { useState } from "react";
 
@@ -9,6 +8,7 @@ import { Input } from "../../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { Textarea } from "../../components/ui/textarea";
 import { useAdminQuery } from "../../hooks/use-admin-query";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import type { CreateWorkflowInstanceResult, WorkflowInstanceStatusResult, WorkflowMetadata, WorkflowsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -69,7 +69,7 @@ const effectiveExportName = (workflows: ReadonlyArray<WorkflowMetadata>, selecte
  * admin RPC (`binding.get(id).status()`).
  */
 const WorkflowsPanel = (): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     // Deployment-wide metadata (root shard), so no shard selector is needed.

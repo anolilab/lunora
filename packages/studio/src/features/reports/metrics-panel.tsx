@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -8,6 +7,7 @@ import { Button } from "../../components/ui/button";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import useOpenTrace from "../../hooks/use-open-trace";
 import { useShardKey } from "../../hooks/use-shard-key";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import type { MetricsSnapshot, ShardMetrics } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -43,7 +43,7 @@ const resolveTab = (hasQueryStats: boolean, activeTab: "overview" | "query-insig
  * Health snapshot for a single shard: request / error counts (since the DO last
  * woke), its live SQLite size, and reactive-cache hit/miss stats when a cache is
  * configured. Reads via the `__lunora_admin__:getMetrics` RPC over the
- * {@link useLunora} client; gated by the server's `LUNORA_ADMIN_TOKEN`.
+ * {@link useStudioClient} client; gated by the server's `LUNORA_ADMIN_TOKEN`.
  *
  * Counters are per-DO-instance and reset on hibernation/restart — this is a
  * "since this instance woke" readout, not a durable time series.
@@ -56,7 +56,7 @@ const resolveTab = (hasQueryStats: boolean, activeTab: "overview" | "query-insig
  * remount.
  */
 export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);

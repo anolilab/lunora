@@ -1,10 +1,10 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useReducer } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Label } from "../../components/ui/label";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { copyToClipboard, errorMessage, fireAndForget, formatBytes } from "../../lib/internal";
 import { buildKvPutOptions, byteLength, isJsonOrEmpty, isTtlValid, tryFormatJson } from "./kv-fields";
@@ -100,7 +100,7 @@ const KvValueEditor = ({
     readonly namespace: string;
     readonly onDeleted: (name: string) => void;
 }): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [state, dispatch] = useReducer(valueReducer, INITIAL_VALUE_STATE);

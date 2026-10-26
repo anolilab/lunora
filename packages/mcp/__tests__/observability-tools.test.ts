@@ -1,4 +1,5 @@
-import type { FunctionDescriptor, LunoraClient } from "@lunora/client";
+import type { FunctionDescriptor } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 import { LunoraError } from "@lunora/errors";
 import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 import { describe, expect, it, vi } from "vitest";
@@ -20,13 +21,13 @@ const logEntry = (index: number, level: string): Record<string, unknown> => {
 const mockClient = (
     results: Record<string, unknown> = {},
 ): {
-    asClient: LunoraClient;
+    asClient: LunoraAdminClient;
     query: ReturnType<typeof vi.fn>;
 } => {
     const query = vi.fn<(reference: { __lunoraRef: string }) => Promise<unknown>>(async (reference) => results[reference.__lunoraRef] ?? {});
     const listFunctions = vi.fn<() => Promise<FunctionDescriptor[]>>(async () => []);
 
-    return { asClient: { listFunctions, query } as unknown as LunoraClient, query };
+    return { asClient: { listFunctions, query } as unknown as LunoraAdminClient, query };
 };
 
 describe("observability tool definitions", () => {
@@ -189,7 +190,7 @@ describe("lunora_get_logs", () => {
     it("maps a bigint / bytes leaf so structuredContent survives the transport's JSON.stringify", async () => {
         expect.assertions(3);
 
-        // `LunoraClient` decodes every response, so a `v.int64()` field logged
+        // `LunoraAdminClient` decodes every response, so a `v.int64()` field logged
         // into `fields` reaches the tool as a real bigint. Left unmapped it
         // would throw when the transport serializes `structuredContent`.
         const entries = [{ fields: { blob: new Uint8Array([1, 2, 3]), id: 9_007_199_254_740_993n }, level: "info", message: "m", timestamp: 1 }];

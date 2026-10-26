@@ -1,5 +1,4 @@
 import { LunoraError } from "@lunora/errors";
-import { useLunora } from "@lunora/react";
 import { decodeWire, encodeWire } from "@lunora/wire";
 import type { ChangeEvent, ReactElement } from "react";
 import { useState } from "react";
@@ -10,6 +9,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { useAdminQuery, useInvalidateAdmin } from "../../hooks/use-admin-query";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import type { ExportRow, ImportShardResult, TableColumnsResult, TableInfo } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -425,8 +425,8 @@ interface ExportedShard {
     shardKey: string;
 }
 
-/** The client `sendImport` writes through; the panel's own `useLunora()` result. */
-type ImportClient = ReturnType<typeof useLunora>;
+/** The client `sendImport` writes through; the panel's own `useStudioClient()` result. */
+type ImportClient = ReturnType<typeof useStudioClient>;
 
 /** A shard's answer to an `importShard` check: the echo of `dryRun` marks one that honoured the flag. */
 type DryRunAnswer = ImportShardResult & { dryRun?: boolean };
@@ -617,11 +617,11 @@ const sendImport = async (
  * per-row errors. Globally-scoped (`.global()`) tables live in D1 and are
  * intentionally out of scope here.
  *
- * Both calls travel over the {@link useLunora} client transport and are gated by
+ * Both calls travel over the {@link useStudioClient} client transport and are gated by
  * the server's `LUNORA_ADMIN_TOKEN`.
  */
 export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const invalidateAdmin = useInvalidateAdmin();
     const t = useT();
 

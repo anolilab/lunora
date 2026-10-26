@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { LunoraAdminClient } from "../src/admin/admin-client";
 import { getCronJobs, runCronJob } from "../src/admin/functions";
 import { listGlobalTables } from "../src/admin/global-tables";
 import type { AdminHost } from "../src/admin/host";
@@ -22,7 +23,6 @@ import {
     STORAGE_PATH,
     VECTOR_INDEXES_PATH,
 } from "../src/client-paths";
-import { LunoraClient } from "../src/lunora-client";
 
 interface RecordedCall {
     contentType?: string;
@@ -193,7 +193,7 @@ describe("lunoraClient admin wiring", () => {
         expect.assertions(2);
 
         const fetchMock = vi.fn<typeof fetch>();
-        const client = new LunoraClient({
+        const client = new LunoraAdminClient({
             fetch: fetchMock,
             url: "https://app.example",
             WebSocket: vi.fn<() => void>() as unknown as typeof WebSocket,

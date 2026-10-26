@@ -1,5 +1,4 @@
 import type { ScheduleRecord } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -10,6 +9,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
 
@@ -39,7 +39,7 @@ const formatScheduledFor = (value: number): string => (Number.isFinite(value) ? 
  * view supplies only `loadJobs`).
  */
 export const DeadLetterJobs = ({ loadJobs, removeJob, retryJob }: DeadLetterJobsProps = {}): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     // The dead-letter queue is HTTP-only (no admin-RPC path), so it's a

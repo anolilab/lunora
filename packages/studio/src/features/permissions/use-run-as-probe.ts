@@ -1,6 +1,6 @@
 import type { FunctionReference } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 
+import useStudioClient from "../../hooks/use-studio-client";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions } from "../../lib/internal";
 
@@ -75,7 +75,7 @@ interface RunAsProbeArgs {
  * sites the same way; this is the shared one.
  */
 const useRunAsProbe = (): ((probe: RunAsProbeArgs) => Promise<ProbeOutcome>) => {
-    const client = useLunora();
+    const client = useStudioClient();
 
     return async ({ args, functionPath, shardKey = "", userId }: RunAsProbeArgs): Promise<ProbeOutcome> => {
         if (userId.trim() === "") {

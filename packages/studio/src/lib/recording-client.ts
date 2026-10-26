@@ -1,9 +1,9 @@
-import type { LunoraClient } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 
 import { operationLog } from "./operation-log";
 
 /**
- * Wrap a {@link LunoraClient} so every admin RPC the Studio issues lands on the
+ * Wrap a {@link LunoraAdminClient} so every admin RPC the Studio issues lands on the
  * operation tape.
  *
  * **Why here and not at the call sites.** The first cut of this recorded inside a
@@ -102,7 +102,7 @@ const shardKeyOf = (options: unknown): string => {
  * Return a recording view of `client`. Non-admin traffic and every non-dispatch
  * member pass straight through.
  */
-const withOperationRecording = (client: LunoraClient): LunoraClient =>
+const withOperationRecording = (client: LunoraAdminClient): LunoraAdminClient =>
     new Proxy(client, {
         get(target, property, receiver): unknown {
             const value = Reflect.get(target, property, receiver) as unknown;

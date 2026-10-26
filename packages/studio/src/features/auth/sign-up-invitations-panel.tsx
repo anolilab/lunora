@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -8,6 +7,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useClientQuery } from "../../hooks/use-admin-query";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { fireAndForget, formatTimestamp, workerBaseUrl } from "../../lib/internal";
 import type { InvitationRow } from "./invitation-status";
@@ -113,7 +113,7 @@ const IssuedInvitation = ({
  * invitee never receive mail.
  */
 const SignUpInvitationsPanel = (): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
     const [email, setEmail] = useState("");
     const [error, setError] = useState<null | string>(null);

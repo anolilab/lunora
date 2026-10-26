@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -12,6 +11,7 @@ import { useClientQuery } from "../../hooks/use-admin-query";
 import useAuthCapabilities from "../../hooks/use-auth-capabilities";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useDebounced from "../../hooks/use-debounced";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { formatTimestamp } from "../../lib/internal";
 import { AuthPager } from "./auth-pager";
@@ -35,7 +35,7 @@ const DEFAULT_PAGE_SIZE = 50;
  * identity metadata only — never password hashes or session tokens.
  */
 export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {}): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [search, setSearch] = useState<string>("");

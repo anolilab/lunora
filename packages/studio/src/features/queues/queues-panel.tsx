@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
 import { Fragment, useState } from "react";
 
@@ -15,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Textarea } from "../../components/ui/textarea";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useStudioClient from "../../hooks/use-studio-client";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import type { QueueMessageOutcome, QueueMessageRow, QueueMessagesResult, QueueMetadata, QueuesResult, ReplayQueueMessageResult } from "../../lib/admin";
@@ -40,7 +40,7 @@ const SEND_QUEUE_MESSAGE = adminRef(ADMIN_FUNCTIONS.sendQueueMessage);
  * get the message — a blind retry would duplicate it in the ones that did.
  */
 const sendToTargets = async (
-    client: ReturnType<typeof useLunora>,
+    client: ReturnType<typeof useStudioClient>,
     requests: ReadonlyArray<{ batch?: unknown[]; body?: unknown; delaySeconds?: number; exportName: string }>,
     t: TFunction,
 ): Promise<null | string> => {
@@ -423,7 +423,7 @@ const QueuesSendTab = ({
  *
  * Send: enqueue a JSON body (optionally a batch, with an optional delay) to any declared producer, to exercise a consumer end to end.
  *
- * All three read/write reserved admin RPCs over the {@link useLunora} client, gated by the server's `LUNORA_ADMIN_TOKEN`.
+ * All three read/write reserved admin RPCs over the {@link useStudioClient} client, gated by the server's `LUNORA_ADMIN_TOKEN`.
  *
  * The tab bodies are extracted into sibling components so the panel stays small
  * and each tab is independently readable; state and actions live here and flow
@@ -436,7 +436,7 @@ const QueuesSendTab = ({
  */
 const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
     const messageLimit = limit ?? DEFAULT_MESSAGE_LIMIT;
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [tab, setTab] = useState<QueuesTab>("declared");

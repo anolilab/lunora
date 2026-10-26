@@ -90,7 +90,7 @@ interface LunoraMcpServerOptions {
     allowDataReads?: boolean;
     allowObservability?: boolean;
     allowWrites?: boolean;
-    client?: LunoraClient;
+    client?: LunoraAdminClient;
     fetch?: typeof fetch;
     token?: string;
     url?: string;
@@ -623,7 +623,7 @@ Re-exported from `@lunora/mcp` — signature tracked in that section.
 ### `localTools` (const)
 
 ```ts
-const localTools: (options: LocalMcpServerOptions, clientFor?: (deployment: LocalDeployment) => LunoraClient) => ReadonlyArray<McpTool>;
+const localTools: (options: LocalMcpServerOptions, clientFor?: (deployment: LocalDeployment) => LunoraAdminClient) => ReadonlyArray<McpTool>;
 ```
 
 ## `@lunora/mcp/worker`
@@ -821,7 +821,7 @@ Re-exported from `@lunora/mcp` — signature tracked in that section.
 ### `callTool` (const)
 
 ```ts
-const callTool: (client: LunoraClient, name: string, input: Record<string, unknown>, allowWrites?: boolean, allowObservability?: boolean, allowDataReads?: boolean) => Promise<ToolResult>;
+const callTool: (client: LunoraAdminClient, name: string, input: Record<string, unknown>, allowWrites?: boolean, allowObservability?: boolean, allowDataReads?: boolean) => Promise<ToolResult>;
 ```
 
 ### `createAuthedMcpFetchHandler` (const)

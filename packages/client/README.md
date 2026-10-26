@@ -97,6 +97,7 @@ client.close();
 - `@lunora/client/query` — the shared live-query state machine every UI adapter builds on, plus the TanStack Query key contract and `lunoraQueryOptions` factory (subpath of this package).
 - `@lunora/client/auth` — the identity store and auth-gate contract, plus the framework-neutral core of the admin/organization list hooks (subpath of this package).
 - `@lunora/client/ssr` — server-side preloading over this client's HTTP transport (subpath of this package).
+- `@lunora/client/admin` — `LunoraAdminClient`, a `LunoraClient` with the deployment-admin surface (functions, scheduler, storage, KV, vectors, logs, better-auth admin) the Studio uses. Kept off `LunoraClient` so apps don't ship it.
 
 ## Supported Node.js Versions
 

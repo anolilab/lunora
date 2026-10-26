@@ -1,4 +1,5 @@
-import type { FunctionDescriptor, LunoraClient } from "@lunora/client";
+import type { FunctionDescriptor } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 import { describe, expect, it, vi } from "vitest";
 
@@ -44,7 +45,7 @@ const mockClient = (
     token = "admin-token",
 ): {
     action: ReturnType<typeof vi.fn>;
-    asClient: LunoraClient;
+    asClient: LunoraAdminClient;
     listFunctions: ReturnType<typeof vi.fn>;
     listGlobalTables: ReturnType<typeof vi.fn>;
     mutation: ReturnType<typeof vi.fn>;
@@ -70,7 +71,7 @@ const mockClient = (
         mutation,
         query,
         url: deploymentUrl,
-    } as unknown as LunoraClient;
+    } as unknown as LunoraAdminClient;
 
     return { action, asClient: client, listFunctions, listGlobalTables, mutation, query };
 };
@@ -94,11 +95,11 @@ interface ActionRequired {
 const parseResult = (result: ToolResult): unknown => JSON.parse(result.content[0]!.text);
 
 /** Step one of the handshake: propose the write and read back its digest. */
-const propose = async (client: LunoraClient, name: string, input: Record<string, unknown>): Promise<ActionRequired> =>
+const propose = async (client: LunoraAdminClient, name: string, input: Record<string, unknown>): Promise<ActionRequired> =>
     parseResult(await callTool(client, name, input, true)) as ActionRequired;
 
 /** Both steps, for the tests that care about what happens AFTER a valid confirmation. */
-const proposeAndConfirm = async (client: LunoraClient, name: string, input: Record<string, unknown>): Promise<ToolResult> => {
+const proposeAndConfirm = async (client: LunoraAdminClient, name: string, input: Record<string, unknown>): Promise<ToolResult> => {
     const { actionDigest } = await propose(client, name, input);
 
     return callTool(client, name, { ...input, actionDigest, confirmed: true }, true);
