@@ -26,9 +26,11 @@ const siblingSecretOf = (env: unknown): string | undefined => {
  * isolation, so any DO in the namespace (or a future custom route that
  * forwarded a client path+body to a shard) could inject forged frames — e.g.
  * deliver an arbitrary `rowsPatch` to another subscriber's socket, or feed a
- * replica a fabricated change batch. Opt-in: only enforced when
- * `LUNORA_RELAY_SECRET` is set, so existing deployments are unaffected until
- * they provision the secret.
+ * replica a fabricated change batch. The shard engine's sibling channel is
+ * opt-in: only enforced when `LUNORA_RELAY_SECRET` is set, so existing
+ * deployments are unaffected until they provision the secret. The event log and
+ * the shard registry refuse every request without the secret, so they check it
+ * before they verify.
  */
 const signSiblingBody = async (secret: string, body: string): Promise<string> => {
     const encoder = new TextEncoder();
@@ -41,7 +43,9 @@ const signSiblingBody = async (secret: string, body: string): Promise<string> =>
 /**
  * Whether `raw` may be dispatched: true when no secret is configured (legacy
  * network-trust), or when `supplied` is a valid signature over the exact bytes
- * received. Fails closed on a missing or mismatched signature.
+ * received. Fails closed on a missing or mismatched signature, but admits every
+ * frame when no secret is set, so a caller that must refuse unsigned frames
+ * checks `siblingSecretOf` first.
  */
 const verifySiblingBody = async (env: unknown, supplied: null | string, raw: string): Promise<boolean> => {
     const secret = siblingSecretOf(env);
