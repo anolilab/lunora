@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { markBuildStarted, oncePerBuild } from "../src/build-session";
+import { markBuildStarted, oncePerBuild, oncePerBuildSync } from "../src/build-session";
 
 let workdir: string;
 
@@ -125,6 +125,66 @@ describe(oncePerBuild, () => {
         await Promise.all([first, second]);
 
         expect(runs).toBe(1);
+    });
+
+    it("runs afresh for a pass that sees a schema edit made while the step was running", async () => {
+        expect.assertions(2);
+
+        let runs = 0;
+        let finish: (() => void) | undefined;
+        const run = async (): Promise<number> => {
+            runs += 1;
+            const mine = runs;
+
+            await new Promise<void>((resolve) => {
+                finish = resolve;
+            });
+
+            return mine;
+        };
+
+        const first = oncePerBuild(project(), "step", run);
+        const finishFirst = finish;
+
+        // The developer saves the schema after the step read it, before it settled.
+        appendFileSync(join(workdir, "lunora", "schema.ts"), "// edit\n");
+
+        const second = oncePerBuild(project(), "step", run);
+
+        finishFirst?.();
+        finish?.();
+
+        await expect(Promise.all([first, second])).resolves.toStrictEqual([1, 2]);
+        // The edited schema's session holds the second run's result, not the first's.
+        await expect(oncePerBuild(project(), "step", run)).resolves.toBe(2);
+    });
+
+    it("throws a synchronous check's failure synchronously, and records only a pass", () => {
+        expect.assertions(3);
+
+        let runs = 0;
+
+        expect(() => {
+            oncePerBuildSync(project(), "check", () => {
+                throw new Error("invalid wrangler.jsonc");
+            });
+        }).toThrow("invalid wrangler.jsonc");
+
+        oncePerBuildSync(project(), "check", () => {
+            runs += 1;
+        });
+        oncePerBuildSync(project(), "check", () => {
+            runs += 1;
+        });
+
+        expect(runs).toBe(1);
+
+        markBuildStarted(project());
+        oncePerBuildSync(project(), "check", () => {
+            runs += 1;
+        });
+
+        expect(runs).toBe(2);
     });
 
     it("does not record a step that threw", async () => {

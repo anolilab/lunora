@@ -9,12 +9,14 @@ import type { ResolvedLunoraPluginOptions } from "./types";
 type SessionProject = Pick<ResolvedLunoraPluginOptions, "apiSpec" | "lazyFunctions" | "projectRoot" | "schemaDir" | "target">;
 
 interface Session {
+    /** `wrangler.jsonc` and `lunora.config.*` as last seen — re-taken after every step, since provisioning rewrites the former. */
+    config: string;
     /** Each step's run, by step name — in flight or settled, so overlapping passes share one. */
     done: Map<string, Promise<unknown>>;
-    /** The inputs as last seen — re-taken after every step, so Lunora's own writes don't end the session. */
-    fingerprint: string;
-    /** Steps still running. Their writes land before the fingerprint is re-taken, so they must not end the session either. */
+    /** Steps still running. Their writes land before `config` is re-taken, so they must not end the session either. */
     running: number;
+    /** The schema sources the session's steps read. No step writes them, so any change ends the session. */
+    sources: string;
     /** Set once the build itself starts: the next config pass belongs to a new build. */
     started: boolean;
 }
@@ -37,8 +39,22 @@ const sessions = new Map<string, Session>();
 const keyOf = (project: SessionProject): string =>
     JSON.stringify([join(project.projectRoot, project.schemaDir), project.apiSpec, project.lazyFunctions, project.target]);
 
-const inputsOf = (project: SessionProject): string =>
-    `${fingerprintSchemaSources(join(project.projectRoot, project.schemaDir))}\u0000${computeConfigFingerprint(project.projectRoot)}`;
+const sourcesOf = (project: SessionProject): string => fingerprintSchemaSources(join(project.projectRoot, project.schemaDir));
+
+/** The session for this config pass, replacing one that belongs to an earlier build or to inputs that moved. */
+const sessionOf = (project: SessionProject): Session => {
+    const key = keyOf(project);
+    const sources = sourcesOf(project);
+    const config = computeConfigFingerprint(project.projectRoot);
+    let session = sessions.get(key);
+
+    if (session === undefined || session.started || session.sources !== sources || (session.config !== config && session.running === 0)) {
+        session = { config, done: new Map(), running: 0, sources, started: false };
+        sessions.set(key, session);
+    }
+
+    return session;
+};
 
 /**
  * Run a project-level startup `step` once per `vite build`: the first config pass
@@ -47,16 +63,7 @@ const inputsOf = (project: SessionProject): string =>
  * again (and fails the same way).
  */
 const oncePerBuild = async <T>(project: SessionProject, step: string, run: () => Promise<T> | T): Promise<T> => {
-    const key = keyOf(project);
-    const fingerprint = inputsOf(project);
-    let session = sessions.get(key);
-
-    if (session === undefined || session.started || (session.fingerprint !== fingerprint && session.running === 0)) {
-        session = { done: new Map(), fingerprint, running: 0, started: false };
-        sessions.set(key, session);
-    }
-
-    const owner = session;
+    const owner = sessionOf(project);
     let pending = owner.done.get(step) as Promise<T> | undefined;
 
     if (pending === undefined) {
@@ -66,7 +73,7 @@ const oncePerBuild = async <T>(project: SessionProject, step: string, run: () =>
         pending = (async (): Promise<T> => run())().then(
             (value) => {
                 owner.running -= 1;
-                owner.fingerprint = inputsOf(project);
+                owner.config = computeConfigFingerprint(project.projectRoot);
 
                 return value;
             },
@@ -83,6 +90,23 @@ const oncePerBuild = async <T>(project: SessionProject, step: string, run: () =>
     return pending;
 };
 
+/**
+ * Like {@link oncePerBuild}, for a synchronous check that must keep throwing synchronously:
+ * Vite starts every plugin's `configResolved` before awaiting any, so a rejected promise
+ * would let codegen run against a config the check refused.
+ */
+const oncePerBuildSync = (project: SessionProject, step: string, run: () => void): void => {
+    const session = sessionOf(project);
+
+    if (session.done.has(step)) {
+        return;
+    }
+
+    run();
+    session.done.set(step, Promise.resolve());
+    session.config = computeConfigFingerprint(project.projectRoot);
+};
+
 /** The build has started; whatever config pass comes next is a new build's. */
 const markBuildStarted = (project: SessionProject): void => {
     const session = sessions.get(keyOf(project));
@@ -92,4 +116,4 @@ const markBuildStarted = (project: SessionProject): void => {
     }
 };
 
-export { markBuildStarted, oncePerBuild };
+export { markBuildStarted, oncePerBuild, oncePerBuildSync };

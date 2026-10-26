@@ -6,7 +6,7 @@ import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { assertWranglerSatisfiesSchema, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import type { Plugin } from "vite";
 
-import { oncePerBuild } from "./build-session";
+import { oncePerBuildSync } from "./build-session";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 /** Mirrors the config-layer heuristic: a container image that is a local path. */
@@ -93,19 +93,19 @@ const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions, discovery
             isBuild = env.command === "build";
         },
         // Once per `vite build`, not once per environment pass — see `oncePerBuild`.
-        // Synchronous otherwise, so a dev server's failure surfaces exactly where it did.
-        configResolved(): Promise<void> | undefined {
+        // Synchronous either way, so a refusal throws before any other plugin's hook runs on.
+        configResolved() {
             if (isPreview) {
-                return undefined;
+                return;
             }
 
             if (isBuild) {
-                return oncePerBuild(options, "validate-wrangler", validate);
+                oncePerBuildSync(options, "validate-wrangler", validate);
+
+                return;
             }
 
             validate();
-
-            return undefined;
         },
         enforce: "pre",
         name: "lunora:wrangler-validator",
