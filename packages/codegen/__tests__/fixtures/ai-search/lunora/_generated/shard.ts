@@ -4,7 +4,8 @@
 import type { AdvisorProcedure, AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, DispatchBookmark, ExportRow, ImportShardResult, KeyRange, MaskPoliciesResult, MigrationRunResult, QueryReadScope, RelatedPage, RunShardApplyCdcArgs, RunShardExportArgs, RunShardFindRelatedArgs, RunShardImportArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, SensitiveScope, TransactionHeadroomTracker, SchemaLike, ShardDOState, DeliveryAuthorization, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SubscriptionIdentity, SystemReaderStorageLike, TelemetrySink } from "@lunora/do";
 import { applyCdcChanges, createStableIdFactory, createStableRandomFactory, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "@lunora/do";
 import { asBucketStorage, beginDeferredDeletes, beginDeferredSchedules, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "@lunora/server";
-import { bindOrm, bindTableFacade } from "@lunora/server";
+import type { FacadeEntry } from "@lunora/server";
+import { bindOrm, defineLazyFacade } from "@lunora/server";
 import type { AiSearch } from "@lunora/bindings/ai-search";
 
 import schema from "../schema.js";
@@ -198,6 +199,17 @@ const aiSearchStub: AiSearch = {
     search: async () => {
         throw new Error("ctx.aiSearch: no AI Search binding found. Add an `ai_search_namespaces` binding (env.AI_SEARCH) to wrangler.jsonc, or point `defineApp().aiSearch((env) => …)` at yours.");
     },
+};
+
+// `ctx.fetch` is action-only. A query is re-run by every live subscription and a
+// mutation may be replayed, so a network call in either returns a different answer
+// on each run. Refused at runtime, not only linted: the advisor sees just the call
+// sites it can read, and a call inside a dependency is invisible to it.
+// Synchronous on purpose: an async refusal only rejects a promise the handler may
+// discard, and the handler would then return normally. A sync throw surfaces at the call.
+// Module scope: it captures nothing, so one instance serves every dispatch.
+const refuseFetch = (): never => {
+    throw new LunoraError("FORBIDDEN", "ctx.fetch is action-only: network I/O belongs in an action, not a query or mutation");
 };
 
 // Bound in-process `ctx.run*` composition depth so a self- or cyclically-
@@ -1178,8 +1190,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 storage,
             }), logFunctionPath, traceAnchor, observability, options.sensitive);
 
-            const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
-            facade["questions"] = bindTableFacade(db, "questions");
+            const facade = db as unknown as Record<string, FacadeEntry>;
+            defineLazyFacade(db, "questions");
                 return { db, orm: bindOrm(facade) };
             };
             const databaseContext = makeDatabaseContext(scheduler);
@@ -1204,22 +1216,14 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // advisor flags `Date.now()`. Actions may still use ambient `Date.now()`.
             const now = Date.now();
 
-            // `ctx.fetch` is action-only. A query is re-run by every live subscription and a
-            // mutation may be replayed, so a network call in either returns a different answer
-            // on each run. Refused at runtime, not only linted: the advisor sees just the call
-            // sites it can read, and a call inside a dependency is invisible to it.
-            // Synchronous on purpose: an async refusal only rejects a promise the handler may
-            // discard, and the handler would then return normally. A sync throw surfaces at the call.
-            const refuseFetch = (): never => {
-                throw new LunoraError("FORBIDDEN", "ctx.fetch is action-only: network I/O belongs in an action, not a query or mutation");
-            };
-
             // A reactor run is driven by the writer's inline refresh, not replayed by the writer, so it must not
             // inherit the writer's key: every run would restart the same id and random sequence.
             const stableKey = options.replayKey !== false && options.identity === undefined && this.idempotencyNamespace() !== undefined ? this.getCurrentMutationId() : undefined;
-            const stableScope = JSON.stringify([this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? "", userId ?? ""]);
+            // Both factories ignore the scope without a replay key, and most dispatches have none.
+            const stableScope = stableKey === undefined ? "" : JSON.stringify([this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? "", userId ?? ""]);
             // One sequence for every mutation this run composes: their ids share one counter (the copied `newId`), so their draws must too.
-            const composedRandom = createStableRandomFactory(stableKey, stableScope);
+            // Created on the first composed mutation that gets a ctx of its own; most dispatches compose none.
+            let composedRandom: (() => number) | undefined;
 
             const ctx: Record<string, unknown> = {
                 auth: {
@@ -1310,7 +1314,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                                 fetch: { configurable: true, enumerable: true, value: refuseFetch, writable: true },
                                 // The composed mutation's ids come from the action's replay key and counter, so its draws do too; a
                                 // fresh factory per call would repeat the same draws across sibling mutations.
-                                random: { configurable: true, enumerable: true, value: composedRandom, writable: true },
+                                random: { configurable: true, enumerable: true, value: (composedRandom ??= createStableRandomFactory(stableKey, stableScope)), writable: true },
                                 scheduler: { configurable: true, enumerable: true, value: mutationScheduler, writable: true },
                                 storage: { configurable: true, enumerable: true, value: withDeferredDeletes(storage), writable: true },
                             });

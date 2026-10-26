@@ -1703,7 +1703,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         });
 
         it("emits the ctx.orm namespace bound to the shipped facade generics", () => {
-            expect.assertions(14);
+            expect.assertions(15);
 
             const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
@@ -1725,8 +1725,10 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
             // Runtime: the database facade and ORM are built together for each
             // scheduler context. The outer ctx carries the matching ORM when it
             // gets a derived database context for a composed mutation.
-            expect(result.generated.shard).toContain('import { bindOrm, bindTableFacade } from "@lunora/server";');
-            expect(result.generated.shard).toContain("= bindTableFacade(");
+            expect(result.generated.shard).toContain('import { bindOrm, defineLazyFacade } from "@lunora/server";');
+            expect(result.generated.shard).toContain("defineLazyFacade(db, ");
+            // Bound on first read, not once per table on every dispatch.
+            expect(result.generated.shard).not.toContain("bindTableFacade(");
             expect(result.generated.shard).toContain("return { db, orm: bindOrm(facade) };");
             expect(result.generated.shard).toContain("const databaseContext = makeDatabaseContext(scheduler);");
             expect(result.generated.shard).toContain("orm: databaseContext.orm,");
@@ -5353,8 +5355,8 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // D1 `globalDb` internally while still firing the read-dependency /
             // change-broadcast hooks that drive live subscriptions; binding a global
             // facade straight to `globalDb` would skip those.
-            expect(output).toContain('facade["messages"] = bindTableFacade(db, "messages");');
-            expect(output).toContain('facade["users"] = bindTableFacade(db, "users");');
+            expect(output).toContain('defineLazyFacade(db, "messages");');
+            expect(output).toContain('defineLazyFacade(db, "users");');
 
             // Reverse cross-backend relations: the `runRelationFanoutRead` override
             // is emitted only when a `.global()` table exists (a reverse relation
@@ -5390,7 +5392,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).not.toContain("globalDbStub");
             expect(output).not.toContain("config.d1");
             expect(output).not.toContain("d1?:");
-            expect(output).toContain('facade["messages"] = bindTableFacade(db, "messages");');
+            expect(output).toContain('defineLazyFacade(db, "messages");');
         });
 
         it("hoists the scheduler and threads it into createShardCtxDb for triggers", () => {

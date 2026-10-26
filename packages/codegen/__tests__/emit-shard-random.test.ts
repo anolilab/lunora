@@ -51,8 +51,17 @@ describe("emitShard — ctx.random", () => {
 
         const shard = emitShard({ schema: discover(PLAIN) });
 
-        expect(shard).toContain("const composedRandom = createStableRandomFactory(stableKey, stableScope);");
-        expect(shard).toContain("value: composedRandom, writable: true },");
+        // Created once, on the first composed mutation, and reused by every later one.
+        expect(shard).toContain("let composedRandom: (() => number) | undefined;");
+        expect(shard).toContain("value: (composedRandom ??= createStableRandomFactory(stableKey, stableScope)), writable: true },");
+    });
+
+    it("serialises the scope only when there is a replay key to scope", () => {
+        expect.assertions(1);
+
+        const shard = emitShard({ schema: discover(PLAIN) });
+
+        expect(shard).toContain('const stableScope = stableKey === undefined ? "" : JSON.stringify([this.currentShardKey(), ');
     });
 
     it("keeps a reactor run off the writer's replay key", () => {
