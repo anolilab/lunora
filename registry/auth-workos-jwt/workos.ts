@@ -1,12 +1,13 @@
 /**
- * WorkOS AuthKit access tokens → ctx.auth — added by `lunora registry add auth-workos`.
+ * WorkOS AuthKit access tokens → ctx.auth — added by `lunora registry add auth-workos-jwt`.
  *
  * WorkOS owns the session; Lunora only verifies it. The AuthKit access token
- * (sent as `Authorization: Bearer`; authkit-react keeps it in memory, not in a
- * cookie on your domain) is checked against your client's JWKS, and the
- * verified user becomes `ctx.auth.userId`. The organization lands on the
- * identity as `orgId`, the role as `role` + `roles` (read by RLS), plus
- * `permissions`, `entitlements` and `featureFlags`.
+ * (sent as `Authorization: Bearer`) is checked against your client's JWKS, and
+ * the verified user becomes `ctx.auth.userId`. The organization lands on the
+ * identity as `orgId`, with that membership's `role` / `orgRoles` /
+ * `permissions`, plus `entitlements` and `featureFlags`. The roles are scoped to
+ * the organization, so they are not copied into the app-wide `roles` RLS reads:
+ * check them together with `orgId` in your policies.
  *
  * Wire it into your Worker entry as the `resolveIdentity` option:
  *
@@ -14,17 +15,17 @@
  *
  *   createWorker({ resolveIdentity: workosIdentity(env), shardDO: env.SHARD });
  *
- * On the client, give LunoraClient the token and let sockets carry it:
+ * On the client, let LunoraClient keep the access token fresh (a
+ * `LoginRequiredError` from `getAccessToken()` means signed out, so map it to `null`):
  *
  *   const client = new LunoraClient({ url, authTokenOnUpgrade: true });
- *   client.setAuthToken(await getAccessToken());
- *   client.onTokenExpired(async () => client.setAuthToken(await getAccessToken()));
+ *   const stop = setAuthTokenProvider(client, fetchToken, { subject: user.id });
  */
 import type { JwtIdentityResolver } from "@lunora/jwt-auth";
 import { workos } from "@lunora/jwt-auth";
 
 interface WorkOsEnv {
-    /** Your custom auth domain, when configured (it then issues the tokens instead of api.workos.com). */
+    /** Your custom authentication domain, when configured. Must be the host the client's `apiHostname` names. */
     WORKOS_AUTH_DOMAIN?: string;
     /** Your WorkOS client id (`client_…`). */
     WORKOS_CLIENT_ID?: string;

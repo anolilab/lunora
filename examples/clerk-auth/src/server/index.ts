@@ -30,9 +30,8 @@ const app = defineApp<Env>()
         return {
             resolveIdentity: memoizeIdentity(
                 clerk({
-                    authorizedParties: env.CLERK_AUTHORIZED_PARTIES?.split(",")
-                        .map((origin) => origin.trim())
-                        .filter((origin) => origin.length > 0),
+                    // Required: an unset or empty list fails here, at startup.
+                    authorizedParties: env.CLERK_AUTHORIZED_PARTIES ?? "",
                     publishableKey: env.CLERK_PUBLISHABLE_KEY ?? "",
                 }),
             ),

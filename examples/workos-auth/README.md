@@ -11,15 +11,17 @@ What it shows:
   the WorkOS user id. A read policy (`ownerId = auth.userId`) narrows `mine` to
   the caller's rows, and an insert policy stops anyone writing a note they don't
   own.
-- **An org/role-gated query.** `orgNotes` returns every note in the caller's
-  organization, but only to the `admin` role. The token's `role`/`roles` become
-  the identity's `roles`, and `rls(..., { roles: [orgAdmin] })` maps `admin` to
-  the `notes:read-org` permission.
+- **An org-gated query.** `orgNotes` returns every note in the caller's
+  organization, but only to members whose role grants `notes:read-org`. The
+  identity carries the org's `role`, `orgRoles` and `permissions` next to
+  `orgId`, and the policy checks them together. They are never turned into
+  app-wide RLS roles, since they belong to one organization.
 - **Token wiring and refresh.** `src/client/workos-token-bridge.tsx` hands
-  `useAuth().getAccessToken()` to `LunoraClient.setAuthToken` and refreshes it
-  ten seconds before each `exp` and from `onTokenExpired`. AuthKit keeps the
-  access token in memory, not in a
-  cookie on your domain, so a bearer is the only way it reaches the API.
+  `useAuth().getAccessToken` to `setAuthTokenProvider` from `lunorash/client`,
+  which installs each token with the user id as its subject, fetches the next
+  one ten seconds before `exp`, and refreshes again from `onTokenExpired`. A
+  `LoginRequiredError` means signed out. The access token reaches the API only
+  as a bearer.
 - **Authenticated live queries.** The client sets `authTokenOnUpgrade: true`,
   so its WebSockets carry the token as a `Sec-WebSocket-Protocol` entry, never
   in the URL. `useQuery(api.notes.mine)` updates live.
@@ -50,8 +52,15 @@ What it shows:
     | `.env.local` | `VITE_WORKOS_API_HOSTNAME` | optional: the same custom auth domain |
 
     None of these is a secret. Tokens are verified against the public JWKS at
-    `https://api.workos.com/sso/jwks/<clientId>`, so the Worker needs no WorkOS
-    API key.
+    `https://<api.workos.com or your auth domain>/sso/jwks/<clientId>`, so the
+    Worker needs no WorkOS API key. `WORKOS_AUTH_DOMAIN` and
+    `VITE_WORKOS_API_HOSTNAME` must name the same host: the browser gets its
+    tokens from `apiHostname`, and the Worker expects that host in `iss`.
+
+    On `localhost`, authkit-react runs in `devMode` and keeps the refresh token
+    in `localStorage`. In production, set `apiHostname` to a custom
+    authentication domain you own, so the refresh token can live in a cookie
+    on your domain instead.
 
 6. Run it:
 

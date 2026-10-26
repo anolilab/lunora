@@ -11,14 +11,15 @@ What it shows:
   the Clerk user id. A read policy (`ownerId = auth.userId`) narrows `mine` to
   the caller's rows, and an insert policy stops anyone writing a note they don't
   own.
-- **An org/role-gated query.** `orgNotes` returns every note in the caller's
-  active Clerk organization, but only to the org `admin` role. The role arrives
-  as `roles: [o.rol]` on the identity, and `rls(..., { roles: [orgAdmin] })`
-  maps it to the `notes:read-org` permission.
+- **An org-gated query.** `orgNotes` returns every note in the caller's
+  active Clerk organization, but only to its admins. The identity carries the
+  org role as `orgRole: "org:admin"` next to `orgId`, and the policy checks the
+  two together. The org role is never turned into an app-wide RLS role: any
+  Clerk user can create an organization and become its admin.
 - **Token wiring and refresh.** `src/client/clerk-token-bridge.tsx` hands
-  `useAuth().getToken()` to `LunoraClient.setAuthToken`, refreshes it ten
-  seconds before each `exp`, and again from
-  `onTokenExpired`.
+  `useAuth().getToken` to `setAuthTokenProvider` from `lunorash/client`, which
+  installs each token with the user id as its subject, fetches the next one ten
+  seconds before `exp`, and refreshes again from `onTokenExpired`.
 - **Authenticated live queries.** The client sets `authTokenOnUpgrade: true`,
   so its WebSockets carry the token as a `Sec-WebSocket-Protocol` entry, never
   in the URL. `useQuery(api.notes.mine)` updates live.
@@ -73,7 +74,13 @@ in-memory harness.
   sockets warm with the new token, resuming from their cursors, so that
   happens about once a minute per socket. If a refresh comes too late, the
   server closes the socket with code 4001 and the same reconnect follows.
-  To reduce it, issue tokens from a longer-lived Clerk JWT template.
+  Keep using the session token: Clerk leaves the session-bound claims
+  (`sid`, `v`, `fea`, …) out of JWT template tokens, and the preset relies on
+  them. To add claims, customize the session token instead
+  (https://clerk.com/docs/guides/sessions/customize-session-tokens).
+- `CLERK_AUTHORIZED_PARTIES` is required. An empty value stops the Worker at
+  startup, because Clerk warns that skipping the `azp` check opens the app to
+  CSRF.
 - `memoizeIdentity` reuses a verification for 5 seconds. That is also how long
   a revoked session keeps working.
 

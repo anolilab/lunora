@@ -1,6 +1,6 @@
 import { LunoraError } from "lunorash/errors";
 import type { Middleware } from "lunorash/server";
-import { definePermission, definePolicies, definePolicy, defineRole, rls } from "lunorash/server";
+import { definePolicies, definePolicy, rls } from "lunorash/server";
 
 import type { Doc as Document_ } from "./_generated/dataModel.js";
 import type { Id, MutationCtx, QueryCtx } from "./_generated/server.js";
@@ -9,7 +9,10 @@ import { mutation, query, v } from "./_generated/server.js";
 /**
  * Who sees what. The identity comes from `@lunora/jwt-auth`'s resolver in
  * `src/server/index.ts`: `auth.userId` is the IdP user id, and the active
- * organization arrives as the `orgId` claim with the org role in `roles`.
+ * organization arrives as the `orgId` claim with its role as `orgRole`
+ * (`org:admin`). The org role is scoped to that organization (any user can
+ * create an organization and be its admin), so it is checked together with the
+ * `orgId` it came with, never turned into an app-wide role.
  */
 const ownNotes = definePolicies([
     // read: your own notes only — an anonymous caller matches nothing.
@@ -19,17 +22,15 @@ const ownNotes = definePolicies([
 ]);
 
 /** Org admins may read every note written in their active organization. */
-const readOrgNotes = definePermission("notes:read-org");
-const orgAdmin = defineRole("admin", { permissions: [readOrgNotes] });
-
 const orgNotesPolicy = definePolicies([
     definePolicy({
         on: "read",
         table: "notes",
         when: ({ auth }) => {
-            const orgId = auth.identity?.["orgId"];
+            const { identity } = auth;
+            const orgId = identity?.["orgId"];
 
-            return auth.can(readOrgNotes) && typeof orgId === "string" ? { orgId } : false;
+            return identity?.["orgRole"] === "org:admin" && typeof orgId === "string" ? { orgId } : false;
         },
     }),
 ]);
@@ -40,7 +41,7 @@ const orgNotesPolicy = definePolicies([
 // boundary cast apps/playground/lunora/notes.ts uses too).
 const ownRead = rls(ownNotes) as unknown as Middleware<QueryCtx, QueryCtx>;
 const ownWrite = rls(ownNotes) as unknown as Middleware<MutationCtx, MutationCtx>;
-const orgRead = rls(orgNotesPolicy, { roles: [orgAdmin] }) as unknown as Middleware<QueryCtx, QueryCtx>;
+const orgRead = rls(orgNotesPolicy) as unknown as Middleware<QueryCtx, QueryCtx>;
 
 const newestFirst = (rows: Document_<"notes">[]): Document_<"notes">[] => rows.toSorted((a, b) => b.createdAt - a.createdAt);
 
@@ -51,7 +52,7 @@ const newestFirst = (rows: Document_<"notes">[]): Document_<"notes">[] => rows.t
  */
 export const mine = query.use(ownRead).query(async ({ ctx }): Promise<Document_<"notes">[]> => newestFirst(await ctx.db.query("notes").take(200)));
 
-/** Every note in the caller's active organization — only for the org's `admin` role; everyone else gets none. */
+/** Every note in the caller's active organization, for its admins only; everyone else gets none. */
 export const orgNotes = query.use(orgRead).query(async ({ ctx }): Promise<Document_<"notes">[]> => newestFirst(await ctx.db.query("notes").take(200)));
 
 export const add = mutation

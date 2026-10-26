@@ -13,15 +13,16 @@ import { describe, expect, it } from "vitest";
 import { add, mine, orgNotes } from "../lunora/notes";
 import schema from "../lunora/schema";
 
-const ISSUER = "https://api.workos.com";
 const CLIENT_ID = "client_example";
+// The `iss` production AuthKit access tokens carry (workos-node README, "Access token issuer validation").
+const ISSUER = `https://api.workos.com/user_management/${CLIENT_ID}`;
 const APP = "http://localhost:5173";
 const { privateKey, publicKey } = await generateKeyPair("RS256");
 const attacker = await generateKeyPair("RS256");
 const resolveIdentity = workos({ clientId: CLIENT_ID, keySet: publicKey });
 
 const sessionToken = async (claims: Record<string, unknown>): Promise<string> =>
-    new SignJWT({ client_id: CLIENT_ID, sid: "session_1", ...claims })
+    new SignJWT({ auth_time: Math.floor(Date.now() / 1000), client_id: CLIENT_ID, sid: "session_1", ...claims })
         .setProtectedHeader({ alg: "RS256" })
         .setIssuer(ISSUER)
         .setIssuedAt()

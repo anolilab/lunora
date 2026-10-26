@@ -12,9 +12,14 @@
             "title": "Auth"
         },
         {
-            "description": "Sign in with Auth0 for Lunora auth. Wires Auth0 as an OIDC provider via better-auth's genericOAuth plugin, on top of the base `auth` item.",
+            "description": "Sign in with Auth0 for Lunora auth, with Lunora (better-auth) owning the session. Wires Auth0 as an OIDC provider via better-auth's genericOAuth plugin, on top of the base `auth` item. To let Auth0 own the session and only verify its access tokens, use auth-auth0-jwt instead.",
             "name": "auth-auth0",
             "title": "Auth — Auth0"
+        },
+        {
+            "description": "Use Auth0 as the identity provider and let Auth0 own the session: verify each request's Auth0 access token against your tenant's JWKS and API audience, and feed the user, permissions, scopes and organization into ctx.auth / RLS via a resolveIdentity adapter. For Auth0 as a login button on a Lunora-owned better-auth session, use auth-auth0 instead.",
+            "name": "auth-auth0-jwt",
+            "title": "Auth — Auth0 access tokens (bring your own auth)"
         },
         {
             "description": "Sign in with Clerk for Lunora auth, with Lunora (better-auth) owning the session. Wires Clerk as an OIDC provider via better-auth's genericOAuth plugin, on top of the base `auth` item. To let Clerk own the session and only verify its tokens, use auth-clerk-jwt instead.",
@@ -72,8 +77,8 @@
             "title": "Auth UI — Vue"
         },
         {
-            "description": "Use WorkOS AuthKit as the identity provider: verify each request's AuthKit access token against your client's JWKS and feed the user, organization, role, permissions, entitlements and feature flags into ctx.auth / RLS via a resolveIdentity adapter.",
-            "name": "auth-workos",
+            "description": "Use WorkOS AuthKit as the identity provider: verify each request's AuthKit access token against your client's JWKS and feed the user, organization, org role, permissions, entitlements and feature flags into ctx.auth / RLS via a resolveIdentity adapter.",
+            "name": "auth-workos-jwt",
             "title": "Auth — WorkOS AuthKit (bring your own auth)"
         },
         {
