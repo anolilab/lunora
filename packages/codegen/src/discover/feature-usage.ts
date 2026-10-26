@@ -474,7 +474,9 @@ const requestSecretToolExportsOf = (file: SourceFile, onPath: Set<string>, scope
     }
 
     for (const statement of file.getVariableStatements()) {
-        if (!statement.isExported()) {
+        // The keyword, not `isExported()`: a statement has no symbol, so the two always agree, but
+        // `isExported()` builds the whole program and type checker first to find that out.
+        if (!statement.hasExportKeyword()) {
             continue;
         }
 
