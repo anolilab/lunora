@@ -166,9 +166,11 @@ describe("orchestrateImport", () => {
         const seen: unknown[] = [];
 
         const spy = createShardSpy((_shardKey, body) => {
-            seen.push(body.args["dryRun"]);
+            if ((body.args["rows"] as unknown[]).length > 0) {
+                seen.push(body.args["dryRun"]);
+            }
 
-            return json({ result: { conflicts: 0, errors: [], inserted: {} } });
+            return json({ result: { conflicts: 0, errors: [], inserted: {}, ...(body.args["dryRun"] === true ? { dryRun: true } : {}) } });
         });
         const batches = [{ rows: [{ doc: { _id: "m1", channelId: "c1", text: "hi" }, table: "messages" }], shardKey: "c1" }];
 
@@ -176,6 +178,42 @@ describe("orchestrateImport", () => {
         await coordinator.orchestrateImport(spy.namespace, { batches, dryRun: true });
 
         expect(seen).toStrictEqual([false, true]);
+    });
+
+    it("refuses a dry run on a shard that does not echo the flag, before sending it any row", async () => {
+        expect.assertions(5);
+
+        const registry = createStaticShardRegistry({ messages: ["old", "new"] });
+        const coordinator = createQueryCoordinator({ registry });
+        const written: string[] = [];
+
+        // A shard built before the flag existed ignores it: it inserts whatever rows it is sent and answers without the echo.
+        const spy = createShardSpy((shardKey, body) => {
+            const rows = body.args["rows"] as unknown[];
+
+            if (shardKey === "old") {
+                written.push(...rows.map(() => shardKey));
+
+                return json({ result: { conflicts: 0, errors: [], inserted: { messages: rows.length } } });
+            }
+
+            return json({ result: { conflicts: 0, errors: [], inserted: {}, dryRun: true } });
+        });
+        const row = { doc: { _id: "m1", channelId: "c1", text: "hi" }, table: "messages" };
+
+        const result = await coordinator.orchestrateImport(spy.namespace, {
+            batches: [
+                { rows: [row], shardKey: "old" },
+                { rows: [row], shardKey: "new" },
+            ],
+            dryRun: true,
+        });
+
+        expect(written).toStrictEqual([]);
+        expect(result.failed).toBe(1);
+        expect(result.ok).toBe(1);
+        expect(result.shards.find((shard) => shard.shardKey === "old")?.error?.message).toContain("cannot check rows without writing them");
+        expect(result.inserted).toStrictEqual({});
     });
 
     it("collects per-shard errors but does not throw", async () => {

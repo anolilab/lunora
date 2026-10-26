@@ -1922,18 +1922,38 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // workers pulling jobs off a shared cursor.
             const { batches } = request;
 
-            const outcomes = await runBoundedJobs(batches, maxConcurrency, async (batch) =>
+            const importOnShard = async (shardKey: string, args: Record<string, unknown>): Promise<ShardRpcOutcome> =>
                 callOneShard(
                     namespace,
-                    batch.shardKey,
-                    prepareShardRpc({
-                        args: { dryRun: request.dryRun === true, rows: [...batch.rows], startLine: batch.startLine ?? 1 },
-                        functionPath: "__lunora_admin__:importShard",
-                        headers: request.headers,
-                    }),
+                    shardKey,
+                    prepareShardRpc({ args, functionPath: "__lunora_admin__:importShard", headers: request.headers }),
                     perShardTimeoutMs,
-                ),
-            );
+                );
+
+            const outcomes = await runBoundedJobs(batches, maxConcurrency, async (batch) => {
+                if (request.dryRun === true) {
+                    // A shard built before the flag existed ignores it and inserts the rows, and its answer is the same body a check
+                    // returns. An empty batch is the only call that is safe to learn that from: the echo of `dryRun` is the proof, and a
+                    // shard that does not give it is never sent a row.
+                    const probe = await importOnShard(batch.shardKey, { dryRun: true, rows: [], startLine: 1 });
+
+                    if (probe.kind === "err") {
+                        return probe;
+                    }
+
+                    if ((unwrapResult(probe.value) as undefined | { dryRun?: unknown })?.dryRun !== true) {
+                        return {
+                            code: "SHARD_DRY_RUN_UNSUPPORTED",
+                            kind: "err",
+                            message: `shard "${batch.shardKey}" cannot check rows without writing them`,
+                            shardKey: batch.shardKey,
+                            timedOut: false,
+                        } satisfies ShardRpcError;
+                    }
+                }
+
+                return importOnShard(batch.shardKey, { dryRun: request.dryRun === true, rows: [...batch.rows], startLine: batch.startLine ?? 1 });
+            });
 
             return rollUpImport(outcomes);
         },
