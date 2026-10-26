@@ -7,6 +7,7 @@
  * second copy of a routine that WRITES `wrangler.jsonc` is a bug that has to be
  * fixed twice.
  */
+import type { DiscoveryCache } from "../discovery-cache";
 import { inferLunoraBindings } from "../infer-bindings";
 import { LUNORA_TAG } from "../log-line";
 import type { ExportGap } from "./reconcile-bindings";
@@ -16,6 +17,9 @@ import { describePreservedCrons, reconcileWranglerCrons } from "./reconcile-cron
 
 /** The project coordinates every reconciler here needs. */
 interface ReconcileProject {
+    /** Memoises the source scans, so a caller that also validates or reconciles again parses the project once. */
+    cache?: DiscoveryCache;
+
     /** Absolute path to the project root holding `wrangler.jsonc`. */
     projectRoot: string;
 
@@ -49,7 +53,7 @@ const reconcileBindingsSafely = async (
     onExportGaps?: (gaps: ReadonlyArray<ExportGap>) => void,
 ): Promise<void> => {
     try {
-        const inferred = await inferLunoraBindings({ projectRoot: options.projectRoot, schemaDir: options.schemaDir });
+        const inferred = await inferLunoraBindings({ cache: options.cache, projectRoot: options.projectRoot, schemaDir: options.schemaDir });
         const reconciled = reconcileWranglerBindings(options.projectRoot, inferred, { target: options.target });
 
         const target = reconciled.wranglerPath ?? "wrangler.jsonc";

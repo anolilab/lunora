@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createCodegenProject, findTsconfig, PROJECT_CONFIG_FILENAMES, runCodegen } from "@lunora/codegen";
-import { runPostCodegenHook } from "@lunora/config";
+import type { DiscoveryCache } from "@lunora/config";
+import { createDiscoveryCache, runPostCodegenHook } from "@lunora/config";
 import { consumeStudioWrite } from "@lunora/config/studio-host";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
@@ -296,6 +297,8 @@ describe("codegen-plugin", () => {
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
 
             const buildContext = {
+                // Vite runs a build's hooks within an environment.
+                environment: { name: "client" },
                 error: (message: string): never => {
                     throw new Error(message);
                 },
@@ -330,6 +333,8 @@ describe("codegen-plugin", () => {
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
 
             const buildContext = {
+                // Vite runs a build's hooks within an environment.
+                environment: { name: "client" },
                 error: (message: string): never => {
                     throw new Error(message);
                 },
@@ -356,6 +361,8 @@ describe("codegen-plugin", () => {
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
 
             const buildContext = {
+                // Vite runs a build's hooks within an environment.
+                environment: { name: "client" },
                 error: (message: string): never => {
                     throw new Error(message);
                 },
@@ -379,6 +386,8 @@ describe("codegen-plugin", () => {
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "serve" });
 
             const buildContext = {
+                // Vite runs a build's hooks within an environment.
+                environment: { name: "client" },
                 error: (message: string): never => {
                     throw new Error(message);
                 },
@@ -862,6 +871,8 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
 
             const buildContext = {
+                // Vite runs a build's hooks within an environment.
+                environment: { name: "client" },
                 error: (message: string): never => {
                     throw new Error(message);
                 },
@@ -1255,6 +1266,33 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             vi.useRealTimers();
         });
 
+        it("the first save refreshes configResolved's Project instead of building another", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+            const createCalls = createCodegenProject as ReturnType<typeof vi.fn>;
+            const before = createCalls.mock.calls.length;
+
+            (plugin.config as (this: unknown, config: object, env: object) => void).call(undefined, {}, { command: "serve", mode: "development" });
+            (plugin.configResolved as (this: unknown) => void).call(undefined);
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            wireServer(plugin, server);
+
+            const changeListener = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.find((args) => args[0] === "change")?.[1] as (
+                file: string,
+            ) => void;
+
+            changeListener(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+        });
+
         it("a root tsconfig.json save drops the cached Project — the next codegen run builds a fresh one", async () => {
             expect.assertions(4);
 
@@ -1483,6 +1521,109 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             await vi.runAllTimersAsync();
 
             expect(findTsconfigCalls).toHaveBeenCalledWith(join(workdir, "lunora"));
+        });
+    });
+
+    describe("vite build environments", () => {
+        it("generates once for all environments, and none starts before the shared postcodegen finished", async () => {
+            expect.assertions(4);
+
+            // One instance serving both environments, as with plugins passed
+            // inline; `@cloudflare/vite-plugin` builds worker environments
+            // concurrently, so both `buildStart`s run at once.
+            writeFixture(workdir);
+            vi.mocked(runCodegen).mockClear();
+            vi.mocked(runPostCodegenHook).mockClear();
+
+            let finishHook: (() => void) | undefined;
+            const order: string[] = [];
+
+            vi.mocked(runPostCodegenHook).mockImplementationOnce(
+                async () =>
+                    new Promise((resolve) => {
+                        finishHook = () => {
+                            order.push("hook");
+                            resolve({ ran: false });
+                        };
+                    }),
+            );
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const buildStart = plugin.buildStart as (this: object) => Promise<void>;
+            const contextFor = (name: string) => {
+                return {
+                    environment: { name },
+                    error: (message: string): never => {
+                        throw new Error(message);
+                    },
+                };
+            };
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
+            await (plugin.configResolved as (this: unknown) => Promise<void>).call(undefined);
+
+            const starts = [buildStart.call(contextFor("client")), buildStart.call(contextFor("worker"))].map(async (start) => {
+                await start;
+                order.push("start");
+            });
+
+            await vi.waitFor(() => {
+                expect(finishHook).toBeDefined();
+            });
+
+            finishHook?.();
+            await Promise.all(starts);
+
+            // A start that did not wait for the shared hook would have settled before it.
+            expect(order).toStrictEqual(["hook", "start", "start"]);
+
+            expect(runCodegen).toHaveBeenCalledTimes(1);
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    describe("startup discovery cache", () => {
+        it("drops the scans a postcodegen hook may have invalidated before reconciling bindings", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const events: string[] = [];
+            const cache = createDiscoveryCache();
+            const discovery: DiscoveryCache = {
+                clear: () => {
+                    events.push("clear");
+                    cache.clear();
+                },
+                memo: (key, compute) => {
+                    events.push("memo");
+
+                    return cache.memo(key, compute);
+                },
+            };
+
+            vi.mocked(runPostCodegenHook).mockImplementationOnce(async () => {
+                events.push("hook");
+
+                return { ran: true };
+            });
+
+            const plugin = codegenPlugin(makeOptions(workdir), discovery);
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
+            await (plugin.configResolved as (this: unknown) => Promise<void>).call(undefined);
+            await (plugin.buildStart as (this: object) => Promise<void>).call({
+                environment: { name: "client" },
+                error: (message: string): never => {
+                    throw new Error(message);
+                },
+            });
+
+            const afterHook = events.slice(events.indexOf("hook") + 1);
+
+            // The reconcile consults the cache after the hook, and only once it has been cleared.
+            expect(afterHook).toContain("memo");
+            expect(afterHook.indexOf("clear")).toBeLessThan(afterHook.indexOf("memo"));
         });
     });
 

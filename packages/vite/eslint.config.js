@@ -30,6 +30,7 @@ export default createConfig(
             // linting can't parse them — don't lint doc snippets as source.
             "**/*.md/**",
             "**/vitest.config.ts",
+            "**/vitest.bench.config.ts",
             "**/packem.config.ts",
             "**/vite.config.ts",
             "**/wrangler.jsonc",

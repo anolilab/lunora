@@ -4,6 +4,7 @@ import { resolve as resolvePath } from "node:path";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import {
     assertBuildTargetMatches,
+    createDiscoveryCache,
     isRunnableTarget,
     resolveLazyFunctions,
     resolveTargetOrThrow,
@@ -158,6 +159,10 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     // Shared, mutable context threaded through every Lunora sub-plugin so the
     // detected meta-framework is computed once and readable downstream.
     const context = createPluginContext();
+    // One startup's source scans (schema, capabilities, containers), shared by
+    // binding provisioning, the wrangler validator, container logs and
+    // `buildStart`'s reconcile instead of each parsing the project again.
+    const discovery = createDiscoveryCache();
     // `devVariablesPlugin` is `enforce: "pre"` + `apply: "serve"`: it offers to
     // scaffold `.dev.vars` before `@cloudflare/vite-plugin` boots the worker.
     // The framework-detect plugin runs early (its `config` hook) so the
@@ -180,8 +185,8 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // before `remoteBindingsPlugin` copies it. Unconditional: provisioning is
         // not validation, and gating it on `validateWrangler` took the write back
         // out of `config` for anyone who turned the CHECKS off.
-        bindingsProvisionPlugin(resolved),
-        codegenPlugin(resolved),
+        bindingsProvisionPlugin(resolved, discovery),
+        codegenPlugin(resolved, discovery),
         // Build-only: writes the server bundle's metafile for `lunora build`, which
         // cannot otherwise see what a Vite-built worker contains.
         bundleMetaPlugin(resolved.projectRoot),
@@ -204,7 +209,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     }
 
     if (resolved.validateWrangler) {
-        plugins.push(wranglerValidatorPlugin(resolved));
+        plugins.push(wranglerValidatorPlugin(resolved, discovery));
     }
 
     if (resolved.overlay !== false) {
@@ -216,7 +221,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     // `cloudflare: false` the project adds it itself and still runs containers —
     // gating this on the option left that path with silent containers. A project
     // that declares none never imports `dockerode` either way.
-    plugins.push(containerLogsPlugin(resolved));
+    plugins.push(containerLogsPlugin(resolved, discovery));
 
     // The Cloudflare plugin Lunora adds, or `undefined` on the BYO path — where
     // the remote plugin reports the materialized config instead of injecting it.
