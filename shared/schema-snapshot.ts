@@ -688,6 +688,12 @@ const diffFieldShape = (tableName: string, name: string, oldField: FieldSnapshot
         );
     }
 
+    // A baseline that recorded `v.object(shared)` with no fields predates the resolution of spread shapes. The runtime shape did not
+    // change, so filling the fields in only refreshes the baseline.
+    if (deep && old.kind === "object" && Object.keys(old.fields ?? {}).length === 0 && Object.keys(field.fields ?? {}).length > 0) {
+        return safeFieldChange(tableName, "widenedFieldShape", `field ${tableName}.${name} now records its object shape — the runtime shape is unchanged`);
+    }
+
     return breakingFieldChange(
         tableName,
         "changedFieldShape",
