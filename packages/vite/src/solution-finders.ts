@@ -1,5 +1,4 @@
 import { findLunoraSolution } from "@lunora/codegen";
-import { resolveHint } from "@lunora/errors";
 
 import type { OverlayPluginOptions } from "./types";
 
@@ -30,7 +29,6 @@ type Solution = NonNullable<Awaited<ReturnType<SolutionFinder["handle"]>>>;
  * typed `unknown` because the overlay's own contract passes the error as `any`.
  */
 interface NormalizedError {
-    code?: unknown;
     message?: unknown;
 }
 
@@ -54,15 +52,7 @@ const lunoraSolutionFinder: SolutionFinder = {
         const message = typeof error.message === "string" ? error.message : "";
         const solution = findLunoraSolution(message);
 
-        if (solution) {
-            return Promise.resolve({ body: solution.body, header: solution.header });
-        }
-
-        // A coded error whose message matches no table entry still has the catalog's
-        // own hint for its code, which is what the CLI renderer shows.
-        const hint = typeof error.code === "string" ? resolveHint({ code: error.code }) : undefined;
-
-        return Promise.resolve(hint === undefined ? undefined : { body: typeof hint === "string" ? hint : hint.join("\n") });
+        return Promise.resolve(solution ? { body: solution.body, header: solution.header } : undefined);
     },
     name: "lunora",
     priority: 100,
