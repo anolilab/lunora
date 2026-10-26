@@ -811,11 +811,14 @@ const useDataBrowser = ({
     // filter bar, but pins the facet's OWN value as the row's literal: the text
     // is only what the box displays, and re-deriving a value from it is what let
     // a facet's count disagree with the rows the click returned. Replaces any
-    // existing clause for the same column so repeated clicks don't stack.
+    // existing plain clause for the same column so repeated clicks don't stack. A
+    // nested-path or `has` row on that column tests another value, so it is kept.
     const facetFilter = (column: string, value: unknown): void => {
         const row: EditableFilter = { column, literal: [facetFilterValue(value)], operator: "eq", value: facetValueText(value) };
+        const replaces = (clause: EditableFilter): boolean =>
+            clause.column === column && clause.operator !== "has" && clause.pathSegments === undefined && (clause.path ?? "").trim() === "";
 
-        setFilters((current) => [...current.filter((clause) => clause.column !== column), row]);
+        setFilters((current) => [...current.filter((clause) => !replaces(clause)), row]);
         setOffset(0);
     };
 

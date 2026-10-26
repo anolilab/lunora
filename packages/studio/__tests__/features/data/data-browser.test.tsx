@@ -2524,6 +2524,38 @@ describe("dataBrowser — filter by cell value", () => {
         expect(screen.queryByTestId("grid-cell-filter") !== null).toBe(offered);
     });
 
+    it("keeps a nested clause on the same column when a cell filter adds its equality", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: NULLABLE_CELL_ROWS.length }];
+                }
+
+                return { columns: ["__id__", "note", "text"], rows: NULLABLE_CELL_ROWS, total: NULLABLE_CELL_ROWS.length };
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <DataBrowser initialFilters={[{ column: "note", operator: "eq", path: ["a"], value: "x" }]} tableParam="messages" />
+            </LunoraProvider>,
+        );
+
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getAllByTestId("db-expand-note")[0] as HTMLElement);
+        fireEvent.click(await screen.findByTestId("grid-cell-filter"));
+
+        const lastRead = mock.query.mock.calls.findLast((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage);
+
+        expect((lastRead?.[1] as { filters?: FilterArg[] }).filters).toStrictEqual([
+            { column: "note", operator: "eq", path: ["a"], value: "x" },
+            { column: "note", operator: "eq", value: null },
+        ]);
+    });
+
     it("closes the expanded cell when the table changes under it, so its filter cannot reach the new table", async () => {
         expect.assertions(3);
 
