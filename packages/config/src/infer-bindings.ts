@@ -37,6 +37,7 @@ import {
 } from "@lunora/codegen";
 // `worker-entry.ts` lexes the entry's exports; the lexer's wasm must be initialised first.
 import { init as initLexer } from "es-module-lexer";
+import type { SourceFile } from "ts-morph";
 import { Project, ts } from "ts-morph";
 
 import type { AgentIR } from "./agent-info";
@@ -188,6 +189,8 @@ const SECRET_SOURCE_FLAGS = [
     ["hostsShardRegistry", "@lunora/do:shardRegistry"],
     // `EventLogDO` refuses every request without the same secret, and the app that exports it hosts the log.
     ["hostsEventLog", "@lunora/replica:eventLog"],
+    // A worker that only constructs `EventLogDOClient` takes the host's value, so its line is a template, never minted.
+    ["usesEventLogClient", "@lunora/replica:eventLogClient"],
     // The secret store behind `requestSecretTool`. The tool's own import is the
     // signal, not `@lunora/agent`: an app that imports the package for something
     // else needs no key.
@@ -197,6 +200,34 @@ const SECRET_SOURCE_FLAGS = [
 /** The packages whose sandbox tools (`browserTool`, `jsCodeTool`) provision `BROWSER` / `LOADER` when imported under `lunora/`. */
 const SANDBOX_PACKAGES = ["@lunora/agent", "@lunora/agent/sandbox"] as const;
 
+/** The package whose barrel exports `EventLogDO` and `EventLogDOClient`, so a star re-export of it forwards the host class. */
+const EVENT_LOG_PACKAGE = "@lunora/replica";
+
+/**
+ * Whether a file constructs `EventLogDOClient`: a value import or re-export of the class from {@link EVENT_LOG_PACKAGE},
+ * or a namespace import of the package. The client throws at construction without the relay secret, so a type-only
+ * binding, which builds nothing, asks for none.
+ */
+const constructsEventLogClient = (sourceFile: SourceFile): boolean =>
+    sourceFile.getImportDeclarations().some((declaration) => {
+        if (declaration.getModuleSpecifierValue() !== EVENT_LOG_PACKAGE || declaration.isTypeOnly()) {
+            return false;
+        }
+
+        return (
+            declaration.getNamespaceImport() !== undefined ||
+            declaration.getNamedImports().some((specifier) => !specifier.isTypeOnly() && specifier.getNameNode().getText() === "EventLogDOClient")
+        );
+    }) ||
+    sourceFile
+        .getExportDeclarations()
+        .some(
+            (declaration) =>
+                declaration.getModuleSpecifierValue() === EVENT_LOG_PACKAGE &&
+                !declaration.isTypeOnly() &&
+                declaration.getNamedExports().some((specifier) => !specifier.isTypeOnly() && specifier.getNameNode().getText() === "EventLogDOClient"),
+        );
+
 /**
  * The parse prefilter: a file naming no capability package in quotes — the form
  * every static import, re-export and literal dynamic `import()` takes — and
@@ -205,7 +236,7 @@ const SANDBOX_PACKAGES = ["@lunora/agent", "@lunora/agent/sandbox"] as const;
  * rejects (JSX, a mid-edit syntax error), which used to be parsed unconditionally.
  */
 const CAPABILITY_PACKAGE_PATTERN = new RegExp(
-    String.raw`["'\x60](?:${[...FLAG_PACKAGES.map(([, source]) => source), ...SANDBOX_PACKAGES].map((source) => escapeRegExp(source)).join("|")})["'\x60]`,
+    String.raw`["'\x60](?:${[...FLAG_PACKAGES.map(([, source]) => source), ...SANDBOX_PACKAGES, EVENT_LOG_PACKAGE].map((source) => escapeRegExp(source)).join("|")})["'\x60]`,
     "u",
 );
 
@@ -329,6 +360,8 @@ interface InferredBindings {
     usesBrowser: boolean;
     /** `@lunora/auth/cimd/workers` is imported → needs the `global_fetch_strictly_public` compatibility flag (no binding; `lunora doctor` checks it). */
     usesCimdWorkers: boolean;
+    /** The app constructs an `EventLogDOClient`, so it needs the `LUNORA_RELAY_SECRET` its host minted, hosting the log or not. */
+    usesEventLogClient: boolean;
     /** `lunora/flags.ts` declares a feature-flag provider (any OpenFeature provider — Flagship or custom). */
     usesFlags: boolean;
     /** `@lunora/hyperdrive` is imported or `ctx.sql` read (reconcile writes `{ binding: "HYPERDRIVE" }` with a placeholder `id`; `lunora deploy` swaps in the created config's). */
@@ -384,7 +417,7 @@ interface InferredBindings {
  * the two not driven by a package import, so they are added explicitly. A `Pick`
  * of {@link InferredBindings}, so a flag the result does not declare fails to compile.
  */
-type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesRequestSecretTool" | "usesWorkerLoader">;
+type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesEventLogClient" | "usesRequestSecretTool" | "usesWorkerLoader">;
 
 /** A relative module specifier in an import or re-export: `from "./x"`, `from "../y"`. */
 const RELATIVE_IMPORT_PATTERN = /\bfrom\s+["']\.{1,2}\//u;
@@ -520,6 +553,9 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
     return {
         ...flags,
         needsD1: usesEnvDatabase,
+        // A lazy `import("@lunora/replica")` counts, as for every flag: a missing secret builds green and throws at runtime.
+        usesEventLogClient:
+            everywhere.dynamicImports.has(EVENT_LOG_PACKAGE) || candidates.some(({ file }) => constructsEventLogClient(project.getSourceFileOrThrow(file))),
         usesRequestSecretTool: lunora.requestSecretTool,
         usesAi: used.has("ai") || usesEnvAi,
         // A sandbox `browserTool` provisions BROWSER even without a direct
@@ -648,9 +684,6 @@ const hostsShardRegistry = (durableObjects: ReadonlyArray<DurableObjectSpec>, ge
     durableObjects.some((object) => object.binding === "SHARD_REGISTRY") ||
     (isMergedProject(generatedDirectory) && existsSync(join(generatedDirectory, "shardRegistry.ts")));
 
-/** The package whose barrel exports `EventLogDO`, so a star re-export of it forwards the class. */
-const EVENT_LOG_PACKAGE = "@lunora/replica";
-
 /** The source extension a `.js`-style relative specifier names, so it can be probed against the `.ts` file. */
 const SOURCE_SPECIFIER_EXTENSION = /\.[cm]?[jt]sx?$/u;
 
@@ -675,28 +708,93 @@ const resolveBarrel = (fromFile: string, specifier: string): string | undefined 
 };
 
 /**
- * The specifiers of a module's `export * from "…"` statements, read from the parsed syntax tree so a comment
- * or string that spells one forwards nothing. `export type *` forwards no runtime name and is skipped, as is
- * `export * as ns`, which binds a namespace rather than forwarding the module's names.
+ * The local names a file binds the replica's `EventLogDO` under, mapped to the module each is imported from.
+ * A type-only import compiles away, so it binds nothing the file can forward.
  */
-const starReexportSpecifiers = (modulePath: string): string[] => {
-    const source = ts.createSourceFile(modulePath, readFileSync(modulePath, "utf8"), ts.ScriptTarget.Latest);
+const eventLogImportSources = (source: ts.SourceFile): Map<string, string> => {
+    const importedFrom = new Map<string, string>();
 
-    return source.statements.flatMap((statement) =>
-        ts.isExportDeclaration(statement) &&
-        statement.exportClause === undefined &&
-        !statement.isTypeOnly &&
-        statement.moduleSpecifier !== undefined &&
-        ts.isStringLiteral(statement.moduleSpecifier)
-            ? [statement.moduleSpecifier.text]
-            : [],
-    );
+    for (const statement of source.statements) {
+        if (
+            !ts.isImportDeclaration(statement) ||
+            statement.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword ||
+            !ts.isStringLiteral(statement.moduleSpecifier)
+        ) {
+            continue;
+        }
+
+        const bindings = statement.importClause?.namedBindings;
+        const elements = bindings !== undefined && ts.isNamedImports(bindings) ? bindings.elements : [];
+
+        for (const element of elements) {
+            if (!element.isTypeOnly && (element.propertyName ?? element.name).text === "EventLogDO") {
+                importedFrom.set(element.name.text, statement.moduleSpecifier.text);
+            }
+        }
+    }
+
+    return importedFrom;
 };
 
 /**
- * Whether a module forwards `EventLogDO` as a runtime value: it exports the class itself, star-re-exports
- * the replica package, or star-re-exports a relative barrel that does. `visited` ends a barrel cycle, which
- * forwards no name it has not already been asked about.
+ * The module one export specifier forwards `EventLogDO` from, or `undefined` when it forwards some other name.
+ * The source name decides, not the exported one: `export { EventLogDO as Log }` still forwards the class.
+ */
+const eventLogSpecifierSource = (
+    element: ts.ExportSpecifier,
+    moduleSpecifier: ts.Expression | undefined,
+    importedFrom: ReadonlyMap<string, string>,
+): string | undefined => {
+    if (element.isTypeOnly) {
+        return undefined;
+    }
+
+    const sourceName = (element.propertyName ?? element.name).text;
+
+    if (moduleSpecifier !== undefined && ts.isStringLiteral(moduleSpecifier)) {
+        return sourceName === "EventLogDO" ? moduleSpecifier.text : undefined;
+    }
+
+    return importedFrom.get(sourceName);
+};
+
+/**
+ * The modules a file takes `EventLogDO` from, read from its syntax tree so a comment or string forwards nothing:
+ * every `export * from "…"` (a star re-export may carry the class under any name), `export { EventLogDO } from "…"`,
+ * and an `import { EventLogDO } from "…"` the file then exports. A class the file declares itself is not a forward,
+ * and neither is `export { Other as EventLogDO }`. `export * as ns` binds a namespace, not the names, so it is skipped.
+ */
+const eventLogForwardSpecifiers = (modulePath: string): string[] => {
+    const source = ts.createSourceFile(modulePath, readFileSync(modulePath, "utf8"), ts.ScriptTarget.Latest);
+    const importedFrom = eventLogImportSources(source);
+
+    return source.statements.flatMap((statement) => {
+        if (!ts.isExportDeclaration(statement) || statement.isTypeOnly) {
+            return [];
+        }
+
+        const { exportClause, moduleSpecifier } = statement;
+
+        if (exportClause === undefined) {
+            return moduleSpecifier !== undefined && ts.isStringLiteral(moduleSpecifier) ? [moduleSpecifier.text] : [];
+        }
+
+        if (!ts.isNamedExports(exportClause)) {
+            return [];
+        }
+
+        return exportClause.elements.flatMap((element) => {
+            const from = eventLogSpecifierSource(element, moduleSpecifier, importedFrom);
+
+            return from === undefined ? [] : [from];
+        });
+    });
+};
+
+/**
+ * Whether a module forwards the replica package's `EventLogDO`: it names the package as a source of
+ * `EventLogDO` (directly, or through an import it then exports), or a relative barrel it forwards from does.
+ * `visited` ends a barrel cycle, which forwards no name it has not already been asked about.
  */
 const forwardsEventLogDO = (modulePath: string, visited: Set<string>): boolean => {
     if (visited.has(modulePath)) {
@@ -705,11 +803,7 @@ const forwardsEventLogDO = (modulePath: string, visited: Set<string>): boolean =
 
     visited.add(modulePath);
 
-    if (detectClassExports({ composed: false, path: modulePath }, [{ className: "EventLogDO" }], "eventLog").some((definition) => definition.exported)) {
-        return true;
-    }
-
-    for (const specifier of starReexportSpecifiers(modulePath)) {
+    for (const specifier of eventLogForwardSpecifiers(modulePath)) {
         if (specifier === EVENT_LOG_PACKAGE) {
             return true;
         }

@@ -14,7 +14,7 @@ import { reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings"
 import { validateWranglerProject } from "../src/cloudflare/wrangler-project";
 import type { InferredBindings } from "../src/infer-bindings";
 import { inferLunoraBindings, secretSourcesFromBindings } from "../src/infer-bindings";
-import { secretsForPackages } from "../src/package-secrets-registry";
+import { mintableSecretKeysFor, secretsForPackages, SHARD_RELAY_HOST_PLACEHOLDER } from "../src/package-secrets-registry";
 
 const SCHEMA_WITH_GLOBAL = `import { defineSchema, defineTable, v } from "@lunora/server";
 
@@ -1539,6 +1539,157 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
         expect(sources).toEqual(expect.arrayContaining(["@lunora/do:shardRegistry", "@lunora/replica:eventLog"]));
         expect(secretsForPackages(sources).filter((entry) => entry.key === "LUNORA_RELAY_SECRET")).toHaveLength(1);
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for an entry that declares its own EventLogDO class", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport class EventLogDO {}\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for a relative barrel whose EventLogDO is its own class", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { EventLogDO } from "./local";\n`);
+        write("src/server/local.ts", "export class EventLogDO {}\n");
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for an export that renames another class to EventLogDO", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { Other as EventLogDO } from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET for an entry that exports the replica EventLogDO under another name", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { EventLogDO as Log } from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET for an entry that imports the replica EventLogDO and exports it by name", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nimport { EventLogDO } from "@lunora/replica";\nexport { EventLogDO };\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET for a remote-only worker that constructs EventLogDOClient for another worker's log", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "src/server/events.ts",
+            `import { EventLogDOClient } from "@lunora/replica";\n\nexport const log = (env: Env) => new EventLogDOClient({ env });\n`,
+        );
+
+        const sources = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+        const entry = secretsForPackages(sources).find((candidate) => candidate.key === "LUNORA_RELAY_SECRET");
+
+        expect(sources).toContain("@lunora/replica:eventLogClient");
+        // The client takes the host's value: its line is a template, and the key is never minted here.
+        expect(entry?.placeholderValue.startsWith("<")).toBe(true);
+        expect(mintableSecretKeysFor(sources).has("LUNORA_RELAY_SECRET")).toBe(false);
+    });
+
+    it("keys LUNORA_RELAY_SECRET for a composed remote-only worker whose lunora/ code constructs EventLogDOClient", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", `{\n    "name": "app",\n    "main": "virtual:lunora/worker",\n    "compatibility_date": "2026-04-07"\n}\n`);
+        write("lunora/events.ts", `import { EventLogDOClient } from "@lunora/replica";\n\nexport const log = (env: Env) => new EventLogDOClient({ env });\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("lists LUNORA_RELAY_SECRET once, keeping the host's value, for a worker that hosts and constructs the log", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { EventLogDO } from "@lunora/replica";\n`);
+        write(
+            "src/server/events.ts",
+            `import { EventLogDOClient } from "@lunora/replica";\n\nexport const log = (env: Env) => new EventLogDOClient({ env });\n`,
+        );
+
+        const sources = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+        const entries = secretsForPackages(sources).filter((entry) => entry.key === "LUNORA_RELAY_SECRET");
+
+        expect(entries).toHaveLength(1);
+        expect(entries[0]?.placeholderValue).toBe(SHARD_RELAY_HOST_PLACEHOLDER);
+        expect(mintableSecretKeysFor(sources).has("LUNORA_RELAY_SECRET")).toBe(true);
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for a worker that imports EventLogDOClient as a type only", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/events.ts", `import type { EventLogDOClient } from "@lunora/replica";\n\nexport type Log = EventLogDOClient;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the client's relay secret for a worker that reaches EventLogDOClient through a namespace import", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "src/server/events.ts",
+            `import * as replica from "@lunora/replica";\n\nexport const log = (env: Env) => new replica.EventLogDOClient({ env });\n`,
+        );
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the client's relay secret for a barrel that re-exports EventLogDOClient", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/client.ts", `export { EventLogDOClient } from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the client's relay secret for an aliased import of EventLogDOClient", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "src/server/events.ts",
+            `import { EventLogDOClient as Client } from "@lunora/replica";\n\nexport const log = (env: Env) => new Client({ env });\n`,
+        );
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the client's relay secret for a worker that loads EventLogDOClient lazily", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "src/server/events.ts",
+            `export const log = async (env: Env) => {\n    const { EventLogDOClient } = await import("@lunora/replica");\n\n    return new EventLogDOClient({ env });\n};\n`,
+        );
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
     });
 
     it("keys the secret-value key to a tool imported through a relative barrel inside lunora/", async () => {

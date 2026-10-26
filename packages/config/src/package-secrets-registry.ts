@@ -191,6 +191,16 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: SHARD_RELAY_HOST_PLACEHOLDER,
         },
     ],
+    // A worker that only constructs `EventLogDOClient` takes the value its host minted. Not a relay host source, so it never mints one.
+    "@lunora/replica:eventLogClient": [
+        {
+            description:
+                "The LUNORA_RELAY_SECRET of the worker that hosts EventLogDO. EventLogDOClient throws at construction without it, and the log refuses every request signed with another value.",
+            docsUrl: "https://lunora.sh/docs/packages/replica#eventlogdo",
+            key: SHARD_RELAY_SECRET_KEY,
+            placeholderValue: "<your-eventlogdo-host-relay-secret>",
+        },
+    ],
     // `@lunora/notify` itself needs no secret: each push channel's are keyed by the
     // channel `defineNotify` configures, so a webPush-only app is not told to set
     // FCM_* (#1039) — the same reason the payment adapters are keyed by subpath.

@@ -49,6 +49,7 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         usesR2sql: false,
         usesScheduler: false,
         hostsEventLog: false,
+        usesEventLogClient: false,
         hostsShardRegistry: false,
         usesStorage: false,
         usesWorkerLoader: false,

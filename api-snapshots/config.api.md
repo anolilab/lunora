@@ -781,6 +781,7 @@ interface InferredBindings {
     usesAuth: boolean;
     usesBrowser: boolean;
     usesCimdWorkers: boolean;
+    usesEventLogClient: boolean;
     usesFlags: boolean;
     usesHyperdrive: boolean;
     usesImages: boolean;
