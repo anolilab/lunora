@@ -1529,17 +1529,15 @@ const wireFrameTagExclusion = (documentExpression: string): string => {
 };
 
 /**
- * `contains` on a top-level `__doc__` field. A scalar keeps the plain substring test
- * over `json_extract` (the common case, no tree walk). An array or object is walked
- * with `json_tree` and only its text, integer, real and boolean leaves are tested, never its
- * keys or JSON punctuation. A boolean leaf is tested by its type name, as the table-wide
- * search does, since `json_extract` would read it as 1 or 0. A Date, Map or Set is a
- * wire-tagged array, so the tag and type name at elements 0 and 1 are excluded
- * ({@link wireFrameTagExclusion}): a search for `date` must not select the row, and a bulk
- * delete must not remove it.
- * Both trees are rooted at the same bound path so their node ids line up. A top-level
- * boolean is tested by its type name too, so it matches the same terms an array's boolean does.
- * A missing field matches nothing.
+ * `contains` on a top-level `__doc__` field. A scalar text or number keeps the plain substring
+ * test over `json_extract` (the common case, no tree walk). A scalar boolean is tested by its
+ * type name, as the table-wide search tests a boolean, since `json_extract` would read it as 1
+ * or 0. An array or object is walked with `json_tree`, and only its text, integer, real and
+ * boolean leaves are tested, never its keys or JSON punctuation; a boolean leaf is tested by its
+ * type name the same way. A Date, Map or Set is a wire-tagged array, so the tag and type name at
+ * elements 0 and 1 are excluded ({@link wireFrameTagExclusion}): a search for `date` must not
+ * select the row, and a bulk delete must not remove it. Both trees are rooted at the same bound
+ * path so their node ids line up. A missing field matches nothing.
  * @returns the SQL conjunct and bound params
  */
 const buildTopLevelContains = (document: string, path: unknown, term: string): { params: unknown[]; sql: string } => {
