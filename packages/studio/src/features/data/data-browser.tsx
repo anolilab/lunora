@@ -69,7 +69,8 @@ const isFilterableCellValue = (value: unknown, declaredType: string | undefined)
  * null, since a blank box would test for the empty string. A boolean is pinned for every
  * operator, since the box sends `true` as text and a stored boolean never equals text. Other
  * operators keep the box's own coercion, since a model that writes `18` for a numeric bound
- * means a number.
+ * means a number. A text value under `eq` or `ne` is pinned as text, so the model's `"10"` is
+ * not coerced to the number 10.
  */
 const suggestedValue = (operator: FilterClause["operator"], raw: unknown): { literal?: [unknown]; value: string } => {
     if (raw === null && (operator === "eq" || operator === "ne")) {
@@ -78,6 +79,10 @@ const suggestedValue = (operator: FilterClause["operator"], raw: unknown): { lit
 
     if (typeof raw !== "string" && typeof raw !== "number" && typeof raw !== "boolean") {
         return { value: "" };
+    }
+
+    if (typeof raw === "string" && (operator === "eq" || operator === "ne")) {
+        return { literal: [raw], value: raw };
     }
 
     if (operator !== "has" && typeof raw !== "boolean") {
