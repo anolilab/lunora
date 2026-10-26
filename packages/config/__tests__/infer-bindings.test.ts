@@ -1900,6 +1900,19 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
     });
 
+    it("keys the client's relay secret for a dynamic import that destructures the client under a computed key", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "src/server/load.ts",
+            `export const load = async (env: Env) => {\n    const { ["EventLogDOClient"]: Client } = await import("@lunora/replica");\n\n    return new Client({ env });\n};\n`,
+        );
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
     it("keys the client's relay secret for a worker that loads EventLogDOClient lazily", async () => {
         expect.assertions(1);
 

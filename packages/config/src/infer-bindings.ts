@@ -37,7 +37,7 @@ import {
 } from "@lunora/codegen";
 // `worker-entry.ts` lexes the entry's exports; the lexer's wasm must be initialised first.
 import { init as initLexer } from "es-module-lexer";
-import type { CallExpression, SourceFile } from "ts-morph";
+import type { BindingElement, CallExpression, SourceFile } from "ts-morph";
 import { Node, Project, ts } from "ts-morph";
 
 import type { AgentIR } from "./agent-info";
@@ -550,6 +550,19 @@ const isReplicaImportCall = (call: CallExpression): boolean => {
     );
 };
 
+/** The name a destructured element reads from the module: a quoted or computed string key names its value, not its source text. */
+const bindingKeyOf = (element: BindingElement): string => {
+    const key = element.getPropertyNameNode();
+
+    if (key === undefined) {
+        return element.getNameNode().getText();
+    }
+
+    const literal = Node.isComputedPropertyName(key) ? key.getExpression() : key;
+
+    return Node.isStringLiteral(literal) || Node.isNoSubstitutionTemplateLiteral(literal) ? literal.getLiteralValue() : key.getText();
+};
+
 /**
  * Whether a dynamic `import("@lunora/replica")` reaches `EventLogDOClient`. Unawaited it is a promise that any `.then` can read, so it
  * counts. Awaited, its members are reachable: a destructuring counts when it names the client or takes a rest element, and a member
@@ -576,12 +589,7 @@ const dynamicImportReachesClient = (call: CallExpression): boolean => {
 
         return (
             !Node.isObjectBindingPattern(binding) ||
-            binding
-                .getElements()
-                .some(
-                    (element) =>
-                        element.getDotDotDotToken() !== undefined || (element.getPropertyNameNode() ?? element.getNameNode()).getText() === EVENT_LOG_CLIENT,
-                )
+            binding.getElements().some((element) => element.getDotDotDotToken() !== undefined || bindingKeyOf(element) === EVENT_LOG_CLIENT)
         );
     }
 
@@ -599,18 +607,19 @@ const dynamicImportReachesClient = (call: CallExpression): boolean => {
  */
 const importsClientFromBarrel = (sourceFile: SourceFile): boolean =>
     sourceFile.getImportDeclarations().some((declaration) => {
-        const barrel = declaration.isTypeOnly() ? undefined : resolveBarrel(sourceFile.getFilePath(), declaration.getModuleSpecifierValue());
+        // The cheap check first: the barrel is only read for an import that names the client, which is almost none.
+        const namespace = declaration.getNamespaceImport();
+        const namesClient =
+            declaration.getNamedImports().some((specifier) => !specifier.isTypeOnly() && specifier.getNameNode().getText() === EVENT_LOG_CLIENT) ||
+            (namespace !== undefined && namespaceReachesClient(sourceFile, namespace.getText()));
 
-        if (barrel === undefined || !forwardsReplicaExport(barrel, EVENT_LOG_CLIENT, EVENT_LOG_CLIENT, new Set())) {
+        if (!namesClient || declaration.isTypeOnly()) {
             return false;
         }
 
-        const namespace = declaration.getNamespaceImport();
+        const barrel = resolveBarrel(sourceFile.getFilePath(), declaration.getModuleSpecifierValue());
 
-        return (
-            declaration.getNamedImports().some((specifier) => !specifier.isTypeOnly() && specifier.getNameNode().getText() === EVENT_LOG_CLIENT) ||
-            (namespace !== undefined && namespaceReachesClient(sourceFile, namespace.getText()))
-        );
+        return barrel !== undefined && forwardsReplicaExport(barrel, EVENT_LOG_CLIENT, EVENT_LOG_CLIENT, new Set());
     });
 
 /**
