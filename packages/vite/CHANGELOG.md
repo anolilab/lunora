@@ -1,3 +1,16 @@
+## @lunora/vite [1.0.0-alpha.389](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.388...@lunora/vite@1.0.0-alpha.389) (2026-10-26)
+
+### Bug Fixes
+
+* **vite:** stop test:bench rebuilding its dependencies mid-run ([#1354](https://github.com/anolilab/lunora/issues/1354)) ([b88cfdf](https://github.com/anolilab/lunora/commit/b88cfdff4321603236daf07dc35fdfad3abf0d8b))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.361
+* **@lunora/config:** upgraded to 1.0.0-alpha.415
+* **@lunora/studio:** upgraded to 1.0.0-alpha.347
+
 ## @lunora/vite [1.0.0-alpha.388](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.387...@lunora/vite@1.0.0-alpha.388) (2026-10-26)
 
 
