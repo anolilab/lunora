@@ -264,7 +264,7 @@ import {
     writeShapePokeCursors,
     writeTouchesMemo,
 } from "@lunora/shard-engine";
-import { decodeWire, encodeWire, isPlainObject } from "@lunora/wire";
+import { decodeWire, encodeWire, isPlainObject, needsWireEncoding } from "@lunora/wire";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
@@ -462,7 +462,10 @@ const adminResponse = (result: unknown): Response => jsonResponse({ result: enco
  */
 const encodeDispatchResult = (result: unknown): unknown => {
     try {
-        return encodeWire(result);
+        // Every consumer stringifies the encoded value straight away, and for a value
+        // `needsWireEncoding` clears that string is the same either way — so skip
+        // the deep copy `encodeWire` would build only to be serialized.
+        return needsWireEncoding(result) ? encodeWire(result) : result;
     } catch (error: unknown) {
         throw new LunoraError("WIRE_ENCODE_FAILED", error instanceof Error ? error.message : String(error), { cause: error });
     }
@@ -12751,28 +12754,35 @@ abstract class ShardDO {
      * in ANY identity field never share a result (RLS / `ctx.auth` / per-user flags).
      * The `cache` is created fresh per flush by the caller, so a result is never
      * reused across passes (it would go stale after the next write).
+     *
+     * `args` and `attachment` are the socket's own stored values and are only READ
+     * here, to build the key. What the handler receives is a copy — `handedArgs()`
+     * and a fresh {@link socketIdentity} — made only when the query actually runs,
+     * so every socket that shares a run skips both deep clones.
      */
     private resolveReactiveOutcomeDeduped(
         functionPath: string,
         args: Record<string, unknown>,
+        handedArgs: () => Record<string, unknown>,
         isAdmin: boolean,
-        identity: SubscriptionIdentity,
+        attachment: SocketAttachment,
         cache: Map<string, Promise<SubscriptionOutcome | null>>,
     ): Promise<SubscriptionOutcome | null> {
         if (this.deliveryAuthorization) {
-            return this.resolveReactiveOutcome(functionPath, args, isAdmin, identity);
+            return this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment));
         }
         const key = this.isIdentityIndependent(functionPath)
             ? // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null = the identity-independent bucket
               reactiveCacheKey(functionPath, args, null)
-            : reactiveCacheKey(functionPath, args, subscriptionIdentityKey(identity));
+            : // The key reads the identity, never keeps it, so the stored one serves without a copy.
+              reactiveCacheKey(functionPath, args, subscriptionIdentityKey({ identity: attachment.identity, ip: attachment.ip, userId: attachment.userId }));
         const cached = cache.get(key);
 
         if (cached !== undefined) {
             return cached;
         }
 
-        const pending = this.resolveReactiveOutcome(functionPath, args, isAdmin, identity);
+        const pending = this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment));
 
         cache.set(key, pending);
 
@@ -13442,7 +13452,7 @@ abstract class ShardDO {
 
                 // eslint-disable-next-line no-await-in-loop -- passes are intentionally sequential: each observes the prior pass's committed state and the tables merged while it ran
                 await Promise.all([
-                    this.refreshSubscriptions(batch, batchKeys),
+                    this.refreshSubscriptions(batch, frameCursor, frameEpoch, batchKeys),
                     this.pokeShapeSubscribers(batch, frameCursor, frameEpoch),
                     this.relay?.onFlush(batch, frameCursor ?? 0),
                 ]);
@@ -13609,15 +13619,22 @@ abstract class ShardDO {
         );
     }
 
-    private async refreshSubscriptions(changed: Set<string>, changedKeys?: Map<string, IndexKeyEntry[] | undefined>): Promise<void> {
+    /**
+     * `frameCursor` / `frameEpoch` are the post-write high-watermark the caller
+     * resolved for this pass — the same for every sub flushed in it (they all
+     * observe the committed state), stamped on every frame as the cursor each
+     * subscriber advances to. Read once by the caller, in the same synchronous
+     * step, rather than re-probed here.
+     */
+    private async refreshSubscriptions(
+        changed: Set<string>,
+        frameCursor: number | undefined,
+        frameEpoch: string | undefined,
+        changedKeys?: Map<string, IndexKeyEntry[] | undefined>,
+    ): Promise<void> {
         // Delivery authorization settles every subscription on every flush, so it never skips a socket.
         const sockets = [...this.runner.sockets()].filter((ws) => this.deliveryAuthorization !== undefined || this.socketIndex.mayCare(ws, changed));
 
-        // The post-write high-watermark is the same for every sub flushed in
-        // this pass (they all observe the committed state), so resolve it once
-        // and stamp it on every frame as the cursor each subscriber advances to.
-        const frameCursor = this.currentCdcCursor();
-        const frameEpoch = this.currentCdcEpoch();
         const generation = this.writeGeneration;
 
         // Flush-local dedup of reactive runs: sockets on the same
@@ -13674,9 +13691,19 @@ abstract class ShardDO {
                     // per-request identity fields. Without it an `rls()` / `ctx.auth`
                     // scoped live query would evaluate anonymous and return zero rows.
                     // (Admin + reserved flag reads ignore the identity payload.)
+                    //
+                    // `args` is the attachment's stored value. User code gets ONE copy of
+                    // it, shared by the authorization and the run as before, made only
+                    // when one of them is reached.
+                    let copy: Record<string, unknown> | undefined;
+                    const handedArgs = (): Record<string, unknown> => {
+                        copy ??= structuredClone(args);
+
+                        return copy;
+                    };
                     let permit: SubscriptionDeliveryPermit | undefined;
                     if (this.deliveryAuthorization) {
-                        permit = await this.authorizeSubscription(ws, subId, socketIdentity(attachment), functionPath, args);
+                        permit = await this.authorizeSubscription(ws, subId, socketIdentity(attachment), functionPath, handedArgs());
                     }
                     if (this.deliveryAuthorization && permit === undefined) {
                         return;
@@ -13690,7 +13717,7 @@ abstract class ShardDO {
                         this.sendSubscriptionSettlement(ws, subId, { cursor: frameCursor, epoch: frameEpoch, generation }, delivery, permit, true);
                         return;
                     }
-                    const outcome = await this.resolveReactiveOutcomeDeduped(functionPath, args, isAdmin, socketIdentity(attachment), reactiveRunCache);
+                    const outcome = await this.resolveReactiveOutcomeDeduped(functionPath, args, handedArgs, isAdmin, attachment, reactiveRunCache);
 
                     if (!outcome) {
                         // A clean resolve to "nothing to deliver" still ends the failure streak.
@@ -13788,7 +13815,7 @@ abstract class ShardDO {
                 }
 
                 // eslint-disable-next-line no-await-in-loop -- subscriptions on one socket share its SQLite connection
-                await refreshQuery(subId, functionPath, structuredClone(query.args ?? {}), isAdmin, backingOff);
+                await refreshQuery(subId, functionPath, query.args ?? {}, isAdmin, backingOff);
             }
 
             finishIndexVisit(subs);
