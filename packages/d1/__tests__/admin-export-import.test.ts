@@ -364,6 +364,29 @@ describe("d1 admin export/import globals", () => {
             expect(reloaded).toMatchObject({ value: "dark" });
         });
 
+        it('overwrites an existing _id under onConflict: "replace" (a rollback after the source changed)', async () => {
+            expect.assertions(3);
+
+            await writer.insert("settings", { _id: "s1", name: "theme", value: "copied" }, { allowExplicitId: true });
+
+            const result = await importGlobalRows(writer, schema, {
+                exec: harness.exec,
+                onConflict: "replace",
+                rows: [{ doc: { _creationTime: 42, _id: "s1", name: "theme", value: "changed on the source" }, table: "settings" }],
+            });
+
+            expect(result).toMatchObject({ conflicts: 0, errors: [], inserted: {}, replaced: 1 });
+            await expect(writer.get("settings", "s1")).resolves.toMatchObject({ _creationTime: 42, value: "changed on the source" });
+
+            // The default stays insert-only: the same row is a conflict, left as it is.
+            const again = await importGlobalRows(writer, schema, {
+                exec: harness.exec,
+                rows: [{ doc: { _id: "s1", name: "theme", value: "third" }, table: "settings" }],
+            });
+
+            expect(again).toMatchObject({ conflicts: 1, replaced: 0 });
+        });
+
         it("roundtrip: a bigint / bytes row survives JSON egress and comes back real", async () => {
             expect.assertions(4);
 

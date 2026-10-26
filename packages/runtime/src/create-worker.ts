@@ -286,12 +286,16 @@ type GlobalCdcApplyFunction = (request: { changes: ReadonlyArray<Record<string, 
 type GlobalImportFunction = (request: {
     /** Check the rows and return their shape errors without writing. */
     dryRun?: boolean;
+    /** `"replace"` overwrites a row whose `_id` already exists; `"skip"` (the default) reports it as a conflict and leaves it unchanged. */
+    onConflict?: "replace" | "skip";
     rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>;
     startLine?: number;
 }) => Promise<{
     conflicts: number;
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     inserted: Record<string, number>;
+    /** Existing rows overwritten under `onConflict: "replace"`. */
+    replaced?: number;
 }>;
 
 /** One R2 object as the storage browser surfaces it. Mirrors `@lunora/storage`'s `R2ObjectLike`. */
@@ -1269,6 +1273,15 @@ interface WorkerOptions {
      * and insert the rows.
      */
     importGlobalsSupportsDryRun?: boolean;
+
+    /**
+     * Set when `importGlobals` honours `onConflict: "replace"`. A replace import
+     * (`?onConflict=replace`) that targets global rows is refused unless this is
+     * set: an importer that ignores the mode would report every existing row as
+     * a conflict and leave it unchanged, which is the rollback the caller asked
+     * to undo.
+     */
+    importGlobalsSupportsReplace?: boolean;
 
     /**
      * Restrict every Durable Object this worker reaches — shard DOs, the
@@ -3890,7 +3903,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         resolveForwardContext: resolveAdminForwardContext,
         shardDO,
         prepareExportRows: async (headers, tables) => prepareExportRows(options, queryCoordinator, headers, tables, shardDO),
-        streamingImport: (request, headers, dryRun) => streamingImport(request, options, queryCoordinator, headers, shardDO, dryRun),
+        streamingImport: (request, headers, dryRun, onConflict) => streamingImport(request, options, queryCoordinator, headers, shardDO, dryRun, onConflict),
         syncGlobals: options.syncGlobals,
     });
 

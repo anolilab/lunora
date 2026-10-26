@@ -16,6 +16,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createHyperdriveGlobalCtxDb } from "../src/global";
 import { mysqlDialect } from "../src/global-dialect";
+import { ADMIN_PLANE_TABLES, adminPlaneCases } from "./_helpers/admin-plane-cases";
 import backendParityCases from "./_helpers/backend-parity-cases";
 import type { MysqlHarness } from "./_helpers/mysql-mem";
 import { tryCreateMysqlHarness } from "./_helpers/mysql-mem";
@@ -112,6 +113,31 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
         await harness.query("DROP TABLE IF EXISTS `nullables`");
         await harness.query("DROP TABLE IF EXISTS `__lunora_migration_state`");
         await harness.query("DROP TABLE IF EXISTS `wide`");
+
+        for (const table of ADMIN_PLANE_TABLES) {
+            // eslint-disable-next-line no-await-in-loop -- children before parents: the FK forbids dropping them in any order
+            await harness.query(`DROP TABLE IF EXISTS \`${table}\``);
+        }
+    });
+
+    describe("admin plane — export, import, browser, CDC", () => {
+        it.each(
+            adminPlaneCases({
+                engine: "mysql",
+                get exec() {
+                    return harness.exec;
+                },
+                query: async (statement) => await harness.query(statement),
+            }),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            TEST_TIMEOUT * 2,
+        );
     });
 
     describe("values every engine must treat alike", () => {

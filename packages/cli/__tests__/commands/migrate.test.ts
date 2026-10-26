@@ -1243,6 +1243,164 @@ describe("lunora migrate d1-to-hyperdrive | hyperdrive-to-d1", () => {
         expect(infos.some((line) => line.includes("Verify your app reads from D1, then decommission the Hyperdrive binding"))).toBe(true);
     });
 
+    describe("rolling back rows edited since cutover", () => {
+        /**
+         * Two deployments over in-memory tables: the source exports its rows, the target's
+         * import endpoint behaves as the runtime does — insert-only by default, overwriting an
+         * existing `_id` only under `?onConflict=replace`, which it echoes.
+         */
+        const deployments =
+            (source: Map<string, string>, target: Map<string, string>): StreamingFetchLike =>
+            async (input: string, init?: { body?: unknown }) => {
+                const url = new URL(input);
+
+                if (url.pathname.includes("/_lunora/admin/export")) {
+                    const ndjson = [...source].map(([id, key]) => JSON.stringify({ doc: { _creationTime: 1, _id: id, key }, table: "settings" })).join("\n");
+
+                    return {
+                        body: new ReadableStream<Uint8Array>({
+                            start(controller) {
+                                controller.enqueue(new TextEncoder().encode(`${ndjson}\n`));
+                                controller.close();
+                            },
+                        }),
+                        json: async () => {
+                            return {};
+                        },
+                        ok: true,
+                        status: 200,
+                        text: async () => ndjson,
+                    };
+                }
+
+                const replace = url.searchParams.get("onConflict") === "replace";
+                const echo = replace ? { onConflict: "replace" } : {};
+
+                if (url.searchParams.get("dryRun") === "true") {
+                    return {
+                        ...checkResponse(),
+                        json: async () => {
+                            return { conflicts: 0, dryRun: true, errors: [], inserted: {}, ...echo };
+                        },
+                    };
+                }
+
+                const rows = (typeof init?.body === "string" ? init.body : "")
+                    .split("\n")
+                    .filter((line) => line.trim() !== "")
+                    .map((line) => JSON.parse(line) as { doc: { _id: string; key: string } });
+                let conflicts = 0;
+                let inserted = 0;
+                let replaced = 0;
+
+                for (const { doc } of rows) {
+                    if (!target.has(doc._id)) {
+                        inserted += 1;
+                    } else if (replace) {
+                        replaced += 1;
+                    } else {
+                        conflicts += 1;
+                        continue;
+                    }
+
+                    target.set(doc._id, doc.key);
+                }
+
+                return {
+                    body: null,
+                    json: async () => {
+                        return {
+                            conflicts,
+                            errors: [],
+                            inserted: inserted > 0 ? { settings: inserted } : {},
+                            received: rows.length,
+                            replaced,
+                            ...echo,
+                        };
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            };
+
+        const rollBack = async (
+            target: Map<string, string>,
+            replace: boolean,
+        ): Promise<{ result: Awaited<ReturnType<typeof runMigrateBackendCommand>>; warnings: string[] }> => {
+            const warnings: string[] = [];
+            const logger: Logger = { error: () => {}, info: () => {}, success: () => {}, warn: (message: string) => warnings.push(message) };
+            // Copied to Hyperdrive at cutover as "old", then edited there.
+            const hyperdrive = new Map([["a", "edited on hyperdrive"]]);
+            const result = await runMigrateBackendCommand({
+                direction: "hyperdrive-to-d1",
+                fetchImpl: deployments(hyperdrive, target),
+                fromToken: "source-token",
+                fromUrl: "https://new.example.com",
+                logger,
+                out: join(dir, "dump.ndjson"),
+                replace,
+                toToken: "target-token",
+                toUrl: "https://old.example.com",
+                yes: true,
+            });
+
+            return { result, warnings };
+        };
+
+        it("leaves a row D1 already holds unchanged without --replace, and says so", async () => {
+            expect.assertions(3);
+
+            const d1 = new Map([["a", "old"]]);
+            const { result, warnings } = await rollBack(d1, false);
+
+            expect(d1.get("a")).toBe("old");
+            expect(result).toMatchObject({ code: 0, imported: 0, replaced: 0 });
+            expect(warnings.join("\n")).toContain("left unchanged (reported as conflicts above), so this copied rows missing from D1, not later edits");
+        });
+
+        it("restores the edited value with --replace", async () => {
+            expect.assertions(2);
+
+            const d1 = new Map([["a", "old"]]);
+            const { result } = await rollBack(d1, true);
+
+            expect(d1.get("a")).toBe("edited on hyperdrive");
+            expect(result).toMatchObject({ code: 0, imported: 0, replaced: 1 });
+        });
+
+        it("refuses --replace against a worker that would ignore it, before writing anything", async () => {
+            expect.assertions(3);
+
+            const d1 = new Map([["a", "old"]]);
+            const legacy = deployments(new Map([["a", "edited on hyperdrive"]]), d1);
+            // A worker predating the mode: it never echoes `onConflict`, and treats every existing row as a conflict.
+            const fetchImpl: StreamingFetchLike = async (input, init) => {
+                const url = new URL(input);
+
+                url.searchParams.delete("onConflict");
+
+                return legacy(url.toString(), init);
+            };
+            const result = await runMigrateBackendCommand({
+                direction: "hyperdrive-to-d1",
+                fetchImpl,
+                fromToken: "source-token",
+                fromUrl: "https://new.example.com",
+                logger: silentLogger(),
+                out: join(dir, "dump.ndjson"),
+                replace: true,
+                toToken: "target-token",
+                toUrl: "https://old.example.com",
+                yes: true,
+            });
+
+            expect(result.code).not.toBe(0);
+            expect(result.error).toContain("predates ?onConflict=replace");
+            expect(d1.get("a")).toBe("old");
+        });
+    });
+
     it("refuses the import leg against a remote target when --yes was not passed", async () => {
         expect.assertions(2);
 

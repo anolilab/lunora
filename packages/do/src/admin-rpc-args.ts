@@ -22,6 +22,7 @@ import type {
     ExportRow,
     FilterClause,
     FilterOperator,
+    ImportConflictMode,
     MigrationDirection,
     OrderByClause,
     QueueMessageOutcome,
@@ -92,6 +93,8 @@ interface RunShardExportArgs {
 interface RunShardImportArgs {
     /** Check the rows and report their shape errors, writing nothing. See `ImportShardArgs.dryRun` in `@lunora/shard-engine`. */
     dryRun?: boolean;
+    /** What a row whose `_id` already exists does. See `ImportConflictMode` in `@lunora/shard-engine`. */
+    onConflict?: ImportConflictMode;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }

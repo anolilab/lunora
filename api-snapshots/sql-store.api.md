@@ -9,6 +9,130 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/sql-store`
 
+### `ExportGlobalArgs` (interface)
+
+```ts
+interface ExportGlobalArgs {
+    batchSize?: number;
+    tables?: ReadonlyArray<string>;
+}
+```
+
+### `ExportRow` (interface)
+
+```ts
+interface ExportRow {
+    doc: Record<string, unknown>;
+    line?: number;
+    table: string;
+}
+```
+
+### `FacetGlobalColumnOptions` (interface)
+
+```ts
+interface FacetGlobalColumnOptions {
+    column: string;
+    filters?: GlobalFilterClause[];
+    limit?: number;
+    table: string;
+}
+```
+
+### `GlobalFacetResult` (interface)
+
+```ts
+interface GlobalFacetResult {
+    truncated: boolean;
+    values: GlobalFacetValue[];
+}
+```
+
+### `GlobalFacetValue` (interface)
+
+```ts
+interface GlobalFacetValue {
+    count: number;
+    value: unknown;
+}
+```
+
+### `GlobalFilterClause` (interface)
+
+```ts
+interface GlobalFilterClause {
+    column: string;
+    operator?: string;
+    path?: string[];
+    value: unknown;
+}
+```
+
+### `GlobalTableInfo` (interface)
+
+```ts
+interface GlobalTableInfo {
+    name: string;
+    rowCount: number;
+}
+```
+
+### `GlobalTablePage` (interface)
+
+```ts
+interface GlobalTablePage {
+    columns: string[];
+    refs?: Record<string, string>;
+    rows: Record<string, unknown>[];
+    total: number;
+}
+```
+
+### `ImportError` (interface)
+
+```ts
+interface ImportError {
+    code: string;
+    line: number;
+    message: string;
+    table: string;
+}
+```
+
+### `ImportGlobalArgs` (interface)
+
+```ts
+interface ImportGlobalArgs {
+    dryRun?: boolean;
+    exec?: SqlCtxExec;
+    onConflict?: ImportConflictMode;
+    rows: ReadonlyArray<ExportRow>;
+    startLine?: number;
+}
+```
+
+### `ImportResult` (interface)
+
+```ts
+interface ImportResult {
+    conflicts: number;
+    errors: ImportError[];
+    inserted: Record<string, number>;
+    replaced: number;
+}
+```
+
+### `ReadGlobalTablePageOptions` (interface)
+
+```ts
+interface ReadGlobalTablePageOptions {
+    filters?: GlobalFilterClause[];
+    limit?: number;
+    offset?: number;
+    table: string;
+}
+```
+
 ### `SEARCH_STATE_TABLE` (const)
 
 ```ts
@@ -147,6 +271,30 @@ const decodeGlobalRow: (definition: TableDefinitionLike, row: Record<string, unk
 const effectiveColumnKind: (validator: ValidatorLike) => string | undefined;
 ```
 
+### `exportSqlGlobalRows` (const)
+
+```ts
+const exportSqlGlobalRows: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect, args: ExportGlobalArgs) => AsyncGenerator<ExportRow, void, undefined>;
+```
+
+### `facetSqlGlobalColumn` (const)
+
+```ts
+const facetSqlGlobalColumn: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect, options: FacetGlobalColumnOptions) => Promise<GlobalFacetResult>;
+```
+
+### `importSqlGlobalRows` (const)
+
+```ts
+const importSqlGlobalRows: (writer: DatabaseWriterLike, schema: SchemaLike, dialect: SqlDialect, args: ImportGlobalArgs) => Promise<ImportResult>;
+```
+
+### `listSqlGlobalTables` (const)
+
+```ts
+const listSqlGlobalTables: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect) => Promise<GlobalTableInfo[]>;
+```
+
 ### `migrateSearchState` (const)
 
 ```ts
@@ -185,6 +333,12 @@ const readSqlCdcChanges: (exec: SqlCtxExec, options: {
 const readSqlCdcFloor: (exec: SqlCtxExec, dialect: SqlDialect) => Promise<number | undefined>;
 ```
 
+### `readSqlGlobalTablePage` (const)
+
+```ts
+const readSqlGlobalTablePage: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect, options: ReadGlobalTablePageOptions) => Promise<GlobalTablePage>;
+```
+
 ### `runSqlAggregateMigrations` (const)
 
 ```ts
@@ -213,6 +367,12 @@ const runSqlRankMigrations: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlD
 
 ```ts
 const runSqlSearchMigrations: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect) => Promise<void>;
+```
+
+### `selectGlobalTables` (const)
+
+```ts
+const selectGlobalTables: (schema: SchemaLike, requested?: ReadonlyArray<string>) => string[];
 ```
 
 ### `sqliteDecode` (const)

@@ -721,6 +721,8 @@ interface MigrateBackendOptions {
     /** Keep the intermediate NDJSON dump at this path instead of a private temp dir. */
     out?: string;
     prod?: boolean;
+    /** Overwrite rows the target already holds instead of reporting them as conflicts. */
+    replace?: boolean;
     /** Comma-separated `.global()` tables to move; omit to move every global table. */
     tables?: string;
     toToken?: string;
@@ -738,8 +740,10 @@ interface MigrateBackendResult {
     error?: string;
     /** Rows read out of the source. */
     exported: number;
-    /** Rows the target accepted. Short of `exported` means the remainder already existed there. */
+    /** Rows the target newly inserted. */
     imported: number;
+    /** Rows the target already held and `--replace` overwrote. */
+    replaced: number;
 }
 
 /** Apply {@link normalizeAdminBaseUrl}, passing an absent URL straight through. */
@@ -788,7 +792,7 @@ const runMigrateBackendCommand = async (options: MigrateBackendOptions): Promise
 
         logger.error(error);
 
-        return { bytes: 0, code: EXIT_CODE.USAGE, error, exported: 0, imported: 0 };
+        return { bytes: 0, code: EXIT_CODE.USAGE, error, exported: 0, imported: 0, replaced: 0 };
     }
 
     // When no --out is given, stage the (plaintext, cross-tenant) dump inside a
@@ -815,6 +819,7 @@ const runMigrateBackendCommand = async (options: MigrateBackendOptions): Promise
                 code: exportResult.code,
                 exported: exportResult.rows,
                 imported: 0,
+                replaced: 0,
                 ...(exportResult.error === undefined ? {} : { error: exportResult.error }),
             };
         }
@@ -828,10 +833,12 @@ const runMigrateBackendCommand = async (options: MigrateBackendOptions): Promise
             file: dumpPath,
             logger,
             prod: options.prod,
+            replace: options.replace,
             token: options.toToken,
             url: toUrl,
             yes: options.yes,
         });
+        const replaced = importResult.replaced ?? 0;
 
         if (importResult.code !== 0) {
             return {
@@ -839,21 +846,27 @@ const runMigrateBackendCommand = async (options: MigrateBackendOptions): Promise
                 code: importResult.code,
                 exported: exportResult.rows,
                 imported: importResult.inserted,
+                replaced,
                 ...(importResult.error === undefined ? {} : { error: importResult.error }),
             };
         }
 
-        if (importResult.inserted === exportResult.rows) {
+        if (importResult.inserted + replaced === exportResult.rows) {
+            const overwritten = replaced > 0 ? ` (${String(replaced)} existing row(s) overwritten)` : "";
+
             logger.info(
-                `✓ Migrated ${String(exportResult.rows)} row(s) — counts match. Verify your app reads from ${target}, then decommission the ${source} binding.`,
+                `✓ Migrated ${String(exportResult.rows)} row(s)${overwritten} — counts match. Verify your app reads from ${target}, then decommission the ${source} binding.`,
             );
         } else {
+            // Without --replace the import is insert-only: a row the target already
+            // holds is a conflict and keeps the target's values. Said outright,
+            // because on a rollback those are exactly the rows edited since cutover.
             logger.warn(
-                `Imported ${String(importResult.inserted)} of ${String(exportResult.rows)} exported row(s) — the remainder likely already existed in the target (see conflicts above). Re-run after resolving, or inspect the dump with --out.`,
+                `Imported ${String(importResult.inserted)} of ${String(exportResult.rows)} exported row(s). The rest already exist in the ${target} target and were left unchanged (reported as conflicts above), so this copied rows missing from ${target}, not later edits to rows it already holds. Re-run with --replace to overwrite them with the ${source} values, or keep the dump with --out and reconcile by hand.`,
             );
         }
 
-        return { bytes: exportResult.bytes, code: 0, exported: exportResult.rows, imported: importResult.inserted };
+        return { bytes: exportResult.bytes, code: 0, exported: exportResult.rows, imported: importResult.inserted, replaced };
     } finally {
         // Always shred the private temp dir (and the plaintext, cross-tenant dump
         // inside it) — even when export/import throws or returns early — unless the

@@ -140,10 +140,46 @@ interface CreateHyperdriveGlobalCtxDbOptions extends Omit<SqlCtxDbOptions, "dial
 }
 ```
 
+### `ExportHyperdriveGlobalRowsOptions` (interface)
+
+```ts
+interface ExportHyperdriveGlobalRowsOptions {
+    engine: HyperdriveEngine;
+    exec: SqlExec;
+    schema: SchemaLike;
+    tables?: ReadonlyArray<string>;
+}
+```
+
 ### `HyperdriveEngine` (type)
 
 ```ts
 type HyperdriveEngine = "mysql" | "postgres";
+```
+
+### `HyperdriveGlobalIntrospector` (interface)
+
+```ts
+interface HyperdriveGlobalIntrospector {
+    facetColumn: (options: FacetGlobalColumnOptions) => Promise<GlobalFacetResult>;
+    listTables: () => Promise<GlobalTableInfo[]>;
+    readTablePage: (options: ReadGlobalTablePageOptions) => Promise<GlobalTablePage>;
+}
+```
+
+### `ImportHyperdriveGlobalRowsOptions` (interface)
+
+```ts
+interface ImportHyperdriveGlobalRowsOptions {
+    cdc: boolean;
+    dryRun?: boolean;
+    engine: HyperdriveEngine;
+    exec: SqlExec;
+    onConflict?: ImportConflictMode;
+    rows: ReadonlyArray<ExportRow>;
+    schema: SchemaLike;
+    startLine?: number;
+}
 ```
 
 ### `Mysql2Execute` (type)
@@ -172,6 +208,18 @@ interface PgVectorIndexOptions {
 type RowClient = SqlClient;
 ```
 
+### `applyHyperdriveGlobalCdc` (const)
+
+```ts
+const applyHyperdriveGlobalCdc: (options: {
+    cdc: boolean;
+    changes: ReadonlyArray<CdcChange>;
+    engine: HyperdriveEngine;
+    exec: SqlExec;
+    schema: SchemaLike;
+}) => Promise<number>;
+```
+
 ### `buildMysqlExec` (const)
 
 ```ts
@@ -188,6 +236,12 @@ const buildPgExec: (client: RowClient) => SqlExec;
 
 ```ts
 const createHyperdriveGlobalCtxDb: ({ engine, exec, ...rest }: CreateHyperdriveGlobalCtxDbOptions) => DatabaseWriterLike;
+```
+
+### `createHyperdriveGlobalIntrospector` (const)
+
+```ts
+const createHyperdriveGlobalIntrospector: (engine: HyperdriveEngine, exec: SqlExec, schema: SchemaLike) => HyperdriveGlobalIntrospector;
 ```
 
 ### `createMysqlGlobalCtxDb` (const)
@@ -208,6 +262,18 @@ const createPgVectorIndex: (options: PgVectorIndexOptions) => VectorizeIndexLike
 const createPostgresGlobalCtxDb: (client: RowClient, options: Omit<CreateHyperdriveGlobalCtxDbOptions, "engine" | "exec">) => DatabaseWriterLike;
 ```
 
+### `exportHyperdriveGlobalRows` (const)
+
+```ts
+const exportHyperdriveGlobalRows: ({ engine, exec, schema, tables }: ExportHyperdriveGlobalRowsOptions) => AsyncGenerator<ExportRow, void, undefined>;
+```
+
+### `importHyperdriveGlobalRows` (const)
+
+```ts
+const importHyperdriveGlobalRows: ({ cdc, dryRun, engine, exec, onConflict, rows, schema, startLine }: ImportHyperdriveGlobalRowsOptions) => Promise<ImportResult>;
+```
+
 ### `mysqlDialect` (const)
 
 ```ts
@@ -218,4 +284,16 @@ const mysqlDialect: SqlDialect;
 
 ```ts
 const postgresDialect: SqlDialect;
+```
+
+### `readHyperdriveGlobalCdc` (const)
+
+```ts
+const readHyperdriveGlobalCdc: (engine: HyperdriveEngine, exec: SqlExec, request: {
+    limit?: number;
+    sinceSeq: number;
+}) => Promise<{
+    changes: CdcChange[];
+    cursor: number;
+}>;
 ```

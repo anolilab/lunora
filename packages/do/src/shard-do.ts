@@ -5015,7 +5015,7 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardImport(_args: RunShardImportArgs): Promise<ImportShardResult> {
-        return Promise.resolve({ conflicts: 0, errors: [], inserted: {} });
+        return Promise.resolve({ conflicts: 0, errors: [], inserted: {}, replaced: 0 });
     }
 
     /**
@@ -10807,7 +10807,7 @@ abstract class ShardDO {
      */
     private async importAdminShard(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseImportShardArgs(args);
-        const result = await this.runShardImport({ dryRun: parsed.dryRun, rows: parsed.rows, startLine: parsed.startLine });
+        const result = await this.runShardImport({ dryRun: parsed.dryRun, onConflict: parsed.onConflict, rows: parsed.rows, startLine: parsed.startLine });
 
         // A dry run writes nothing, so there is no table to flush and no change to audit. The echo is how a client tells a shard that
         // honoured the flag from one built before it existed, which ignores the flag, writes the rows and answers the same body.
@@ -10819,7 +10819,9 @@ abstract class ShardDO {
         // flush so live subscribers re-run.
         await this.flushChangedTables();
 
-        this.recordAudit("importShard", { detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted } });
+        this.recordAudit("importShard", {
+            detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted, replaced: result.replaced },
+        });
 
         return adminResponse(result);
     }

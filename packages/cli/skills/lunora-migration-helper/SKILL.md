@@ -193,8 +193,12 @@ lunora migrate d1-to-hyperdrive --from-url https://old-worker --to-url https://n
 
 `--tables a,b` limits it to some tables, and `--out <path>` keeps the
 intermediate NDJSON dump. `lunora migrate hyperdrive-to-d1` takes the same
-flags and moves the data back, for a rollback. This moves the data to another
-backend; any reshaping still follows widen → migrate → narrow.
+flags and moves the data back, for a rollback. Both are insert-only by default:
+a row whose `_id` already exists in the target is reported as a conflict and
+left unchanged, so a rollback restores missing rows, not later edits. Add
+`--replace` to overwrite those rows with the source's values, or keep the dump
+with `--out` and reconcile by hand. This moves the data to another backend; any
+reshaping still follows widen → migrate → narrow.
 
 ## Common pitfalls
 

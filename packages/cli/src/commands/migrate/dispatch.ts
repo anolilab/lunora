@@ -23,7 +23,7 @@ import type { MigrateOptions } from "./index";
  * the verdict.
  */
 type MigrateCommandData =
-    | { bytes: number; exported: number; imported: number; subcommand: MigrateBackendDirection }
+    | { bytes: number; exported: number; imported: number; replaced: number; subcommand: MigrateBackendDirection }
     | { empty: boolean; migrationFile?: string; subcommand: "generate" }
     | { file?: string; name: string; subcommand: "create" }
     | { id: string; result: unknown; subcommand: "down" | "status" | "up" };
@@ -61,6 +61,7 @@ const dispatchBackend = async (context: MigrateDispatchContext, direction: Migra
         logger,
         out: options.out,
         prod: options.prod === true,
+        replace: options.replace === true,
         tables: options.tables,
         toToken: options.toToken ?? options.token,
         toUrl: options.toUrl ?? options.url,
@@ -69,7 +70,7 @@ const dispatchBackend = async (context: MigrateDispatchContext, direction: Migra
 
     return {
         code: result.code,
-        data: { bytes: result.bytes, exported: result.exported, imported: result.imported, subcommand: direction },
+        data: { bytes: result.bytes, exported: result.exported, imported: result.imported, replaced: result.replaced, subcommand: direction },
         ...(result.error === undefined ? {} : { error: result.error }),
     };
 };

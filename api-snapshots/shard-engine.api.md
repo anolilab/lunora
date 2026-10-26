@@ -1221,6 +1221,12 @@ interface IdempotentRecord {
 }
 ```
 
+### `ImportConflictMode` (type)
+
+```ts
+type ImportConflictMode = "replace" | "skip";
+```
+
 ### `ImportError` (interface)
 
 ```ts
@@ -1237,6 +1243,7 @@ interface ImportError {
 ```ts
 interface ImportShardAdminArgs {
     dryRun: boolean;
+    onConflict: ImportConflictMode;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -1247,6 +1254,7 @@ interface ImportShardAdminArgs {
 ```ts
 interface ImportShardArgs {
     dryRun?: boolean;
+    onConflict?: ImportConflictMode;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -1259,6 +1267,7 @@ interface ImportShardResult {
     conflicts: number;
     errors: ImportError[];
     inserted: Record<string, number>;
+    replaced: number;
 }
 ```
 

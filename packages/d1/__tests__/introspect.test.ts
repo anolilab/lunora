@@ -675,12 +675,12 @@ describe("d1 introspect — operators and nested paths on the global path", () =
     it("runs a page whose statement binds exactly 100 parameters, and refuses 101", async () => {
         expect.assertions(3);
 
-        // One bound value per clause, plus LIMIT and OFFSET on the page statement.
-        const fits = await readGlobalTablePage(harness.exec, schema, { filters: repeatedClauses(98), table: "organizations" });
+        // One bound value per clause; LIMIT and OFFSET are inlined literals.
+        const fits = await readGlobalTablePage(harness.exec, schema, { filters: repeatedClauses(100), table: "organizations" });
 
         expect(fits.total).toBe(1);
 
-        const error = await readGlobalTablePage(harness.exec, schema, { filters: repeatedClauses(99), table: "organizations" }).catch(
+        const error = await readGlobalTablePage(harness.exec, schema, { filters: repeatedClauses(101), table: "organizations" }).catch(
             (error_: unknown) => error_,
         );
 
@@ -707,11 +707,11 @@ describe("d1 introspect — operators and nested paths on the global path", () =
     it("runs a facet whose statement binds exactly 100 parameters, and refuses 101", async () => {
         expect.assertions(2);
 
-        const fits = await facetGlobalColumn(harness.exec, schema, { column: "active", filters: repeatedClauses(99), table: "organizations" });
+        const fits = await facetGlobalColumn(harness.exec, schema, { column: "active", filters: repeatedClauses(100), table: "organizations" });
 
         expect(fits.values).toHaveLength(1);
         await expect(
-            facetGlobalColumn(harness.exec, schema, { column: "active", filters: repeatedClauses(100), table: "organizations" }),
+            facetGlobalColumn(harness.exec, schema, { column: "active", filters: repeatedClauses(101), table: "organizations" }),
         ).rejects.toMatchObject({
             code: "BAD_REQUEST",
         });

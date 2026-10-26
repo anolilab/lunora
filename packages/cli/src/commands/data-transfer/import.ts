@@ -67,6 +67,12 @@ interface ImportCommandOptions {
     prod?: boolean;
 
     /**
+     * Overwrite rows whose `_id` already exists in the target instead of
+     * reporting them as conflicts (`?onConflict=replace`).
+     */
+    replace?: boolean;
+
+    /**
      * Scan the export for columns holding `_storage` ids and write a candidate
      * `lunora/import-convex.json`. Scan-only: nothing is imported.
      */
@@ -84,6 +90,7 @@ interface ImportCommandOptions {
      * shape.
      */
     table?: string;
+
     token?: string;
 
     url?: string;
@@ -121,6 +128,8 @@ interface ImportSummary {
     failed?: ImportShardFailure[];
     inserted: Record<string, number>;
     received: number;
+    /** Existing rows overwritten under `--replace`. */
+    replaced: number;
     storage?: {
         /** Up to {@link UNRESOLVED_REPORT_LIMIT} distinct references — a sample, not the whole set. See `ambiguousTotal`. */
         ambiguous: StorageRemapReport["ambiguous"];
@@ -148,6 +157,8 @@ interface ImportCommandResult extends CommandResult<ImportCommandData> {
     body: ImportSummary | undefined;
     /** Total inserted rows across batches. */
     inserted: number;
+    /** Existing rows overwritten under `--replace`; absent when the run wrote nothing. */
+    replaced?: number;
 }
 
 interface ImportRequest {
@@ -235,6 +246,7 @@ const buildImportBody = (totals: ImportTotals, storageIdMap: Map<string, string>
         ...(totals.failed.length > 0 ? { failed: totals.failed } : {}),
         inserted: totals.inserted,
         received: totals.received,
+        replaced: totals.replaced,
         // A SAMPLE plus the totals, never the whole arrays: an unmapped 200k-row
         // import produced tens of thousands of distinct references and pushed a
         // multi-megabyte blob through one `logger.info`, burying the summary the
@@ -648,19 +660,28 @@ const runStoragePhase = async (
  */
 const reportImportOutcome = (
     logger: Logger,
-    outcome: { conflicts: number; errorCount: number; failed: boolean; insertedTotal: number; received: number; warnings: ReadonlyArray<string> },
+    outcome: {
+        conflicts: number;
+        errorCount: number;
+        failed: boolean;
+        insertedTotal: number;
+        received: number;
+        replaced: number;
+        warnings: ReadonlyArray<string>;
+    },
 ): void => {
     for (const warning of outcome.warnings) {
         logger.warn(warning);
     }
 
-    const unaccounted = outcome.received - outcome.insertedTotal - outcome.conflicts - outcome.errorCount;
+    const unaccounted = outcome.received - outcome.insertedTotal - outcome.replaced - outcome.conflicts - outcome.errorCount;
 
     if (unaccounted > 0) {
-        logger.warn(`${String(unaccounted)} of ${String(outcome.received)} rows were neither inserted, conflicted, nor reported as errors`);
+        logger.warn(`${String(unaccounted)} of ${String(outcome.received)} rows were neither inserted, replaced, conflicted, nor reported as errors`);
     }
 
-    const summary = `imported ${String(outcome.insertedTotal)} of ${String(outcome.received)} rows (${String(outcome.conflicts)} conflicts, ${String(outcome.errorCount)} errors)`;
+    const replaced = outcome.replaced > 0 ? `${String(outcome.replaced)} replaced, ` : "";
+    const summary = `imported ${String(outcome.insertedTotal)} of ${String(outcome.received)} rows (${replaced}${String(outcome.conflicts)} conflicts, ${String(outcome.errorCount)} errors)`;
 
     // A run that exits 1 must not end on a green line — the summary is the last
     // thing an operator reads, and only the exit code disagreed with it.
@@ -869,11 +890,12 @@ const logUnreachedShards = (logger: Logger, shards: ImportShardFailure[]): void 
 /**
  * Why the worker cannot check a file before writing it, or `undefined` when it can. A worker built before `?dryRun=true` existed ignores the
  * flag and writes every row it is sent, and the check would learn that only after the rows are in. So the probe sends no row, which no worker
- * version can write, and only a worker that honours the flag echoes `dryRun: true` in its answer.
+ * version can write, and only a worker that honours the flag echoes `dryRun: true` in its answer. `--replace` is probed the same way: a
+ * worker that ignores `?onConflict=replace` would report every existing row as a conflict and overwrite none of them.
  */
-const probeDryRunSupport = async (target: ImportPassTarget): Promise<string | undefined> => {
+const probeDryRunSupport = async (target: ImportPassTarget, replace: boolean): Promise<string | undefined> => {
     try {
-        const response = await target.fetchImpl(`${target.requestUrl}?dryRun=true`, {
+        const response = await target.fetchImpl(`${target.requestUrl}?dryRun=true${replace ? "&onConflict=replace" : ""}`, {
             // A blank line rather than an empty body: a request with no body is refused before any line is read.
             body: "\n",
             headers: { authorization: `Bearer ${target.token}`, "content-type": "application/x-ndjson" },
@@ -884,11 +906,15 @@ const probeDryRunSupport = async (target: ImportPassTarget): Promise<string | un
             return `the worker at ${target.requestUrl} answered HTTP ${String(response.status)} to the check`;
         }
 
-        const json = (await response.json()) as { dryRun?: unknown };
+        const json = (await response.json()) as { dryRun?: unknown; onConflict?: unknown };
 
-        return json.dryRun === true
-            ? undefined
-            : `the worker at ${target.requestUrl} predates ?dryRun=true, so it would write the file while checking it; deploy the current runtime and import again`;
+        if (json.dryRun !== true) {
+            return `the worker at ${target.requestUrl} predates ?dryRun=true, so it would write the file while checking it; deploy the current runtime and import again`;
+        }
+
+        return replace && json.onConflict !== "replace"
+            ? `the worker at ${target.requestUrl} predates ?onConflict=replace, so --replace would overwrite nothing; deploy the current runtime and import again`
+            : undefined;
     } catch (error) {
         return `the worker at ${target.requestUrl} did not answer the check: ${failureMessage(error)}`;
     }
@@ -920,12 +946,15 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
         return { body: undefined, code: request.refused, error: "import: could not resolve the worker URL and admin token", inserted: 0 };
     }
 
-    const { baseUrl, fetchImpl, requestUrl, token } = request;
+    const { baseUrl, fetchImpl, token } = request;
+    const replace = options.replace === true;
+    // Only the write pass carries the mode: the check probes no `_id`, so it answers the same either way.
+    const requestUrl = replace ? `${request.requestUrl}?onConflict=replace` : request.requestUrl;
     const batchSize = options.batchSize ?? DEFAULT_IMPORT_BATCH_SIZE;
-    const target: ImportPassTarget = { batchSize, fetchImpl, requestUrl, token };
+    const target: ImportPassTarget = { batchSize, fetchImpl, requestUrl: request.requestUrl, token };
 
     // Before any row or blob is sent: a worker that cannot check must not see the file at all.
-    const unsupported = await probeDryRunSupport(target);
+    const unsupported = await probeDryRunSupport(target, replace);
 
     if (unsupported !== undefined) {
         return { body: undefined, code: 1, error: `import: ${options.file} was not written: ${unsupported}`, inserted: 0 };
@@ -941,7 +970,7 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
         return { body: undefined, code: 1, error: "import: the storage phase failed — no rows were written", inserted: 0 };
     }
 
-    const check = await runImportPass(quietOptions(options), source, plan, { ...target, requestUrl: `${requestUrl}?dryRun=true` });
+    const check = await runImportPass(quietOptions(options), source, plan, { ...target, requestUrl: `${request.requestUrl}?dryRun=true` });
     const refusal = checkRefusal(check, options.verify === true);
 
     if (refusal !== undefined) {
@@ -968,13 +997,15 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
             : `POST ${requestUrl} -> import ${options.file}`,
     );
 
-    const { batcher, remapReport, sourceRows, streamFailure, unresolvedPaths } = await runImportPass(options, source, storage, target);
+    const { batcher, remapReport, sourceRows, streamFailure, unresolvedPaths } = await runImportPass(options, source, storage, { ...target, requestUrl });
 
-    const { conflicts, errors, failed: failedShards, inserted, received, warnings } = batcher.totals;
+    const { conflicts, errors, failed: failedShards, inserted, received, replaced, warnings } = batcher.totals;
 
     // Parity over an aborted run only restates the abort, so skip it there and
-    // let the failure be the verdict.
-    const parityMismatch = options.verify === true && streamFailure === undefined ? checkRowParity(options.logger, sourceRows, { conflicts, inserted }) : 0;
+    // let the failure be the verdict. A replaced row is accounted for the way a
+    // conflict is: present in the target, just not newly inserted.
+    const parityMismatch =
+        options.verify === true && streamFailure === undefined ? checkRowParity(options.logger, sourceRows, { conflicts: conflicts + replaced, inserted }) : 0;
     const unmigratedFailure = storageIdMap !== undefined && reportStorageOutcome(options.logger, remapReport, options.verify === true);
 
     const unresolvedPathFailure = reportUntransferredPaths(options.logger, unresolvedPaths, options.verify === true);
@@ -998,17 +1029,17 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
         options.logger.info(JSON.stringify(body, undefined, 2));
     }
 
-    reportImportOutcome(options.logger, { conflicts, errorCount: errors.length, failed, insertedTotal, received, warnings });
+    reportImportOutcome(options.logger, { conflicts, errorCount: errors.length, failed, insertedTotal, received, replaced, warnings });
 
     const data = { file: options.file, inserted: insertedTotal, summary: body };
 
     if (failed) {
         // The per-row detail is in `data.summary`; this is the one line that says
         // the run did not come out clean.
-        return { body, code: 1, data, error: `import: ${options.file} did not import cleanly`, inserted: insertedTotal };
+        return { body, code: 1, data, error: `import: ${options.file} did not import cleanly`, inserted: insertedTotal, replaced };
     }
 
-    return { body, code: 0, data, inserted: insertedTotal };
+    return { body, code: 0, data, inserted: insertedTotal, replaced };
 };
 
 export type { ImportCommandData, ImportCommandOptions, ImportCommandResult };

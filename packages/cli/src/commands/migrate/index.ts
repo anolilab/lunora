@@ -13,6 +13,7 @@ const migrateCommand: Command = {
         ["lunora migrate status backfill-names --format json", "Same, as a single JSON document on stdout"],
         ["lunora migrate d1-to-hyperdrive --from-url https://old --to-url https://new", "Copy .global() data from D1 to Hyperdrive"],
         ["lunora migrate hyperdrive-to-d1 --from-url https://new --to-url https://old", "Roll .global() data back from Hyperdrive to D1"],
+        ["lunora migrate hyperdrive-to-d1 --from-url https://new --to-url https://old --replace --yes", "Roll back, overwriting rows D1 already holds"],
     ],
     group: "Data",
     loader: () =>
@@ -42,6 +43,11 @@ const migrateCommand: Command = {
         { description: "backend migration: target admin token (defaults to --token / LUNORA_ADMIN_TOKEN)", name: "to-token", type: String },
         { description: "backend migration: comma-separated .global() tables to move (default: all global tables)", name: "tables", type: String },
         { description: "backend migration: keep the intermediate NDJSON dump at this path", name: "out", type: String },
+        {
+            description: "backend migration: overwrite rows that already exist in the target with the source's values (default: leave them, report conflicts)",
+            name: "replace",
+            type: Boolean,
+        },
     ],
 };
 
@@ -56,6 +62,7 @@ export type MigrateOptions = CreateOptions<{
     name: string | undefined;
     out: string | undefined;
     prod: boolean | undefined;
+    replace: boolean | undefined;
     steps: number | undefined;
     table: string | undefined;
     tables: string | undefined;

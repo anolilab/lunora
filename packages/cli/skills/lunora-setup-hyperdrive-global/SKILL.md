@@ -168,6 +168,12 @@ Hyperdrive deployment as `--from-url` and the D1 one as `--to-url`. The target's
 `.global()` backend decides where the rows land, so the copy works the same way
 in both directions.
 
+Without `--replace` the rollback restores rows missing from D1, not edits made
+on Hyperdrive since cutover: a row D1 already holds is a conflict and keeps its
+D1 values. Add `--replace` (plus `--yes` for a remote target) to overwrite those
+rows with the Hyperdrive values, or keep the dump with `--out` and reconcile by
+hand.
+
 ## Common Pitfalls
 
 1. **Installing `@lunora/hyperdrive/global` as a package name.** It's a subpath.

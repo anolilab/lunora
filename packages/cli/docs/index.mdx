@@ -87,7 +87,7 @@ lunora migrate <generate|create|up|down|status> [name|id] [--format json]
 lunora env <list|get|set|unset|push|diff|doctor> [--format json]
 lunora export [--out <file>] [--tables <t1,t2>] [--url <u>] [--token <tok>]
               [--format json]           #   json needs --out <file>
-lunora import <file> [--table <name>] [--batch-size n] [--format json]
+lunora import <file> [--table <name>] [--batch-size n] [--replace] [--format json]
 lunora backup <create|list|restore|pitr> [--dir <d>] [--bucket <b>] [--at <iso>]
             [--format json]
 lunora seed [--table <t>] [--count n]   # deterministic fake data from schema.ts
@@ -1118,6 +1118,14 @@ the Hyperdrive deployment as `--from-url` and the D1 one as `--to-url`. The
 export/import does not care about direction, because the target's `.global()`
 backend decides where the rows land.
 
+The import is insert-only by default: a row whose `_id` already exists in the
+target is reported as a conflict and left unchanged. On a rollback after
+cutover, that means rows missing from D1 come back but edits made on Hyperdrive
+to rows D1 still holds do not. Pass `--replace` to overwrite those rows with the
+source's values (it keeps their `_id` and takes the source's `_creationTime`),
+or keep the dump with `--out` and reconcile by hand. `--replace` writes like any
+import, so a remote target still needs `--yes`.
+
 ### `lunora run`
 
 Send a single RPC to a running Worker without spinning up the client SDK:
@@ -1343,7 +1351,14 @@ lunora export --tables messages,channels --url https://my-worker.workers.dev --t
 
 lunora import ./backup.ndjson
 lunora import ./users.ndjson --table users   # wrap bare docs as {table,doc} envelopes
+lunora import ./backup.ndjson --replace      # overwrite rows whose _id already exists
 ```
+
+`import` inserts. A row whose `_id` is already in the target is a conflict: it
+is counted and left as it is. `--replace` overwrites it instead, on `.global()`
+and sharded tables alike, and the summary counts it under `replaced`. An `_id`
+held by a different table is still refused. The worker has to support the mode;
+an older one is detected before any row is sent.
 
 ### `lunora backup`
 

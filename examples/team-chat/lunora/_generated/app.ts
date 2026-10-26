@@ -559,8 +559,10 @@ class AppBuilder<Env extends object> {
                 // plane: the rows `resolveTableSharding` classifies as `.global()`
                 // land here, and without it they are reported, not written.
                 options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
-                // The importer above skips the write for a dry run.
+                // The importer above skips the write for a dry run, and
+                // overwrites an existing `_id` under `onConflict: "replace"`.
                 options.importGlobalsSupportsDryRun = true;
+                options.importGlobalsSupportsReplace = true;
                 // The read/replay half of the same admin plane. Each one is the
                 // only reason its endpoint can see the global storage plane at
                 // all, and every one of them fails SILENTLY when unset — export
@@ -914,11 +916,12 @@ const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector =
  * shard-local ones it filtered out before calling here — a single
  * `startLine` plus positional counting would mis-attribute every row after
  * the first gap. `importGlobalRows` prefers `row.line` when present and
- * falls back to the position-derived count otherwise. A dry run is passed through and writes nothing.
+ * falls back to the position-derived count otherwise. A dry run is passed through and writes nothing;
+ * `onConflict: "replace"` overwrites a row whose `_id` already exists instead of reporting a conflict.
  */
 const buildGlobalImporter =
     (database: D1DatabaseLike, cdc: boolean) =>
-    (request: { dryRun?: boolean; rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => {
+    (request: { dryRun?: boolean; onConflict?: "replace" | "skip"; rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => {
         const exec = buildExec(database);
         // Same reason the PITR applier carries it: a bulk import that skips the
         // changelog restores rows no downstream consumer is ever told about.
@@ -927,6 +930,7 @@ const buildGlobalImporter =
         return importGlobalRows(writer, schema as unknown as D1CtxDbOptions["schema"], {
             dryRun: request.dryRun === true,
             exec,
+            onConflict: request.onConflict ?? "skip",
             rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, table: row.table })),
             ...(request.startLine === undefined ? {} : { startLine: request.startLine }),
         });

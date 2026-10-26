@@ -242,6 +242,7 @@ interface ImportTotals {
     errors: ImportRowError[];
     failed: ImportShardFailure[];
     inserted: Record<string, number>;
+    replaced: number;
 }
 
 /**
@@ -263,7 +264,7 @@ const shardFailures = (shards: ReadonlyArray<{ error?: { message: string; timedO
  */
 const mergeImportResult = (
     totals: ImportTotals,
-    result: { conflicts: number; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number> },
+    result: { conflicts: number; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number>; replaced?: number },
 ): void => {
     for (const [table, count] of Object.entries(result.inserted)) {
         // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
@@ -276,6 +277,8 @@ const mergeImportResult = (
 
     // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
     totals.conflicts += result.conflicts;
+    // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
+    totals.replaced += result.replaced ?? 0;
 };
 
 /** Report every global row as an error, because the importer for them is missing or cannot take this request. */
@@ -298,19 +301,21 @@ const streamingImport = async (
     forwardedHeaders: Record<string, string>,
     namespace: ShardNamespaceLike,
     dryRun: boolean,
+    onConflict: "replace" | "skip",
 ): Promise<{
     conflicts: number;
     errors: ImportRowError[];
     failed: ImportShardFailure[];
     inserted: Record<string, number>;
     received: number;
+    replaced: number;
     warnings?: string[];
 }> => {
     const defaultShard = options.defaultShardKey ?? "__root__";
 
     const { errors, globalRows, perShard, received } = await bucketImportStream(request, options, defaultShard);
 
-    const totals: ImportTotals = { conflicts: 0, errors, failed: [], inserted: {} };
+    const totals: ImportTotals = { conflicts: 0, errors, failed: [], inserted: {}, replaced: 0 };
     const warnings: string[] = [];
 
     // A worker with no `resolveTableSharding` cannot tell a `.global()` table
@@ -339,6 +344,7 @@ const streamingImport = async (
             batches: [...perShard.values()],
             dryRun,
             headers: forwardedHeaders,
+            onConflict,
         });
 
         mergeImportResult(totals, result);
@@ -353,13 +359,15 @@ const streamingImport = async (
             refuseGlobalRows(totals, globalRows, "GLOBAL_NOT_CONFIGURED", "no `importGlobals` is configured");
         } else if (dryRun && options.importGlobalsSupportsDryRun !== true) {
             refuseGlobalRows(totals, globalRows, "GLOBAL_DRY_RUN_UNSUPPORTED", "the configured `importGlobals` cannot check rows without writing them");
+        } else if (onConflict === "replace" && options.importGlobalsSupportsReplace !== true) {
+            refuseGlobalRows(totals, globalRows, "GLOBAL_REPLACE_UNSUPPORTED", "the configured `importGlobals` cannot overwrite existing rows");
         } else {
             // Pass each row's true physical `line` (carried on the row) so error
             // attribution is correct even when global rows are interspersed with
             // shard rows or blank lines. `startLine` is the first global row's
             // line, retained only as a backward-compat fallback.
             const startLine = globalRows[0]?.line ?? 1;
-            const result = await options.importGlobals({ dryRun, rows: globalRows, startLine });
+            const result = await options.importGlobals({ dryRun, onConflict, rows: globalRows, startLine });
 
             mergeImportResult(totals, result);
         }
@@ -383,6 +391,7 @@ const streamingImport = async (
         failed: totals.failed,
         inserted: totals.inserted,
         received,
+        replaced: totals.replaced,
         ...(warnings.length > 0 ? { warnings } : {}),
     };
 };

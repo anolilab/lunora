@@ -12,6 +12,7 @@ const importCommand: Command = {
         ["lunora import ./convex-export --scan", "Write a candidate `lunora/import-convex.json` storage-column mapping (imports nothing)"],
         ["lunora import ./snapshot.zip --with-storage --verify", "Import a `npx convex export --path` zip snapshot with blob + row-parity checks"],
         ["lunora import ./supabase-csv --from supabase", "Import a directory of `COPY … TO STDOUT WITH CSV HEADER` dumps"],
+        ["lunora import backup.ndjson --replace", "Restore a snapshot over existing rows, overwriting each matching _id"],
         ["lunora import ./firestore-json --from firebase --verify", "Import Firestore documents (REST/Admin-SDK JSON) with row-parity checks"],
     ],
     group: "Data",
@@ -41,6 +42,11 @@ const importCommand: Command = {
         },
         { description: "Write a candidate `lunora/import-convex.json` storage-column mapping and exit", name: "scan", type: Boolean },
         { description: "Verify row parity + dangling-storage after import (non-zero exit on mismatch)", name: "verify", type: Boolean },
+        {
+            description: "Overwrite rows whose _id already exists in the target (default: leave them unchanged and report a conflict)",
+            name: "replace",
+            type: Boolean,
+        },
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
         { description: "Confirm bulk-writing production (required with --prod)", name: "yes", type: Boolean },
         { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
@@ -59,6 +65,7 @@ export type ImportOptions = CreateOptions<{
     format: string | undefined;
     from: string | undefined;
     prod: boolean | undefined;
+    replace: boolean | undefined;
     scan: boolean | undefined;
     "storage-dir": string | undefined;
     table: string | undefined;
