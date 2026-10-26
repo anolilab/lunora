@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.359](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.358...@lunora/codegen@1.0.0-alpha.359) (2026-10-26)
+
+### Performance Improvements
+
+* drop unused TypeScript programs from dev startup binding scan ([#1349](https://github.com/anolilab/lunora/issues/1349)) ([8aa7725](https://github.com/anolilab/lunora/commit/8aa772521e2f101f5ad4585c49882df064ccaa8f))
+
 ## @lunora/codegen [1.0.0-alpha.358](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.357...@lunora/codegen@1.0.0-alpha.358) (2026-10-26)
 
 ### Bug Fixes
