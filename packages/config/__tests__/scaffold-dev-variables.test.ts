@@ -715,14 +715,16 @@ describe("planDevSecretsFill", () => {
 // fillDevSecrets — I/O
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("the relay secret is minted by its host only", () => {
+describe("the relay secret is withheld only from a client-only project", () => {
     const CLIENT_TEMPLATE = "<copy-from-the-worker-that-hosts-the-registry>";
 
-    it("mints the relay secret for a host, not for a client", () => {
-        expect.assertions(3);
+    it("mints the relay secret unless the project only constructs the client", () => {
+        expect.assertions(5);
 
         expect(mintableSecretKeysFor(["@lunora/do:shardRegistry"]).has("LUNORA_RELAY_SECRET")).toBe(true);
-        expect(mintableSecretKeysFor([]).has("LUNORA_RELAY_SECRET")).toBe(false);
+        expect(mintableSecretKeysFor([]).has("LUNORA_RELAY_SECRET")).toBe(true);
+        expect(mintableSecretKeysFor(["@lunora/replica:eventLogClient"]).has("LUNORA_RELAY_SECRET")).toBe(false);
+        expect(mintableSecretKeysFor(["@lunora/replica:eventLogClient", "@lunora/replica:eventLog"]).has("LUNORA_RELAY_SECRET")).toBe(true);
         expect(MINTABLE_SECRET_KEYS.has("LUNORA_RELAY_SECRET")).toBe(false);
     });
 
@@ -870,6 +872,18 @@ describe("planDevSecretsFill — relay key follows the project's role", () => {
 
         expect(plan.content).toContain(`LUNORA_RELAY_SECRET="${"a".repeat(64)}"`);
     });
+
+    it("mints the host placeholder for a project with no relay source, the same as a replica-only one", () => {
+        expect.assertions(1);
+
+        const plan = planDevSecretsFill({
+            existingContent: hostPlaceholder,
+            mintable: mintableSecretKeysFor([]),
+            randomHex: fixedHex,
+        });
+
+        expect(plan.content).toContain(`LUNORA_RELAY_SECRET="${"a".repeat(64)}"`);
+    });
 });
 
 describe("fillDevSecrets — a client-only worker's relay key", () => {
@@ -885,6 +899,24 @@ describe("fillDevSecrets — a client-only worker's relay key", () => {
             fillDevSecrets({ cwd: dir, info, secretSources: ["@lunora/replica:eventLogClient"] });
 
             expect(info).toHaveBeenCalledWith(expect.stringContaining("hosts EventLogDO"));
+        } finally {
+            rmSync(dir, { force: true, recursive: true });
+        }
+    });
+
+    it("mints the relay key and says nothing about a host for a project that names no relay source", () => {
+        expect.assertions(2);
+
+        const dir = mkdtempSync(join(tmpdir(), "lunora-relay-none-"));
+
+        try {
+            writeFileSync(join(dir, ".dev.vars"), 'LUNORA_RELAY_SECRET="replace-with-openssl-rand-hex-32"\n');
+            const info = vi.fn<(message: string) => void>();
+
+            fillDevSecrets({ cwd: dir, info, secretSources: [], randomHex: fixedHex });
+
+            expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toContain(`LUNORA_RELAY_SECRET="${"a".repeat(64)}"`);
+            expect(info).not.toHaveBeenCalledWith(expect.stringContaining("hosts EventLogDO"));
         } finally {
             rmSync(dir, { force: true, recursive: true });
         }
