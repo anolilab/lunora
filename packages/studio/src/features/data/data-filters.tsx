@@ -35,8 +35,9 @@ interface EditableFilter {
 
     /**
      * Dot-separated field names nested under `column`, as typed (`city`,
-     * `geo.city`). Absent or empty addresses the column itself. {@link toFilterClauses}
-     * splits it into the wire `path`, dropping empty segments.
+     * `geo.city`). Absent or blank addresses the column itself. {@link toFilterClauses}
+     * splits it into the wire `path` segment for segment; an empty segment (`geo.`,
+     * `a..b`) goes out as is, and the server refuses it.
      */
     path?: string;
 
@@ -113,20 +114,19 @@ const isVacuous = (filter: EditableFilter): boolean => {
 
 /**
  * The wire `path` for a row: the segments it carries verbatim, else its typed text
- * split on dots, or `undefined` when nothing names a field. Empty segments (`geo.`
- * while typing, `a..b`) are dropped, because the server refuses one outright.
+ * split on dots and trimmed, or `undefined` when the box is blank. An empty segment is
+ * kept, never dropped: dropping one would turn `address.` into a filter on `address`
+ * itself, and a bulk delete would then act on a field the operator did not name. The
+ * server refuses the empty segment instead.
  */
 const wirePath = (filter: EditableFilter): string[] | undefined => {
     if (filter.pathSegments !== undefined) {
         return filter.pathSegments;
     }
 
-    const segments = (filter.path ?? "")
-        .split(".")
-        .map((segment) => segment.trim())
-        .filter((segment) => segment !== "");
+    const text = filter.path ?? "";
 
-    return segments.length === 0 ? undefined : segments;
+    return text.trim() === "" ? undefined : text.split(".").map((segment) => segment.trim());
 };
 
 /**

@@ -114,12 +114,21 @@ describe("dataViewParams", () => {
         const filters = JSON.stringify([
             { column: "address", operator: "eq", path: "city", value: "Berlin" },
             { column: "address", operator: "eq", path: ["city", 2], value: "Berlin" },
-            { column: "address", operator: "eq", path: [""], value: "Berlin" },
-            { column: "address", operator: "eq", path: ["geo", ""], value: "Berlin" },
             { column: "status", operator: "eq", value: "active" },
         ]);
 
         expect(searchToDataView({ filters }).filters).toStrictEqual([{ column: "status", operator: "eq", value: "active" }]);
+    });
+
+    it("keeps a clause with an empty path segment, so the server refuses it instead of a reload dropping the filter", () => {
+        expect.assertions(1);
+
+        const filters = [
+            { column: "address", operator: "eq", path: [""], value: "Berlin" },
+            { column: "address", operator: "eq", path: ["geo", ""], value: "Berlin" },
+        ];
+
+        expect(searchToDataView({ filters: JSON.stringify(filters) }).filters).toStrictEqual(filters);
     });
 
     it("tolerates non-JSON filters", () => {

@@ -145,7 +145,7 @@ describe("toFilterClauses — nested paths and array membership", () => {
 });
 
 describe("toFilterClauses — path segments and typed has values", () => {
-    it("drops empty segments of a typed path, and omits the path when none is left", () => {
+    it("keeps an empty segment of a typed path, so the server refuses it rather than a different field", () => {
         expect.assertions(1);
 
         expect(
@@ -153,11 +153,15 @@ describe("toFilterClauses — path segments and typed has values", () => {
                 { column: "address", operator: "eq", path: "geo.", value: "Berlin" },
                 { column: "address", operator: "eq", path: "a..b", value: "Berlin" },
                 { column: "address", operator: "eq", path: ".", value: "Berlin" },
+                { column: "address", operator: "eq", path: " ", value: "Berlin" },
+                { column: "address", operator: "eq", path: "geo. city", value: "Berlin" },
             ]),
         ).toStrictEqual([
-            { column: "address", operator: "eq", path: ["geo"], value: "Berlin" },
-            { column: "address", operator: "eq", path: ["a", "b"], value: "Berlin" },
+            { column: "address", operator: "eq", path: ["geo", ""], value: "Berlin" },
+            { column: "address", operator: "eq", path: ["a", "", "b"], value: "Berlin" },
+            { column: "address", operator: "eq", path: ["", ""], value: "Berlin" },
             { column: "address", operator: "eq", value: "Berlin" },
+            { column: "address", operator: "eq", path: ["geo", "city"], value: "Berlin" },
         ]);
     });
 
