@@ -277,10 +277,6 @@ interface ModuleExport {
 const isExported = (statement: ts.Node): boolean =>
     ts.canHaveModifiers(statement) && (ts.getModifiers(statement) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
 
-/**
- * The names a module exports from its own declarations: `export class`, `export function`, `export const`, and `export { a }` of a
- * local binding. An explicit export shadows a star re-export of the same name, so these are not forwarded from the star.
- */
 /** The names one top-level statement exports from its own declaration: a local `export`, or the local names of `export { a }`. */
 const localNamesExportedBy = (statement: ts.Statement): string[] => {
     if (ts.isVariableStatement(statement)) {
@@ -306,6 +302,10 @@ const localNamesExportedBy = (statement: ts.Statement): string[] => {
     return [];
 };
 
+/**
+ * The names a module exports from its own declarations: `export class`, `export function`, `export const`, and `export { a }` of a
+ * local binding. An explicit export shadows a star re-export of the same name, so these are not forwarded from the star.
+ */
 const localExportNames = (source: ts.SourceFile): Set<string> => new Set(source.statements.flatMap((statement) => localNamesExportedBy(statement)));
 
 /**
