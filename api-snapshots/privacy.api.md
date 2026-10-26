@@ -273,6 +273,7 @@ interface RequestRecord {
     readonly expiresAt?: Date;
     readonly extendedDueAt?: Date;
     readonly id: string;
+    readonly nothingErased?: boolean;
     readonly reason?: string;
     readonly receivedAt: Date;
     readonly status: RequestStatus;
@@ -290,6 +291,7 @@ interface RequestRow {
     readonly erasureGraceUntil?: number;
     readonly expiresAt?: number;
     readonly extendedDueAt?: number;
+    readonly nothingErased?: boolean;
     readonly reason?: string;
     readonly receivedAt: number;
     readonly requestId: string;
@@ -428,6 +430,12 @@ interface TombstonePort {
 
 ```ts
 const actionCacheDataset: (table?: string) => Dataset;
+```
+
+### `archiveBlocked` (const)
+
+```ts
+const archiveBlocked: (requests: ReadonlyArray<RequestRecord>) => boolean;
 ```
 
 ### `authDataset` (const)

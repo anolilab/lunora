@@ -84,6 +84,7 @@ export interface Doc_privacy_requests {
     erasureGraceUntil?: number;
     expiresAt?: number;
     extendedDueAt?: number;
+    nothingErased?: boolean;
     reason?: string;
     receivedAt: number;
     requestId: string;
@@ -225,6 +226,7 @@ export interface Insert_privacy_requests {
     erasureGraceUntil?: number;
     expiresAt?: number;
     extendedDueAt?: number;
+    nothingErased?: boolean;
     reason?: string;
     receivedAt: number;
     requestId: string;

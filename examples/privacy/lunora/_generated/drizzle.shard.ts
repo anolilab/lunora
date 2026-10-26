@@ -75,6 +75,7 @@ export const privacy_requests = sqliteTable("privacy_requests", {
     erasureGraceUntil: real("erasureGraceUntil"),
     expiresAt: real("expiresAt"),
     extendedDueAt: real("extendedDueAt"),
+    nothingErased: integer("nothingErased", { mode: "boolean" }),
     reason: text("reason"),
     receivedAt: real("receivedAt").notNull(),
     requestId: text("requestId").notNull(),

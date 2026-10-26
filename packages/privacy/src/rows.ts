@@ -12,6 +12,7 @@ interface RequestRow {
     readonly erasureGraceUntil?: number;
     readonly expiresAt?: number;
     readonly extendedDueAt?: number;
+    readonly nothingErased?: boolean;
     readonly reason?: string;
     readonly receivedAt: number;
     readonly requestId: string;
@@ -36,6 +37,7 @@ const fromRequestRow = (row: RequestRow): RequestRecord =>
         expiresAt: toDate(row.expiresAt),
         extendedDueAt: toDate(row.extendedDueAt),
         id: row.requestId,
+        nothingErased: row.nothingErased,
         reason: row.reason,
         receivedAt: new Date(row.receivedAt),
         status: row.status,
@@ -51,6 +53,7 @@ const toRequestRow = (record: RequestRecord): RequestRow =>
         erasureGraceUntil: toMillis(record.erasureGraceUntil),
         expiresAt: toMillis(record.expiresAt),
         extendedDueAt: toMillis(record.extendedDueAt),
+        nothingErased: record.nothingErased,
         reason: record.reason,
         receivedAt: record.receivedAt.getTime(),
         requestId: record.id,
@@ -67,6 +70,7 @@ const toRequestPatch = (patch: Partial<Omit<RequestRecord, "id">>): Partial<Omit
         erasureGraceUntil: toMillis(patch.erasureGraceUntil),
         expiresAt: toMillis(patch.expiresAt),
         extendedDueAt: toMillis(patch.extendedDueAt),
+        nothingErased: patch.nothingErased,
         reason: patch.reason,
         receivedAt: toMillis(patch.receivedAt),
         status: patch.status,

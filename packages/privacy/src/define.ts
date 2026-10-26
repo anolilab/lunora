@@ -21,7 +21,7 @@ import { cancelRequest, extendRequest, openRequest, requireRequest } from "./req
 import type { PrivacyPolicy, PrivacyPreset } from "./rules";
 import { retentionRulesOf } from "./rules";
 import type { ErasureOutcome, ExportOutcome, RunScope, StepRunner } from "./run";
-import { eraseDataset, erasureBlocksSubject, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones } from "./run";
+import { archiveBlocked, eraseDataset, erasureBlocksSubject, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones } from "./run";
 import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
 
 /**
@@ -313,6 +313,10 @@ const downloadUrlFor = async (scope: Scope, requestId: string): Promise<string> 
 
     if (record.status !== "ready" || record.storageKey === undefined) {
         throw new LunoraError("UNPROCESSABLE", "This export is not ready to download.");
+    }
+
+    if (archiveBlocked(await scope.ports.store.listForSubject(record.subjectId))) {
+        throw new LunoraError("UNPROCESSABLE", "This export's subject is being erased, so its archive is not available.");
     }
 
     if (record.expiresAt !== undefined && scope.ports.now().getTime() > record.expiresAt.getTime()) {

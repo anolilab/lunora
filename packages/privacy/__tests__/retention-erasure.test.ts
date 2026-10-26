@@ -5,7 +5,7 @@ import { defineDataset } from "../src/dataset";
 import { germany } from "../src/de";
 import type { DataPort } from "../src/ports";
 import { retain } from "../src/rules";
-import { exportFileOf, memoryFiles, memoryRequests, NOW, setup } from "./harness";
+import { exportFileOf, memoryRequests, NOW, setup } from "./harness";
 
 type Row = Readonly<Record<string, unknown>>;
 
@@ -168,10 +168,10 @@ describe("retention during erasure", () => {
         expect(store.rows.get(exported.id)?.status).toBe("expired");
     });
 
-    it("fails an erasure whose crash leaves an export's archive that cannot be deleted", async () => {
+    it("blocks a new export of a subject whose erasure failed after writing its tombstone", async () => {
         const { port } = rowData({ archive: false });
-        const files = memoryFiles();
         let crashing = false;
+        // The tombstone is written first, so a drain that throws here leaves rows gone: the failure may have erased data.
         const failing = {
             ...port,
             eraseBatch: async (...args: Parameters<DataPort["eraseBatch"]>) => {
@@ -182,28 +182,18 @@ describe("retention during erasure", () => {
                 return port.eraseBatch(...args);
             },
         };
-        const flaky = {
-            ...files,
-            delete: async (key: string) => {
-                if (crashing && key.endsWith("/export.zip")) {
-                    throw new Error("archive delete unavailable");
-                }
-
-                await files.delete(key);
-            },
-        };
-        const { privacy, store } = setup({ data: failing, datasets: [billing], presets: [germany()], files: flaky });
-        const exported = await privacy.requestExport();
-
-        await expect(privacy.runExport(exported.id)).resolves.toMatchObject({ status: "ready" });
-
+        const { privacy, store } = build(failing);
         const erasure = await privacy.requestErasure();
 
         store.rows.set(erasure.id, { ...store.rows.get(erasure.id)!, status: "received" });
         crashing = true;
 
-        await expect(privacy.runErasure(erasure.id)).rejects.toThrow("archive delete unavailable");
-        expect(store.rows.get(erasure.id)?.status).toBe("failed");
+        await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "failed" });
+        expect(store.rows.get(erasure.id)?.nothingErased).toBe(false);
+
+        const exported = await privacy.requestExport();
+
+        await expect(privacy.runExport(exported.id)).resolves.toStrictEqual({ status: "failed" });
     });
 
     it("marks a dataset with a retained table as restricted in the manifest", async () => {

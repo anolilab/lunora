@@ -21,6 +21,8 @@ interface RequestRecord {
     readonly expiresAt?: Date;
     readonly extendedDueAt?: Date;
     readonly id: string;
+    /** A failed erasure that stopped before its tombstone. Absent blocks exports, as a failure after deletion does. */
+    readonly nothingErased?: boolean;
     readonly reason?: string;
     readonly receivedAt: Date;
     readonly status: RequestStatus;

@@ -461,6 +461,59 @@ describe("runExport", () => {
         expect(store.rows.get(exported.id)?.status).toBe("expired");
     });
 
+    it("lets an export proceed when the subject's erasure failed before its tombstone, because it erased nothing", async () => {
+        const { port } = memoryData({});
+        // The tombstone store refuses the write, which is the first step: nothing is erased before it.
+        const refusing: TombstonePort = {
+            add: async () => {
+                throw new Error("tombstone store unavailable");
+            },
+            has: async () => false,
+            keys: async () => new Set(),
+        };
+        const { privacy, runErasureWorkflow, runExportWorkflow, store } = setup({ data: port, erasure: NO_GRACE, tombstones: refusing });
+        const erasure = await privacy.requestErasure();
+
+        await runErasureWorkflow(erasure.id);
+
+        expect(store.rows.get(erasure.id)).toMatchObject({ nothingErased: true, status: "failed" });
+
+        const exported = await privacy.requestExport();
+
+        await runExportWorkflow(exported.id);
+
+        expect(store.rows.get(exported.id)?.status).toBe("ready");
+    });
+
+    it("expires an export that a racing erasure starts over while its ready claim is in flight", async () => {
+        const store = memoryRequests();
+        let exportId = "";
+        let erasureId = "";
+        // Simulates an erasure whose start claim lands between the export's erased check and its ready claim.
+        const racing = {
+            ...store,
+            claim: async (id: string, from: Parameters<typeof store.claim>[1], patch: Parameters<typeof store.claim>[2]) => {
+                const landed = await store.claim(id, from, patch);
+
+                if (landed && id === exportId && patch.status === "ready" && erasureId !== "") {
+                    store.rows.set(erasureId, { ...store.rows.get(erasureId)!, status: "processing" });
+                }
+
+                return landed;
+            },
+        };
+        const { privacy } = setup({ data: memoryData({}).port, datasets: [tasks], erasure: NO_GRACE, store: racing });
+        const exported = await privacy.requestExport();
+        const erasure = await privacy.requestErasure();
+
+        exportId = exported.id;
+        erasureId = erasure.id;
+        store.rows.set(erasure.id, { ...store.rows.get(erasure.id)!, status: "received" });
+
+        await expect(privacy.runExport(exported.id)).resolves.toStrictEqual({ status: "expired" });
+        expect(store.rows.get(exported.id)?.status).toBe("expired");
+    });
+
     it("leaves another erasure request of the subject open when an erasure completes", async () => {
         const { port } = memoryData({});
         const { privacy, store } = setup({ data: port, erasure: NO_GRACE });

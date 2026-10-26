@@ -33,6 +33,19 @@ describe("downloadUrl", () => {
         await expect(codeOf(privacy.downloadUrl({ requestId: opened.id }))).resolves.toBe("UNPROCESSABLE");
     });
 
+    it("refuses a download while the subject's erasure has failed after writing its tombstone", async () => {
+        const { privacy, store } = setup();
+        const opened = await privacy.requestExport();
+
+        await privacy.runExport(opened.id);
+
+        const erasure = await privacy.requestErasure();
+
+        store.rows.set(erasure.id, { ...store.rows.get(erasure.id)!, nothingErased: false, status: "failed" });
+
+        await expect(codeOf(privacy.downloadUrl({ requestId: opened.id }))).resolves.toBe("UNPROCESSABLE");
+    });
+
     it("refuses a download after the seven-day window", async () => {
         const { advance, privacy } = setup();
         const opened = await privacy.requestExport();
