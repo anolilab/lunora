@@ -98,7 +98,9 @@ export class EventLogDOClient {
         const secret = siblingSecretOf(options.env);
 
         if (secret === undefined) {
-            throw new Error("EventLogDOClient requires LUNORA_RELAY_SECRET in env");
+            throw new Error(
+                "EventLogDOClient requires LUNORA_RELAY_SECRET in env: set it to the relay secret of the worker that hosts EventLogDO (in .dev.vars for local development, or with `wrangler secret put` on deploy)",
+            );
         }
 
         this.#fetch = options.fetch;
