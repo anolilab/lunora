@@ -19,7 +19,6 @@ import type {
     LogEventInput,
     MetricHistoryOptions,
     QueryStatEntry,
-    RedactedRequestLogValues,
     RequestLogWriteOptions,
     SpanCollection,
     SpanCollector,
@@ -12134,9 +12133,8 @@ abstract class ShardDO {
         // Build the structured entry once and feed it to BOTH sinks: the durable
         // `__lunora_reqlog__` row (the queryable readout) and — when enabled — a
         // console event CF's Workers Logs / Logpush pipeline ships to external
-        // SIEMs (PLAN3 §3.3). The durable write redacts args/identity from this
-        // raw entry (unless `captureRaw` in dev) and the event reuses that text,
-        // so the two stay byte-consistent.
+        // SIEMs (PLAN3 §3.3). Both redact args/identity from this same raw entry
+        // (unless `captureRaw` in dev), so the two stay byte-consistent.
         const entry: AppendRequestLogEntry = {
             cacheHit: attribution.cacheHit,
             durationMs,
@@ -12188,17 +12186,15 @@ abstract class ShardDO {
         const writeOptions: RequestLogWriteOptions = { captureRaw: config.captureRaw, retention: config.retention };
         const attributed = this.attributeToDeploy(entry);
 
-        let redacted: RedactedRequestLogValues | undefined;
-
         try {
-            redacted = appendRequestLogEntry(this.shardHost.sql, attributed, writeOptions);
+            appendRequestLogEntry(this.shardHost.sql, attributed, writeOptions);
         } catch {
             // Best-effort: never let request-log persistence fail the caller.
         }
 
         if (config.emit || attributed.outcome === "error") {
             try {
-                emitRequestLogEvent(attributed, writeOptions, redacted);
+                emitRequestLogEvent(attributed, writeOptions);
             } catch {
                 // Best-effort: never let event emission fail the caller.
             }

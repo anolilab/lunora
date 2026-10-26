@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { appendRequestLogEntry, emitRequestLogEvent } from "../src/request-log";
+import { appendRequestLogEntry, emitRequestLogEvent, redactArgs } from "../src/request-log";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 const { maskCalls } = vi.hoisted(() => {
@@ -21,7 +21,7 @@ vi.mock(import("../../../shared/credential-redaction"), async (importOriginal) =
     };
 });
 
-/** Unique per call, so the append path's per-input memo never answers for it. */
+/** Unique per call, so only this test's own calls can fill the redaction memo for it. */
 const dispatch = () => {
     const unique = crypto.randomUUID();
 
@@ -38,7 +38,7 @@ const dispatch = () => {
 /** The last line written to `console.log`. */
 const emittedLine = (log: ReturnType<typeof vi.spyOn>): string => String(log.mock.calls.at(-1)?.[0]);
 
-describe("emitRequestLogEvent reusing the append-path redaction", () => {
+describe("emitRequestLogEvent sharing the append-path redaction", () => {
     afterEach(() => {
         vi.restoreAllMocks();
     });
@@ -54,9 +54,8 @@ describe("emitRequestLogEvent reusing the append-path redaction", () => {
 
             maskCalls.count = 0;
 
-            const redacted = appendRequestLogEntry(database.sql, entry);
-
-            emitRequestLogEvent(entry, {}, redacted);
+            appendRequestLogEntry(database.sql, entry);
+            emitRequestLogEvent(entry);
 
             expect(maskCalls.count).toBe(2);
         } finally {
@@ -65,23 +64,23 @@ describe("emitRequestLogEvent reusing the append-path redaction", () => {
         }
     });
 
-    it("emits the same bytes as redacting on its own, redacted and under captureRaw", () => {
-        expect.assertions(2);
+    it("emits what redacting on its own would, redacted and under captureRaw", () => {
+        expect.assertions(4);
 
         const database = createSqliteExec();
         const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
         try {
-            for (const options of [{}, { captureRaw: true }]) {
+            for (const captureRaw of [false, true]) {
                 const entry = dispatch();
 
-                emitRequestLogEvent(entry, options);
+                appendRequestLogEntry(database.sql, entry, { captureRaw });
+                emitRequestLogEvent(entry, { captureRaw });
 
-                const standalone = emittedLine(log);
+                const event = JSON.parse(emittedLine(log)) as { args: unknown; identity: unknown };
 
-                emitRequestLogEvent(entry, options, appendRequestLogEntry(database.sql, entry, options));
-
-                expect(emittedLine(log)).toBe(standalone);
+                expect(JSON.stringify(event.args)).toBe(JSON.stringify(redactArgs(entry.redactedArgs, captureRaw)));
+                expect(JSON.stringify(event.identity)).toBe(JSON.stringify(redactArgs(entry.identity, captureRaw)));
             }
         } finally {
             log.mockRestore();

@@ -151,15 +151,6 @@ interface RequestLogWriteOptions {
     retention?: number;
 }
 
-/**
- * The `identity` / `args` text {@link appendRequestLogEntry} wrote, handed to
- * {@link emitRequestLogEvent} so the same dispatch is not redacted twice.
- */
-interface RedactedRequestLogValues {
-    args: string | undefined;
-    identity: string | undefined;
-}
-
 /** Filters for {@link readRequestLog}, all AND-combined; every value is a bound SQL parameter, so nothing here injects SQL. */
 interface ReadRequestLogOptions {
     /** Functions whose path begins with this prefix (a `<file>:` or `<file>:<fn>` correlation). */
@@ -957,34 +948,41 @@ const cacheHitColumn = (cacheHit: boolean | undefined): null | number => {
     return cacheHit ? 1 : 0;
 };
 
-/** How many redacted request-log values {@link redactedJson} remembers per isolate. */
+/** How many redacted request-log values {@link rememberedRedaction} keeps per isolate. */
 const REDACTED_JSON_MEMO_ENTRIES = 256;
 
 /**
- * The longest input (as JSON) {@link redactedJson} remembers; a larger one is
+ * The longest input (as JSON) {@link rememberedRedaction} keeps; a larger one is
  * redacted every time. The key is the caller's unredacted text, so this also
  * caps how much raw input the memo holds per entry.
  */
 const REDACTED_JSON_MEMO_MAX_CHARS = 1024;
 
-const redactedJsonMemo = new Map<string, string>();
+/** One input's redaction, as the durable row stores it and as the Logpush event embeds it. */
+interface RedactedValue {
+    json: string;
+    value: unknown;
+}
+
+const redactedJsonMemo = new Map<string, RedactedValue>();
 
 /**
- * `JSON.stringify(redactArgs(value, captureRaw))`, remembered per input.
+ * `redactArgs(value)`, as text and as a value, remembered per input; `undefined`
+ * for an input the memo does not take.
  *
  * The redactor walks every key against the rule list and runs its value regexes
  * over every string, which costs 5–30 µs for an ordinary args object or identity
  * on the Durable Object's only thread — more than the rest of a cached query.
  * Its output depends on nothing but its input, and the same inputs recur: one
  * caller's identity on every request, one channel's query args from every
- * subscriber. So the redacted text is kept for each input text, but only for
- * small, pure JSON data (see {@link isSmallJsonData}), whose text identifies it
- * exactly; a large payload takes the uncached path without being stringified for
- * a key, and the memo cannot hold one. Oldest entry out.
+ * subscriber, and the durable write and the event of one dispatch. So the
+ * redaction is kept for each input text, but only for small, pure JSON data (see
+ * {@link isSmallJsonData}), whose text identifies it exactly; a large payload is
+ * never stringified for a key. Oldest entry out.
  */
-const redactedJson = (value: unknown, captureRaw: boolean): string => {
-    if (captureRaw || !isSmallJsonData(value, REDACTED_JSON_MEMO_MAX_CHARS)) {
-        return JSON.stringify(redactArgs(value, captureRaw));
+const rememberedRedaction = (value: unknown): RedactedValue | undefined => {
+    if (!isSmallJsonData(value, REDACTED_JSON_MEMO_MAX_CHARS)) {
+        return undefined;
     }
 
     const key = JSON.stringify(value);
@@ -993,7 +991,7 @@ const redactedJson = (value: unknown, captureRaw: boolean): string => {
     // it can pass a value whose text is longer (escapes, long numerals); this
     // check is what bounds an entry.
     if (key.length > REDACTED_JSON_MEMO_MAX_CHARS) {
-        return JSON.stringify(redactArgs(value));
+        return undefined;
     }
 
     const remembered = redactedJsonMemo.get(key);
@@ -1002,12 +1000,29 @@ const redactedJson = (value: unknown, captureRaw: boolean): string => {
         return remembered;
     }
 
-    const redacted = JSON.stringify(redactArgs(value));
+    const json = JSON.stringify(redactArgs(value));
+    // Parsed from the text rather than kept from the redactor, so the memo owns the
+    // value outright and nothing a caller still holds can change a later hit.
+    const redacted: RedactedValue = { json, value: JSON.parse(json) as unknown };
 
     evictOldestEntry(redactedJsonMemo, REDACTED_JSON_MEMO_ENTRIES);
     redactedJsonMemo.set(key, redacted);
 
     return redacted;
+};
+
+/** `JSON.stringify(redactArgs(value, captureRaw))`, through the memo when it takes `value`. */
+const redactedJson = (value: unknown, captureRaw: boolean): string => {
+    const remembered = captureRaw ? undefined : rememberedRedaction(value);
+
+    return remembered === undefined ? JSON.stringify(redactArgs(value, captureRaw)) : remembered.json;
+};
+
+/** `redactArgs(value, captureRaw)`, through the memo when it takes `value`. */
+const redactedValue = (value: unknown, captureRaw: boolean): unknown => {
+    const remembered = captureRaw ? undefined : rememberedRedaction(value);
+
+    return remembered === undefined ? redactArgs(value, captureRaw) : remembered.value;
 };
 
 /**
@@ -1027,20 +1042,12 @@ const redactedJson = (value: unknown, captureRaw: boolean): string => {
  * masking a PII-bearing value — e.g. two different `<n>`-bucketed IDs that
  * redact to two different tag lengths (`<DL>` vs `<BANKACC>`) — can't split an
  * existing Issue or change its identity.
- *
- * Returns the redacted `identity` / `args` text it stored, for
- * {@link emitRequestLogEvent} to reuse.
  */
-const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, options: RequestLogWriteOptions = {}): RedactedRequestLogValues => {
+const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, options: RequestLogWriteOptions = {}): void => {
     ensureRequestLogTable(sql);
 
     const captureRaw = options.captureRaw ?? false;
     const retention = options.retention ?? REQUEST_LOG_RETENTION;
-    const identity = entry.identity === undefined ? undefined : redactedJson(entry.identity, captureRaw);
-    const redacted: RedactedRequestLogValues = {
-        args: entry.redactedArgs === undefined ? undefined : redactedJson(entry.redactedArgs, captureRaw),
-        identity,
-    };
 
     // Fingerprint the RAW message — `fingerprintError` is pure/synchronous and
     // cheap, so this costs nothing on the (rare) error path. `undefined` on a
@@ -1067,9 +1074,9 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
         // `user_id` column above stays raw; it's the non-PII correlation key the
         // `getRequestLog` filters key on.
         // eslint-disable-next-line unicorn/no-null -- anonymous request or no claims attached.
-        redacted.identity ?? null,
+        entry.identity === undefined ? null : redactedJson(entry.identity, captureRaw),
         // eslint-disable-next-line unicorn/no-null -- no args were sent on this dispatch.
-        redacted.args ?? null,
+        entry.redactedArgs === undefined ? null : redactedJson(entry.redactedArgs, captureRaw),
         entry.outcome,
         // eslint-disable-next-line unicorn/no-null -- success path: no error message. Redacted like args/identity — see the module docstring on `redactArgs`.
         entry.errorMessage === undefined ? null : redactArgs(entry.errorMessage, captureRaw),
@@ -1100,24 +1107,6 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
     pruneOncePerWindow(sql, Math.floor(entry.ts / REQUEST_LOG_PRUNE_WINDOW_MS), "request-log", () => {
         runSql(sql, `DELETE FROM "${REQUEST_LOG_TABLE}" WHERE seq <= (SELECT MAX(seq) - ? FROM "${REQUEST_LOG_TABLE}")`, retention);
     });
-
-    return redacted;
-};
-
-/**
- * One `args` / `identity` value for the Logpush event: the text
- * {@link appendRequestLogEntry} already redacted, parsed back, when the caller
- * has it. Parsing a few hundred bytes costs a fraction of a second redaction
- * pass, and `JSON.stringify` of the parsed value reproduces that text, so the
- * event line is byte-identical either way. Under `captureRaw` the value is used
- * as-is: nothing was redacted, so there is nothing to save.
- */
-const entryValue = (value: unknown, redactedText: string | undefined, captureRaw: boolean): unknown => {
-    if (value === undefined) {
-        return undefined;
-    }
-
-    return redactedText === undefined || captureRaw ? redactArgs(value, captureRaw) : (JSON.parse(redactedText) as unknown);
 };
 
 /**
@@ -1133,15 +1122,13 @@ const entryValue = (value: unknown, redactedText: string | undefined, captureRaw
  * trace so a SIEM can alert on it); everything else to `console.log`. The
  * `source: "lunora"` / `type: "request"` envelope lets a consumer filter these
  * events out of the raw Workers-trace firehose. `captureRaw` (dev only) skips
- * redaction, mirroring the durable write. `redacted` is what
- * {@link appendRequestLogEntry} returned for this same entry and options; without
- * it the event redacts on its own. Best-effort by contract — the caller wraps it
- * so a serialization hiccup can never fail the served request.
+ * redaction, mirroring the durable write. Best-effort by contract — the caller
+ * wraps it so a serialization hiccup can never fail the served request.
  */
-const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWriteOptions = {}, redacted?: RedactedRequestLogValues): void => {
+const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWriteOptions = {}): void => {
     const captureRaw = options.captureRaw ?? false;
     const event = {
-        args: entryValue(entry.redactedArgs, redacted?.args, captureRaw),
+        args: entry.redactedArgs === undefined ? undefined : redactedValue(entry.redactedArgs, captureRaw),
         cacheHit: entry.cacheHit,
         // Deploy attribution on EVERY invocation, so "did this start with a
         // specific deploy?" is a group-by in the Workers Logs Query Builder
@@ -1151,7 +1138,7 @@ const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWr
         durationMs: entry.durationMs,
         error: entry.errorMessage === undefined ? undefined : redactArgs(entry.errorMessage, captureRaw),
         function: entry.functionPath,
-        identity: entryValue(entry.identity, redacted?.identity, captureRaw),
+        identity: entry.identity === undefined ? undefined : redactedValue(entry.identity, captureRaw),
         outcome: entry.outcome,
         // Search Cloudflare Traces / Workers Logs by it to reach the platform's
         // view of this request. Absent off the edge.
@@ -1684,7 +1671,6 @@ export type {
     LogEventInput,
     ReadIssuesOptions,
     ReadRequestLogOptions,
-    RedactedRequestLogValues,
     RequestLogEntry,
     RequestLogResult,
     RequestLogWriteOptions,

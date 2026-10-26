@@ -3535,10 +3535,6 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
-### `RedactedRequestLogValues` (interface)
-
-Re-exported from `@lunora/observability` — signature tracked at its source.
-
 ### `RequestLogEntry` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.

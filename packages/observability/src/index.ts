@@ -90,7 +90,6 @@ export type {
     LogEventInput,
     ReadIssuesOptions,
     ReadRequestLogOptions,
-    RedactedRequestLogValues,
     RequestLogEntry,
     RequestLogResult,
     RequestLogWriteOptions,
