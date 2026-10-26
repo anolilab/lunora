@@ -343,6 +343,7 @@ const usePaginatedCore = function <T>(
     useEffect(() => {
         const cache = queryClient.getQueryCache();
         const pageHashes = new Set(pageEntries.map(({ key }) => serializeQueryKey(key)));
+        const pageFunctionRef = function_.__lunoraRef;
         const unsubscribe = cache.subscribe((event) => {
             // The registry pushes page data via `setQueryData`, which emits an
             // `"updated"` event. Every other event type (observer lifecycle,
@@ -353,7 +354,17 @@ const usePaginatedCore = function <T>(
                 return;
             }
 
-            const hash = serializeQueryKey(event.query.queryKey as QueryKey);
+            const eventKey = event.query.queryKey as QueryKey;
+
+            // Every live query in the app pushes through this shared cache, so
+            // most "updated" events belong to some other function. Rejecting them
+            // on the key's function-ref slot keeps the full key canonicalisation
+            // off every unrelated push.
+            if (eventKey[1] !== pageFunctionRef) {
+                return;
+            }
+
+            const hash = serializeQueryKey(eventKey);
 
             if (pageHashes.has(hash)) {
                 // A frame for one of our pages landed — the feed is healthy again.
