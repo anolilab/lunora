@@ -1,3 +1,17 @@
+## @lunora/vite [1.0.0-alpha.386](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.385...@lunora/vite@1.0.0-alpha.386) (2026-10-26)
+
+### Performance Improvements
+
+* **vite:** stop repeating startup work per build pass and per save ([#1339](https://github.com/anolilab/lunora/issues/1339)) ([aaef949](https://github.com/anolilab/lunora/commit/aaef9498c186af4533789dc826d4ce84ee805691))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.358
+* **@lunora/config:** upgraded to 1.0.0-alpha.412
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/studio:** upgraded to 1.0.0-alpha.346
+
 ## @lunora/vite [1.0.0-alpha.385](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.384...@lunora/vite@1.0.0-alpha.385) (2026-10-26)
 
 
