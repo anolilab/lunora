@@ -3113,6 +3113,10 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
+### `ERROR_HINTS` (const)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
 ### `ErrorBody` (interface)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
@@ -3186,6 +3190,10 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `getCatalogEntry` (const)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `getCatalogHint` (const)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 

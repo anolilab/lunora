@@ -15,7 +15,7 @@ codegen errors carried a "here's how to fix it" hint. `@lunora/errors` unifies a
 ```ts
 import { LunoraError, isLunoraError } from "@lunora/errors";
 
-// Code fills in status/title/hint from the catalog.
+// Code fills in status/title from the catalog; resolveHint(error) adds the fix.
 throw new LunoraError("NOT_FOUND", `no message with id ${id}`);
 
 // Attach structured data + an actionable hint.

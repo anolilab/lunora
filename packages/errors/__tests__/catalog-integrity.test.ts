@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ErrorCatalogEntry } from "../src";
-import { ERROR_CATALOG, flattenHint, isInternalCode, MESSAGE_SOLUTIONS } from "../src";
+import { ERROR_CATALOG, ERROR_HINTS, flattenHint, isInternalCode, MESSAGE_SOLUTIONS } from "../src";
 
 const codes = Object.keys(ERROR_CATALOG) as (keyof typeof ERROR_CATALOG)[];
 
@@ -76,14 +76,14 @@ describe("error catalog integrity", () => {
     it("every authored hint flattens to non-empty terminal text", () => {
         expect.hasAssertions();
 
-        const hintedCodes = codes.filter((code) => (ERROR_CATALOG[code] as ErrorCatalogEntry).hint !== undefined);
+        const hinted = Object.entries(ERROR_HINTS);
 
-        expect(hintedCodes.length).toBeGreaterThan(0);
+        expect(hinted.length).toBeGreaterThan(0);
 
-        for (const code of hintedCodes) {
-            const entry: ErrorCatalogEntry = ERROR_CATALOG[code];
-
-            expect(flattenHint(entry.hint as string | string[]).trim().length, `${code} has an empty hint`).toBeGreaterThan(0);
+        for (const [code, hint] of hinted) {
+            // A hint keyed by a code the catalog does not register would never be resolved.
+            expect(Object.hasOwn(ERROR_CATALOG, code), `${code} is not a catalog code`).toBe(true);
+            expect(flattenHint(hint).trim().length, `${code} has an empty hint`).toBeGreaterThan(0);
         }
     });
 

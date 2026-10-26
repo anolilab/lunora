@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Generates the per-code reference in `src/content/docs/errors.mdx` from
- * `ERROR_CATALOG` (`packages/errors/src/catalog.ts`).
+ * `ERROR_CATALOG` (`packages/errors/src/catalog.ts`) and its per-code `ERROR_HINTS`
+ * (`packages/errors/src/hints.ts`).
  *
  * The catalog is the single source of truth every error surface already reads —
  * the runtime/DO wire mappers, the CLI renderer, the Vite overlay, Studio and
@@ -23,7 +24,7 @@
  *   node --experimental-strip-types apps/docs/scripts/generate-error-reference.js
  *   node --experimental-strip-types apps/docs/scripts/generate-error-reference.js --check
  *
- * The flag is required because this imports `catalog.ts` directly via Node's
+ * The flag is required because this imports `catalog.ts`/`hints.ts` directly via Node's
  * built-in type stripping — unflagged only from Node 22.18, and CI's lint jobs
  * pin 22.15. Importing the built `@lunora/errors` instead would put a build step
  * in front of `pnpm dev`; the catalog is a plain annotated object literal, so
@@ -44,6 +45,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const ROOT_DIR = path.resolve(__dirname, "..", "..", "..");
 const CATALOG_PATH = path.join(ROOT_DIR, "packages", "errors", "src", "catalog.ts");
+const HINTS_PATH = path.join(ROOT_DIR, "packages", "errors", "src", "hints.ts");
 const PAGE_PATH = path.join(__dirname, "..", "src", "content", "docs", "errors.mdx");
 
 /**
@@ -64,7 +66,7 @@ const anchorFor = (code) => code.toLowerCase();
 const hintLines = (hint) => (typeof hint === "string" ? hint.split("\n") : [...hint]);
 
 /**
- * Render the generated Markdown for `catalog` — every code `isInternal` does not
+ * Render the generated Markdown for `catalog` (with each code's fix from `hints`) — every code `isInternal` does not
  * claim, alphabetically, one `###` section each.
  *
  * A section per code rather than one big table, because the readers that matter
@@ -75,9 +77,10 @@ const hintLines = (hint) => (typeof hint === "string" ? hint.split("\n") : [...h
  * Pure, and takes the catalog rather than reading it, so a test can render a
  * catalog carrying one extra code and assert the drift check would fail.
  * @param catalog
+ * @param hints
  * @param isInternal
  */
-const renderErrorReference = (catalog, isInternal) => {
+const renderErrorReference = (catalog, hints, isInternal) => {
     const codes = Object.keys(catalog)
         .filter((code) => !isInternal(code))
         // Code-unit order, not `localeCompare`: the ICU collation differs between the Node builds that run this
@@ -97,12 +100,8 @@ const renderErrorReference = (catalog, isInternal) => {
 
         lines.push(`### \`${code}\``, "", `\`${entry.status}\` — ${entry.title}`, "");
 
-        if (entry.hint !== undefined) {
-            lines.push(...hintLines(entry.hint), "");
-        }
-
-        if (entry.docsUrl !== undefined) {
-            lines.push(`[Read more](${entry.docsUrl})`, "");
+        if (Object.hasOwn(hints, code)) {
+            lines.push(...hintLines(hints[code]), "");
         }
     }
 
@@ -116,9 +115,10 @@ const renderErrorReference = (catalog, isInternal) => {
  * regeneration re-dirties the file.
  * @param source
  * @param catalog
+ * @param hints
  * @param isInternal
  */
-const buildErrorReferencePage = async (source, catalog, isInternal) => {
+const buildErrorReferencePage = async (source, catalog, hints, isInternal) => {
     const start = source.indexOf(MARKER_START);
     const end = source.indexOf(MARKER_END);
 
@@ -126,7 +126,7 @@ const buildErrorReferencePage = async (source, catalog, isInternal) => {
         throw new Error(`errors.mdx is missing the generated-block markers:\n  ${MARKER_START}\n  ...\n  ${MARKER_END}`);
     }
 
-    const next = [source.slice(0, start + MARKER_START.length), "", renderErrorReference(catalog, isInternal), "", source.slice(end)].join("\n");
+    const next = [source.slice(0, start + MARKER_START.length), "", renderErrorReference(catalog, hints, isInternal), "", source.slice(end)].join("\n");
     const options = await prettier.resolveConfig(PAGE_PATH);
 
     return prettier.format(next, { ...options, filepath: PAGE_PATH });
@@ -136,10 +136,11 @@ const main = async () => {
     const check = process.argv.includes("--check");
 
     const { ERROR_CATALOG, isInternalCode } = await import(pathToFileURL(CATALOG_PATH).href);
+    const { ERROR_HINTS } = await import(pathToFileURL(HINTS_PATH).href);
 
     const published = Object.keys(ERROR_CATALOG).filter((code) => !isInternalCode(code)).length;
     const source = await fs.readFile(PAGE_PATH, "utf8");
-    const next = await buildErrorReferencePage(source, ERROR_CATALOG, isInternalCode);
+    const next = await buildErrorReferencePage(source, ERROR_CATALOG, ERROR_HINTS, isInternalCode);
 
     if (source === next) {
         console.log(`errors.mdx is up to date (${published} published codes).`);

@@ -10,7 +10,7 @@
  * where `NotFoundError`/`NotUniqueError`/`RlsRequiredError` (whose names were in
  * no matcher) were redacted to a generic 500.
  */
-import type { ErrorHint } from "./catalog";
+import type { ErrorHint } from "./hints";
 
 /** The wire-relevant shape of a Lunora error (a real `LunoraError` or a wire-decoded twin). */
 export interface LunoraErrorLike extends Error {

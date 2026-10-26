@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { ERROR_CATALOG, isInternalCode } from "@lunora/errors";
+import { ERROR_CATALOG, ERROR_HINTS, isInternalCode } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
 import { buildErrorReferencePage, MARKER_END, MARKER_START, renderErrorReference } from "../scripts/generate-error-reference";
@@ -53,14 +53,14 @@ describe("error-reference drift check", () => {
     it("passes against the committed page", async () => {
         expect.assertions(1);
 
-        expect(await buildErrorReferencePage(page, ERROR_CATALOG, isInternalCode)).toBe(page);
+        expect(await buildErrorReferencePage(page, ERROR_CATALOG, ERROR_HINTS, isInternalCode)).toBe(page);
     });
 
     it("fails once the catalog gains a code and the page is stale", async () => {
         expect.assertions(2);
 
         const withNewCode = { ...ERROR_CATALOG, ZZ_ADDED_BY_THIS_TEST: { status: 418, title: "Added by this test" } };
-        const regenerated = await buildErrorReferencePage(page, withNewCode, isInternalCode);
+        const regenerated = await buildErrorReferencePage(page, withNewCode, ERROR_HINTS, isInternalCode);
 
         // This inequality IS the gate: `--check` compares exactly these two.
         expect(regenerated).not.toBe(page);
@@ -72,13 +72,13 @@ describe("error-reference drift check", () => {
 
         const retitled = { ...ERROR_CATALOG, CONFLICT: { ...ERROR_CATALOG.CONFLICT, title: "Something else entirely" } };
 
-        expect(await buildErrorReferencePage(page, retitled, isInternalCode)).not.toBe(page);
+        expect(await buildErrorReferencePage(page, retitled, ERROR_HINTS, isInternalCode)).not.toBe(page);
     });
 
     it("omits a newly internal code from the render", () => {
         expect.assertions(2);
 
-        const rendered = renderErrorReference(ERROR_CATALOG, (code: string) => isInternalCode(code) || code === "CONFLICT");
+        const rendered = renderErrorReference(ERROR_CATALOG, ERROR_HINTS, (code: string) => isInternalCode(code) || code === "CONFLICT");
 
         expect(rendered).not.toContain("### `CONFLICT`");
         expect(rendered).toContain("### `NOT_UNIQUE`");
@@ -87,6 +87,8 @@ describe("error-reference drift check", () => {
     it("refuses a page whose generated-block markers are gone", async () => {
         expect.assertions(1);
 
-        await expect(buildErrorReferencePage("# no markers here\n", ERROR_CATALOG, isInternalCode)).rejects.toThrow("missing the generated-block markers");
+        await expect(buildErrorReferencePage("# no markers here\n", ERROR_CATALOG, ERROR_HINTS, isInternalCode)).rejects.toThrow(
+            "missing the generated-block markers",
+        );
     });
 });
