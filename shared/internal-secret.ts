@@ -17,10 +17,6 @@ export const hasInternalSecret = (request: Request, header: string, expected: un
     return supplied !== null && supplied.length > 0 && constantTimeEqual(expected, supplied);
 };
 
-/** Header and env var guarding `ShardRegistryDO` (`@lunora/do`); the worker-side clients send the same secret. */
-export const SHARD_REGISTRY_SECRET_HEADER = "x-lunora-shard-registry-do-secret";
-export const SHARD_REGISTRY_SECRET_ENV = "SHARD_REGISTRY_DO_SECRET";
-
 /** Header and env var guarding `EventLogDO` (`@lunora/replica`). */
 export const EVENT_LOG_SECRET_HEADER = "x-lunora-event-log-do-secret";
 export const EVENT_LOG_SECRET_ENV = "EVENT_LOG_DO_SECRET";

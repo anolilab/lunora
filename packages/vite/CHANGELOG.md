@@ -1,3 +1,16 @@
+## @lunora/vite [1.0.0-alpha.380](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.379...@lunora/vite@1.0.0-alpha.380) (2026-10-25)
+
+### Bug Fixes
+
+* **config:** celld audit fixes ([#1283](https://github.com/anolilab/lunora/issues/1283)) ([6fd7854](https://github.com/anolilab/lunora/commit/6fd78547928d41d3569ba71cf94683dac7f49b94))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.352
+* **@lunora/config:** upgraded to 1.0.0-alpha.406
+* **@lunora/studio:** upgraded to 1.0.0-alpha.341
+
 ## @lunora/vite [1.0.0-alpha.379](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.378...@lunora/vite@1.0.0-alpha.379) (2026-10-25)
 
 

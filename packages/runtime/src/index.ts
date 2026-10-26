@@ -87,6 +87,7 @@ export {
 export type { CrossShardCounter, CrossShardReader, CrossShardRelationCapabilities, CrossShardRelationOptions } from "./cross-shard-relations";
 export { createCrossShardRelationCapabilities } from "./cross-shard-relations";
 export type { DynamicShardRegistry, DynamicShardRegistryOptions } from "./dynamic-shard-registry";
+export type { ShardRegistryRpc } from "./dynamic-shard-registry";
 export { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "./dynamic-shard-registry";
 export type { ReportedError, StackFrame } from "./error-reporting";
 export { parseStackFrames, toError } from "./error-reporting";

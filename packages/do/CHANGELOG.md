@@ -1,3 +1,18 @@
+## @lunora/do [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.245...@lunora/do@1.0.0-alpha.246) (2026-10-25)
+
+### Bug Fixes
+
+* **config:** celld audit fixes ([#1283](https://github.com/anolilab/lunora/issues/1283)) ([6fd7854](https://github.com/anolilab/lunora/commit/6fd78547928d41d3569ba71cf94683dac7f49b94))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.170
+* **@lunora/platform:** upgraded to 1.0.0-alpha.75
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.108
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.158
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.134
+
 ## @lunora/do [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.244...@lunora/do@1.0.0-alpha.245) (2026-10-25)
 
 

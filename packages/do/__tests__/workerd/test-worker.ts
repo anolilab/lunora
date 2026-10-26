@@ -676,7 +676,19 @@ class MergedSchedulerRole {
     }
 }
 
-const TestMergedDO = mergeDurableObjects({ scheduler: MergedSchedulerRole, shard: MergedShardRole, shardRegistry: ShardRegistryDO });
+/**
+ * The registry refuses any request not signed with the relay secret; this env supplies one without changing the pool's shared bindings.
+ * The merge test signs with the same literal.
+ */
+const TEST_RELAY_SECRET = "workerd-test-relay-secret";
+
+class TestShardRegistryRole extends ShardRegistryDO {
+    public constructor(state: ConstructorParameters<typeof ShardRegistryDO>[0], env: unknown) {
+        super(state, { ...(env as Record<string, unknown>), LUNORA_RELAY_SECRET: TEST_RELAY_SECRET });
+    }
+}
+
+const TestMergedDO = mergeDurableObjects({ scheduler: MergedSchedulerRole, shard: MergedShardRole, shardRegistry: TestShardRegistryRole });
 
 const handler = {
     async fetch(_request: Request, _env: Env): Promise<Response> {

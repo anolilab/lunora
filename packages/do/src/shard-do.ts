@@ -283,7 +283,6 @@ import {
 } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { decodeIdentityExpiryHeader, decodeUserIdHeader, dropExpiredCredentialSocket, isIdentityExpired } from "../../../shared/identity-header";
-import { SHARD_REGISTRY_SECRET_ENV } from "../../../shared/internal-secret";
 import { jsonResponse } from "../../../shared/json-response";
 import {
     encodeLiveFrame,
@@ -405,10 +404,16 @@ import type { InFlightClaim } from "./in-flight-claims";
 import { InFlightClaims } from "./in-flight-claims";
 import { ensureScheduleRateTable, readScheduleRateWindow, scheduleRateLimitFrom, writeScheduleRateWindow } from "./schedule-rate-breaker";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
-import { registerShardKey, SHARD_REGISTRY_DO_NAME, unregisterShardKey } from "./shard-registry-do";
+import { isRegistryNamespace, isRegistryRpc, registerShardKey, SHARD_REGISTRY_DO_NAME, unregisterShardKey } from "./shard-registry-do";
 import type { SubscriptionMemo } from "./socket-table-index";
 import { SocketTableIndex } from "./socket-table-index";
 import SubscriptionFailureLatch from "./subscription-backoff";
+
+/** The registry writes a shard makes, whether they reach a namespace or an entrypoint. */
+interface RegistryWriter {
+    register: (table: string, shardKey: string) => Promise<void>;
+    unregister: (table: string, shardKey: string) => Promise<void>;
+}
 
 // Admin-only (Studio AI actions): kept out of the always-loaded class chunk, fetched on first use.
 const loadSqlAssistant = () => import("./sql-assistant");
@@ -13109,16 +13114,44 @@ abstract class ShardDO {
         return run;
     }
 
-    /** The `SHARD_REGISTRY_DO_SECRET` the registry requires of its callers, when one is provisioned. */
-    private registrySecret(): string | undefined {
-        const secret = (this.env as Record<string, unknown> | undefined)?.[SHARD_REGISTRY_SECRET_ENV];
-
-        return typeof secret === "string" ? secret : undefined;
-    }
-
     /** The registry stub, pinned to this DO's own jurisdiction — the subnamespace the worker pins the registry it reads. */
     private registryStub(namespace: unknown): ReturnType<typeof stubByName> {
         return stubByName(namespace, SHARD_REGISTRY_DO_NAME, this.state.id?.jurisdiction);
+    }
+
+    /**
+     * Where this shard's registry writes go. A Durable Object namespace is this app's own
+     * registry: signed directly with this worker's secret. Anything else is the RPC surface of
+     * the worker that hosts the registry, reached through its service binding, so the binding
+     * itself is the capability and no secret is needed. `undefined` when a namespace is not in
+     * this shard's jurisdiction.
+     */
+    private registryWriter(binding: unknown): RegistryWriter | undefined {
+        if (!isRegistryNamespace(binding)) {
+            if (!isRegistryRpc(binding)) {
+                return undefined;
+            }
+
+            const host = binding;
+
+            return {
+                register: async (table, shardKey) => host.register(table, shardKey),
+                unregister: async (table, shardKey) => host.unregister(table, shardKey),
+            };
+        }
+
+        const stub = this.registryStub(binding);
+
+        if (stub === undefined) {
+            return undefined;
+        }
+
+        const secret = siblingSecretOf(this.env);
+
+        return {
+            register: async (table, shardKey) => registerShardKey(stub, table, shardKey, secret),
+            unregister: async (table, shardKey) => unregisterShardKey(stub, table, shardKey, secret),
+        };
     }
 
     /**
@@ -13155,12 +13188,12 @@ abstract class ShardDO {
                 return;
             }
 
-            const stub = this.registryStub(registry.namespace);
+            const writer = this.registryWriter(registry.namespace);
 
-            if (stub === undefined) {
+            if (writer === undefined) {
                 // eslint-disable-next-line no-console -- server-side diagnostic: a misbound registry leaves this shard out of every fan-out
                 console.error(
-                    `[@lunora/do] shard registry binding is not a Durable Object namespace in this shard's jurisdiction; shard "${shardKey}" is not registered`,
+                    `[@lunora/do] shard registry binding is neither a Durable Object namespace in this shard's jurisdiction nor a registry entrypoint; shard "${shardKey}" is not registered`,
                 );
 
                 return;
@@ -13171,7 +13204,7 @@ abstract class ShardDO {
                     this.registeredTables.add(table);
 
                     try {
-                        await registerShardKey(stub, table, shardKey, this.registrySecret());
+                        await writer.register(table, shardKey);
                     } catch (error: unknown) {
                         this.registeredTables.delete(table);
                         this.registryRetryAt = Date.now() + SHARD_REGISTRY_RETRY_MS;
@@ -13205,9 +13238,9 @@ abstract class ShardDO {
 
         const result = await this.serializeRegistry(async () => {
             const registry = this.shardRegistry();
-            const stub = registry === undefined ? undefined : this.registryStub(registry.namespace);
+            const writer = registry === undefined ? undefined : this.registryWriter(registry.namespace);
 
-            if (registry === undefined || stub === undefined) {
+            if (registry === undefined || writer === undefined) {
                 throw new LunoraError("BAD_REQUEST", "releaseShardRegistration: this shard has no shard registry bound", { status: 400 });
             }
 
@@ -13223,7 +13256,7 @@ abstract class ShardDO {
 
                 if (!dryRun) {
                     // eslint-disable-next-line no-await-in-loop -- one small round trip per table this shard is listed for; ordered with the rest of the chain
-                    await unregisterShardKey(stub, table, shardKey, this.registrySecret());
+                    await writer.unregister(table, shardKey);
                     this.registeredTables.delete(table);
                 }
 

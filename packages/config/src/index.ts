@@ -16,8 +16,11 @@ export type { MarkedApiSpec } from "./api-spec-marker";
 export { clearApiSpecMarker, readApiSpecMarker, writeApiSpecMarker } from "./api-spec-marker";
 export { MissingBuildOutputError } from "./build-output-error";
 export { default as canonicalPath } from "./canonical-path";
+export type { CelldToolchainProbe, CelldToolchainProbeOptions } from "./celld/celld-toolchain";
+export { probeCelldToolchain } from "./celld/celld-toolchain";
 export type { CelldDevSession, CelldDevSessionOptions, CelldLineOrigin } from "./celld/dev-session";
-export { startCelldDevSession } from "./celld/dev-session";
+export { startCelldDevSession, writeCelldDevProjection } from "./celld/dev-session";
+export { D1_PLACEHOLDER_ID } from "./cloudflare/reconcile-bindings";
 export {
     BUILD_ROOT_ENV,
     BUILD_TARGET_ENV,
@@ -97,6 +100,7 @@ export {
     runnableTargetIds,
     targetRunsOwnDevServer,
 } from "./driver-registry";
+export { default as ensureGitignoreEntries } from "./ensure-gitignore";
 export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
 export { inferLunoraBindings, secretSourcesFromBindings } from "./infer-bindings";
 export type { LinkedProject } from "./linked-project";
@@ -121,7 +125,7 @@ export {
     toolchainExecArgs,
 } from "./package-manager";
 export type { SecretEntry } from "./package-secrets-registry";
-export { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
+export { mintableSecretKeysFor, PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
 export type { HookLogger, HookSpawnDescriptor, HookSpawner, PostCodegenHookResult } from "./post-codegen-hook";
 export { runPostCodegenHook } from "./post-codegen-hook";
 export type { RemotePreference } from "./project-config";
