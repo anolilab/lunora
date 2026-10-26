@@ -6,7 +6,7 @@
  *
  * The number is the standalone bundle's FIRST-LOAD closure: `studio.js` plus every
  * chunk it reaches through static `import` statements. Dynamic `import()` chunks
- * (the route-level lazy panels, the Home sparkline, the theme indicator) are
+ * (the route-level lazy panels, the theme indicator) are
  * excluded — they load on demand, and keeping heavy dependencies behind them is
  * exactly what this gate protects. A static import of `recharts` or `motion` from
  * the shell shows up here as a jump of 100+ KiB.
