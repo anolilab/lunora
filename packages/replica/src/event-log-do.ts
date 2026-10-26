@@ -375,11 +375,12 @@ export class EventLogDO {
         // storage lacks `transaction` fall back to a bare call — their fakes
         // carry no transactional semantics anyway (see ShardDO.runInTransaction
         // in `@lunora/do` for the same convention).
-        const { transaction } = this.state.storage;
+        // Called through `storage`, not a destructured copy: workerd throws "Illegal invocation" on an unbound native method.
+        const { storage } = this.state;
         let entries: EventLogEntry[];
 
         try {
-            entries = typeof transaction === "function" ? await transaction(runBatch) : await runBatch();
+            entries = typeof storage.transaction === "function" ? await storage.transaction(runBatch) : await runBatch();
         } catch (error) {
             if (isIdempotencyConflictError(error)) {
                 return errorResponse(409, "CONFLICT", error.message);
