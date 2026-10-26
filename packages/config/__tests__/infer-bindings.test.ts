@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 import type { CapabilityProbe } from "@lunora/codegen";
 import { CAPABILITY_PROBES, discoverSandboxUsage } from "@lunora/codegen";
@@ -326,6 +326,37 @@ describe("inferLunoraBindings", () => {
 
         expect(result.usesAi).toBe(true);
         expect(result.signals.some((signal) => signal.includes("AI"))).toBe(true);
+    });
+
+    it("re-reads an edited file on the next scan of the same project, and forgets a deleted one", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/summarize.ts", `import { generateText } from "@lunora/ai";\nexport const summarize = () => generateText;`);
+        write("lunora/other.ts", `import { generateText } from "@lunora/ai";\nexport const other = () => generateText;`);
+
+        await expect(inferLunoraBindings({ projectRoot: root })).resolves.toHaveProperty("usesAi", true);
+
+        // Still a candidate file (it names the package), but a type-only import implies nothing.
+        write("lunora/summarize.ts", `import type { generateText } from "@lunora/ai";\nexport type Summarize = typeof generateText;`);
+        rmSync(join(root, "lunora", "other.ts"));
+
+        await expect(inferLunoraBindings({ projectRoot: root })).resolves.toHaveProperty("usesAi", false);
+
+        write("lunora/summarize.ts", `import { generateText } from "@lunora/ai";\nexport const summarize = () => generateText;`);
+
+        await expect(inferLunoraBindings({ projectRoot: root })).resolves.toHaveProperty("usesAi", true);
+    });
+
+    it("scans a project named by a relative root", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/summarize.ts", `import { generateText } from "@lunora/ai";\nexport const summarize = () => generateText;`);
+
+        await expect(inferLunoraBindings({ projectRoot: relative(process.cwd(), root) })).resolves.toHaveProperty("usesAi", true);
     });
 
     it("infers AI from an env.AI access without importing @lunora/ai", async () => {

@@ -14,6 +14,7 @@ import { buildArchitecture, emitArchitectureModule } from "./architecture";
 import assertNoNamespaceCollisions from "./assert-namespace-collisions";
 import { createCodegenProject } from "./codegen-project";
 import { buildDeclarationSurface } from "./declaration-surface";
+import { withSourceListMemo } from "./discover/ast";
 import discoverCallEdges from "./discover/call-edges";
 import type { ErasedReturn } from "./discover/erased-returns";
 import { collectErasures, erasedReturnFindings } from "./discover/erased-returns";
@@ -373,18 +374,9 @@ const inferToFixpoint = (options: {
     }
 };
 
-/**
- * Top-level codegen entry. Parses `<projectRoot>/lunora/schema.ts` and every
- * function file under `<projectRoot>/lunora/`, then writes
- * `_generated/{api,server,dataModel}.ts` next to them.
- *
- * When `LUNORA_CODEGEN_TIMING` is set (truthy), a single diagnostic summary
- * line is written to stderr with the total wall time and the discovery-vs-emit
- * split — opt-in instrumentation that is otherwise zero-cost and side-effect-free
- * on the returned {@link CodegenResult}.
- */
+/** The codegen pipeline proper; {@link runCodegen} is its public entry. */
 // eslint-disable-next-line sonarjs/cognitive-complexity -- top-level codegen orchestrator; splitting further would obscure the linear pipeline
-export const runCodegen = (options: CodegenOptions): CodegenResult => {
+const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     const timingEnabled = isTimingEnabled();
     const startedAt = timingEnabled ? performance.now() : 0;
 
@@ -1023,6 +1015,21 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         writtenFiles,
     };
 };
+
+/**
+ * Top-level codegen entry. Parses `<projectRoot>/lunora/schema.ts` and every
+ * function file under `<projectRoot>/lunora/`, then writes
+ * `_generated/{api,server,dataModel}.ts` next to them.
+ *
+ * When `LUNORA_CODEGEN_TIMING` is set (truthy), a single diagnostic summary
+ * line is written to stderr with the total wall time and the discovery-vs-emit
+ * split — opt-in instrumentation that is otherwise zero-cost and side-effect-free
+ * on the returned {@link CodegenResult}.
+ *
+ * One walk of the source tree is shared by every discoverer for the run (see
+ * `withSourceListMemo`).
+ */
+export const runCodegen = (options: CodegenOptions): CodegenResult => withSourceListMemo(() => runCodegenUnmemoized(options));
 
 // Exports kept at end-of-file per the package's `import/exports-last` rule.
 export { createCodegenProject, findTsconfig, refreshCodegenProject, tsconfigFingerprint } from "./codegen-project";

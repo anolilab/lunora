@@ -18,7 +18,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import type { CoverageProblem, TableClassification } from "../../../../shared/privacy-coverage";
 import { AUTH_DEFAULT_TABLES, checkCoverage, classifyTables } from "../../../../shared/privacy-coverage";
 import type { TableIR, ValidatorIR } from "../ir";
-import { listLunoraSourceFiles } from "./ast";
+import { descendantsOfKind, listLunoraSourceFiles } from "./ast";
 
 /** The package whose declaration turns the lint on. Read from the same manifest signal `studio-features` uses. */
 const PRIVACY_PACKAGE = "@lunora/privacy";
@@ -350,7 +350,7 @@ interface FileFacts {
 const scanFile = (file: SourceFile, state: CoverageState): FileFacts => {
     const privacyCalls: PrivacyCall[] = [];
 
-    for (const call of file.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(file, SyntaxKind.CallExpression)) {
         visitCall(call, state);
 
         if (calleeName(call) === "definePrivacy") {
@@ -361,8 +361,7 @@ const scanFile = (file: SourceFile, state: CoverageState): FileFacts => {
         }
     }
 
-    const declared = file
-        .getDescendantsOfKind(SyntaxKind.VariableDeclaration)
+    const declared = descendantsOfKind(file, SyntaxKind.VariableDeclaration)
         .filter((declaration) => isDefineDatasetCall(declaration.getInitializer()))
         .map((declaration) => {
             return { declaration, name: declaration.getName() };

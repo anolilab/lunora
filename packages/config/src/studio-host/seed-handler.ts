@@ -22,7 +22,6 @@ import { existsSync } from "node:fs";
 import { discoverSchema, schemaFromIr } from "@lunora/codegen";
 import { LunoraError } from "@lunora/errors";
 import type { TablePlan } from "@lunora/seed";
-import { seedPlan } from "@lunora/seed";
 import { Project } from "ts-morph";
 
 import join from "../path";
@@ -115,8 +114,12 @@ const clampCount = (count: number | undefined): number => {
  * `existingIds` to resolve against is answered with `409
  * fk-parents-empty` naming the parent tables — the endpoint refuses
  * rather than hand back children whose parents it just dropped.
+ *
+ * `@lunora/seed` is imported here, on the first request, not at module scope:
+ * it pulls in faker, which every dev server paid at startup for a button most
+ * sessions never press.
  */
-const handleSeedRequest = (request: SeedRequest): SeedResponse => {
+const handleSeedRequest = async (request: SeedRequest): Promise<SeedResponse> => {
     if (request.method !== "POST") {
         return { body: { error: "method-not-allowed", ok: false }, status: 405 };
     }
@@ -148,6 +151,7 @@ const handleSeedRequest = (request: SeedRequest): SeedResponse => {
     }
 
     const schema = schemaFromIr(ir);
+    const { seedPlan } = await import("@lunora/seed");
     let plan: ReadonlyArray<TablePlan>;
 
     try {
