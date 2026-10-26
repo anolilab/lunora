@@ -36,38 +36,38 @@ const fail = (message) => {
 
 const kib = (bytes) => `${(bytes / 1024).toFixed(1)} KiB`;
 
-const pkg = (name) => JSON.stringify(`@lunora/${name}`);
-
-const ref = (name) => `{ __lunoraRef: ${JSON.stringify(name)} }`;
-
 /**
  * One reference app per adapter. Each uses only what a first app uses: create a
  * client, provide it, read a live query, run a mutation, open a subscription.
- * Everything is parked on `globalThis` so the bundler cannot drop it.
+ * Everything is parked on `globalThis` so the bundler cannot drop it. Written out
+ * literally rather than templated, so the bundled source is exactly what is shown.
  */
 const apps = {
-    angular: `import { liveQuery, mutate, provideLunora, subscription } from ${pkg("angular")};
-globalThis.app = { providers: [provideLunora()], q: () => liveQuery(${ref("todos:list")}, () => ({})), m: () => mutate(${ref("todos:add")}), s: () => subscription(${ref("todos:list")}, () => ({})) };`,
-    react: `import { LunoraClient } from ${pkg("client")};
-import { LunoraProvider, useMutation, useQuery, useSubscription } from ${pkg("react")};
+    angular: `import { liveQuery, mutate, provideLunora, subscription } from "@lunora/angular";
+globalThis.app = { providers: [provideLunora()], q: () => liveQuery({ __lunoraRef: "todos:list" }, () => ({})), m: () => mutate({ __lunoraRef: "todos:add" }), s: () => subscription({ __lunoraRef: "todos:list" }, () => ({})) };`,
+    react: `import { LunoraClient } from "@lunora/client";
+import { LunoraProvider, useMutation, useQuery, useSubscription } from "@lunora/react";
 const client = new LunoraClient({ url: location.origin });
-globalThis.app = { client, LunoraProvider, q: () => useQuery(${ref("todos:list")}, {}), m: () => useMutation(${ref("todos:add")}), s: () => useSubscription(${ref("todos:list")}, {}) };`,
-    solid: `import { LunoraClient } from ${pkg("client")};
-import { createMutation, createQuery, createSubscription, LunoraProvider } from ${pkg("solid")};
+globalThis.app = { client, LunoraProvider, q: () => useQuery({ __lunoraRef: "todos:list" }, {}), m: () => useMutation({ __lunoraRef: "todos:add" }), s: () => useSubscription({ __lunoraRef: "todos:list" }, {}) };`,
+    solid: `import { LunoraClient } from "@lunora/client";
+import { createMutation, createQuery, createSubscription, LunoraProvider } from "@lunora/solid";
 const client = new LunoraClient({ url: location.origin });
-globalThis.app = { client, LunoraProvider, q: () => createQuery(${ref("todos:list")}, () => ({})), m: () => createMutation(${ref("todos:add")}), s: () => createSubscription(${ref("todos:list")}, () => ({})) };`,
-    svelte: `import { LunoraClient } from ${pkg("client")};
-import { mutation, query, setLunoraClient, subscription } from ${pkg("svelte")};
+globalThis.app = { client, LunoraProvider, q: () => createQuery({ __lunoraRef: "todos:list" }, () => ({})), m: () => createMutation({ __lunoraRef: "todos:add" }), s: () => createSubscription({ __lunoraRef: "todos:list" }, () => ({})) };`,
+    svelte: `import { LunoraClient } from "@lunora/client";
+import { mutation, query, setLunoraClient, subscription } from "@lunora/svelte";
 const client = new LunoraClient({ url: location.origin });
-globalThis.app = { client, setLunoraClient, q: () => query(${ref("todos:list")}, {}), m: () => mutation(${ref("todos:add")}), s: () => subscription(${ref("todos:list")}, {}) };`,
-    vue: `import { LunoraClient } from ${pkg("client")};
-import { provideLunora, useMutation, useQuery, useSubscription } from ${pkg("vue")};
+globalThis.app = { client, setLunoraClient, q: () => query({ __lunoraRef: "todos:list" }, {}), m: () => mutation({ __lunoraRef: "todos:add" }), s: () => subscription({ __lunoraRef: "todos:list" }, {}) };`,
+    vue: `import { LunoraClient } from "@lunora/client";
+import { provideLunora, useMutation, useQuery, useSubscription } from "@lunora/vue";
 const client = new LunoraClient({ url: location.origin });
-globalThis.app = { client, provideLunora, q: () => useQuery(${ref("todos:list")}, {}), m: () => useMutation(${ref("todos:add")}), s: () => useSubscription(${ref("todos:list")}, {}) };`,
+globalThis.app = { client, provideLunora, q: () => useQuery({ __lunoraRef: "todos:list" }, {}), m: () => useMutation({ __lunoraRef: "todos:add" }), s: () => useSubscription({ __lunoraRef: "todos:list" }, {}) };`,
 };
 
-/** Anything that is the app's own framework, not Lunora's weight. */
-const external = /^(?:react|react-dom|vue|svelte|solid-js|@angular|@tanstack|rxjs)(?:\/|$)/u;
+/**
+ * The app's own framework, not Lunora's weight. `@tanstack/*` is NOT here: the
+ * React adapter ships TanStack Query, so its bytes are what the adapter costs.
+ */
+const external = /^(?:react|react-dom|vue|svelte|solid-js|@angular|rxjs)(?:\/|$)/u;
 
 // Vite is a dependency of `@lunora/vite`, so the gate needs none of its own.
 const { build } = await import(pathToFileURL(createRequire(join(rootDir, "packages", "vite", "package.json")).resolve("vite")).href);
@@ -130,6 +130,14 @@ const failures = [];
 
 for (const [name, size] of Object.entries(results)) {
     const previous = baseline.apps[name];
+
+    // An app with no baseline has no budget, and passing it would let it grow unchecked.
+    if (!update && previous === undefined) {
+        failures.push(`  ${name}: no baseline in client-size.json — run \`pnpm run client-size:update\``);
+
+        continue;
+    }
+
     const ceiling = previous ? previous.gzipBytes + baseline.allowanceBytes : Number.POSITIVE_INFINITY;
 
     process.stdout.write(

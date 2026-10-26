@@ -7,9 +7,9 @@
             "rawBytes": 149845
         },
         "react": {
-            "brotliBytes": 41768,
-            "gzipBytes": 48402,
-            "rawBytes": 157073
+            "brotliBytes": 50256,
+            "gzipBytes": 58088,
+            "rawBytes": 192430
         },
         "solid": {
             "brotliBytes": 39383,
