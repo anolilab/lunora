@@ -145,6 +145,15 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "Migration drift";
     };
+    readonly UNIQUE_INDEX_DUPLICATES: {
+        readonly hint: readonly [
+            "The index was not built, so the shard refuses user traffic until it is.",
+            "",
+            "Write a `defineMigration` in `lunora/migrations.ts` that deletes or merges the duplicate rows so one row keeps each key. Run `lunora migrate up`, then redeploy. The `lunora-migration-helper` skill covers the pattern."
+        ];
+        readonly status: 409;
+        readonly title: "Unique index blocked by duplicate rows";
+    };
     readonly UNKNOWN_TABLE: {
         readonly status: 404;
         readonly title: "Unknown table";

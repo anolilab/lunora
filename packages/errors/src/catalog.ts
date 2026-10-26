@@ -103,6 +103,16 @@ export const ERROR_CATALOG = {
         status: 409,
         title: "Migration drift",
     },
+    /** A UNIQUE index cannot be built because existing rows already share its key. The shard refuses user traffic until a later build succeeds. */
+    UNIQUE_INDEX_DUPLICATES: {
+        hint: [
+            "The index was not built, so the shard refuses user traffic until it is.",
+            "",
+            "Write a `defineMigration` in `lunora/migrations.ts` that deletes or merges the duplicate rows so one row keeps each key. Run `lunora migrate up`, then redeploy. The `lunora-migration-helper` skill covers the pattern.",
+        ],
+        status: 409,
+        title: "Unique index blocked by duplicate rows",
+    },
     UNKNOWN_TABLE: { status: 404, title: "Unknown table" },
     GLOBAL_TABLE_NOT_EDITABLE: { status: 400, title: "Global table is not editable" },
 

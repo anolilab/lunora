@@ -928,6 +928,14 @@ The ceilings are deliberately conservative — they exist to stop one request ta
 
 `401` — Unauthorized
 
+### `UNIQUE_INDEX_DUPLICATES`
+
+`409` — Unique index blocked by duplicate rows
+
+The index was not built, so the shard refuses user traffic until it is.
+
+Write a `defineMigration` in `lunora/migrations.ts` that deletes or merges the duplicate rows so one row keeps each key. Run `lunora migrate up`, then redeploy. The `lunora-migration-helper` skill covers the pattern.
+
 ### `UNKNOWN_ADMIN_OP`
 
 `404` — Unknown admin operation
