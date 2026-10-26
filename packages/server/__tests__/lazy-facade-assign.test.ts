@@ -37,4 +37,17 @@ describe("defineLazyFacade assignment", () => {
 
         expect(target["users"]).toBe("replaced");
     });
+
+    it("shadows the facade when assigned through an object that inherits from the target", () => {
+        expect.assertions(3);
+
+        const target = lazyTarget();
+        const child = Object.create(target) as Record<string, unknown>;
+
+        child["users"] = "replaced";
+
+        expect(child["users"]).toBe("replaced");
+        expect(Object.hasOwn(child, "users")).toBe(true);
+        expect(target["users"]).not.toBe("replaced");
+    });
 });
