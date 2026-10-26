@@ -1,4 +1,4 @@
-import type { CallExpression, Node as TsNode, Project } from "ts-morph";
+import type { CallExpression, Identifier, Node as TsNode, Project } from "ts-morph";
 import { Node, VariableDeclarationKind } from "ts-morph";
 
 import type { TableWriteIR } from "../ir";
@@ -76,13 +76,37 @@ const patchedFieldsOf = (call: CallExpression, method: string, bodyIndex: number
     return keys;
 };
 
+/** The initializer of the `const` an identifier names, or `undefined` when it names anything else. */
+const constantInitializerOf = (identifier: Identifier): TsNode | undefined => {
+    const declaration = identifier.getSymbol()?.getDeclarations()[0];
+
+    if (declaration === undefined || !Node.isVariableDeclaration(declaration)) {
+        return undefined;
+    }
+
+    return declaration.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const ? declaration.getInitializer() : undefined;
+};
+
 /**
  * The tables a first argument may name: a string literal, a `const` bound to one, or an expression whose type is a
  * literal or a union of literals (a `"notes" | "todos"` parameter may write either). An assertion (`x as "posts"`)
  * is a claim about the value, not proof of it, so it is unreadable. `undefined` when no table can be read.
  */
 const tablesOfFirst = (first: TsNode | undefined): string[] | undefined => {
-    if (first === undefined || Node.isAsExpression(first) || Node.isTypeAssertion(first) || Node.isSatisfiesExpression(first)) {
+    if (first === undefined) {
+        return undefined;
+    }
+
+    // `as const` and `satisfies` claim nothing about the value, so the expression they wrap decides.
+    if (Node.isAsExpression(first) && first.getTypeNode()?.getText() === "const") {
+        return tablesOfFirst(first.getExpression());
+    }
+
+    if (Node.isSatisfiesExpression(first)) {
+        return tablesOfFirst(first.getExpression());
+    }
+
+    if (Node.isAsExpression(first) || Node.isTypeAssertion(first)) {
         return undefined;
     }
 
@@ -91,18 +115,10 @@ const tablesOfFirst = (first: TsNode | undefined): string[] | undefined => {
     }
 
     if (Node.isIdentifier(first)) {
-        const declaration = first.getSymbol()?.getDeclarations()[0];
+        const initializer = constantInitializerOf(first);
 
-        if (
-            declaration !== undefined &&
-            Node.isVariableDeclaration(declaration) &&
-            declaration.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const
-        ) {
-            const initializer = declaration.getInitializer();
-
-            if (initializer !== undefined) {
-                return tablesOfFirst(initializer);
-            }
+        if (initializer !== undefined) {
+            return tablesOfFirst(initializer);
         }
     }
 
