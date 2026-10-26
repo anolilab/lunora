@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.71...@lunora/errors@1.0.0-alpha.72) (2026-10-26)
+
+### Bug Fixes
+
+* **errors:** register SHARD_DRY_RUN_UNSUPPORTED in the catalog ([#1348](https://github.com/anolilab/lunora/issues/1348)) ([df9fb5b](https://github.com/anolilab/lunora/commit/df9fb5ba45a32fb178fc8fbc74604090c030c5f6))
+
 ## @lunora/errors [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.70...@lunora/errors@1.0.0-alpha.71) (2026-10-26)
 
 ### Features
