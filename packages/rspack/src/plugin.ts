@@ -104,6 +104,22 @@ const nearerTsconfigPaths = (schemaDirectory: string, found: string | undefined)
 };
 
 /**
+ * The `package.json` and `.git` paths that decide where `projectConfigCandidatePaths`
+ * stops: one of each in every directory it walks. Creating or removing a `package.json`
+ * moves that boundary and so changes which `lunora.config.*` codegen reads.
+ *
+ * ponytail: an existing `.git` is left out, since everything git does happens inside
+ * it; deleting one is not seen until the next `lunora/` edit. Watch its parent
+ * directory if that ever matters.
+ */
+const projectBoundaryMarkers = (schemaDirectory: string): string[] =>
+    [...new Set(projectConfigCandidatePaths(schemaDirectory).map((path) => dirname(path)))].flatMap((directory) => {
+        const git = join(directory, ".git");
+
+        return existsSync(git) ? [join(directory, "package.json")] : [join(directory, "package.json"), git];
+    });
+
+/**
  * The real paths of schema sources that are symlinks to files outside the schema
  * directory. Codegen reads them through the link, but the watcher reports their edits
  * under the target, which the directory watch does not cover.
@@ -339,6 +355,7 @@ class LunoraRspackPlugin {
                 ...WRANGLER_FILES.map((name) => resolve(this.#options.projectRoot, name)),
                 ...PROJECT_CONFIG_FILENAMES.map((name) => resolve(this.#options.projectRoot, name)),
                 ...projectConfigCandidatePaths(this.#schemaDirectory),
+                ...projectBoundaryMarkers(this.#schemaDirectory),
                 ...nearerTsconfigPaths(this.#schemaDirectory, tsconfigPath),
                 ...this.#linkedSources,
             ];
@@ -379,8 +396,7 @@ class LunoraRspackPlugin {
 
     /**
      * Whether a watch rebuild changed nothing a pass reads, so it can skip the pass
-     * without even fingerprinting — which reads and hashes every `lunora/` source,
-     * and on a 200-module app was the whole of the plugin's cost on an app-code edit.
+     * without even fingerprinting, which reads and hashes every `lunora/` source.
      *
      * Conservative on every axis; any doubt runs the pass, whose fingerprint then
      * decides as before. It runs when there are no change sets (a one-shot build, the

@@ -721,6 +721,43 @@ describe("rspack watch (real compiler)", () => {
     );
 
     it(
+        "re-runs the pass when a package.json appears between a nested schema directory and the config above it",
+        async () => {
+            expect.assertions(1);
+
+            // `apps/lunora.config.ts` governs `apps/web/lunora` until `apps/web/package.json`
+            // makes `apps/web/` the project boundary and cuts it off.
+            const root = fixture({ scripts: { postcodegen: `node -e "require('fs').appendFileSync('.hook-runs', 'x')"` } });
+
+            mkdirSync(join(root, "apps", "web"), { recursive: true });
+            renameSync(join(root, "lunora"), join(root, "apps", "web", "lunora"));
+            writeFileSync(join(root, "apps", "lunora.config.ts"), 'export default { codegen: { exclude: ["seed/**"] } };\n', "utf8");
+
+            await runOnce(
+                rspack({
+                    context: root,
+                    entry: "./index.js",
+                    mode: "production",
+                    output: { path: join(root, "dist") },
+                    plugins: [lunoraRspack({ projectRoot: root, schemaDir: "apps/web/lunora" })],
+                }),
+            );
+
+            await watchRun(
+                root,
+                () => {
+                    rmSync(join(root, ".hook-runs"), { force: true });
+                    writeFileSync(join(root, "apps", "web", "package.json"), "{}\n", "utf8");
+                },
+                { expectedBuilds: 2, schemaDir: "apps/web/lunora", settleMs: 2500 },
+            );
+
+            expect(existsSync(join(root, ".hook-runs"))).toBe(true);
+        },
+        TEST_TIMEOUT_MS,
+    );
+
+    it(
         "re-runs the pass when the target of a source symlinked from outside lunora/ changes",
         async () => {
             expect.assertions(1);
