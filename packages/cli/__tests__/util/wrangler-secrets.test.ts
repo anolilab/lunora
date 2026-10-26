@@ -62,6 +62,24 @@ describe("listRemoteSecrets", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
+    it("resolves the toolchain from the target it is given, not the project's config", async () => {
+        expect.assertions(3);
+
+        const calls: string[] = [];
+        const runner = async (command: string): Promise<{ code: number; stderr: string; stdout: string }> => {
+            calls.push(command);
+
+            return { code: 0, stderr: "", stdout: "[]" };
+        };
+
+        // The project has no config (so it resolves to cloudflare); the explicit celld target has no secret store.
+        const result = await listRemoteSecrets({ cwd: workdir, runner, target: "celld" });
+
+        expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/no secret store/u) });
+        expect(calls).toHaveLength(0);
+        await expect(listRemoteSecrets({ cwd: workdir, runner }).then((named) => named.ok)).resolves.toBe(true);
+    });
+
     it("reports failure when the injected runner exits non-zero", async () => {
         expect.assertions(3);
 

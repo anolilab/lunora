@@ -182,6 +182,11 @@ const FLAG_PACKAGES: ReadonlyArray<readonly [CapabilityFlag, string]> = [
 const SECRET_SOURCE_FLAGS = [
     ["usesNotifyFcm", "@lunora/notify:fcm"],
     ["usesNotifyWebPush", "@lunora/notify:webPush"],
+    // `ShardRegistryDO` refuses unsigned requests, so an app with a registry needs
+    // `LUNORA_RELAY_SECRET` in `.dev.vars` and on deploy, with no package import to say so.
+    ["hostsShardRegistry", "@lunora/do:shardRegistry"],
+    // `EventLogDO` refuses every request without the same secret, and the app that exports it hosts the log.
+    ["hostsEventLog", "@lunora/replica:eventLog"],
     // The secret store behind `requestSecretTool`. The tool's own import is the
     // signal, not `@lunora/agent`: an app that imports the package for something
     // else needs no key.
@@ -274,6 +279,12 @@ interface InferredBindings {
      * un-mintable `app_id`, so it is reconciled as a hint, not auto-written.
      */
     flagshipBinding?: string;
+
+    /** The worker entry exports `EventLogDO`, so the app mints the `LUNORA_RELAY_SECRET` the event log checks on every request. */
+    hostsEventLog: boolean;
+
+    /** The app hosts the registry (exports or binds `ShardRegistryDO`, or is merged with its module), so it mints the `LUNORA_RELAY_SECRET` its registry checks. */
+    hostsShardRegistry: boolean;
 
     /**
      * The schema's `.jurisdiction("…")`, when it declares one. Read by the binding
@@ -628,6 +639,23 @@ const describeSignals = (
 };
 
 /**
+ * Whether the app hosts `ShardRegistryDO`: it exports or binds the class, or a merged app carries the
+ * registry in `LunoraDO`. codegen writes `shardRegistry.ts` for every `.shardBy()` schema, so the file's
+ * presence alone does not host the registry.
+ */
+const hostsShardRegistry = (durableObjects: ReadonlyArray<DurableObjectSpec>, generatedDirectory: string): boolean =>
+    durableObjects.some((object) => object.binding === "SHARD_REGISTRY") ||
+    (isMergedProject(generatedDirectory) && existsSync(join(generatedDirectory, "shardRegistry.ts")));
+
+/**
+ * Whether the worker entry exports `EventLogDO` as a value. A composed entry star-re-exports
+ * only the generated modules, so it never hosts the log by itself; `detectClassExports` would
+ * otherwise report every class there as exported.
+ */
+const hostsEventLog = (entry: ReturnType<typeof resolveWorkerEntry>): boolean =>
+    !entry.composed && detectClassExports(entry, [{ className: "EventLogDO" }], "eventLog").some((definition) => definition.exported);
+
+/**
  * Scan a Lunora project and report which Cloudflare bindings its code implies.
  * Read-only: performs no writes. Binding provisioning is driven by the worker
  * entry's Durable Object exports plus the schema's D1 need; capability imports
@@ -682,6 +710,9 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const notifyChannels = notifyIr.error === undefined ? notifyIr.value : { hasFcm: true, hasWebPush: true };
     const flagshipBinding = flags?.provider === "flagship" && flags.mode === "binding" ? flags.bindingName : undefined;
 
+    const hostsRegistry = hostsShardRegistry(durableObjects, join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY));
+    const hostsLog = hostsEventLog(entry);
+
     const signals = describeSignals(durableObjects, schema, capabilities, containers, workflows, agents);
 
     // A hand-written entry opts in by exporting `LunoraDO` itself; with the merge
@@ -729,12 +760,11 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         usesFlags: flags !== undefined,
         usesNotifyFcm: notifyChannels?.hasFcm ?? false,
         usesNotifyWebPush: notifyChannels?.hasWebPush ?? false,
+        hostsEventLog: hostsLog,
+        hostsShardRegistry: hostsRegistry,
         workflows,
     };
 };
-
-/** The secret source a worker exporting `ShardRegistryDO` needs — see PACKAGE_SECRETS_REGISTRY. */
-const SHARD_REGISTRY_SECRET_SOURCE = "@lunora/runtime:shardRegistry";
 
 /**
  * The secret sources a project uses — the {@link PACKAGE_SECRETS_REGISTRY} keys
@@ -744,16 +774,12 @@ const SHARD_REGISTRY_SECRET_SOURCE = "@lunora/runtime:shardRegistry";
  * `.dev.vars.example` scaffolding in `scaffold-dev-variables.ts`. The result is
  * {@link FLAG_PACKAGES}' sources whose flag is `true` in `bindings` — in
  * flag-name order — followed by the configured `@lunora/notify` channels
- * ({@link SECRET_SOURCE_FLAGS}) and the shard registry when the worker exports
- * `ShardRegistryDO`, keeping only sources that carry secrets.
+ * ({@link SECRET_SOURCE_FLAGS}), keeping only sources that carry secrets.
  */
-const secretSourcesFromBindings = (bindings: InferredBindings): string[] => [
-    ...[...FLAG_PACKAGES, ...SECRET_SOURCE_FLAGS]
+const secretSourcesFromBindings = (bindings: InferredBindings): string[] =>
+    [...FLAG_PACKAGES, ...SECRET_SOURCE_FLAGS]
         .filter(([flag, source]) => bindings[flag] && PACKAGE_SECRETS_REGISTRY[source] !== undefined)
-        .map(([, source]) => source),
-    // The shard registry fails closed without LUNORA_RELAY_SECRET, and no import announces it, so the exported class is the signal.
-    ...(bindings.durableObjects.some((object) => object.className === "ShardRegistryDO") ? [SHARD_REGISTRY_SECRET_SOURCE] : []),
-];
+        .map(([, source]) => source);
 
 export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow };
 export { inferLunoraBindings, secretSourcesFromBindings };

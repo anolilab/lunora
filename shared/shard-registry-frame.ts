@@ -1,11 +1,19 @@
 /**
- * The signed frame for one `ShardRegistryDO` request: the method, the path and
- * query, then the body. The signature covers the frame rather than the body
- * alone, so a GET (whose body is empty) is authenticated too, and a captured
- * signature cannot be replayed against another route.
+ * The exact string a shard-registry request is signed over, shared by the
+ * registry Durable Object (which verifies it) and both of its clients (the
+ * worker and the shard, which sign it) so the three cannot disagree.
  *
- * The body is last because it may contain newlines; the three fields before it
- * never do. Zero-dependency: bundler-inlined into `@lunora/do` and `@lunora/runtime`.
+ * The method and the path-plus-query are part of the frame, not just the body:
+ * `GET /list` and `GET /snapshot` carry no body, so a body-only signature would
+ * be one fixed value that authenticates every read of every table.
+ *
+ * Like the other `shared/` files this is inlined by the bundler — keep it free
+ * of imports.
  */
-export const shardRegistryFrame = (method: string, url: URL, body: string): string =>
-    ["lunora.shard-registry.v1", method, `${url.pathname}${url.search}`, body].join("\n");
+const shardRegistryFrame = (method: string, url: string, body: string): string => {
+    const { pathname, search } = new URL(url);
+
+    return `${method.toUpperCase()} ${pathname}${search}\n${body}`;
+};
+
+export { shardRegistryFrame };

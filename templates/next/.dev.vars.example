@@ -4,7 +4,8 @@
 #
 # Generate a strong secret with: openssl rand -hex 32
 
-# Required — the shard registry throws on every request without it. Signs the calls
-# between the worker and its registry and event-log Durable Objects. Local development
-# only: the value is minted per checkout and never committed.
+# Required — the shard registry and event-log Durable Objects answer 403 to every request
+# without it, and the client throws when constructed without it. Signs the calls between the
+# worker and those Durable Objects. Local development only: the value is minted per checkout
+# and never committed.
 LUNORA_RELAY_SECRET="replace-with-openssl-rand-hex-32"

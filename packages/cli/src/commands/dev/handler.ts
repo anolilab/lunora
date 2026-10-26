@@ -26,6 +26,7 @@ import {
     resolveSchemaDirectory,
     secretSourcesFromBindings,
     updateDevServerState,
+    writeCelldDevProjection,
 } from "@lunora/config";
 import type { LocalHyperdrive } from "@lunora/config/cloudflare";
 import { describeWithheld, resolveRemoteEnabled, startLocalHyperdrive, wranglerCodegenInputs } from "@lunora/config/cloudflare";
@@ -397,6 +398,39 @@ const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions
 const startBanner = (plan: DevCommandPlan): string =>
     plan.flavor === "vite" ? "starting vite dev (worker + studio + codegen run inside Vite via @lunora/vite)" : `starting ${plan.wrangler.tag} dev + studio`;
 
+/** Says why the worker binds IPv4 loopback: the host has no IPv6 `::1`, which `wrangler dev` needs. */
+const noteIpv4LoopbackFallback = (plan: DevCommandPlan, logger: Logger): void => {
+    if (plan.ipv4LoopbackForced) {
+        logger.info(
+            "no IPv6 loopback (::1) on this host — binding the worker to 127.0.0.1 (--ip) so wrangler dev doesn't crash. Pin `dev.ip` in wrangler.jsonc to override.",
+        );
+    }
+};
+
+/**
+ * Whether an attached `--no-worker` celld run can start. Its external runner
+ * executes `celld dev` on the projection, so the projection is written first, once
+ * the toolchain probe passes; `false`, logged, when it cannot be written. A run
+ * that starts its own session writes the projection there instead.
+ */
+const attachedCelldProjectionReady = async (plan: DevCommandPlan, options: DevCommandOptions, cwd: string, logger: Logger): Promise<boolean> => {
+    if (plan.celldSession !== true || plan.workerEnabled) {
+        return true;
+    }
+
+    try {
+        for (const warning of await (options.writeCelldProjection ?? writeCelldDevProjection)({ projectRoot: cwd })) {
+            logger.warn(warning);
+        }
+
+        return true;
+    } catch (error: unknown) {
+        logger.error(`could not write the celld projection: ${error instanceof Error ? error.message : String(error)}`);
+
+        return false;
+    }
+};
+
 /**
  * The worker the plan runs — a celld dev session, else the planned dev server
  * process — or `undefined`, logged, when it cannot start.
@@ -566,11 +600,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         // Before anything is spawned — see the helper.
         printCloudflareCliConfigWarning(logger, cwd);
 
-        if (plan.ipv4LoopbackForced) {
-            logger.info(
-                "no IPv6 loopback (::1) on this host — binding the worker to 127.0.0.1 (--ip) so wrangler dev doesn't crash. Pin `dev.ip` in wrangler.jsonc to override.",
-            );
-        }
+        noteIpv4LoopbackFallback(plan, logger);
 
         if (plan.runsCodegenWatch) {
             handles.codegen = (options.startCodegen ?? startCodegenWatch)({
@@ -642,6 +672,10 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
                 signal: handles.readyProbe.signal,
             });
         };
+
+        if (!(await attachedCelldProjectionReady(plan, options, cwd, logger))) {
+            return { code: EXIT_CODE.FAILURE, plan };
+        }
 
         if (!plan.workerEnabled) {
             // Attached mode: whatever is left after `--no-worker` keeps running

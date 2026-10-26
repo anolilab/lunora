@@ -980,14 +980,70 @@ describe("lunora dev", () => {
 
             expect(result.code).toBe(1);
             expect(started).toStrictEqual([{ port: 8790, projectRoot: workdir }]);
-            // Marked as development, as `wrangler dev --var WORKER_ENV:development` does.
-            expect(JSON.parse(readFileSync(join(workdir, ".celld.wrangler.json"), "utf8"))).toStrictEqual({
-                main: "src/server.ts",
-                name: "app",
-                vars: { WORKER_ENV: "development" },
-            });
+            // The session writes the projection once its toolchain probe has passed;
+            // planning must leave the project untouched until then.
+            expect(existsSync(join(workdir, ".celld.wrangler.json"))).toBe(false);
             // A crashed app is already gone; only a stop the user asks for stops the session.
             expect(stopped).toBe(0);
+        });
+
+        // `--no-worker` runs no session, but the external runner executes `celld dev` on the projection, so it has to be written first.
+        it("writes the celld projection before an attached --no-worker run names it", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
+
+            const written: string[] = [];
+
+            const result = await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8790,
+                logger: silentLogger(),
+                startCelldSession: async () => {
+                    throw new Error("an attached run starts no session");
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                target: "celld",
+                waitForInterrupt: async () => EXIT_CODE.SUCCESS,
+                worker: false,
+                writeCelldProjection: async (options) => {
+                    written.push(options.projectRoot);
+
+                    return [];
+                },
+            });
+
+            expect(result.code).toBe(EXIT_CODE.SUCCESS);
+            expect(written).toStrictEqual([workdir]);
+        });
+
+        it("stops an attached --no-worker run when the celld projection cannot be written", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
+
+            const result = await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8790,
+                logger: silentLogger(),
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                target: "celld",
+                waitForInterrupt: async () => {
+                    throw new Error("an attached run must not park after a failed projection write");
+                },
+                worker: false,
+                writeCelldProjection: async () => {
+                    throw new Error("celld is not on PATH");
+                },
+            });
+
+            expect(result.code).toBe(EXIT_CODE.FAILURE);
         });
 
         it("starts no embedded Hyperdrive Postgres for a celld-target session, which has no Hyperdrive binding", async () => {
@@ -1034,7 +1090,7 @@ describe("lunora dev", () => {
         });
 
         it("stops before anything is served when the celld session cannot start", async () => {
-            expect.assertions(1);
+            expect.assertions(3);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
 
@@ -1053,6 +1109,9 @@ describe("lunora dev", () => {
             });
 
             expect(result.code).toBe(EXIT_CODE.FAILURE);
+            // A session that cannot start has written no projection and touched no `.gitignore`.
+            expect(existsSync(join(workdir, ".celld.wrangler.json"))).toBe(false);
+            expect(existsSync(join(workdir, ".gitignore"))).toBe(false);
         });
 
         it("carries `dev.inspector_port` from the wrangler config into the spawned wrangler argv", async () => {

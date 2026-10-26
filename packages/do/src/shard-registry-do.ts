@@ -47,17 +47,27 @@
  *
  * Responses are JSON; the client shapes them. Keep the surface narrow.
  *
- * Every route requires a request signed with `LUNORA_RELAY_SECRET` (403 otherwise),
- * and without that secret no route answers at all. The signature covers the method,
- * path and query, and the body; see `shardRegistryFrame`.
+ * Every request must carry an `x-lunora-relay-sig` HMAC (see
+ * {@link shardRegistryFrame}) under `LUNORA_RELAY_SECRET`, and a DO without that
+ * secret refuses all of them. The registry decides which shards every
+ * cross-shard export, sync and migration reaches, and any code holding the
+ * namespace binding can address it, so network isolation alone is not enough.
  */
-import { RELAY_SIGNATURE_HEADER, siblingSecretOf, signSiblingBody, verifySiblingBody } from "@lunora/shard-engine";
+import { RELAY_SIGNATURE_HEADER, siblingSecretOf, signSiblingBody, stubByName, verifySiblingBody } from "@lunora/shard-engine";
 
 import { jsonResponse } from "../../../shared/json-response";
+import { readBodyTextCapped } from "../../../shared/read-body-text-capped";
 import { shardRegistryFrame } from "../../../shared/shard-registry-frame";
 
 /** Ceiling on one registry round trip from a shard. */
 const REGISTER_TIMEOUT_MS = 5000;
+
+/**
+ * Largest request body the registry buffers. It is read before the signature can be
+ * checked, so this bounds what an unauthenticated caller can make the DO hold. A
+ * registration is one table name and one shard key.
+ */
+const MAX_REQUEST_BYTES = 64 * 1024;
 
 /** Conventional DO instance name, passed to `idFromName` to address the single registry instance. */
 const SHARD_REGISTRY_DO_NAME: string = "__lunora_shard_registry__";
@@ -120,7 +130,13 @@ const readTableShardBody = (raw: string): { kind: "error"; response: Response } 
     let body: { shardKey?: unknown; table?: unknown };
 
     try {
-        body = JSON.parse(raw) as { shardKey?: unknown; table?: unknown };
+        const parsed: unknown = JSON.parse(raw);
+
+        if (parsed === null || typeof parsed !== "object") {
+            throw new TypeError("not an object");
+        }
+
+        body = parsed;
     } catch {
         return { kind: "error", response: jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400) };
     }
@@ -153,9 +169,10 @@ const readTableShardBody = (raw: string): { kind: "error"; response: Response } 
 
 /**
  * Concrete (not abstract) DO class. Apps register this binding in their
- * `wrangler.jsonc` as `SHARD_REGISTRY` (or any name) — no subclassing
- * required. The runtime's `createDynamicShardRegistry` takes the namespace
- * binding and the conventional instance name and produces a `ShardRegistry`.
+ * `wrangler.jsonc` as `SHARD_REGISTRY` — the name the hosted entrypoint and
+ * binding inference both read — with no subclassing required. The runtime's
+ * `createDynamicShardRegistry` takes the namespace binding and the conventional
+ * instance name and produces a `ShardRegistry`.
  */
 class ShardRegistryDO {
     protected env: unknown;
@@ -185,26 +202,30 @@ class ShardRegistryDO {
     }
 
     public async fetch(request: Request): Promise<Response> {
-        // Fail closed: without the relay secret no route answers, GET included, and the table is never loaded.
-        if (siblingSecretOf(this.env) === undefined) {
-            return jsonResponse({ error: { code: "FORBIDDEN", message: "shard registry requires LUNORA_RELAY_SECRET" } }, 403);
+        const unsigned = this.refuseUnsigned(request);
+
+        if (unsigned) {
+            return unsigned;
         }
 
-        // Refuse before the body is read: a request with no signature cannot verify, and buffering its body first is memory the caller spends for free.
-        const signature = request.headers.get(RELAY_SIGNATURE_HEADER);
+        const raw = await readBodyTextCapped(request, MAX_REQUEST_BYTES);
 
-        if (signature === null) {
-            return jsonResponse({ error: { code: "FORBIDDEN", message: "missing or invalid shard registry signature" } }, 403);
+        if (raw === null) {
+            return jsonResponse(
+                { error: { code: "PAYLOAD_TOO_LARGE", message: `shard registry requests are capped at ${String(MAX_REQUEST_BYTES)} bytes` } },
+                413,
+            );
         }
 
-        const url = new URL(request.url);
-        const raw = await request.text();
+        const forged = await this.refuseBadSignature(request, raw);
 
-        if (!(await verifySiblingBody(this.env, signature, shardRegistryFrame(request.method, url, raw)))) {
-            return jsonResponse({ error: { code: "FORBIDDEN", message: "missing or invalid shard registry signature" } }, 403);
+        if (forged) {
+            return forged;
         }
 
         await this.ensureLoaded();
+
+        const url = new URL(request.url);
 
         if (request.method === "POST" && url.pathname === "/register") {
             return this.handleRegister(raw);
@@ -223,6 +244,38 @@ class ShardRegistryDO {
         }
 
         return jsonResponse({ error: { code: "NOT_FOUND", message: `unknown shard-registry route ${request.method} ${url.pathname}` } }, 404);
+    }
+
+    /**
+     * Refuse a request that cannot be signed, before its body is read: a DO without
+     * `LUNORA_RELAY_SECRET`, or a request without a signature header. `verifySiblingBody`
+     * alone passes an unconfigured DO (the relay channel's legacy network-trust), which
+     * is the hole this closes, so a missing secret is its own refusal.
+     */
+    private refuseUnsigned(request: Request): Response | undefined {
+        if (siblingSecretOf(this.env) === undefined) {
+            return jsonResponse(
+                { error: { code: "FORBIDDEN", message: "the shard registry requires LUNORA_RELAY_SECRET to be set on the Durable Object's environment" } },
+                403,
+            );
+        }
+
+        if (!request.headers.has(RELAY_SIGNATURE_HEADER)) {
+            return jsonResponse({ error: { code: "FORBIDDEN", message: "missing or invalid shard registry signature" } }, 403);
+        }
+
+        return undefined;
+    }
+
+    /** Refuse a request whose signature does not cover its body, once the body has been read. */
+    private async refuseBadSignature(request: Request, raw: string): Promise<Response | undefined> {
+        const frame = shardRegistryFrame(request.method, request.url, raw);
+
+        if (!(await verifySiblingBody(this.env, request.headers.get(RELAY_SIGNATURE_HEADER), frame))) {
+            return jsonResponse({ error: { code: "FORBIDDEN", message: "missing or invalid shard registry signature" } }, 403);
+        }
+
+        return undefined;
     }
 
     /**
@@ -272,7 +325,7 @@ class ShardRegistryDO {
         return jsonResponse({ shardKeys: [...(this.tables.get(table) ?? [])] }, 200);
     }
 
-    private handleRegister(raw: string): Response | Promise<Response> {
+    private async handleRegister(raw: string): Promise<Response> {
         const parsed = readTableShardBody(raw);
 
         if (parsed.kind === "error") {
@@ -313,7 +366,7 @@ class ShardRegistryDO {
         return jsonResponse({ tables: this.serializeTables() }, 200);
     }
 
-    private handleUnregister(raw: string): Response | Promise<Response> {
+    private async handleUnregister(raw: string): Promise<Response> {
         const parsed = readTableShardBody(raw);
 
         if (parsed.kind === "error") {
@@ -359,23 +412,26 @@ type RegistryStub = { fetch: (url: string, init?: RequestInit) => Promise<Respon
 /**
  * `POST` one `(table, shardKey)` pair to {@link ShardRegistryDO}'s `/register` or
  * `/unregister` route — the client half for a caller inside `@lunora/do` (the
- * runtime's `createDynamicShardRegistry` is the worker-side twin). The request is
- * signed with `LUNORA_RELAY_SECRET` read from `env`. Throws on a non-2xx answer,
- * and before sending when the secret is not configured.
+ * runtime's `createDynamicShardRegistry` is the worker-side twin). Throws on a
+ * non-2xx answer, and without a `secret` before sending anything: the registry
+ * would refuse the request, and the clearer failure is the one that names why.
  */
-const postRegistration = async (stub: RegistryStub, route: "/register" | "/unregister", table: string, shardKey: string, env: unknown): Promise<void> => {
-    const secret = siblingSecretOf(env);
-
+const postRegistration = async (
+    stub: RegistryStub,
+    route: "/register" | "/unregister",
+    table: string,
+    shardKey: string,
+    secret: string | undefined,
+): Promise<void> => {
     if (secret === undefined) {
-        throw new Error("shard registry requires LUNORA_RELAY_SECRET");
+        throw new Error("the shard registry requires LUNORA_RELAY_SECRET; set it on the worker and every Durable Object");
     }
 
-    const url = new URL(`https://shard-registry.internal${route}`);
+    const url = `https://shard-registry.internal${route}`;
     const body = JSON.stringify({ shardKey, table });
-    const signature = await signSiblingBody(secret, shardRegistryFrame("POST", url, body));
-    const response = await stub.fetch(url.href, {
+    const response = await stub.fetch(url, {
         body,
-        headers: { "content-type": "application/json", [RELAY_SIGNATURE_HEADER]: signature },
+        headers: { "content-type": "application/json", [RELAY_SIGNATURE_HEADER]: await signSiblingBody(secret, shardRegistryFrame("POST", url, body)) },
         method: "POST",
         // Bounded, so a stuck registry cannot pin the shard's background work.
         signal: AbortSignal.timeout(REGISTER_TIMEOUT_MS),
@@ -386,10 +442,104 @@ const postRegistration = async (stub: RegistryStub, route: "/register" | "/unreg
     }
 };
 
-const registerShardKey = async (stub: RegistryStub, table: string, shardKey: string, env: unknown): Promise<void> =>
-    postRegistration(stub, "/register", table, shardKey, env);
+const registerShardKey = async (stub: RegistryStub, table: string, shardKey: string, secret: string | undefined): Promise<void> =>
+    postRegistration(stub, "/register", table, shardKey, secret);
 
-const unregisterShardKey = async (stub: RegistryStub, table: string, shardKey: string, env: unknown): Promise<void> =>
-    postRegistration(stub, "/unregister", table, shardKey, env);
+const unregisterShardKey = async (stub: RegistryStub, table: string, shardKey: string, secret: string | undefined): Promise<void> =>
+    postRegistration(stub, "/unregister", table, shardKey, secret);
 
-export { registerShardKey, SHARD_REGISTRY_DO_NAME, ShardRegistryDO, unregisterShardKey };
+/**
+ * `GET` a read route of {@link ShardRegistryDO} with the same signed frame the DO
+ * verifies. Throws on a non-2xx answer, like {@link postRegistration}.
+ */
+const readRegistration = async (stub: RegistryStub, path: string, secret: string | undefined): Promise<Record<string, unknown>> => {
+    if (secret === undefined) {
+        throw new Error("the shard registry requires LUNORA_RELAY_SECRET; set it on the worker and every Durable Object");
+    }
+
+    const url = `https://shard-registry.internal${path}`;
+    const response = await stub.fetch(url, {
+        headers: { [RELAY_SIGNATURE_HEADER]: await signSiblingBody(secret, shardRegistryFrame("GET", url, "")) },
+        method: "GET",
+        signal: AbortSignal.timeout(REGISTER_TIMEOUT_MS),
+    });
+
+    if (!response.ok) {
+        throw new Error(`shard registry ${path.split("?")[0] ?? path} returned ${String(response.status)}: ${await response.text()}`);
+    }
+
+    // The registry answers its own routes, so the body is its JSON shape, parsed once here.
+    return await response.json();
+};
+
+/**
+ * The registry's read and write surface, as a worker calls it. Each method is an
+ * RPC on the worker that hosts the registry, so a caller that holds only that
+ * worker's service binding needs no secret.
+ */
+interface ShardRegistryRpc {
+    listShardKeys: (table: string) => Promise<string[]>;
+    register: (table: string, shardKey: string) => Promise<void>;
+    snapshot: () => Promise<Record<string, string[]>>;
+    unregister: (table: string, shardKey: string) => Promise<void>;
+}
+
+/**
+ * Whether a registry binding is a Durable Object namespace, which this worker signs
+ * into directly, rather than the RPC surface of the worker that hosts the registry.
+ */
+
+/**
+ * Whether a binding is a service binding's RPC surface for the registry: the methods the host's
+ * `ShardRegistryEntrypoint` defines. Anything without them is neither a namespace nor a registry.
+ */
+const isRegistryRpc = (binding: unknown): binding is ShardRegistryRpc => {
+    // A service binding's stub has no static type here, so the methods are checked by shape.
+    const rpc = binding as Partial<ShardRegistryRpc> | undefined;
+
+    return typeof rpc?.register === "function" && typeof rpc.unregister === "function";
+};
+
+// An RPC stub is a proxy that can answer any property, so `idFromName` alone does not prove a namespace: the
+// registry's RPC methods are checked first.
+const isRegistryNamespace = (binding: unknown): boolean =>
+    !isRegistryRpc(binding) && typeof binding === "object" && binding !== null && "idFromName" in binding && typeof binding.idFromName === "function";
+
+/**
+ * The registry, as the host worker calls its own Durable Object namespace. The
+ * generated `ShardRegistryEntrypoint` delegates to this: its methods are the RPC
+ * surface a client worker reaches through a service binding. Signed with
+ * `LUNORA_RELAY_SECRET`, which only the host holds.
+ */
+const hostedShardRegistry = (env: unknown, jurisdiction?: string): ShardRegistryRpc => {
+    const registry = (): RegistryStub => {
+        // The framework provisions the host's registry binding as `SHARD_REGISTRY`, so the entrypoint reads that name.
+        const binding = typeof env === "object" && env !== null && "SHARD_REGISTRY" in env ? env.SHARD_REGISTRY : undefined;
+        const stub = stubByName(binding, SHARD_REGISTRY_DO_NAME, jurisdiction);
+
+        if (stub === undefined) {
+            throw new Error("the shard registry entrypoint needs this worker's Durable Object namespace bound as SHARD_REGISTRY");
+        }
+
+        return stub;
+    };
+    const secret = (): string | undefined => siblingSecretOf(env);
+
+    return {
+        listShardKeys: async (table) => {
+            const body = await readRegistration(registry(), `/list?table=${encodeURIComponent(table)}`, secret());
+
+            return body["shardKeys"] as string[];
+        },
+        register: async (table, shardKey) => registerShardKey(registry(), table, shardKey, secret()),
+        snapshot: async () => {
+            const body = await readRegistration(registry(), "/snapshot", secret());
+
+            return body["tables"] as Record<string, string[]>;
+        },
+        unregister: async (table, shardKey) => unregisterShardKey(registry(), table, shardKey, secret()),
+    };
+};
+
+export type { ShardRegistryRpc };
+export { hostedShardRegistry, isRegistryNamespace, isRegistryRpc, registerShardKey, SHARD_REGISTRY_DO_NAME, ShardRegistryDO, unregisterShardKey };

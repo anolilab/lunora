@@ -1,6 +1,7 @@
-import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
+import { ADMIN_FUNCTIONS, RELAY_SIGNATURE_HEADER, signSiblingBody } from "@lunora/shard-engine";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { shardRegistryFrame } from "../../../shared/shard-registry-frame";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import { SHARD_REGISTRY_DO_NAME } from "../src/shard-registry-do";
@@ -9,8 +10,7 @@ import createSqliteExec from "./_helpers/node-sqlite";
 let database: ReturnType<typeof createSqliteExec>;
 
 const ADMIN_TOKEN = "admin-token";
-const RELAY_SECRET = "s3cret";
-const SHARD_ENV: Record<string, unknown> = { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_RELAY_SECRET: RELAY_SECRET };
+const RELAY_SECRET = "test-relay-secret";
 
 const makeState = (name = "channel-1", jurisdiction?: string): ShardDOState => {
     database = createSqliteExec();
@@ -31,9 +31,14 @@ interface RegistryCall {
     route: string;
 }
 
-/** A registry namespace that records every `/register` call and answers `status`. */
-const fakeRegistry = (status = 200): { calls: RegistryCall[]; namespace: unknown; setStatus: (next: number) => void } => {
+/**
+ * A registry namespace that records every `/register` call and answers `status`.
+ * `unverified` lists the routes whose signature did not verify under the relay
+ * secret, which the real registry would have refused.
+ */
+const fakeRegistry = (status = 200): { calls: RegistryCall[]; namespace: unknown; setStatus: (next: number) => void; unverified: string[] } => {
     const calls: RegistryCall[] = [];
+    const unverified: string[] = [];
     let current = status;
 
     const namespaceFor = (jurisdiction?: string): unknown => {
@@ -41,7 +46,14 @@ const fakeRegistry = (status = 200): { calls: RegistryCall[]; namespace: unknown
             get: (name: string) => {
                 return {
                     fetch: async (url: string, init?: RequestInit) => {
-                        calls.push({ body: JSON.parse(init?.body as string), jurisdiction, name, route: new URL(url).pathname });
+                        const route = new URL(url).pathname;
+                        const expected = await signSiblingBody(RELAY_SECRET, shardRegistryFrame("POST", url, init?.body as string));
+
+                        if ((init?.headers as Record<string, string>)[RELAY_SIGNATURE_HEADER] !== expected) {
+                            unverified.push(route);
+                        }
+
+                        calls.push({ body: JSON.parse(init?.body as string), jurisdiction, name, route });
 
                         return new Response("{}", { status: current });
                     },
@@ -58,6 +70,7 @@ const fakeRegistry = (status = 200): { calls: RegistryCall[]; namespace: unknown
         setStatus: (next) => {
             current = next;
         },
+        unverified,
     };
 };
 
@@ -65,9 +78,9 @@ class RegistryShard extends ShardDO {
     public constructor(
         state: ShardDOState,
         private readonly registryNamespace: unknown,
-        env: Record<string, unknown> = SHARD_ENV,
+        relaySecret: null | string = RELAY_SECRET,
     ) {
-        super(state, env);
+        super(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, ...(relaySecret === null ? {} : { LUNORA_RELAY_SECRET: relaySecret }) });
     }
 
     // eslint-disable-next-line class-methods-use-this -- override stub; this suite drives the flush directly
@@ -127,17 +140,33 @@ describe("shardDO — shard registry", () => {
         ]);
     });
 
-    it("sends no registration without the relay secret, and logs that as the reason", async () => {
+    it("signs its registrations and releases with the relay secret", async () => {
+        expect.assertions(2);
+
+        const registry = fakeRegistry();
+        const shard = new RegistryShard(makeState(), registry.namespace);
+
+        await shard.write("messages");
+        await shard.release(["messages"]);
+
+        expect(registry.calls.map((call) => call.route)).toStrictEqual(["/register", "/unregister"]);
+        expect(registry.unverified).toStrictEqual([]);
+    });
+
+    it("sends nothing to the registry without a relay secret, and says why", async () => {
         expect.assertions(2);
 
         const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
         const registry = fakeRegistry();
-        const shard = new RegistryShard(makeState(), registry.namespace, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new RegistryShard(makeState(), registry.namespace, null);
 
         await shard.write("messages");
 
         expect(registry.calls).toStrictEqual([]);
-        expect(error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: "shard registry requires LUNORA_RELAY_SECRET" }));
+        expect(error).toHaveBeenCalledWith(
+            expect.stringContaining('could not register shard "channel-1"'),
+            expect.objectContaining({ message: expect.stringContaining("LUNORA_RELAY_SECRET") }),
+        );
     });
 
     it("registers in the shard's own jurisdiction, where the worker reads the registry", async () => {

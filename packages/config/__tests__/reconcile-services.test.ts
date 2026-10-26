@@ -44,6 +44,8 @@ const inferred = (services: ServiceBindingIR[] | undefined): InferredBindings =>
         usesPipelines: false,
         usesR2sql: false,
         usesScheduler: false,
+        hostsEventLog: false,
+        hostsShardRegistry: false,
         usesStorage: false,
         usesWorkerLoader: false,
         usesX402Charge: false,

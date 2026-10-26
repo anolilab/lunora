@@ -11,20 +11,17 @@ import { describe, expect, it } from "vitest";
 import { shardRegistryFrame } from "../../../../shared/shard-registry-frame";
 import { roleNamespace } from "../../src/merge-durable-objects";
 
+/** The secret `TestShardRegistryRole` in test-worker.ts gives the registry it hosts. */
+const REGISTRY_SECRET = "workerd-test-relay-secret";
+
+const signedRequest = async (method: "GET" | "POST", url: string, body = ""): Promise<Request> =>
+    new Request(url, {
+        body: method === "POST" ? body : undefined,
+        headers: { [RELAY_SIGNATURE_HEADER]: await signSiblingBody(REGISTRY_SECRET, shardRegistryFrame(method, url, body)) },
+        method,
+    });
+
 const text = async (response: Response): Promise<string> => await response.text();
-
-/** A registry request signed with the workerd project's relay secret, as a shard or worker signs one. */
-const signedRegistryRequest = async (method: string, url: string, body = ""): Promise<Request> => {
-    const secret = (env as { LUNORA_RELAY_SECRET?: string }).LUNORA_RELAY_SECRET;
-
-    if (secret === undefined) {
-        throw new Error("the workerd project must provision LUNORA_RELAY_SECRET");
-    }
-
-    const signature = await signSiblingBody(secret, shardRegistryFrame(method, new URL(url), body));
-
-    return new Request(url, { body: body === "" ? undefined : body, headers: { [RELAY_SIGNATURE_HEADER]: signature }, method });
-};
 
 /** Re-read until the alarm has recorded something, at most `attempts` times, 20ms apart. */
 const pollFired = async (read: () => Promise<string>, attempts: number): Promise<string> => {
@@ -58,14 +55,14 @@ describe("mergeDurableObjects (workerd)", () => {
         // `blockConcurrencyWhile` over storage, which must work through the merge.
         const registry = roleNamespace(env.MERGED, "shardRegistry").getByName("__lunora_shard_registry__");
         const registered = await registry.fetch(
-            await signedRegistryRequest("POST", "https://do.internal/register", JSON.stringify({ shardKey: "user-42", table: "posts" })),
+            await signedRequest("POST", "https://do.internal/register", JSON.stringify({ shardKey: "user-42", table: "posts" })),
         );
 
         await registered.arrayBuffer();
 
         expect(registered.ok).toBe(true);
         await expect(
-            registry.fetch(await signedRegistryRequest("GET", "https://do.internal/list?table=posts")).then(async (response) => await response.json()),
+            registry.fetch(await signedRequest("GET", "https://do.internal/list?table=posts")).then(async (response) => await response.json()),
         ).resolves.toStrictEqual({
             shardKeys: ["user-42"],
         });

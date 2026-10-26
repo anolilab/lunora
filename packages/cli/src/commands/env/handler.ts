@@ -7,8 +7,8 @@ import {
     DEV_VARS_KEY_PATTERN,
     generateSecretValue,
     inferLunoraBindings,
-    isMintableSecretKey,
     isPlaceholderValue,
+    mintableSecretKeysFor,
     parseDevVariableEntries,
     removeDevVariableLine,
     requiredSecrets,
@@ -473,10 +473,11 @@ const resolveMintableKeys = async (context: EnvContext): Promise<string[]> => {
         // Scan failure → fall back to the core secret + whatever is already local.
     }
 
+    const mintable = mintableSecretKeysFor(packages);
     const fromPackages = requiredSecrets(packages)
         .map((entry) => entry.key)
-        .filter((key) => isMintableSecretKey(key));
-    const fromLocal = [...loadDevVariables(context.devVariablesPath).keys()].filter((key) => isMintableSecretKey(key));
+        .filter((key) => mintable.has(key));
+    const fromLocal = [...loadDevVariables(context.devVariablesPath).keys()].filter((key) => mintable.has(key));
 
     return [...new Set([...fromPackages, ...fromLocal])];
 };

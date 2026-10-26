@@ -705,6 +705,17 @@ class ShardRegistryDO {
 }
 ```
 
+### `ShardRegistryRpc` (interface)
+
+```ts
+interface ShardRegistryRpc {
+    listShardKeys: (table: string) => Promise<string[]>;
+    register: (table: string, shardKey: string) => Promise<void>;
+    snapshot: () => Promise<Record<string, string[]>>;
+    unregister: (table: string, shardKey: string) => Promise<void>;
+}
+```
+
 ### `SourceClientLike` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -879,6 +890,12 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 ### `exportShardRows` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `hostedShardRegistry` (const)
+
+```ts
+const hostedShardRegistry: (env: unknown, jurisdiction?: string) => ShardRegistryRpc;
+```
 
 ### `importShardRows` (const)
 

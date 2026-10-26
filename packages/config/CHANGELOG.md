@@ -1,3 +1,23 @@
+## @lunora/config [1.0.0-alpha.406](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.405...@lunora/config@1.0.0-alpha.406) (2026-10-25)
+
+### Bug Fixes
+
+* **config:** celld audit fixes ([#1283](https://github.com/anolilab/lunora/issues/1283)) ([6fd7854](https://github.com/anolilab/lunora/commit/6fd78547928d41d3569ba71cf94683dac7f49b94))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.352
+* **@lunora/seed:** upgraded to 1.0.0-alpha.254
+* **@lunora/studio:** upgraded to 1.0.0-alpha.341
+
+## @lunora/config [1.0.0-alpha.405](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.404...@lunora/config@1.0.0-alpha.405) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.340
+
 ## @lunora/config [1.0.0-alpha.404](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.403...@lunora/config@1.0.0-alpha.404) (2026-10-25)
 
 ### Bug Fixes

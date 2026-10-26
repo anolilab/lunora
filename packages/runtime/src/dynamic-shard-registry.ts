@@ -8,12 +8,16 @@
  *
  * # Wiring
  *
- * 1. Bind the `ShardRegistryDO` class in `wrangler.jsonc` as `SHARD_REGISTRY`
- * (or any name; the namespace binding is passed in).
+ * 1. The worker that hosts the registry binds `ShardRegistryDO` as `SHARD_REGISTRY`
+ * (or any name). A worker that calls a registry another worker hosts binds that
+ * worker's `ShardRegistryEntrypoint` as a service binding instead, and needs no secret.
  * 2. Construct the client once per worker request:
  *
  * ```ts
+ * // Hosting the registry: the namespace, signed with `LUNORA_RELAY_SECRET`.
  * const registry = createDynamicShardRegistry({ env, namespace: env.SHARD_REGISTRY });
+ * // Calling another worker's registry: its service binding, with no secret.
+ * const remote = createDynamicShardRegistry({ namespace: env.SERVICE_REGISTRY });
  * const coordinator = createQueryCoordinator({ registry });
  * ```
  *
@@ -68,35 +72,54 @@ const DEFAULT_REGISTRY_CACHE_TTL_MS: number = 30_000;
  */
 const REGISTRY_BASE_URL = "https://shard-registry.internal";
 
+/**
+ * The registry as the worker that hosts it exposes it over RPC: the methods of the
+ * host's `ShardRegistryEntrypoint`, reached through a service binding. The binding is
+ * the capability, so a caller holding it needs no secret.
+ */
+interface ShardRegistryRpc {
+    listShardKeys: (table: string) => Promise<string[]>;
+    register: (table: string, shardKey: string) => Promise<void>;
+    snapshot: () => Promise<Record<string, string[]>>;
+    unregister: (table: string, shardKey: string) => Promise<void>;
+}
+
 interface DynamicShardRegistryOptions {
     /**
      * Override the in-process per-table cache TTL. Set to `0` to disable
-     * caching (every `listShardKeys` call hits the DO — useful only for
+     * caching (every `listShardKeys` call hits the registry — useful only for
      * tests).
      */
     cacheTtlMs?: number;
 
     /**
-     * The Worker env. Every request is signed with `LUNORA_RELAY_SECRET` read from
-     * it, and construction throws when that secret is not set.
+     * The worker's `env`, read for `LUNORA_RELAY_SECRET` when `namespace` is a Durable
+     * Object namespace. Every request to the registry is signed with it and the registry
+     * refuses any that is not. Not needed for a service binding, which needs no secret.
      */
-    env: unknown;
+    env?: unknown;
 
     /**
      * DO instance name. Defaults to {@link SHARD_REGISTRY_DO_NAME}. Override
-     * only if you run multiple isolated registries in one environment.
+     * only if you run multiple isolated registries in one environment. Applies to a
+     * Durable Object namespace only.
      */
     instanceName?: string;
 
     /**
      * Pin the registry DO to a Cloudflare data-residency jurisdiction. Pass the
      * same value as the worker's `jurisdiction` so the registry co-locates with
-     * the shards it tracks. Omit for the un-pinned global namespace.
+     * the shards it tracks. Omit for the un-pinned global namespace. Applies to a
+     * Durable Object namespace only.
      */
     jurisdiction?: DurableObjectJurisdiction;
 
-    /** DO namespace binding (`env.SHARD_REGISTRY`). */
-    namespace: ShardNamespaceLike;
+    /**
+     * The registry: `env.SHARD_REGISTRY` as a Durable Object namespace when this worker
+     * hosts the registry, or as a service binding to the host's `ShardRegistryEntrypoint`
+     * when another worker hosts it.
+     */
+    namespace: ShardNamespaceLike | ShardRegistryRpc;
 }
 
 /**
@@ -123,25 +146,32 @@ interface CacheEntry {
     shardKeys: ReadonlyArray<string>;
 }
 
+/** The registry's reads and writes, whichever way this worker reaches it. */
+interface RegistryTransport {
+    list: (table: string) => Promise<ReadonlyArray<string>>;
+    register: (table: string, shardKey: string) => Promise<void>;
+    snapshot: () => Promise<Record<string, ReadonlyArray<string>>>;
+    unregister: (table: string, shardKey: string) => Promise<void>;
+}
+
+/**
+ * Whether a binding is a Durable Object namespace rather than a service binding's RPC stub.
+ * Checked here instead of imported from `@lunora/do`, which `@lunora/runtime` must not depend on.
+ */
+// An RPC stub is a proxy that can answer any property, so the registry's RPC methods are checked first.
+const isDurableObjectNamespace = (binding: ShardNamespaceLike | ShardRegistryRpc): binding is ShardNamespaceLike =>
+    typeof (binding as Partial<ShardRegistryRpc>).register !== "function" && "idFromName" in binding && typeof binding.idFromName === "function";
+
 const decodeJson = async <T>(response: Response): Promise<T> =>
-    // Response.json() throws on non-JSON; the DO always returns JSON so this
-    // only surfaces if the DO route is misbehaving — let it bubble.
+    // Response.json() throws on non-JSON; the registry always returns JSON so this
+    // only surfaces if the registry route is misbehaving — let it bubble.
     await response.json();
-const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): DynamicShardRegistry => {
+
+/** The transport for a Durable Object namespace: the registry's routes, each signed with `LUNORA_RELAY_SECRET`. */
+const signedRegistry = (options: DynamicShardRegistryOptions & { namespace: ShardNamespaceLike }): RegistryTransport => {
     const instanceName = options.instanceName ?? SHARD_REGISTRY_DO_NAME;
-    const cacheTtlMs = options.cacheTtlMs ?? DEFAULT_REGISTRY_CACHE_TTL_MS;
-    const cache = new Map<string, CacheEntry>();
-    // The `/list` in flight per table, so concurrent misses share one request. Cleared with `cache`, so a
-    // caller that just registered never joins a list that started before the registration.
-    const pending = new Map<string, Promise<ReadonlyArray<string>>>();
     // Pin the registry DO to the configured jurisdiction (unchanged when unset).
     const namespace = applyJurisdiction(options.namespace, options.jurisdiction);
-
-    const secret = siblingSecretOf(options.env);
-
-    if (secret === undefined) {
-        throw new LunoraError("createDynamicShardRegistry requires LUNORA_RELAY_SECRET in env");
-    }
 
     // Resolved per call, never cached: a registry is built once per isolate
     // (the generated worker memoizes its options), and workerd refuses I/O on
@@ -149,22 +179,92 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
     // first request and throws on every one after it.
     const stub = (): ResolvedShard => resolveShard(namespace, instanceName);
 
-    // Built from one URL and sent as that URL's href, so the path the registry verifies is the path it receives.
-    const send = async (method: "GET" | "POST", path: string, body = ""): Promise<Response> => {
-        const url = new URL(`${REGISTRY_BASE_URL}${path}`);
-        const signature = await signSiblingBody(secret, shardRegistryFrame(method, url, body));
-        const headers: Record<string, string> = { [RELAY_SIGNATURE_HEADER]: signature };
+    const send = async (method: "GET" | "POST", path: string, body?: unknown): Promise<Response> => {
+        const secret = siblingSecretOf(options.env);
 
-        if (method === "POST") {
+        if (secret === undefined) {
+            throw new LunoraError("the shard registry requires LUNORA_RELAY_SECRET; set it on the worker and every Durable Object", {
+                code: "RELAY_MISCONFIGURED",
+            });
+        }
+
+        const url = `${REGISTRY_BASE_URL}${path}`;
+        const payload = body === undefined ? undefined : JSON.stringify(body);
+        const headers: Record<string, string> = { [RELAY_SIGNATURE_HEADER]: await signSiblingBody(secret, shardRegistryFrame(method, url, payload ?? "")) };
+
+        if (payload !== undefined) {
             headers["content-type"] = "application/json";
         }
 
-        return stub().fetch(new Request(url.href, { body: method === "POST" ? body : undefined, headers, method }));
+        return stub().fetch(new Request(url, { body: payload, headers, method }));
     };
 
-    const post = (path: string, body: unknown): Promise<Response> => send("POST", path, JSON.stringify(body));
+    const post = async (path: string, body: unknown): Promise<Response> => send("POST", path, body);
 
-    const get = (path: string): Promise<Response> => send("GET", path);
+    const get = async (path: string): Promise<Response> => send("GET", path);
+
+    return {
+        async list(table) {
+            const response = await get(`/list?table=${encodeURIComponent(table)}`);
+
+            if (!response.ok) {
+                throw new LunoraError(`shard registry /list returned ${String(response.status)}`);
+            }
+
+            const { shardKeys } = await decodeJson<{ shardKeys: ReadonlyArray<string> }>(response);
+
+            return shardKeys;
+        },
+
+        async register(table, shardKey) {
+            const response = await post("/register", { shardKey, table });
+
+            if (!response.ok) {
+                throw new LunoraError(`shard registry /register returned ${String(response.status)}`);
+            }
+        },
+
+        async snapshot() {
+            const response = await get("/snapshot");
+
+            if (!response.ok) {
+                throw new LunoraError(`shard registry /snapshot returned ${String(response.status)}`);
+            }
+
+            const { tables } = await decodeJson<{ tables: Record<string, ReadonlyArray<string>> }>(response);
+
+            return tables;
+        },
+
+        async unregister(table, shardKey) {
+            const response = await post("/unregister", { shardKey, table });
+
+            if (!response.ok) {
+                throw new LunoraError(`shard registry /unregister returned ${String(response.status)}`);
+            }
+        },
+    };
+};
+
+/** The transport for a service binding: the host's RPC surface, which carries the capability itself. */
+const rpcRegistry = (rpc: ShardRegistryRpc): RegistryTransport => {
+    return {
+        list: async (table) => rpc.listShardKeys(table),
+        register: async (table, shardKey) => rpc.register(table, shardKey),
+        snapshot: async () => rpc.snapshot(),
+        unregister: async (table, shardKey) => rpc.unregister(table, shardKey),
+    };
+};
+
+const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): DynamicShardRegistry => {
+    const cacheTtlMs = options.cacheTtlMs ?? DEFAULT_REGISTRY_CACHE_TTL_MS;
+    const cache = new Map<string, CacheEntry>();
+    // The `/list` in flight per table, so concurrent misses share one request. Cleared with `cache`, so a
+    // caller that just registered never joins a list that started before the registration.
+    const pending = new Map<string, Promise<ReadonlyArray<string>>>();
+    const transport = isDurableObjectNamespace(options.namespace)
+        ? signedRegistry({ ...options, namespace: options.namespace })
+        : rpcRegistry(options.namespace);
 
     return {
         invalidate(table) {
@@ -193,19 +293,9 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
                 return inFlight;
             }
 
-            const request = (async (): Promise<ReadonlyArray<string>> => {
-                const response = await get(`/list?table=${encodeURIComponent(table)}`);
+            const request = transport.list(table);
 
-                if (!response.ok) {
-                    throw new LunoraError(`shard registry /list returned ${String(response.status)}`);
-                }
-
-                const { shardKeys } = await decodeJson<{ shardKeys: ReadonlyArray<string> }>(response);
-
-                return shardKeys;
-            })();
-
-            // With caching off, every call is meant to reach the DO, so nothing is shared.
+            // With caching off, every call is meant to reach the registry, so nothing is shared.
             if (cacheTtlMs > 0) {
                 pending.set(table, request);
             }
@@ -228,11 +318,7 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
         },
 
         async register(table, shardKey) {
-            const response = await post("/register", { shardKey, table });
-
-            if (!response.ok) {
-                throw new LunoraError(`shard registry /register returned ${String(response.status)}`);
-            }
+            await transport.register(table, shardKey);
 
             // Bust the local cache so the next listShardKeys reflects the
             // change immediately on this worker. Other isolates will see it
@@ -242,23 +328,11 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
         },
 
         async snapshot() {
-            const response = await get("/snapshot");
-
-            if (!response.ok) {
-                throw new LunoraError(`shard registry /snapshot returned ${String(response.status)}`);
-            }
-
-            const { tables } = await decodeJson<{ tables: Record<string, ReadonlyArray<string>> }>(response);
-
-            return tables;
+            return transport.snapshot();
         },
 
         async unregister(table, shardKey) {
-            const response = await post("/unregister", { shardKey, table });
-
-            if (!response.ok) {
-                throw new LunoraError(`shard registry /unregister returned ${String(response.status)}`);
-            }
+            await transport.unregister(table, shardKey);
 
             cache.delete(table);
             pending.delete(table);
@@ -267,4 +341,4 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
 };
 
 export { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME };
-export type { DynamicShardRegistry, DynamicShardRegistryOptions };
+export type { DynamicShardRegistry, DynamicShardRegistryOptions, ShardRegistryRpc };

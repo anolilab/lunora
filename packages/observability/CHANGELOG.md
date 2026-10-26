@@ -1,3 +1,16 @@
+## @lunora/observability [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.169...@lunora/observability@1.0.0-alpha.170) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.158
+
+## @lunora/observability [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.168...@lunora/observability@1.0.0-alpha.169) (2026-10-25)
+
+### Bug Fixes
+
+* **observability:** namespace prune marker keys ([#1334](https://github.com/anolilab/lunora/issues/1334)) ([fefcf54](https://github.com/anolilab/lunora/commit/fefcf54d41a9fc89d75cae334a75adeef5ea263e))
+
 ## @lunora/observability [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.167...@lunora/observability@1.0.0-alpha.168) (2026-10-25)
 
 ### Bug Fixes
