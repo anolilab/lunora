@@ -310,8 +310,16 @@ const identityHeaderByClaimsJson = new Map<string, string>();
 
 const IDENTITY_HEADER_MEMO_MAX_ENTRIES = 256;
 
+/** Longer claims JSON is encoded on every request, so one oversized identity cannot pin a large entry. */
+const IDENTITY_HEADER_MEMO_MAX_CHARS = 2048;
+
 const memoizedIdentityHeader = (claims: Record<string, unknown>): string => {
     const json = JSON.stringify(claims);
+
+    if (json.length > IDENTITY_HEADER_MEMO_MAX_CHARS) {
+        return encodeIdentityHeaderJson(json);
+    }
+
     const cached = identityHeaderByClaimsJson.get(json);
 
     if (cached !== undefined) {
