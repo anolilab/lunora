@@ -2219,9 +2219,9 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             expect(result.generated.app).toContain("public auth(");
             // Loaded on the first event, not at isolate startup: types only at module scope, and the
-            // loaded module names its imports so the bundler can drop the rest of the barrel.
+            // loaded module imports from `@lunora/auth/worker`, so the barrel stays out of the `import()`.
             expect(result.generated.app).toContain('import type * as LunoraAuthModule from "./authModule.js";');
-            expect(result.generated.authModule).toContain('lunoraD1Adapter } from "@lunora/auth";');
+            expect(result.generated.authModule).toContain('lunoraD1Adapter } from "@lunora/auth/worker";');
             expect(result.generated.app).toContain("options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));");
             // The OAuth discovery documents (plan 461 B): served by the auth instance
             // as the worker's last matcher, after the app's own routes.

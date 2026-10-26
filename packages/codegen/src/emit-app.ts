@@ -81,12 +81,15 @@ const deferredWiring = (
  * re-exported by name. `app.ts` loads this module with `import()` on the first
  * event. Importing the package itself that way would keep the whole barrel in the
  * bundle (about 4 MB more, the email-domain lists among it), because a bundler
- * cannot tree-shake a namespace object it hands out. `""` (not written) without
- * `@lunora/auth`.
+ * cannot tree-shake a namespace object it hands out. Re-exported from
+ * `@lunora/auth/worker`, not the barrel: everything this `import()` reaches is
+ * wrapped in a lazy-init function, so routing it through the barrel would make
+ * any static `@lunora/auth` import elsewhere in the app initialise all of it at
+ * startup. `""` (not written) without `@lunora/auth`.
  */
 const emitAuthModule = (hasAuth: boolean): string =>
     hasAuth
-        ? `${GENERATED_HEADER}export { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";\n`
+        ? `${GENERATED_HEADER}export { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth/worker";\n`
         : "";
 
 /** The `export type { ... }` list — only the declaration types that were emitted. */
