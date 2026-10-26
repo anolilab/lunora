@@ -76,13 +76,8 @@ const canonicalizeForFingerprint = (value: unknown): unknown => {
         // eslint-disable-next-line sonarjs/no-alphabetical-sort -- code-unit order is required for cross-machine determinism; a localeCompare comparator is the bug, not the fix
         sortedKeys.sort();
 
-        const result: Record<string, unknown> = {};
-
-        for (const key of sortedKeys) {
-            result[key] = canonicalizeForFingerprint(record[key]);
-        }
-
-        return result;
+        // `fromEntries` defines each key as an own property. Assigning into `{}` would make an own `__proto__` key set the prototype and vanish.
+        return Object.fromEntries(sortedKeys.map((key) => [key, canonicalizeForFingerprint(record[key])]));
     }
 
     return value;

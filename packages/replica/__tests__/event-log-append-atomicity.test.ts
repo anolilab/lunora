@@ -282,6 +282,27 @@ describe("eventLogDO /append — atomicity + idempotency (REPLICA-03)", () => {
 
         expect(size.count).toBe(1);
     });
+
+    it("treats an own __proto__ key as payload content when a batchId is reused", async () => {
+        expect.assertions(2);
+
+        const do_ = new EventLogDO(createMockState(), TEST_ENV);
+
+        // JSON.parse makes `__proto__` an own key. An object literal would set the prototype instead, and the payload would be `{}`.
+        const first = await doFetch(do_, "POST", "/append", {
+            batchId: "proto-key",
+            events: [{ type: "a", payload: JSON.parse('{"__proto__":1}') }],
+        });
+
+        expect(first.status).toBe(200);
+
+        const second = await doFetch(do_, "POST", "/append", {
+            batchId: "proto-key",
+            events: [{ type: "a", payload: JSON.parse('{"__proto__":2}') }],
+        });
+
+        expect(second.status).toBe(409);
+    });
 });
 
 /** The single request a client sent; a replay test fails here, not on an undefined `Request`, if the append sent none. */
