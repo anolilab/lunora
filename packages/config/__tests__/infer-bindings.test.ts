@@ -1900,6 +1900,18 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
     });
 
+    it("keys LUNORA_RELAY_SECRET for a barrel reached first through a path that hides the replica class and then through an open one", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport * from "./hidden";\nexport * from "./open";\n`);
+        write("src/server/hidden.ts", `export class EventLogDO {}\nexport * from "./log";\n`);
+        write("src/server/open.ts", `export * from "./log";\n`);
+        write("src/server/log.ts", `export * from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
     it("keys the client's relay secret for a named import of a namespace a barrel re-exports from the replica package", async () => {
         expect.assertions(1);
 
@@ -1907,6 +1919,18 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         write("src/server/index.ts", ENTRY_SHARD_ONLY);
         write("src/server/barrel.ts", `export * as replica from "@lunora/replica";\n`);
         write("src/server/events.ts", `import { replica } from "./barrel";\n\nexport const log = (env: Env) => new replica.EventLogDOClient({ env });\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the client's relay secret for a worker entry at the project root that constructs the client", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", `{\n    "name": "app",\n    "main": "worker.ts",\n    "compatibility_date": "2026-04-07"\n}\n`);
+        write(
+            "worker.ts",
+            `import { EventLogDOClient } from "@lunora/replica";\n\nexport const log = (env: Env) => new EventLogDOClient({ env });\n\nexport default { fetch() { return new Response("ok"); } };\n`,
+        );
 
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
     });

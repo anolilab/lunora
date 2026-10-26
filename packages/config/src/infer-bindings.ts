@@ -458,7 +458,8 @@ const forwardsReplicaExport = (
     visited: Set<string>,
     hidden: ReadonlySet<string> = new Set(),
 ): boolean => {
-    const key = JSON.stringify([modulePath, requested]);
+    // The result depends on the names hidden along this path, so a module reached under different hiding is visited again.
+    const key = JSON.stringify([modulePath, requested, [...hidden]]);
 
     if (visited.has(key)) {
         return false;
@@ -1140,6 +1141,22 @@ const hostsShardRegistry = (durableObjects: ReadonlyArray<DurableObjectSpec>, ge
     (isMergedProject(generatedDirectory) && existsSync(join(generatedDirectory, "shardRegistry.ts")));
 
 /**
+ * Whether the worker entry constructs `EventLogDOClient`. The entry can sit outside the scanned directories (a root-level `worker.ts`),
+ * and construction needs the secret wherever the entry is, so it is read on its own.
+ */
+const entryConstructsEventLogClient = (entryPath: string): boolean => {
+    const code = readFileSync(entryPath, "utf8");
+
+    if (!CAPABILITY_PACKAGE_PATTERN.test(code) && !code.includes(EVENT_LOG_CLIENT)) {
+        return false;
+    }
+
+    return constructsEventLogClient(
+        new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true }).createSourceFile(entryPath, code, { overwrite: true }),
+    );
+};
+
+/**
  * Whether the worker entry hosts `EventLogDO`. A composed entry star-re-exports only the generated
  * modules, so it never hosts the log by itself. A hand-written entry can reach the class through a
  * barrel, so star re-exports are followed rather than reading only the entry's own export list.
@@ -1204,6 +1221,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
 
     const hostsRegistry = hostsShardRegistry(durableObjects, join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY));
     const hostsLog = hostsEventLog(entry);
+    const entryUsesClient = !entry.composed && entry.path !== undefined && entryConstructsEventLogClient(entry.path);
 
     const signals = describeSignals(durableObjects, schema, capabilities, containers, workflows, agents);
 
@@ -1240,6 +1258,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         // The scanned flags first: `needsD1` below replaces the raw `env.DB` flag
         // with the schema-augmented value computed above.
         ...capabilities,
+        usesEventLogClient: capabilities.usesEventLogClient || entryUsesClient,
         agents,
         containers,
         durableObjects,
