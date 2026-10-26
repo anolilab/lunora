@@ -36,9 +36,10 @@ const IDENTITY_FIELDS = new Set<string>([
 
 /**
  * `ctx.db` write surfaces whose document / partial (the object whose identity
- * columns this feeder inspects) is the SECOND argument: `insert(table, doc)`,
- * `replace(id, doc)`, `patch(id, partial)`, and `insertManyUnsafe(table, rows)`
- * (`rows` an array of documents). The document argument is always `arg[1]`.
+ * columns this feeder inspects) is the argument after the table: `insert(table, doc)`
+ * and `insertManyUnsafe(table, rows)` (`rows` an array of documents) take it at
+ * `arg[1]`, while `patch(table, id, partial)` and `replace(table, id, doc)` take it at
+ * `arg[2]`, after the id.
  */
 const IDENTITY_WRITE_METHODS = new Set<string>(["insert", "insertManyUnsafe", "patch", "replace"]);
 
