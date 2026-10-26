@@ -1308,6 +1308,8 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         write("src/App.tsx", `import { useState } from "react";\nexport const App = () => <div onClick={() => useState(0)}>ctx</div>;`);
         write("lunora/view.tsx", `export const View = ({ ctx }) => <span>{ctx.db}</span>;`);
         write("lunora/upload.tsx", `export const Upload = ({ ctx }) => <span>{String(ctx.kv)}</span>;`);
+        // Generated code names a capability package, but the scan skips `_generated` and the entry walk must stop there too.
+        write("lunora/_generated/shard.ts", `import "@lunora/replica";\n\nexport const createShardDO = (options: object) => options;\n`);
 
         const parse = vi.spyOn(Project.prototype, "createSourceFile");
 
@@ -2003,6 +2005,72 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         );
 
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    describe("a root-level worker entry's imports", () => {
+        const ROOT_WRANGLER = `{\n    "name": "app",\n    "main": "worker.ts",\n    "compatibility_date": "2026-04-07"\n}\n`;
+        const CLIENT_LOG = `import { EventLogDOClient } from "@lunora/replica";\n\nexport const log = (env: Env) => new EventLogDOClient({ env });\n`;
+        const ROOT_FETCH_ENTRY = `export default { fetch() { return new Response("ok"); } };\n`;
+
+        it("keys the client's relay secret for a module the root-level entry imports that constructs the client", async () => {
+            expect.assertions(1);
+
+            write("wrangler.jsonc", ROOT_WRANGLER);
+            write("lib/log.ts", CLIENT_LOG);
+            write(
+                "worker.ts",
+                `import { log } from "./lib/log";\n\nexport default { fetch(_request: Request, env: Env) { log(env); return new Response("ok"); } };\n`,
+            );
+
+            expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+        });
+
+        it("keys the client's relay secret through a barrel the root-level entry imports", async () => {
+            expect.assertions(1);
+
+            write("wrangler.jsonc", ROOT_WRANGLER);
+            write("lib/index.ts", `export * from "./log";\n`);
+            write("lib/log.ts", CLIENT_LOG);
+            write(
+                "worker.ts",
+                `import { log } from "./lib";\n\nexport default { fetch(_request: Request, env: Env) { log(env); return new Response("ok"); } };\n`,
+            );
+
+            expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+        });
+
+        it("keys the client's relay secret for a module the root-level entry loads with a dynamic import", async () => {
+            expect.assertions(1);
+
+            write("wrangler.jsonc", ROOT_WRANGLER);
+            write("lib/log.ts", CLIENT_LOG);
+            write(
+                "worker.ts",
+                `export default { async fetch(_request: Request, env: Env) { const { log } = await import("./lib/log"); log(env); return new Response("ok"); } };\n`,
+            );
+
+            expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+        });
+
+        it("does not key the client's relay secret for a type-only import of a module that constructs the client", async () => {
+            expect.assertions(1);
+
+            write("wrangler.jsonc", ROOT_WRANGLER);
+            write("lib/log.ts", `${CLIENT_LOG}\nexport type LogFn = typeof log;\n`);
+            write("worker.ts", `import type { LogFn } from "./lib/log";\n\nexport type Entry = LogFn;\n\n${ROOT_FETCH_ENTRY}`);
+
+            expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
+        });
+
+        it("finishes an import cycle back to the entry, and keys nothing when no module in it constructs the client", async () => {
+            expect.assertions(1);
+
+            write("wrangler.jsonc", ROOT_WRANGLER);
+            write("lib/a.ts", `import "../worker";\n\nexport const ready = true;\n`);
+            write("worker.ts", `import "./lib/a";\n\n${ROOT_FETCH_ENTRY}`);
+
+            expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
+        });
     });
 
     it("keys the client's relay secret for a worker that loads EventLogDOClient lazily", async () => {

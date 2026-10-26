@@ -926,6 +926,9 @@ interface InferredBindings {
  */
 type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesEventLogClient" | "usesRequestSecretTool" | "usesWorkerLoader">;
 
+/** A capability scan and every file it read, so a later walk from the worker entry leaves those files alone. */
+type CapabilityScan = Capabilities & { scannedFiles: ReadonlySet<string> };
+
 /** A relative module specifier in an import or re-export: `from "./x"`, `from "../y"`. */
 const RELATIVE_IMPORT_PATTERN = /\bfrom\s+["']\.{1,2}\//u;
 
@@ -1035,10 +1038,11 @@ const forgetUnscanned = (project: Project, scanned: ReadonlySet<SourceFile>): vo
  * `src/`-only `browserTool` never registers the dispatcher and a `src/`-only
  * `jsCodeTool` never reaches the `workerLoaders` gate.
  */
-const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<string>, lunoraDirectory: string): Capabilities => {
+const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<string>, lunoraDirectory: string): CapabilityScan => {
     const lunoraRoot = join(projectRoot, lunoraDirectory);
     const project = scanProjectOf(projectRoot);
     const candidates: { file: string; inLunora: boolean }[] = [];
+    const scannedFiles = new Set<string>();
     const lunoraFiles: SourceCapabilitySignals[] = [];
     const otherFiles: SourceCapabilitySignals[] = [];
     // One scope for the whole scan: a target a barrel reaches from several files is parsed once.
@@ -1058,6 +1062,8 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
         collectSourceFiles(absolute, files);
 
         for (const file of files) {
+            scannedFiles.add(file);
+
             const code = readFileSync(file, "utf8");
             const inLunora = isWithinDirectory(file, lunoraRoot);
 
@@ -1116,6 +1122,7 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
         // `@lunora/browser` import: the browser op runs on the dispatcher's ctx.
         usesBrowser: used.has("browser") || lunora.sandboxTools.usesSandboxBrowser,
         usesWorkerLoader: lunora.sandboxTools.usesSandboxLoader,
+        scannedFiles,
     };
 };
 
@@ -1239,19 +1246,72 @@ const hostsShardRegistry = (durableObjects: ReadonlyArray<DurableObjectSpec>, ge
     (isMergedProject(generatedDirectory) && existsSync(join(generatedDirectory, "shardRegistry.ts")));
 
 /**
- * Whether the worker entry constructs `EventLogDOClient`. The entry can sit outside the scanned directories (a root-level `worker.ts`),
- * and construction needs the secret wherever the entry is, so it is read on its own.
+ * The module specifiers a file loads at run time: static imports and re-exports, and an `import()` of a string literal. A type-only
+ * declaration compiles away, so it loads nothing.
  */
-const entryConstructsEventLogClient = (entryPath: string): boolean => {
-    const code = readFileSync(entryPath, "utf8");
+const runtimeSpecifiersOf = (source: ts.SourceFile): string[] => {
+    const specifiers: string[] = [];
 
-    if (!CAPABILITY_PACKAGE_PATTERN.test(code) && !code.includes(EVENT_LOG_CLIENT)) {
-        return false;
+    const visit = (node: ts.Node): void => {
+        if (ts.isImportDeclaration(node) && node.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword && ts.isStringLiteral(node.moduleSpecifier)) {
+            specifiers.push(node.moduleSpecifier.text);
+        } else if (ts.isExportDeclaration(node) && !node.isTypeOnly && node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier)) {
+            specifiers.push(node.moduleSpecifier.text);
+        } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+            const [argument] = node.arguments;
+
+            if (argument !== undefined && ts.isStringLiteral(argument)) {
+                specifiers.push(argument.text);
+            }
+        }
+
+        ts.forEachChild(node, visit);
+    };
+
+    visit(source);
+
+    return specifiers;
+};
+
+/**
+ * Whether the worker entry constructs `EventLogDOClient`, in its own file or in a module it reaches through local imports. The entry can
+ * sit outside the scanned directories (a root-level `worker.ts`), and so can the modules it imports, while construction needs the secret
+ * wherever it is. A module `scanCapabilities` already read is a leaf: its constructions were counted there, and it is not parsed twice.
+ * Generated modules are leaves too, since codegen never emits a client construction. Imports are read from the TypeScript parse of each
+ * module, and a file only reaches the ts-morph parse when its text names the client or a capability package.
+ */
+const entryConstructsEventLogClient = (entryPath: string, scannedFiles: ReadonlySet<string>, generatedRoot: string): boolean => {
+    const project = new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true });
+    const pending = [entryPath];
+    const visited = new Set<string>();
+
+    for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
+        if (visited.has(file)) {
+            continue;
+        }
+
+        visited.add(file);
+
+        const source = parseModule(file);
+        const code = source.text;
+
+        if (
+            (CAPABILITY_PACKAGE_PATTERN.test(code) || code.includes(EVENT_LOG_CLIENT)) &&
+            constructsEventLogClient(project.createSourceFile(file, code, { overwrite: true }))
+        ) {
+            return true;
+        }
+
+        for (const specifier of runtimeSpecifiersOf(source)) {
+            const target = resolveBarrel(file, specifier);
+
+            if (target !== undefined && !scannedFiles.has(target) && !isWithinDirectory(target, generatedRoot)) {
+                pending.push(target);
+            }
+        }
     }
 
-    return constructsEventLogClient(
-        new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true }).createSourceFile(entryPath, code, { overwrite: true }),
-    );
+    return false;
 };
 
 /**
@@ -1274,8 +1334,8 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const schemaDirectory = options.schemaDir ?? "lunora";
     const scanDirectories = options.scanDirs ?? DEFAULT_SCAN_DIRECTORIES;
 
-    const scan = (): Capabilities => scanCapabilities(options.projectRoot, scanDirectories, schemaDirectory);
-    const capabilities =
+    const scan = (): CapabilityScan => scanCapabilities(options.projectRoot, scanDirectories, schemaDirectory);
+    const { scannedFiles, ...capabilities } =
         options.cache === undefined ? scan() : options.cache.memo(`capabilities:${options.projectRoot}:${schemaDirectory}:${scanDirectories.join(",")}`, scan);
     const entry = resolveWorkerEntry(options.projectRoot);
     let durableObjects: DurableObjectSpec[];
@@ -1317,9 +1377,10 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const notifyChannels = notifyIr.error === undefined ? notifyIr.value : { hasFcm: true, hasWebPush: true };
     const flagshipBinding = flags?.provider === "flagship" && flags.mode === "binding" ? flags.bindingName : undefined;
 
-    const hostsRegistry = hostsShardRegistry(durableObjects, join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY));
+    const generatedRoot = join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY);
+    const hostsRegistry = hostsShardRegistry(durableObjects, generatedRoot);
     const hostsLog = hostsEventLog(entry);
-    const entryUsesClient = !entry.composed && entry.path !== undefined && entryConstructsEventLogClient(entry.path);
+    const entryUsesClient = !entry.composed && entry.path !== undefined && entryConstructsEventLogClient(entry.path, scannedFiles, generatedRoot);
 
     const signals = describeSignals(durableObjects, schema, capabilities, containers, workflows, agents);
 
