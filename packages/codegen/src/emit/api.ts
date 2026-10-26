@@ -1,6 +1,6 @@
-// The /component subpath avoids the package barrel (which pulls the agent
-// runtime + AI SDK into the codegen process just to enumerate function names).
-import { agentComponent } from "@lunora/agent/component";
+// The dependency-free /naming subpath, not /component: building the component
+// pulls `@lunora/server` and its engine into every codegen process just to list names.
+import { AGENT_RUNTIME_FUNCTIONS } from "@lunora/agent/naming";
 import { LunoraError } from "@lunora/errors";
 
 import type { AgentIR, FunctionIR, HttpRouteIR, MutatorIR, ShapeIR, WorkflowIR } from "../ir";
@@ -160,12 +160,13 @@ ${objectMembers}
  * values come from `agentComponent()` imported directly inside the generated
  * dispatch table, so apps never re-export them by hand — and function
  * discovery (which cannot resolve a destructured re-export through a
- * published package's `.d.ts`) is never involved. The name list is DERIVED
- * from codegen's own `@lunora/agent` dependency at emit time, so a function
- * added to (or renamed in) the component is auto-registered without touching
- * this file — only the typed api surface below is pinned by hand.
+ * published package's `.d.ts`) is never involved. The name list comes from
+ * `@lunora/agent`'s `AGENT_RUNTIME_FUNCTIONS`, which a drift test there keeps
+ * equal to the component, so a function added to (or renamed in) the component
+ * is auto-registered without touching this file — only the typed api surface
+ * below is pinned by hand.
  */
-const agentRuntimeFunctionNames = (): ReadonlyArray<string> => Object.keys(agentComponent().functions).toSorted((a, b) => a.localeCompare(b));
+const agentRuntimeFunctionNames = (): ReadonlyArray<string> => Object.keys(AGENT_RUNTIME_FUNCTIONS).toSorted((a, b) => a.localeCompare(b));
 
 /** Names the app registered itself under the `agents` namespace — they win over auto-registration. */
 const takenAgentFunctionNames = (functions: ReadonlyArray<FunctionIR>): ReadonlySet<string> =>
@@ -177,15 +178,14 @@ const takenAgentFunctionNames = (functions: ReadonlyArray<FunctionIR>): Readonly
  * to the public thread queries + the two client-facing mutations
  * (`agentMessages`/`agentState`/`agentThread`/`agentRun`/`agentResolveApproval`),
  * which an app is allowed to shadow (the app's own definition silently wins).
- * Derived from the runtime component's own `visibility: "internal"` marker
- * (mirroring the drift test in `discover/agents.test.ts`) rather than a
- * hand-maintained list, so a newly added internal function is protected
- * automatically.
+ * Read from `AGENT_RUNTIME_FUNCTIONS`, which `@lunora/agent`'s drift test
+ * keeps equal to the component's own `visibility: "internal"` markers, so a
+ * newly added internal function is protected automatically.
  */
 const internalAgentRuntimeFunctionNames = (): ReadonlySet<string> =>
     new Set(
-        Object.entries(agentComponent().functions)
-            .filter(([, definition]) => definition.visibility === "internal")
+        Object.entries(AGENT_RUNTIME_FUNCTIONS)
+            .filter(([, visibility]) => visibility === "internal")
             .map(([name]) => name),
     );
 
