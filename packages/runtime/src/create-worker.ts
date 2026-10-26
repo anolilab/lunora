@@ -11,13 +11,7 @@ import { decodeErrorDetail, describeError, describeInternal, ERROR_DETAIL_HEADER
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
-import {
-    decodeExpectedSubjectHeader,
-    encodeIdentityHeaderJson,
-    encodeUserIdHeader,
-    EXPECT_SUBJECT_HEADER,
-    isIdentityExpired,
-} from "../../../shared/identity-header";
+import { decodeExpectedSubjectHeader, encodeUserIdHeader, EXPECT_SUBJECT_HEADER, isIdentityExpired } from "../../../shared/identity-header";
 import { LIVE_PUBLISH_PATH } from "../../../shared/live-stream";
 import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { buildTraceparent, otlpRandomHex } from "../../../shared/otlp";
@@ -58,6 +52,7 @@ import type { KvIntrospector } from "./kv-admin-routes";
 import { buildKvAdminRoutes, KV_VALUE_MAX_BODY_BYTES, KV_VALUE_PATH } from "./kv-admin-routes";
 import type { LogArchiveConfig } from "./log-archive-admin-routes";
 import { buildLogArchiveAdminRoutes } from "./log-archive-admin-routes";
+import { memoizedIdentityHeader } from "./memoize-identity";
 import { assertMethod } from "./method-guard";
 import type { ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
 import { emitRpcEvent, flushSink } from "./observability";
@@ -2232,32 +2227,6 @@ const queueNameOf = (batch: unknown): string => {
  * `serverQuery` also accepts the context explicitly.
  */
 const executionContextByRequest = new WeakMap<Request, ExecutionContextLike>();
-
-/**
- * Encoded `x-lunora-identity` values by their claims JSON. `resolveIdentity`
- * hands back a fresh object per request, so the serialized text is the only key
- * that recurs; the encoding is a pure function of it. Bounded because each key
- * holds one identity's claims, and an isolate can serve many identities.
- */
-const identityHeaderByClaimsJson = new Map<string, string>();
-
-const IDENTITY_HEADER_MEMO_MAX_ENTRIES = 256;
-
-const memoizedIdentityHeader = (claims: Record<string, unknown>): string => {
-    const json = JSON.stringify(claims);
-    const cached = identityHeaderByClaimsJson.get(json);
-
-    if (cached !== undefined) {
-        return cached;
-    }
-
-    const encoded = encodeIdentityHeaderJson(json);
-
-    evictOldestEntry(identityHeaderByClaimsJson, IDENTITY_HEADER_MEMO_MAX_ENTRIES);
-    identityHeaderByClaimsJson.set(json, encoded);
-
-    return encoded;
-};
 
 const resolveForwardContext = async (
     request: Request,
