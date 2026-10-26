@@ -314,7 +314,9 @@ const isValidTableSnapshot = (value: unknown): value is TableSnapshot =>
  * Studio renders as an unreadable ledger row. Same parse, two policies.
  */
 type SnapshotParseOutcome =
-    { readonly status: "absent" } | { readonly error: string; readonly status: "invalid" } | { readonly snapshot: SchemaSnapshot; readonly status: "ok" };
+    | { readonly status: "absent" }
+    | { readonly error: string; readonly status: "invalid" }
+    | { readonly snapshot: SchemaSnapshot; readonly status: "ok" };
 
 /**
  * Parse snapshot JSON without deciding what a failure means.

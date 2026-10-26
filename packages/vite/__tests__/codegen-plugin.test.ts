@@ -1348,7 +1348,8 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             wireServer(plugin, server);
 
             const changeListener = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.find((args) => args[0] === "change")?.[1] as
-                ((file: string) => void) | undefined;
+                | ((file: string) => void)
+                | undefined;
             const createCalls = createCodegenProject as ReturnType<typeof vi.fn>;
             const before = createCalls.mock.calls.length;
 

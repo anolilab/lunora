@@ -326,7 +326,8 @@ describe(sentryTelemetry, () => {
 
             // Open a call and never deliver a terminal event for it.
             const opened = shared.executeLanguageModelCall?.(evt({ callId: "call-abandoned", execute: pending, modelId: "m", provider: "p" })) as
-                Promise<unknown> | undefined;
+                | Promise<unknown>
+                | undefined;
 
             opened?.catch(() => undefined);
 
@@ -337,7 +338,8 @@ describe(sentryTelemetry, () => {
             vi.setSystemTime(Date.now() + 11 * 60 * 1000);
 
             const openedLater = shared.executeLanguageModelCall?.(evt({ callId: "call-later", execute: pending, modelId: "m", provider: "p" })) as
-                Promise<unknown> | undefined;
+                | Promise<unknown>
+                | undefined;
 
             openedLater?.catch(() => undefined);
 

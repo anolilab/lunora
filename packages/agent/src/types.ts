@@ -1046,7 +1046,9 @@ export interface AgentDefinition extends AgentConfig {
  * @experimental
  */
 export type EnsureThreadOutcome =
-    { outcome: "completed" | "continued" | "created" } | { outcome: "queued"; position: number } | { outcome: "replaced"; priorInstanceId: string };
+    | { outcome: "completed" | "continued" | "created" }
+    | { outcome: "queued"; position: number }
+    | { outcome: "replaced"; priorInstanceId: string };
 
 /**
  * Params of one agent run (the compiled workflow's payload).

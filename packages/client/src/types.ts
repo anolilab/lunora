@@ -673,7 +673,8 @@ export interface RpcEnvelope {
  * committed at — which gates the drop of a per-call optimistic layer.
  */
 export type RpcResponseBody =
-    { error: { code: string; data?: unknown; message: string } } | { commitCursor?: number; lastMutationId?: number; result: unknown };
+    | { error: { code: string; data?: unknown; message: string } }
+    | { commitCursor?: number; lastMutationId?: number; result: unknown };
 
 /** Subscription protocol — client → server. */
 export interface ClientSubscribeMessage {
@@ -1354,7 +1355,16 @@ export type NullableTimestamp = null | number | string;
 
 /** A workflow instance's lifecycle status. Mirrors Cloudflare's `InstanceStatus`. */
 export type WorkflowInstanceStatus =
-    "complete" | "errored" | "paused" | "queued" | "rollingBack" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+    | "complete"
+    | "errored"
+    | "paused"
+    | "queued"
+    | "rollingBack"
+    | "running"
+    | "terminated"
+    | "unknown"
+    | "waiting"
+    | "waitingForPause";
 
 /** The lifecycle mutations the status endpoint accepts. */
 export type WorkflowInstanceAction = "pause" | "restart" | "resume" | "terminate";

@@ -1644,7 +1644,16 @@ interface Scheduler {
  * dependency on `@lunora/scheduler`.
  */
 type WorkflowInstanceStatus =
-    "complete" | "errored" | "paused" | "queued" | "rollingBack" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+    | "complete"
+    | "errored"
+    | "paused"
+    | "queued"
+    | "rollingBack"
+    | "running"
+    | "terminated"
+    | "unknown"
+    | "waiting"
+    | "waitingForPause";
 
 /** Result of {@link WorkflowInstance.status}. Mirrors `@lunora/workflow`'s `WorkflowStatusResult`. */
 interface WorkflowStatusResult {

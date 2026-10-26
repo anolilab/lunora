@@ -60,8 +60,8 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check .",
-        "lint:prettier:fix": "prettier --write .",
+        "lint:prettier": "oxfmt --check . && prettier --check \"**/*.{md,mdx}\"",
+        "lint:prettier:fix": "oxfmt . && prettier --write \"**/*.{md,mdx}\"",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage"

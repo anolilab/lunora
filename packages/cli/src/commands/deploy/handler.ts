@@ -660,11 +660,13 @@ const preflightDeploy = (
     } catch (error) {
         // A client build this run is about to make creates the output a target needs, so that refusal waits for the
         // pipeline, after the build. An option the target refuses stops the deploy here, before anything is written.
-        if (!(
-            beforeBuild &&
-            error instanceof MissingBuildOutputError &&
-            clientBuildRuns(cwd, options.skipCodegen === true ? false : options.frameworkBuild, options.env)
-        )) {
+        if (
+            !(
+                beforeBuild &&
+                error instanceof MissingBuildOutputError &&
+                clientBuildRuns(cwd, options.skipCodegen === true ? false : options.frameworkBuild, options.env)
+            )
+        ) {
             const message = error instanceof Error ? error.message : String(error);
 
             options.logger.error(message);

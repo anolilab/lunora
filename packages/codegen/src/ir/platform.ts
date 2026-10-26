@@ -34,7 +34,9 @@ export interface CronJobIR {
 
 /** A normalized container image source, as written into `wrangler.jsonc`. */
 export type ContainerImageIR =
-    { buildContext: string; dockerfilePath: string; kind: "dockerfile" } | { buildDir: string; kind: "build" } | { kind: "registry"; reference: string };
+    | { buildContext: string; dockerfilePath: string; kind: "dockerfile" }
+    | { buildDir: string; kind: "build" }
+    | { kind: "registry"; reference: string };
 
 /** A `durable_object` container's named image — a Dockerfile or a registry digest, never a Railpack build. */
 export type ContainerNamedImageIR = Exclude<ContainerImageIR, { kind: "build" }>;
