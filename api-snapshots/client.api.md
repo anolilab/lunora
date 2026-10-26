@@ -291,6 +291,8 @@ interface GlobalFacetValue {
 ```ts
 interface GlobalFilterClause {
     column: string;
+    operator?: string;
+    path?: string[];
     value: unknown;
 }
 ```

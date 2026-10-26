@@ -3621,6 +3621,136 @@ describe("dataBrowser — AI filter reply after a table switch", () => {
     });
 });
 
+describe("dataBrowser — nested paths on suggested and linked filters", () => {
+    // Module-stable identity: a fresh array each render would re-seed the browser.
+    const LINKED_DOTTED_FILTER = [{ column: "text", operator: "eq" as const, path: ["a.b"], value: "x" }];
+
+    const readFilters = (mock: MockClientHooks): unknown[] =>
+        mock.query.mock.calls
+            .filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage)
+            .map((call) => (call[1] as { filters?: unknown[] }).filters)
+            .filter((filters): filters is unknown[] => filters !== undefined && filters.length > 0);
+
+    it("keeps the nested path of an AI-suggested clause on the request, rather than testing the parent column", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
+                    return { result: { clauses: [{ column: "text", operator: "has", path: ["a.b", "tags"], value: "x" }], degraded: false } };
+                }
+
+                return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.change(await screen.findByTestId("db-ai-prompt"), { target: { value: "tagged x" } });
+        fireEvent.click(screen.getByTestId("db-ai-filter"));
+
+        // The suggestion lands as a filter row in the same commit that issues the filtered read.
+        await screen.findByTestId("db-filter-row");
+
+        expect(readFilters(mock).at(-1)).toStrictEqual([{ column: "text", operator: "has", path: ["a.b", "tags"], value: "x" }]);
+    });
+
+    it("pins an AI-suggested null equality as null, so the nested clause tests for null and not for an empty string", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
+                    return { result: { clauses: [{ column: "text", operator: "eq", path: ["a"], value: null }], degraded: false } };
+                }
+
+                return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.change(await screen.findByTestId("db-ai-prompt"), { target: { value: "unset" } });
+        fireEvent.click(screen.getByTestId("db-ai-filter"));
+
+        await screen.findByTestId("db-filter-row");
+
+        expect(readFilters(mock).at(-1)).toStrictEqual([{ column: "text", operator: "eq", path: ["a"], value: null }]);
+    });
+
+    it("sends an AI-suggested membership value with the type the model gave it, and leaves a bound's number a number", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
+                    return {
+                        result: {
+                            clauses: [
+                                { column: "text", operator: "has", value: "10" },
+                                { column: "text", operator: "has", value: "true" },
+                                { column: "text", operator: "gt", value: "18" },
+                                { column: "text", operator: "has", value: 10 },
+                            ],
+                            degraded: false,
+                        },
+                    };
+                }
+
+                return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.change(await screen.findByTestId("db-ai-prompt"), { target: { value: "typed" } });
+        fireEvent.click(screen.getByTestId("db-ai-filter"));
+
+        // All four suggestions land as filter rows in the same commit that issues the filtered read.
+        await expect(screen.findAllByTestId("db-filter-row")).resolves.toHaveLength(4);
+        expect(readFilters(mock).at(-1)).toStrictEqual([
+            { column: "text", operator: "has", value: "10" },
+            { column: "text", operator: "has", value: "true" },
+            { column: "text", operator: "gt", value: 18 },
+            { column: "text", operator: "has", value: 10 },
+        ]);
+    });
+
+    it("sends a linked clause's dotted field name as one segment", async () => {
+        expect.assertions(1);
+
+        const mock = createBrowserClient();
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <DataBrowser initialFilters={LINKED_DOTTED_FILTER} tableParam="messages" />
+            </LunoraProvider>,
+        );
+
+        await screen.findByTestId("db-page");
+
+        expect(readFilters(mock).at(-1)).toStrictEqual([{ column: "text", operator: "eq", path: ["a.b"], value: "x" }]);
+    });
+});
+
 describe("dataBrowser — bulk op finishing after a table switch", () => {
     it("does not show the old table's outcome notice or reset the new table's page", async () => {
         expect.assertions(2);

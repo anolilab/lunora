@@ -197,12 +197,14 @@ describe("generateSql", () => {
 
 describe("generateFilter", () => {
     const COLUMNS = ["id", "status", "createdAt"];
+    // Storage-level names: `id` and `_creationTime` are row columns, not document fields.
+    const PHYSICAL = ["id", "_creationTime"];
 
     it("returns structured clauses, not SQL, so existing validation applies unchanged", async () => {
         expect.assertions(2);
 
         const ai = binding('[{"column":"status","operator":"eq","value":"open"}]');
-        const result = await generateFilter(ai, { prompt: "open ones" }, COLUMNS);
+        const result = await generateFilter(ai, { prompt: "open ones" }, COLUMNS, PHYSICAL);
 
         expect(result.degraded).toBe(false);
         expect(result.degraded ? undefined : result.clauses).toStrictEqual([{ column: "status", operator: "eq", value: "open" }]);
@@ -224,7 +226,7 @@ describe("generateFilter", () => {
         const ai = binding('[{"column":"status","operator":"eq","value":"open"}]');
         const prompt = "rows for ada";
 
-        await generateFilter(ai, { prompt }, COLUMNS);
+        await generateFilter(ai, { prompt }, COLUMNS, PHYSICAL);
 
         const sent = JSON.stringify(ai.run.mock.calls);
 
@@ -248,7 +250,7 @@ describe("generateFilter", () => {
         const ai = binding('[{"column":"nope","operator":"eq","value":1}]');
 
         // Every clause invalid ⇒ nothing usable ⇒ degrade, not a bad filter.
-        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS);
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS, PHYSICAL);
 
         expect(result.degraded).toBe(true);
     });
@@ -258,18 +260,135 @@ describe("generateFilter", () => {
 
         const ai = binding('[{"column":"status","operator":"DROP TABLE","value":1}]');
 
-        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS);
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS, PHYSICAL);
 
         expect(result.degraded).toBe(true);
     });
 
-    it("keeps the valid clauses when only some are bad", async () => {
+    it("passes a nested path through unchanged", async () => {
         expect.assertions(1);
 
-        const ai = binding('[{"column":"nope","operator":"eq","value":1},{"column":"status","operator":"eq","value":"open"}]');
-        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS);
+        const ai = binding('[{"column":"address","operator":"eq","path":["geo","city"],"value":"Berlin"}]');
+        const result = await generateFilter(ai, { prompt: "berlin" }, ["id", "address"], PHYSICAL);
 
-        expect(result.degraded ? undefined : result.clauses).toHaveLength(1);
+        expect(result.degraded ? undefined : result.clauses).toStrictEqual([{ column: "address", operator: "eq", path: ["geo", "city"], value: "Berlin" }]);
+    });
+
+    it.each([
+        ['{"column":"address","operator":"eq","path":"city","value":"Berlin"}'],
+        ['{"column":"address","operator":"eq","path":["", "city"],"value":"Berlin"}'],
+    ])("degrades the whole suggestion when a clause has a malformed path (%s), rather than keeping the rest", async (clause) => {
+        expect.assertions(1);
+
+        // The valid predicate beside it is the part a bulk action would run against
+        // alone, so a dropped path must not leave a wider set behind.
+        const ai = binding(`[${clause},{"column":"status","operator":"eq","value":"open"}]`);
+        const result = await generateFilter(ai, { prompt: "x" }, ["id", "address", "status"], PHYSICAL);
+
+        expect(result.degraded).toBe(true);
+    });
+
+    it("reads a null path as absent, since models emit it on top-level columns", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"status","operator":"eq","path":null,"value":"open"}]');
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS, PHYSICAL);
+
+        expect(result.degraded ? undefined : result.clauses).toStrictEqual([{ column: "status", operator: "eq", value: "open" }]);
+    });
+
+    it("refuses a has clause on a physical column, and the valid clause beside it with it", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"status","operator":"eq","value":"open"},{"column":"_creationTime","operator":"has","value":"x"}]');
+        const result = await generateFilter(ai, { prompt: "x" }, ["_creationTime", "status"], ["_creationTime"]);
+
+        expect(result.degraded).toBe(true);
+    });
+
+    it("refuses a nested path on a physical column, and the valid clause beside it with it", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"status","operator":"eq","value":"open"},{"column":"_creationTime","operator":"eq","path":["city"],"value":"x"}]');
+        const result = await generateFilter(ai, { prompt: "x" }, ["_creationTime", "status"], ["_creationTime"]);
+
+        expect(result.degraded).toBe(true);
+    });
+
+    it("passes a has clause with a scalar value through", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"status","operator":"has","path":["tags"],"value":"x"},{"column":"status","operator":"has","value":3}]');
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS, PHYSICAL);
+
+        expect(result.degraded ? undefined : result.clauses).toHaveLength(2);
+    });
+
+    it("degrades the whole suggestion when a has clause has no scalar value, rather than widening the rest", async () => {
+        expect.assertions(2);
+
+        const ai = binding(
+            '[{"column":"status","operator":"eq","value":"open"},{"column":"status","operator":"has","path":["tags"],"value":null}]',
+            '[{"column":"status","operator":"eq","value":"open"},{"column":"status","operator":"has","path":["tags"],"value":{"a":1}}]',
+        );
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS, PHYSICAL);
+
+        expect(result.degraded).toBe(true);
+        expect(ai.run).toHaveBeenCalledTimes(MAX_ATTEMPTS);
+    });
+
+    it.each([
+        ['{"column":"status","operator":"gt","value":null}'],
+        ['{"column":"status","operator":"contains","value":""}'],
+        ['{"column":"status","operator":"has","value":"  "}'],
+    ])("degrades the whole suggestion when %s would be discarded as blank", async (clause) => {
+        expect.assertions(1);
+
+        const ai = binding(`[{"column":"status","operator":"eq","value":"open"},${clause}]`);
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS, PHYSICAL);
+
+        expect(result.degraded).toBe(true);
+    });
+
+    it.each([['{"column":"status","operator":"eq","value":{"a":1}}'], ['{"column":"status","operator":"ne","value":["x"]}']])(
+        "degrades the whole suggestion when %s holds a value a filter row cannot show",
+        async (clause) => {
+            expect.assertions(1);
+
+            const ai = binding(`[{"column":"status","operator":"eq","value":"open"},${clause}]`);
+            const result = await generateFilter(ai, { prompt: "x" }, COLUMNS, PHYSICAL);
+
+            expect(result.degraded).toBe(true);
+        },
+    );
+
+    it("leaves eq and ne alone, since the browser keeps a blank row for them", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"status","operator":"ne","value":null}]');
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS, PHYSICAL);
+
+        expect(result.degraded).toBe(false);
+    });
+
+    it("refuses the whole suggestion when an unknown column sits beside a valid clause", async () => {
+        expect.assertions(1);
+
+        // The valid predicate beside the unknown column is what a bulk action would run
+        // against alone, so keeping it would apply a wider set than the model described.
+        const ai = binding('[{"column":"nope","operator":"eq","value":1},{"column":"status","operator":"eq","value":"open"}]');
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS, PHYSICAL);
+
+        expect(result.degraded).toBe(true);
+    });
+
+    it("refuses the whole suggestion when an unknown operator sits beside a valid clause", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"status","operator":"like","value":"op%"},{"column":"status","operator":"eq","value":"open"}]');
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS, PHYSICAL);
+
+        expect(result.degraded).toBe(true);
     });
 });
 
