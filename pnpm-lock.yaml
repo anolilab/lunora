@@ -5615,6 +5615,9 @@ importers:
         specifier: catalog:vite
         version: 2.0.41(ai@7.0.127(zod@4.6.5))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
     devDependencies:
+      '@codspeed/vitest-plugin':
+        specifier: catalog:test
+        version: 5.7.1(supports-color@10.2.2)(tinybench@6.1.4)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(vitest@4.1.11)
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
@@ -27401,6 +27404,16 @@ snapshots:
       tinybench: 6.1.4
       vite: 7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)
       vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+    transitivePeerDependencies:
+      - debug
+      - supports-color
+
+  '@codspeed/vitest-plugin@5.7.1(supports-color@10.2.2)(tinybench@6.1.4)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(vitest@4.1.11)':
+    dependencies:
+      '@codspeed/core': 5.7.1(supports-color@10.2.2)
+      tinybench: 6.1.4
+      vite: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
     transitivePeerDependencies:
       - debug
       - supports-color

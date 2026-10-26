@@ -2074,6 +2074,7 @@ interface AlchemyTranslation {
 
 ```ts
 interface AssertWranglerOptions {
+    cache?: DiscoveryCache;
     projectRoot: string;
     schemaDir: string;
 }
@@ -2437,6 +2438,7 @@ interface ReconcileResult {
 
 ```ts
 interface ReconcileProject {
+    cache?: DiscoveryCache;
     projectRoot: string;
     schemaDir: string;
     target?: string;
@@ -2845,6 +2847,7 @@ interface WranglerObservabilityTraces {
 
 ```ts
 interface WranglerProjectValidationOptions {
+    cache?: DiscoveryCache;
     environment?: string;
     projectRoot: string;
     schemaDir?: string;
@@ -3122,7 +3125,7 @@ interface LocalEndpointContext {
 ### `LocalEndpointHandler` (type)
 
 ```ts
-type LocalEndpointHandler = (request: LocalEndpointRequest) => LocalEndpointResponse;
+type LocalEndpointHandler = (request: LocalEndpointRequest) => LocalEndpointResponse | Promise<LocalEndpointResponse>;
 ```
 
 ### `LocalEndpointRequest` (interface)
@@ -3369,7 +3372,7 @@ const handleSchemaEditRequest: (request: SchemaEditRequest) => SchemaEditRespons
 ### `handleSeedRequest` (const)
 
 ```ts
-const handleSeedRequest: (request: SeedRequest) => SeedResponse;
+const handleSeedRequest: (request: SeedRequest) => Promise<SeedResponse>;
 ```
 
 ### `headerValue` (const)

@@ -2,7 +2,7 @@ import type { ArrowFunction, FunctionExpression, IfStatement, Node as TsNode, Pr
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { UnrestrictedWhereBranchIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
+import { descendantsOfKind, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
 
 /**
  * Config keys whose value is a row predicate returning a `WhereInput`: a
@@ -436,7 +436,7 @@ const branchesInCall = (call: TsNode, owner: string, relativePath: string): Unre
 const branchesInSourceFile = (sourceFile: SourceFile, relativePath: string): UnrestrictedWhereBranchIR[] => {
     const found: UnrestrictedWhereBranchIR[] = [];
 
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
         const owner = predicateOwnerName(call);
 
         if (owner !== undefined) {

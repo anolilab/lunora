@@ -4,7 +4,7 @@ import type { CallExpression, SourceFile } from "ts-morph";
 import { Node, Project, SyntaxKind } from "ts-morph";
 
 import { PROJECT_CONFIG_FILENAMES } from "../project-config-path";
-import { chainRootOf, listLunoraSourceFiles, memberAccessOf, propertyKeyName, unwrapExpression } from "./ast";
+import { chainRootOf, descendantsOfKind, listLunoraSourceFiles, memberAccessOf, propertyKeyName, unwrapExpression } from "./ast";
 import { callsServerFactory } from "./callee";
 import { contextPropertiesRead } from "./feature-usage";
 
@@ -336,7 +336,7 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string, proj
             signals.liveContext = signals.liveContext || contextReads.has("live");
         }
 
-        const calls = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression);
+        const calls = descendantsOfKind(sourceFile, SyntaxKind.CallExpression);
 
         for (const call of calls) {
             const signal = callSignal(sourceFile, call) ?? declarationSignal(sourceFile, call);

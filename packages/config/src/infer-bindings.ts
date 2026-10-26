@@ -21,7 +21,7 @@
  */
 import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 
 import type { CapabilityKey, ServiceBindingIR, SourceCapabilitySignals } from "@lunora/codegen";
 import {
@@ -235,7 +235,8 @@ const identifierCache = new WeakMap<SourceFile, Identifier[]>();
 const identifiersOf = (sourceFile: SourceFile): Identifier[] => {
     const cached = identifierCache.get(sourceFile);
 
-    if (cached !== undefined) {
+    // A re-parse of the file forgets every node it held, so a list whose first node is forgotten is stale.
+    if (cached !== undefined && cached[0]?.wasForgotten() !== true) {
         return cached;
     }
 
@@ -986,6 +987,42 @@ const schemaFacts = (projectRoot: string, schemaDirectory: string, cache?: Disco
 };
 
 /**
+ * The parse the last {@link scanCapabilities} left, for the project it scanned. A
+ * watch session scans on every codegen pass, and re-parsing every candidate file
+ * each time was most of the scan; a file is re-parsed only when its text changed,
+ * so nothing stale is ever read. Only the latest project is kept: a host scans one,
+ * and one that alternates re-parses on each switch, no worse than not caching.
+ */
+let lastScan: { project: Project; root: string } | undefined;
+
+/** The project {@link lastScan} keeps for `projectRoot`, replacing another root's. */
+const scanProjectOf = (projectRoot: string): Project => {
+    const root = resolve(projectRoot);
+
+    if (lastScan?.root !== root) {
+        lastScan = { project: new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true }), root };
+    }
+
+    return lastScan.project;
+};
+
+/** Parse `code` into `project` as `file`, unless the file is already there with exactly this text. */
+const parseIfChanged = (project: Project, file: string, code: string): void => {
+    if (project.getSourceFile(file)?.getFullText() !== code) {
+        project.createSourceFile(file, code, { overwrite: true });
+    }
+};
+
+/** Drop every file the last scan parsed and this one did not — a deleted file, or one no longer worth parsing. */
+const forgetUnscanned = (project: Project, scanned: ReadonlySet<SourceFile>): void => {
+    for (const sourceFile of project.getSourceFiles()) {
+        if (!scanned.has(sourceFile)) {
+            project.removeSourceFile(sourceFile);
+        }
+    }
+};
+
+/**
  * Scan every source file under `scanDirectories` and decide the capabilities.
  *
  * Each file worth parsing (see {@link CAPABILITY_PACKAGE_PATTERN}) contributes
@@ -1000,7 +1037,8 @@ const schemaFacts = (projectRoot: string, schemaDirectory: string, cache?: Disco
  */
 const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<string>, lunoraDirectory: string): Capabilities => {
     const lunoraRoot = join(projectRoot, lunoraDirectory);
-    const project = new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true });
+    const project = scanProjectOf(projectRoot);
+
     const candidates: { file: string; inLunora: boolean }[] = [];
     const lunoraFiles: SourceCapabilitySignals[] = [];
     const otherFiles: SourceCapabilitySignals[] = [];
@@ -1035,12 +1073,20 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
                 code.includes(EVENT_LOG_CLIENT) ||
                 (inLunora && (mayReadCapabilityContext(code) || RELATIVE_IMPORT_PATTERN.test(code)))
             ) {
-                // Registered now, while the program is not built, so the text is not kept for the signal pass.
-                project.createSourceFile(file, code, { overwrite: true });
+                // Registered now, while the program is not built, so the text is not kept for the signal pass. A file
+                // whose text is unchanged since the last scan keeps its parse — and with it codegen's per-file caches.
+                parseIfChanged(project, file, code);
+
                 candidates.push({ file, inLunora });
             }
         }
     }
+
+    // Forget what the last scan parsed and this one did not (a deleted file, or one no longer worth parsing), before any
+    // signal is read, so the project holds exactly this scan's file set.
+    // By identity, not by path string: ts-morph stores a standardized absolute path, which a relative root or a
+    // Windows spelling of `file` would never equal.
+    forgetUnscanned(project, new Set(candidates.map(({ file }) => project.getSourceFileOrThrow(file))));
 
     // Each file's signals come from `@lunora/codegen`'s own per-file probe over a parsed AST, so a type-only import, or a
     // `ctx.kv` inside a comment or a string, implies nothing here, exactly as it implies nothing to codegen. Every candidate

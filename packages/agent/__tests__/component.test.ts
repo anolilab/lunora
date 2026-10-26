@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { agentComponent, agentExtension } from "../src/component";
+import { AGENT_RUNTIME_FUNCTIONS } from "../src/naming";
 import approvalMarkerFields from "./approval-fixtures";
 import { assertNoExplicitUndefined } from "./loop-harness";
 
@@ -233,6 +234,13 @@ describe(agentComponent, () => {
             totalTokens: 3,
         });
         expect(usage?.parse(undefined)).toBeUndefined();
+    });
+
+    it("matches the static AGENT_RUNTIME_FUNCTIONS table codegen registers from", () => {
+        const { functions } = agentComponent();
+        const derived = Object.fromEntries(Object.entries(functions).map(([name, definition]) => [name, definition.visibility ?? "public"]));
+
+        expect(AGENT_RUNTIME_FUNCTIONS).toStrictEqual(derived);
     });
 
     it("marks the mutations internal and the queries public", () => {
