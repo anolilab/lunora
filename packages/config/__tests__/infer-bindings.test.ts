@@ -1635,6 +1635,15 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
     });
 
+    it("keys LUNORA_RELAY_SECRET for an entry that exports a property of the replica namespace as a value", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nimport * as replica from "@lunora/replica";\n\nexport const Log = replica.EventLogDO;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
     it("keys LUNORA_RELAY_SECRET for an entry that exports the imported EventLogDO as a value", async () => {
         expect.assertions(1);
 

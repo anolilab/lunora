@@ -263,6 +263,29 @@ const namedImportSources = (source: ts.SourceFile): Map<string, NameSource> => {
     return imported;
 };
 
+/** The namespace imports a file binds, keyed by local name, with the module each is imported from. A type-only import binds nothing at runtime. */
+const namespaceImportSources = (source: ts.SourceFile): Map<string, string> => {
+    const namespaces = new Map<string, string>();
+
+    for (const statement of source.statements) {
+        if (
+            !ts.isImportDeclaration(statement) ||
+            statement.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword ||
+            !ts.isStringLiteral(statement.moduleSpecifier)
+        ) {
+            continue;
+        }
+
+        const bindings = statement.importClause?.namedBindings;
+
+        if (bindings !== undefined && ts.isNamespaceImport(bindings)) {
+            namespaces.set(bindings.name.text, statement.moduleSpecifier.text);
+        }
+    }
+
+    return namespaces;
+};
+
 /**
  * One export a module makes that forwards from another module. `exported` is the name it is exported under, or `undefined` for a
  * star re-export, which carries the requested name through unchanged. `name` is the name read from `module`, or `undefined` for a star.
@@ -309,20 +332,46 @@ const localNamesExportedBy = (statement: ts.Statement): string[] => {
 const localExportNames = (source: ts.SourceFile): Set<string> => new Set(source.statements.flatMap((statement) => localNamesExportedBy(statement)));
 
 /**
- * The exports an `export const x = y` statement makes when `y` is a name the file imported: a value copy of the imported class
- * forwards it as surely as a re-export does. Any other initializer forwards nothing.
+ * The export an initializer reads when it names an imported binding (`EventLogDO`) or a property of an imported namespace
+ * (`replica.EventLogDO`). Any other expression reads no export.
  */
-const valueExportsOf = (statement: ts.VariableStatement, imported: ReadonlyMap<string, NameSource>): ModuleExport[] => {
+const importedExportOf = (
+    expression: ts.Expression,
+    imported: ReadonlyMap<string, NameSource>,
+    namespaces: ReadonlyMap<string, string>,
+): NameSource | undefined => {
+    if (ts.isIdentifier(expression)) {
+        return imported.get(expression.text);
+    }
+
+    if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
+        const module = namespaces.get(expression.expression.text);
+
+        return module === undefined ? undefined : { module, name: expression.name.text };
+    }
+
+    return undefined;
+};
+
+/**
+ * The exports an `export const x = y` statement makes when `y` reads an imported name: a value copy of the imported class forwards it
+ * as surely as a re-export does. Any other initializer forwards nothing.
+ */
+const valueExportsOf = (
+    statement: ts.VariableStatement,
+    imported: ReadonlyMap<string, NameSource>,
+    namespaces: ReadonlyMap<string, string>,
+): ModuleExport[] => {
     if (!isExported(statement)) {
         return [];
     }
 
     return statement.declarationList.declarations.flatMap((declaration): ModuleExport[] => {
-        if (!ts.isIdentifier(declaration.name) || declaration.initializer === undefined || !ts.isIdentifier(declaration.initializer)) {
+        if (!ts.isIdentifier(declaration.name) || declaration.initializer === undefined) {
             return [];
         }
 
-        const binding = imported.get(declaration.initializer.text);
+        const binding = importedExportOf(declaration.initializer, imported, namespaces);
 
         return binding === undefined ? [] : [{ exported: declaration.name.text, module: binding.module, name: binding.name }];
     });
@@ -351,10 +400,11 @@ const subclassExportsOf = (statement: ts.ClassDeclaration, imported: ReadonlyMap
  */
 const forwardedExports = (source: ts.SourceFile): ModuleExport[] => {
     const imported = namedImportSources(source);
+    const namespaces = namespaceImportSources(source);
 
     return source.statements.flatMap((statement): ModuleExport[] => {
         if (ts.isVariableStatement(statement)) {
-            return valueExportsOf(statement, imported);
+            return valueExportsOf(statement, imported, namespaces);
         }
 
         if (ts.isClassDeclaration(statement)) {
