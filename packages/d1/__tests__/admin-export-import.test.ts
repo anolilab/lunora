@@ -230,7 +230,7 @@ describe("d1 admin export/import globals", () => {
 
             expect(result.errors).toHaveLength(1);
             expect(result.errors[0]).toMatchObject({ code: "VALIDATION_ERROR", line: 2, table: "settings" });
-            await expect(writer.get("s1", "settings")).resolves.toBeNull();
+            await expect(writer.get("settings", "s1")).resolves.toBeNull();
         });
 
         it("reports a row with no usable `table` as BAD_ROW rather than skipping it", async () => {
