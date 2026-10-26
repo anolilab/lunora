@@ -739,10 +739,6 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
             return { leftover: [], status: started };
         }
 
-        // Before anything is deleted: a ready export holds the subject's data, and one that claims ready after this start meets
-        // the processing status in its own recheck (see exportRun).
-        await steps.do("expire:start", async () => expireReadyExports(scope.ports, requestId));
-
         // The tombstone is written first: before anything is erased, so a store that cannot take it
         // (unbound behind the workflow's port, or failing) stops the erasure with nothing deleted, and
         // before the request completes, so a completed erasure always has one. A retried step writes it
@@ -755,6 +751,11 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
         }
 
         wroteTombstone = true;
+
+        // After the tombstone and before any drain: a failure before it must leave the subject's exports alone. The processing
+        // status is already set, so a ready export that claims after this point meets it in its own recheck (see exportRun).
+        await steps.do("expire:before-drain", async () => expireReadyExports(scope.ports, requestId));
+
         erasing = true;
 
         for (const dataset of erasureOrder(scope.datasets)) {

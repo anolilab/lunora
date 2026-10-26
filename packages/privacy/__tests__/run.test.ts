@@ -461,6 +461,35 @@ describe("runExport", () => {
         expect(store.rows.get(exported.id)?.status).toBe("expired");
     });
 
+    it("keeps a ready export and its archive when the erasure fails at its tombstone, before any row goes", async () => {
+        const { port } = memoryData({});
+        // The tombstone store refuses the write, so nothing is erased and the subject's export must stay available.
+        const refusing: TombstonePort = {
+            add: async () => {
+                throw new Error("tombstone store unavailable");
+            },
+            has: async () => false,
+            keys: async () => new Set(),
+        };
+        const { files, privacy, runErasureWorkflow, runExportWorkflow, store } = setup({
+            data: port,
+            datasets: [tasks],
+            erasure: NO_GRACE,
+            tombstones: refusing,
+        });
+        const exported = await privacy.requestExport();
+
+        await runExportWorkflow(exported.id);
+
+        const erasure = await privacy.requestErasure();
+
+        await runErasureWorkflow(erasure.id);
+
+        expect(store.rows.get(erasure.id)).toMatchObject({ nothingErased: true, status: "failed" });
+        expect(store.rows.get(exported.id)?.status).toBe("ready");
+        expect([...files.files.keys()].some((key) => key.startsWith(`${exported.id}/`))).toBe(true);
+    });
+
     it("lets an export proceed when the subject's erasure failed before its tombstone, because it erased nothing", async () => {
         const { port } = memoryData({});
         // The tombstone store refuses the write, which is the first step: nothing is erased before it.
