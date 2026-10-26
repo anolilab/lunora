@@ -374,21 +374,80 @@ const acceptedDomain = (validator: Validator): ReadonlyArray<unknown> | undefine
 };
 
 /**
- * The deal for an array column.
- *
- * An array of an open element type (strings, numbers, ids) is built from the per-cell hash and so is
- * distinct per row in practice, which is the {@link anonymousDeal}. That only holds when the array can
- * hold something: one capped at zero items is always `[]`. And one over a FINITE element domain has a
- * countable number of arrays (`v.array(v.boolean()).max(2)` has seven), so it is enumerated by length
- * and then by element, which makes the planner refuse a batch past that count instead of repeating one.
+ * Most candidate arrays an array column lists to run its validator over. Past this many the deal stays
+ * arithmetic and checks each value it emits instead (see {@link arrayDeal}).
  */
-const arrayDeal = (field: FieldSpec, constraints: Constraints): UniqueDeal => {
+const ARRAY_ENUMERATION_LIMIT = 65_536;
+
+/**
+ * How many arrays of at least `shortest` and at most `highest` items a finite element domain of `base`
+ * values admits; `Infinity` past the safe-integer range.
+ */
+const countArrays = (base: number, shortest: number, highest: number): number => {
+    // An empty element domain admits only `[]`.
+    if (base === 0) {
+        return shortest === 0 ? 1 : 0;
+    }
+
+    // One element value only ever forms one array per length.
+    if (base === 1) {
+        return Math.max(0, highest - shortest + 1);
+    }
+
+    let count = 0;
+
+    for (let length = shortest; length <= highest && count <= Number.MAX_SAFE_INTEGER; length += 1) {
+        count += base ** length;
+    }
+
+    return count > Number.MAX_SAFE_INTEGER ? Number.POSITIVE_INFINITY : count;
+};
+
+/**
+ * The `index`-th array of a finite element domain: shorter arrays first, and within a length the index read
+ * as base-`domain.length` digits picks the elements.
+ */
+const arrayAt = (domain: ReadonlyArray<unknown>, shortest: number, index: number): unknown[] => {
+    const base = domain.length;
+
+    if (base === 0) {
+        return [];
+    }
+
+    if (base === 1) {
+        return Array.from({ length: shortest + index }).fill(domain[0]);
+    }
+
+    let rest = index;
+    let length = shortest;
+
+    while (rest >= base ** length) {
+        rest -= base ** length;
+        length += 1;
+    }
+
+    return Array.from({ length }, (_, position) => domain[Math.floor(rest / base ** position) % base]);
+};
+
+/** A deal over an explicit list of values, dealt in order. */
+const listDeal = (values: ReadonlyArray<unknown>): UniqueDeal => {
+    return { capacity: values.length, valueAt: (index) => values[index] };
+};
+
+/**
+ * The arrays an array column can hold, as a deal. An open element type is the {@link anonymousDeal}: its
+ * arrays come from the per-cell hash and are distinct per row in practice. A FINITE element domain is
+ * counted and listed by length and then by element, and the column validator then keeps only the arrays it
+ * accepts, because a `.check()` on the array can refuse any of them. Past {@link ARRAY_ENUMERATION_LIMIT}
+ * the arrays are dealt by index and each value is checked as it is dealt.
+ */
+const arrayValuesDeal = (field: FieldSpec, constraints: Constraints, table: string): UniqueDeal => {
     const element = metaOf(field.validator).inner;
     const [lowest, generated] = arrayLengths(constraints, field.name);
 
     // No element validator generates `[]` always.
     if (element === undefined || generated <= 0) {
-        return { capacity: 1, valueAt: () => [] };
+        return listDeal(acceptedBy(field.validator, [[]]));
     }
 
     const domain = acceptedDomain(element);
@@ -401,34 +460,51 @@ const arrayDeal = (field: FieldSpec, constraints: Constraints): UniqueDeal => {
     // `maxItems` is; the schema admits the empty array and any length.
     const shortest = constraints.minItems === undefined ? 0 : lowest;
     const highest = constraints.maxItems === undefined || constraints.maxItems === Number.POSITIVE_INFINITY ? Number.POSITIVE_INFINITY : generated;
-    const base = domain.length;
-    const lengths = highest - shortest + 1;
-    // One element value only ever forms one array per length.
-    let capacity = base === 1 ? lengths : 0;
+    const count = countArrays(domain.length, shortest, highest);
 
-    for (let length = shortest; base > 1 && length <= highest && capacity <= Number.MAX_SAFE_INTEGER; length += 1) {
-        capacity += base ** length;
+    if (count <= ARRAY_ENUMERATION_LIMIT) {
+        return listDeal(
+            acceptedBy(
+                field.validator,
+                Array.from({ length: count }, (_, index) => arrayAt(domain, shortest, index)),
+            ),
+        );
     }
 
     return {
-        capacity: capacity > Number.MAX_SAFE_INTEGER ? Number.POSITIVE_INFINITY : capacity,
+        capacity: count,
         valueAt: (index) => {
-            let rest = index;
-            let length = shortest;
+            const value = arrayAt(domain, shortest, index);
 
-            // Shorter arrays first; within a length, `rest` read as base-`base` digits picks the elements.
-            while (base > 1 && rest >= base ** length) {
-                rest -= base ** length;
-                length += 1;
+            if (!field.validator.safeParse(value).ok) {
+                refuse(
+                    table,
+                    field.name,
+                    `the column's validator rejects the array dealt at row ${String(index)}, and too many arrays exist to check them all up front`,
+                );
             }
 
-            if (base === 1) {
-                length += rest;
-                rest = 0;
-            }
-
-            return Array.from({ length }, (_, position) => domain[Math.floor(rest / base ** position) % base]);
+            return value;
         },
+    };
+};
+
+/**
+ * The deal for an array column: the arrays {@link arrayValuesDeal} accepts, plus SQL NULL when the column is
+ * `.nullable()`. A unique index never compares a NULL, so NULL is one more distinct value after the arrays.
+ */
+const arrayDeal = (field: FieldSpec, constraints: Constraints, table: string): UniqueDeal => {
+    const deal = arrayValuesDeal(field, constraints, table);
+
+    // An open element type is returned as-is: composite planning recognises the {@link anonymousDeal} by identity.
+    if (!field.nullable || !Number.isFinite(deal.capacity)) {
+        return deal;
+    }
+
+    return {
+        capacity: deal.capacity + 1,
+        // eslint-disable-next-line unicorn/no-null -- NULL is the one value a nullable array column takes past its arrays
+        valueAt: (index, generate) => (index === deal.capacity ? null : deal.valueAt(index, generate)),
     };
 };
 
@@ -459,7 +535,7 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
         }
 
         case "array": {
-            return arrayDeal(field, constraints);
+            return arrayDeal(field, constraints, table);
         }
 
         case "bigint": {

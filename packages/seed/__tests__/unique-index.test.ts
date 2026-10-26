@@ -259,6 +259,79 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(() => seedPlan(schema, { counts: { boxes: 4 } })).toThrow(/unique column "xs" has only 3 possible values/u);
     });
 
+    it("seeds the empty array for a unique column whose element domain admits nothing", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            boxes: defineTable({
+                xs: v
+                    .array(v.literal("x").check(() => false))
+                    .max(1)
+                    .unique(),
+            }),
+        });
+        const xs = rowsOf(seedPlan(schema, { counts: { boxes: 1 } }), "boxes").map((row) => row.xs);
+
+        expect(xs).toStrictEqual([[]]);
+        expect(() => seedPlan(schema, { counts: { boxes: 2 } })).toThrow(/unique column "xs" has only 1 possible values/u);
+
+        const required = defineSchema({
+            boxes: defineTable({
+                xs: v
+                    .array(v.literal("x").check(() => false))
+                    .min(1)
+                    .max(1)
+                    .unique(),
+            }),
+        });
+
+        expect(() => seedPlan(required, { counts: { boxes: 1 } })).toThrow(/unique column "xs" has only 0 possible values/u);
+    });
+
+    it("deals only the arrays an array-level refinement on the column accepts", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            boxes: defineTable({
+                xs: v
+                    .array(v.literal("x"))
+                    .max(2)
+                    .check((xs) => xs.length === 2)
+                    .unique(),
+            }),
+        });
+        const xs = rowsOf(seedPlan(schema, { counts: { boxes: 1 } }), "boxes").map((row) => row.xs);
+
+        expect(xs).toStrictEqual([["x", "x"]]);
+        expect(() => seedPlan(schema, { counts: { boxes: 2 } })).toThrow(/unique column "xs" has only 1 possible values/u);
+    });
+
+    it("counts NULL as one more value of a nullable unique array", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({ boxes: defineTable({ tags: v.array(v.string()).max(0).nullable().unique() }) });
+        const tags = rowsOf(seedPlan(schema, { counts: { boxes: 2 } }), "boxes").map((row) => JSON.stringify(row.tags));
+
+        expect(tags.toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["[]", "null"]);
+        expect(() => seedPlan(schema, { counts: { boxes: 3 } })).toThrow(/unique column "tags" has only 2 possible values/u);
+    });
+
+    it("refuses a refined array column too large to list, rather than seed a value it rejects", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            boxes: defineTable({
+                bits: v
+                    .array(v.boolean())
+                    .max(50)
+                    .check((bits) => bits.length === 2)
+                    .unique(),
+            }),
+        });
+
+        expect(() => seedPlan(schema, { counts: { boxes: 1 } })).toThrow(/cannot generate unique values for "boxes"\."bits"/u);
+    });
+
     it("takes NULL for the rows past a nullable member's finite ceiling, which a unique index never compares", () => {
         expect.hasAssertions();
 
