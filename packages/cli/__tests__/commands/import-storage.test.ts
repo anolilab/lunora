@@ -269,6 +269,70 @@ describe("lunora import --with-storage", () => {
         expect(worker.imported.find((row) => row.table === "posts")?.doc).toStrictEqual({ _id: "p1", cover: coverHash, title: "hello" });
     });
 
+    it("checks the whole file before any blob moves, and uploads each blob once when the check passes", async () => {
+        expect.assertions(6);
+
+        const hash = sha256Hex("bytes");
+        const root = writeConvexExport({ kg_a: "bytes" }, { files: [{ _id: "f1", blob: { $storage: "kg_a" } }] });
+        const worker = fakeWorker();
+        const checkedBodies: string[] = [];
+        let refusing = true;
+
+        // A worker whose check refuses the row while `refusing` is set, and otherwise behaves as `fakeWorker`.
+        const fetchImpl: StreamingFetchLike = async (input, init) => {
+            const url = new URL(input);
+
+            if (url.pathname === "/_lunora/admin/import" && url.searchParams.get("dryRun") === "true") {
+                checkedBodies.push(String(init?.body));
+
+                if (refusing) {
+                    return {
+                        body: null,
+                        json: async () => {
+                            return {
+                                conflicts: 0,
+                                errors: [{ code: "INVALID", line: 1, message: "refused", table: "files" }],
+                                inserted: {},
+                                received: 0,
+                            };
+                        },
+                        ok: true,
+                        status: 200,
+                        text: async () => "",
+                    };
+                }
+            }
+
+            return worker.fetchImpl(input, init);
+        };
+
+        const run = async () =>
+            runImportCommand({
+                cwd: workDir,
+                fetchImpl,
+                file: root,
+                logger: capturingLogger().logger,
+                token: "t",
+                url: "http://localhost:8787",
+                withStorage: true,
+            });
+
+        const refused = await run();
+
+        expect(refused.code).toBe(1);
+        expect(worker.uploads).toStrictEqual([]);
+
+        refusing = false;
+
+        const accepted = await run();
+
+        expect(accepted.code).toBe(0);
+        expect(worker.uploads).toStrictEqual([hash]);
+        // The check must see the same rows the real pass sends: the `$storage` reference already rewritten to its blob's key.
+        expect(checkedBodies[0]).toContain(`"blob":"${hash}"`);
+        expect(checkedBodies[0]).not.toContain("$storage");
+    });
+
     it("stops telling the operator to upload blobs by hand once it has uploaded them", async () => {
         expect.assertions(2);
 

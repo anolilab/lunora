@@ -28,7 +28,7 @@ import { readFirestoreExport } from "./sources/firebase";
 import { scanFirebaseDump, scanSupabaseDump } from "./sources/scan";
 import { listLocalObjects, listSupabaseObjects, transferStorageObjects } from "./sources/storage-transfer";
 import { readSupabaseExport } from "./sources/supabase";
-import { migrateStorageBlobs } from "./storage-blobs";
+import { migrateStorageBlobs, readStorageBlobKeys } from "./storage-blobs";
 import type { ImportConvexMapping } from "./storage-mapping";
 import { readImportConvexMapping, scanStorageColumns } from "./storage-mapping";
 import type { StoragePathIndex } from "./storage-path-index";
@@ -525,35 +525,70 @@ const drainIntoBatcher = async (
     }
 };
 
+/** What the document rewrite needs from the storage phase, worked out before any blob moves. */
+interface StoragePlan {
+    mapping?: ImportConvexMapping;
+    /** Convex only: the `storageId → R2 key` map, derived from the metadata, so it is exact before the upload runs. */
+    storageIdMap?: Map<string, string>;
+}
+
 /**
- * Upload every `_storage` blob and build the `storageId → R2 key` map the
- * document rewrite needs. Returns `undefined` after logging when the export
- * cannot support the request.
+ * The storage facts the check needs, read without moving a byte.
+ *
+ * A Convex blob's key is its content hash, so the map is known from the
+ * metadata alone. The check must rewrite with it: an unrewritten
+ * `{ $storage }` reference is an object, and the worker refuses it where the
+ * real pass sends a string. Foreign sources have no such map, because their
+ * keys only exist after the transfer, but their rewrite only swaps one string
+ * for another, so the check's verdict does not depend on it.
  */
-const runStorageMigration = async (
-    context: { baseUrl: string; fetchImpl: StreamingFetchLike; token: string },
-    source: Extract<ImportSource, { kind: "convex" }>,
-    cwd: string,
-    logger: Logger,
-): Promise<undefined | { mapping?: ImportConvexMapping; storageIdMap: Map<string, string> }> => {
-    const mapping = await readImportConvexMapping(cwd, logger);
+const planStoragePhase = async (source: ImportSource, options: ImportCommandOptions, cwd: string): Promise<undefined | StoragePlan> => {
+    if (options.withStorage !== true || source.kind !== "convex") {
+        return {};
+    }
+
+    const mapping = await readImportConvexMapping(cwd, options.logger);
     const storageTableEntry = source.tables.find((entry) => entry.table === CONVEX_STORAGE_TABLE);
 
     if (storageTableEntry === undefined) {
-        logger.error("--with-storage requires a Convex export with a `_storage` metadata table — re-export with `npx convex export --include-file-storage`.");
+        options.logger.error(
+            "--with-storage requires a Convex export with a `_storage` metadata table — re-export with `npx convex export --include-file-storage`.",
+        );
 
         return undefined;
     }
 
-    const storageIdMap = await migrateStorageBlobs(context, source.snapshot, storageTableEntry, mapping?.keyPrefix ?? "", logger);
-
-    logger.info(`storage map: ${String(storageIdMap.size)} blobs mapped`);
-
-    return { mapping, storageIdMap };
+    return { mapping, storageIdMap: await readStorageBlobKeys(source.snapshot, storageTableEntry, mapping?.keyPrefix ?? "", options.logger) };
 };
 
 /**
- * Run whichever storage phase this source has, or none.
+ * Upload every `_storage` blob. The map it returns is the one the plan already
+ * derived, built from the same keys, so the rows the check rewrote and the rows
+ * the real pass rewrites agree. Returns `undefined` when the export has no
+ * `_storage` table, which `planStoragePhase` has already refused and logged.
+ */
+const runStorageMigration = async (
+    context: { baseUrl: string; fetchImpl: StreamingFetchLike; token: string },
+    source: Extract<ImportSource, { kind: "convex" }>,
+    plan: StoragePlan,
+    logger: Logger,
+): Promise<undefined | { mapping?: ImportConvexMapping; storageIdMap: Map<string, string> }> => {
+    const storageTableEntry = source.tables.find((entry) => entry.table === CONVEX_STORAGE_TABLE);
+
+    if (storageTableEntry === undefined) {
+        return undefined;
+    }
+
+    const storageIdMap = await migrateStorageBlobs(context, source.snapshot, storageTableEntry, plan.mapping?.keyPrefix ?? "", logger);
+
+    logger.info(`storage map: ${String(storageIdMap.size)} blobs mapped`);
+
+    return { mapping: plan.mapping, storageIdMap };
+};
+
+/**
+ * Run whichever storage phase this source has, or none. Runs only after the
+ * check has passed the file, so a refused import uploads nothing.
  *
  * Convex carries its blobs inside the export; Supabase and Firebase keep theirs
  * in a bucket that has to be walked. Both end at the same place — a map from the
@@ -564,13 +599,14 @@ const runStoragePhase = async (
     source: ImportSource,
     options: ImportCommandOptions,
     cwd: string,
+    plan: StoragePlan,
 ): Promise<undefined | { mapping?: ImportConvexMapping; storageIdMap?: Map<string, string>; transferredPaths?: Map<string, string> }> => {
     if (options.withStorage !== true) {
         return {};
     }
 
     if (source.kind === "convex") {
-        return runStorageMigration(context, source, cwd, options.logger);
+        return runStorageMigration(context, source, plan, options.logger);
     }
 
     if (source.kind !== "supabase" && source.kind !== "firebase") {
@@ -814,10 +850,29 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
 
     const { baseUrl, fetchImpl, requestUrl, token } = request;
     const batchSize = options.batchSize ?? DEFAULT_IMPORT_BATCH_SIZE;
+    const target: ImportPassTarget = { batchSize, fetchImpl, requestUrl, token };
 
-    // Phase 1: move the files first, so no imported document can reference an
-    // object that is not there yet.
-    const storage = await runStoragePhase({ baseUrl, fetchImpl, token }, source, options, cwd);
+    // Phase 1: check the whole file, writing nothing, before any blob moves. A
+    // refused file leaves neither a row nor a blob behind. The check runs quietly
+    // and its errors come back in its own totals.
+    const plan = await planStoragePhase(source, options, cwd);
+
+    if (plan === undefined) {
+        // `planStoragePhase` logged which requirement the export does not meet.
+        return { body: undefined, code: 1, error: "import: the storage phase failed — no rows were written", inserted: 0 };
+    }
+
+    const check = await runImportPass(quietOptions(options), source, plan, { ...target, requestUrl: `${requestUrl}?dryRun=true` });
+    const refusal = checkRefusal(check);
+
+    if (refusal !== undefined) {
+        // Nothing was uploaded, so the refusal reports no storage block.
+        return refuseFile(options, check, refusal, undefined);
+    }
+
+    // Phase 2: move the files, so no imported document can reference an object
+    // that is not there yet.
+    const storage = await runStoragePhase({ baseUrl, fetchImpl, token }, source, options, cwd, plan);
 
     if (storage === undefined) {
         // `runStoragePhase` logged which object it could not move.
@@ -825,16 +880,6 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     }
 
     const { storageIdMap } = storage;
-    const target: ImportPassTarget = { batchSize, fetchImpl, requestUrl, token };
-
-    // The check reads the whole file and writes nothing, so a file it refuses never gets a real batch. Only the real pass narrates, so the
-    // check runs quietly and its errors come back in its own totals.
-    const check = await runImportPass(quietOptions(options), source, storage, { ...target, requestUrl: `${requestUrl}?dryRun=true` });
-    const refusal = checkRefusal(check);
-
-    if (refusal !== undefined) {
-        return refuseFile(options, check, refusal, storageIdMap);
-    }
 
     options.logger.info(
         source.kind === "convex"
