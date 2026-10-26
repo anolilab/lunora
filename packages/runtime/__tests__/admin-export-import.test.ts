@@ -993,24 +993,25 @@ describe("createWorker — admin import endpoint", () => {
             expect(body).not.toHaveProperty("onConflict");
         });
 
-        it("refuses global rows for an importer that has not opted in, instead of reporting them as conflicts", async () => {
-            expect.assertions(2);
+        it("refuses the whole import (400) for a global importer that has not opted in, before any shard row is overwritten", async () => {
+            expect.assertions(3);
 
-            const { body, importGlobals } = await replaceImport("https://app.example/_lunora/admin/import?onConflict=replace", {});
+            const { importGlobals, status } = await replaceImport("https://app.example/_lunora/admin/import?onConflict=replace", {});
 
+            expect(status).toBe(400);
             expect(importGlobals).not.toHaveBeenCalled();
-            expect(body["errors"]).toMatchObject([{ code: "GLOBAL_REPLACE_UNSUPPORTED", line: 1 }]);
+            expect(orchestrateImport).not.toHaveBeenCalled();
         });
 
-        it("refuses those rows in a dry run too, so a client's check catches it before anything is written", async () => {
+        it("refuses it in a dry run too, so a client's check catches it before anything is written", async () => {
             expect.assertions(2);
 
-            const { body, importGlobals } = await replaceImport("https://app.example/_lunora/admin/import?dryRun=true&onConflict=replace", {
+            const { importGlobals, status } = await replaceImport("https://app.example/_lunora/admin/import?dryRun=true&onConflict=replace", {
                 importGlobalsSupportsDryRun: true,
             });
 
+            expect(status).toBe(400);
             expect(importGlobals).not.toHaveBeenCalled();
-            expect(body["errors"]).toMatchObject([{ code: "GLOBAL_REPLACE_UNSUPPORTED", line: 1 }]);
         });
 
         it("rejects an unknown mode", async () => {

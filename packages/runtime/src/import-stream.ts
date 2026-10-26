@@ -315,6 +315,15 @@ const streamingImport = async (
 
     const { errors, globalRows, perShard, received } = await bucketImportStream(request, options, defaultShard);
 
+    // Refused before the shard fan-out, not per row after it: shard rows would already have been
+    // overwritten by the time the global plane said it cannot replace, and that is not undoable.
+    if (onConflict === "replace" && globalRows.length > 0 && options.importGlobals !== undefined && options.importGlobalsSupportsReplace !== true) {
+        throw new LunoraError("onConflict=replace: the configured `importGlobals` cannot overwrite existing rows, so nothing was imported", {
+            code: "BAD_REQUEST",
+            status: 400,
+        });
+    }
+
     const totals: ImportTotals = { conflicts: 0, errors, failed: [], inserted: {}, replaced: 0 };
     const warnings: string[] = [];
 
@@ -359,8 +368,6 @@ const streamingImport = async (
             refuseGlobalRows(totals, globalRows, "GLOBAL_NOT_CONFIGURED", "no `importGlobals` is configured");
         } else if (dryRun && options.importGlobalsSupportsDryRun !== true) {
             refuseGlobalRows(totals, globalRows, "GLOBAL_DRY_RUN_UNSUPPORTED", "the configured `importGlobals` cannot check rows without writing them");
-        } else if (onConflict === "replace" && options.importGlobalsSupportsReplace !== true) {
-            refuseGlobalRows(totals, globalRows, "GLOBAL_REPLACE_UNSUPPORTED", "the configured `importGlobals` cannot overwrite existing rows");
         } else {
             // Pass each row's true physical `line` (carried on the row) so error
             // attribution is correct even when global rows are interspersed with

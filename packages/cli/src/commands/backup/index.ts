@@ -12,6 +12,7 @@ const backupCommand: Command = {
         ["lunora backup restore <id>", "Restore a snapshot by id"],
         ["lunora backup create --bucket default", "Snapshot into an R2 bucket instead of a directory"],
         ["lunora backup restore <id> --bucket default --verify", "Restore from R2, checksum first"],
+        ["lunora backup restore <id> --replace", "Restore over existing rows, overwriting each matching _id"],
         ["lunora backup retention", "Show what the platform's retention would delete next"],
         ["lunora backup prune", "Delete the snapshots past the retention window (the only command that deletes backups)"],
         ["lunora backup pitr --at 2026-06-01T00:00:00Z", "Point-in-time recovery (≤30 days)"],
@@ -27,6 +28,11 @@ const backupCommand: Command = {
         { description: "Store snapshots in this R2 bucket instead of a directory (use `default` for the app's default bucket)", name: "bucket", type: String },
         { description: "Key prefix for bucket-backed snapshots (default backups/)", name: "prefix", type: String },
         { description: "restore: verify the snapshot's checksum before importing anything", name: "verify", type: Boolean },
+        {
+            description: "restore: overwrite rows whose _id already exists (default: leave them unchanged and report a conflict)",
+            name: "replace",
+            type: Boolean,
+        },
         { description: "Comma-separated table allowlist (create)", name: "tables", type: String },
         OUTPUT_FORMAT_OPTION,
         { description: "pitr: time to read/restore to (ISO or epoch-ms, ≤30 days)", name: "at", type: String },
@@ -55,6 +61,7 @@ export type BackupOptions = CreateOptions<{
     format: string | undefined;
     prefix: string | undefined;
     prod: boolean | undefined;
+    replace: boolean | undefined;
     restart: boolean | undefined;
     restore: boolean | undefined;
     shard: string | undefined;

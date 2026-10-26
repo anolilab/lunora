@@ -177,6 +177,12 @@ the file, row count, byte size, the SHA-256 of the snapshot, and the table
 allowlist if one was used. `restore` accepts either an id from the manifest or a
 direct path to an NDJSON file.
 
+`restore` never overwrites a row whose `_id` already exists in the target: it
+reports it as a conflict and leaves it as it is, so restoring into a live
+deployment brings back deleted rows but not earlier versions of changed ones.
+`restore --replace` overwrites those rows with the snapshot's copy instead,
+keeping each `_id`. The Studio import page has the same choice as a checkbox.
+
 There is no managed backup schedule in the CLI. `create` is a plain command, so
 schedule it wherever you already run periodic jobs (a CI cron, or a
 [cron-triggered action](/docs/concepts/scheduling)).

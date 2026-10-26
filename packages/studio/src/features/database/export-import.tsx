@@ -7,6 +7,7 @@ import { ConfirmButton } from "../../components/confirm-button";
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
+import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { useAdminQuery, useInvalidateAdmin } from "../../hooks/use-admin-query";
 import useStudioClient from "../../hooks/use-studio-client";
@@ -460,8 +461,9 @@ const sendImport = async (
     onProgress: (text: string) => void,
     file: File,
     csvTable: null | string,
+    onConflict: "replace" | "skip",
 ): Promise<{ failure: ImportFailure | undefined; total: ImportShardResult }> => {
-    const total: ImportShardResult = { conflicts: 0, errors: [], inserted: {} };
+    const total: ImportShardResult = { conflicts: 0, errors: [], inserted: {}, replaced: 0 };
     let prepared: { rows: number; source: ImportSource };
 
     // A CSV cell is coerced to its column's kind, so the kinds must be read first. Without them the file cannot be checked, and it is
@@ -504,7 +506,7 @@ const sendImport = async (
         // A shard built before dry runs ignores the flag and writes every row it is sent, and the check would learn that only after the
         // rows are in. So the first request carries no row, which no shard version can write, and only a shard that honours the flag
         // echoes `dryRun: true` in its answer.
-        const probe = (await client.query(IMPORT_SHARD, { dryRun: true, rows: [], startLine: 1 }, callOptions(shardKey))) as DryRunAnswer;
+        const probe = (await client.query(IMPORT_SHARD, { dryRun: true, onConflict, rows: [], startLine: 1 }, callOptions(shardKey))) as DryRunAnswer;
 
         if (probe.dryRun !== true) {
             return {
@@ -518,8 +520,17 @@ const sendImport = async (
             };
         }
 
+        // A shard built before replace imports ignores the mode and would report every existing row as a conflict; one that has it
+        // always answers with a `replaced` count, even for no rows.
+        if (onConflict === "replace" && typeof probe.replaced !== "number") {
+            return {
+                failure: { message: t("This shard cannot overwrite existing rows. Nothing was sent. Update the app and import again."), rows: 0 },
+                total,
+            };
+        }
+
         await forEachRowChunk(source(), async (rows, startLine) => {
-            const result = (await client.query(IMPORT_SHARD, { dryRun: true, rows, startLine }, callOptions(shardKey))) as ImportShardResult;
+            const result = (await client.query(IMPORT_SHARD, { dryRun: true, onConflict, rows, startLine }, callOptions(shardKey))) as ImportShardResult;
 
             check.errors.push(...result.errors);
         });
@@ -552,10 +563,11 @@ const sendImport = async (
 
         pending.startLine = startLine;
 
-        const result = (await client.query(IMPORT_SHARD, { dryRun: false, rows, startLine }, callOptions(shardKey))) as ImportShardResult;
+        const result = (await client.query(IMPORT_SHARD, { dryRun: false, onConflict, rows, startLine }, callOptions(shardKey))) as ImportShardResult;
 
         pending.startLine = undefined;
         total.conflicts += result.conflicts;
+        total.replaced = (total.replaced ?? 0) + (result.replaced ?? 0);
         total.errors.push(...result.errors);
 
         for (const [table, count] of Object.entries(result.inserted)) {
@@ -634,6 +646,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
     const [importResult, setImportResult] = useState<ImportShardResult | null>(null);
     const [progress, setProgress] = useState<null | string>(null);
     const [exported, setExported] = useState<ExportedShard | null>(null);
+    const [replace, setReplace] = useState<boolean>(false);
 
     const csvFile = importFile !== null && isCsvFile(importFile);
     const csvTarget = csvPick !== null && csvPick.shardKey === shardKey ? csvPick.table : "";
@@ -684,7 +697,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         setImportResult(null);
         setExported(null);
 
-        const { failure, total } = await sendImport(client, t, shardKey, setProgress, file, csvTable);
+        const { failure, total } = await sendImport(client, t, shardKey, setProgress, file, csvTable, replace ? "replace" : "skip");
 
         if (failure === undefined) {
             recordShard(shardKey);
@@ -770,6 +783,10 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         setCsvPick({ shardKey, table });
     };
 
+    const onReplaceChange = (event: ChangeEvent<HTMLInputElement>): void => {
+        setReplace(event.target.checked);
+    };
+
     return (
         <div className="flex flex-col gap-4" data-testid="lunora-export-import">
             <Card className="gap-0 py-0 rounded-xl border border-border bg-card shadow-xs">
@@ -823,6 +840,18 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
 
                     {csvFile && <CsvTablePicker onChange={onCsvTableChange} shardKey={shardKey} value={csvTarget} />}
 
+                    <Label className="flex items-center gap-2 text-xs font-normal text-muted-foreground" htmlFor="ei-replace">
+                        <input
+                            checked={replace}
+                            className="size-4 accent-primary"
+                            data-testid="ei-replace"
+                            id="ei-replace"
+                            onChange={onReplaceChange}
+                            type="checkbox"
+                        />
+                        {t("Overwrite rows whose _id already exists (otherwise they are left unchanged and counted as conflicts)")}
+                    </Label>
+
                     <div className="flex flex-wrap items-center gap-2">
                         <ConfirmButton confirmLabel={t("Import (writes rows)?")} disabled={busy || !importReady} onConfirm={runImport} testId="ei-import">
                             {t("Import")}
@@ -838,10 +867,11 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                     {importResult !== null && (
                         <div className="flex flex-col gap-2" data-testid="ei-import-result">
                             <p className="text-sm text-muted-foreground">
-                                {t("Inserted {inserted}, {conflicts} conflicts, {errors} errors.", {
+                                {t("Inserted {inserted}, replaced {replaced}, {conflicts} conflicts, {errors} errors.", {
                                     conflicts: importResult.conflicts,
                                     errors: importResult.errors.length,
                                     inserted: insertedTotal,
+                                    replaced: importResult.replaced ?? 0,
                                 })}
                             </p>
                             {importResult.errors.length > 0 && (

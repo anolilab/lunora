@@ -1746,6 +1746,8 @@ export interface ImportShardResult {
     conflicts: number;
     errors: ImportError[];
     inserted: Record<string, number>;
+    /** Existing rows overwritten under `onConflict: "replace"`; absent from a shard built before replace imports. */
+    replaced?: number;
 }
 
 /* -------------------------------------------------------------------------- */

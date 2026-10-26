@@ -92,6 +92,8 @@ interface BackupCommandOptions {
     /** Key prefix bucket-backed backups live under. Defaults to `backups/`. */
     prefix?: string;
     prod?: boolean;
+    /** `restore`: overwrite rows whose `_id` already exists instead of reporting them as conflicts. */
+    replace?: boolean;
     /** `pitr restore`: also restart the shard now (`ctx.abort()`) so recovery applies immediately. */
     restart?: boolean;
     /** `pitr`: perform a restore (`pitrRestore`) instead of just reading the current/for-a-time bookmark. */
@@ -293,6 +295,7 @@ const runBackupRestore = async (options: BackupCommandOptions, destination: Back
             file: snapshot.path,
             logger: options.logger,
             prod: options.prod,
+            replace: options.replace,
             token: options.token,
             url: options.url,
             yes: options.yes,
@@ -814,6 +817,7 @@ const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions, Back
         logger,
         prefix: options.prefix,
         prod: options.prod === true,
+        replace: options.replace === true,
         restart: options.restart === true,
         restore: options.restore === true,
         shard: options.shard,
