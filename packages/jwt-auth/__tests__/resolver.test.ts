@@ -2,7 +2,7 @@ import type { CryptoKey, JWK } from "jose";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { bearerToken, cookieToken, firstToken, jwtIdentityResolver } from "../src";
+import { bearerToken, cookieToken, firstToken, headerToken, jwtIdentityResolver, jwtVerifier } from "../src";
 
 const ISSUER = "https://issuer.example.test";
 const AUDIENCE = "https://api.example.test";
@@ -193,5 +193,71 @@ describe(jwtIdentityResolver, () => {
 
         await expect(discovered(request({ authorization: `Bearer ${token}` }))).resolves.toMatchObject({ userId: "user_d" });
         expect(fetchMock.mock.calls.map(([input]) => String(input instanceof Request ? input.url : input))).toContain(`${issuer}/keys`);
+    });
+
+    it("requires exp by default", async () => {
+        expect.assertions(1);
+
+        const token = await new SignJWT({ sub: "user_1" })
+            .setProtectedHeader({ alg: "RS256", kid: "a" })
+            .setIssuer(ISSUER)
+            .setAudience(AUDIENCE)
+            .sign(keyA.privateKey);
+
+        await expect(resolver(request({ authorization: `Bearer ${token}` }))).resolves.toBeNull();
+    });
+
+    it("forwards exp plus the clock tolerance it was accepted under", async () => {
+        expect.assertions(1);
+
+        const exp = Math.floor(Date.now() / 1000) - 5;
+        const lenient = jwtIdentityResolver({ audience: AUDIENCE, clockTolerance: 30, issuer: ISSUER, keySet: createLocalJWKSet(jwks) });
+
+        await expect(lenient(request({ authorization: `Bearer ${await sign({ sub: "user_1" }, { exp })}` }))).resolves.toMatchObject({ exp: exp + 30 });
+    });
+
+    it("refuses OIDC discovery for a non-https issuer at construction", () => {
+        expect.assertions(1);
+
+        expect(() => jwtIdentityResolver({ issuer: "http://issuer.example.test" })).toThrow(/https `issuer`/);
+    });
+
+    it("refuses a discovery document that names another issuer", async () => {
+        expect.assertions(2);
+
+        const issuer = "https://mismatch.example.test";
+        const fetchMock = vi.fn<(input: Request | string | URL) => Promise<Response>>(async (input) => {
+            const url = String(input instanceof Request ? input.url : input);
+
+            return url.endsWith("/.well-known/openid-configuration")
+                ? Response.json({ issuer: "https://evil.example.test", jwks_uri: `${issuer}/keys` })
+                : Response.json(jwks);
+        });
+
+        vi.stubGlobal("fetch", fetchMock);
+
+        const discovered = jwtIdentityResolver({ issuer });
+
+        await expect(discovered(request({ authorization: `Bearer ${await sign({ sub: "user_d" }, { iss: issuer })}` }))).resolves.toBeNull();
+        expect(fetchMock.mock.calls.map(([input]) => String(input instanceof Request ? input.url : input))).not.toContain(`${issuer}/keys`);
+    });
+});
+
+describe(jwtVerifier, () => {
+    const verify = jwtVerifier({ audience: AUDIENCE, issuer: ISSUER, keySet: createLocalJWKSet(jwks), token: headerToken("x-assertion") });
+
+    it("returns the payload of a valid token read from a custom header", async () => {
+        expect.assertions(1);
+
+        await expect(verify(request({ "x-assertion": await sign({ sub: "user_1" }) }))).resolves.toMatchObject({ expired: false, payload: { sub: "user_1" } });
+    });
+
+    it("flags an expired-but-genuine token and drops an expired forgery", async () => {
+        expect.assertions(2);
+
+        const past = Math.floor(Date.now() / 1000) - 60;
+
+        await expect(verify(request({ "x-assertion": await sign({ sub: "user_1" }, { exp: past }) }))).resolves.toMatchObject({ expired: true });
+        await expect(verify(request({ "x-assertion": await sign({ sub: "user_1" }, { exp: past, key: attacker.privateKey }) }))).resolves.toBeUndefined();
     });
 });
