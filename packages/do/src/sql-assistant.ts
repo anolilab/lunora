@@ -281,8 +281,9 @@ const validateClauses = (parsed: unknown, columns: ReadonlyArray<string>, physic
     const clauses: AssistantFilterClause[] = [];
 
     for (const entry of parsed) {
+        // Skipping a non-clause would keep its siblings as the whole filter, a wider set than the model described.
         if (typeof entry !== "object" || entry === null) {
-            continue;
+            return undefined;
         }
 
         const { column, operator, path, value } = entry as { column?: unknown; operator?: unknown; path?: unknown; value?: unknown };

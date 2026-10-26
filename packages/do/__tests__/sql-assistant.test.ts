@@ -288,6 +288,19 @@ describe("generateFilter", () => {
         expect(result.degraded).toBe(true);
     });
 
+    it.each([["\"status = 'closed'\""], ["null"]])(
+        "degrades the whole suggestion when an entry is not a clause (%s), rather than keeping the rest",
+        async (entry) => {
+            expect.assertions(1);
+
+            // A skipped entry would leave its siblings as the whole filter, a wider set than the model described.
+            const ai = binding(`[${entry},{"column":"status","operator":"eq","value":"open"}]`);
+            const result = await generateFilter(ai, { prompt: "x" }, ["id", "address", "status"], PHYSICAL);
+
+            expect(result.degraded).toBe(true);
+        },
+    );
+
     it("reads a null path as absent, since models emit it on top-level columns", async () => {
         expect.assertions(1);
 
