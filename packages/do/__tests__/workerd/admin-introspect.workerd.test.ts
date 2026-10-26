@@ -3,8 +3,9 @@
  * `node:sqlite` cannot reproduce: at most 100 bound parameters per statement, and
  * a function allowlist that decides whether `json_tree`/`json_each` may run.
  */
-import type { SqlExec } from "@lunora/shard-engine";
+import type { FilterClause, SqlExec } from "@lunora/shard-engine";
 import { findStorageReferences, readTablePage } from "@lunora/shard-engine";
+import { encodeWire } from "@lunora/wire";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
@@ -68,6 +69,61 @@ describe("admin introspection on workerd", () => {
         });
     });
 
+    it("filters a boolean doc field by eq true and eq false through the JSON truth value", async () => {
+        expect.assertions(2);
+
+        await withSql("admin-filter-booleans", (sql) => {
+            createDocTable(sql, "switches");
+            sql.exec(`INSERT INTO "switches" VALUES ('on', 1, '{"enabled":true}'), ('off', 1, '{"enabled":false}')`);
+
+            const idsWhere = (value: boolean): string[] =>
+                readTablePage(sql, { filters: [{ column: "enabled", operator: "eq", value }], table: "switches" }).rows.map(
+                    (row) => (row as { id: string }).id,
+                );
+
+            expect(idsWhere(true)).toStrictEqual(["on"]);
+            expect(idsWhere(false)).toStrictEqual(["off"]);
+        });
+    });
+
+    it("filters a nested field by eq and a JSON array by has on real SQLite", async () => {
+        expect.assertions(2);
+
+        await withSql("admin-filter-nested", (sql) => {
+            createDocTable(sql, "orders");
+            sql.exec(
+                `INSERT INTO "orders" VALUES ('a', 1, ?), ('b', 1, ?)`,
+                JSON.stringify({ address: { city: "Berlin" }, tags: ["red", "blue"] }),
+                JSON.stringify({ address: { city: "Paris" }, tags: ["green"] }),
+            );
+
+            const ids = (filter: FilterClause): string[] =>
+                readTablePage(sql, { filters: [filter], table: "orders" }).rows.map((row) => (row as { id: string }).id);
+
+            expect(ids({ column: "address", operator: "eq", path: ["city"], value: "Berlin" })).toStrictEqual(["a"]);
+            expect(ids({ column: "tags", operator: "has", value: "blue" })).toStrictEqual(["a"]);
+        });
+    });
+
+    it("matches a user string under nested escaped arrays, and never a codec tag, on real SQLite", async () => {
+        expect.assertions(2);
+
+        await withSql("admin-search-escapes", (sql) => {
+            createDocTable(sql, "frames");
+            // Stored through the real codec, the form the shard writes, so the escape frames and tags are the real ones.
+            sql.exec(
+                `INSERT INTO "frames" VALUES ('a', 1, ?), ('b', 1, ?)`,
+                JSON.stringify(encodeWire({ deep: ["$lunora.wire$", "arr", ["$lunora.wire$", "arr", ["$lunora.wire$", "amber"]]] })),
+                JSON.stringify(encodeWire({ box: 1n })),
+            );
+
+            const idsFor = (search: string): string[] => readTablePage(sql, { search, table: "frames" }).rows.map((row) => (row as { id: string }).id);
+
+            expect(idsFor("amber")).toStrictEqual(["a"]);
+            expect(idsFor("bigint")).toStrictEqual([]);
+        });
+    });
+
     it("keeps a date search under the parameter cap however many date fields a table declares", async () => {
         expect.assertions(1);
 
@@ -79,5 +135,40 @@ describe("admin introspection on workerd", () => {
 
             expect(readTablePage(sql, { columnKinds, search: "2026-07", table: "events" }).total).toBe(1);
         });
+    });
+
+    // Workerd refuses a statement over 100 bound parameters with a bare SQLite error
+    // that names no filter. The builder must refuse first, with BAD_REQUEST naming
+    // the table, and must still run a statement at exactly the cap.
+    it("runs a page at exactly 100 bound parameters, and refuses 101 with BAD_REQUEST naming the table", async () => {
+        expect.assertions(3);
+
+        // A doc-field eq clause binds its JSON path and its value: 49 of them are 98.
+        // LIMIT and OFFSET make the page statement 100.
+        const eqClauses = (count: number): { column: string; operator: "eq"; value: number }[] =>
+            Array.from({ length: count }, (_, index) => {
+                return { column: `field${String(index)}`, operator: "eq" as const, value: index };
+            });
+
+        let refusal: unknown;
+
+        await withSql("admin-param-budget", (sql) => {
+            createDocTable(sql, "budget");
+            sql.exec(`INSERT INTO "budget" VALUES ('a', 1, '{"field0":0}')`);
+
+            expect(readTablePage(sql, { filters: eqClauses(49), table: "budget" }).total).toBe(0);
+
+            // An `eq null` clause binds only its path, so 49 eq clauses plus one reach 99 and the page 101.
+            const overBudget = [...eqClauses(49), { column: "field0", operator: "eq" as const, value: null }];
+
+            try {
+                readTablePage(sql, { filters: overBudget, table: "budget" });
+            } catch (error) {
+                refusal = error;
+            }
+        });
+
+        expect(refusal).toMatchObject({ code: "BAD_REQUEST" });
+        expect((refusal as Error).message).toContain("binds 101 parameters");
     });
 });

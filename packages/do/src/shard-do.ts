@@ -11869,8 +11869,19 @@ abstract class ShardDO {
 
         const table = typeof args["table"] === "string" ? args["table"] : "";
         const columns = table === "" ? [] : this.tableColumns(table).map((column) => column.name);
+        // The storage-level names, which the filter compiler treats as physical; the
+        // suggestion is validated against the same set it will be compiled against.
+        const physical =
+            columns.length === 0
+                ? []
+                : (this.sql as SqlExec)
+                      .exec<{ name: string }>(`PRAGMA table_info(${quoteIdentifier(table)})`)
+                      .toArray()
+                      .map((column) => column.name);
+        // The declared kinds the filter compiler binds through, so a suggestion it would refuse is never offered.
+        const kinds = this.columnKinds(table) ?? {};
         const { generateFilter } = await loadSqlAssistant();
-        const result = await generateFilter((this.env as Record<string, unknown> | undefined)?.["AI"], args, columns);
+        const result = await generateFilter((this.env as Record<string, unknown> | undefined)?.["AI"], args, columns, physical, kinds);
 
         if (result.degraded && result.reason !== "no-ai-binding") {
             this.recordAudit("aiTableFilter", { detail: { reason: result.reason, table } });

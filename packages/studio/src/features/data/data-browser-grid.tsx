@@ -462,7 +462,7 @@ interface GridEdit {
     editable: boolean;
     editableColumn: (column: string) => boolean;
     editingCell: null | { column: string; rowId: string };
-    onExpandCell: (column: string, value: unknown) => void;
+    onExpandCell: (column: string, value: unknown, storedValue: unknown) => void;
     stage: StagedEditsModel["stage"];
     stagedValue: StagedEditsModel["stagedValue"];
     startEdit: (rowId: string, column: string) => void;
@@ -503,14 +503,17 @@ const EXPAND_BTN =
 const CellExpandButton = ({
     column,
     onExpand,
+    storedValue,
     value,
 }: {
     column: string;
-    onExpand: (column: string, value: unknown) => void;
+    onExpand: (column: string, value: unknown, storedValue: unknown) => void;
+    /** The value as the server holds it — what a "filter by this value" click must match, which can differ from `value` while an edit is staged. */
+    storedValue: unknown;
     value: unknown;
 }): ReactElement => {
     const onClick = (): void => {
-        onExpand(column, value);
+        onExpand(column, value, storedValue);
     };
 
     return (
@@ -643,7 +646,7 @@ const EditableCell = ({
         return (
             <>
                 <CellValue value={rawValue} />
-                <CellExpandButton column={column} onExpand={edit.onExpandCell} value={rawValue} />
+                <CellExpandButton column={column} onExpand={edit.onExpandCell} storedValue={rawValue} value={rawValue} />
             </>
         );
     }
@@ -687,7 +690,7 @@ const EditableCell = ({
             <span className={cellClass} data-testid={`db-cell-${id}-${column}`} onDoubleClick={onDoubleClick}>
                 <CellValue highlight={cellHighlight(highlight, mask, column)} value={display} />
             </span>
-            <CellExpandButton column={column} onExpand={edit.onExpandCell} value={display} />
+            <CellExpandButton column={column} onExpand={edit.onExpandCell} storedValue={rawValue} value={display} />
         </>
     );
 };
