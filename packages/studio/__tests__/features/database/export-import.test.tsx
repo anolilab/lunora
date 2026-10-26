@@ -28,6 +28,14 @@ const TYPED_COLUMNS: ColumnMeta[] = [
     { name: "day", optional: false, type: "date" },
 ];
 
+/** A shard's answer to a check: nothing is written, and the echo of `dryRun` shows the shard honoured the flag. */
+const checkPassed = () => {
+    return { conflicts: 0, dryRun: true, errors: [], inserted: {} };
+};
+
+/** A shard's answer to an import into `messages`: a check passes, and a write inserts every row it is sent. */
+const answerImport = ({ dryRun, rows }: ImportArgs) => (dryRun === true ? checkPassed() : { conflicts: 0, errors: [], inserted: { messages: rows.length } });
+
 /**
  * A server whose shard holds `rowsByTable`, with `columns` as the `messages` table's columns; `exportShard` answers one table per call, as
  * the panel asks for it.
@@ -52,10 +60,7 @@ const createClient = (rowsByTable?: Record<string, ExportRow[]>, columns: Column
             }
 
             if (reference === ADMIN_FUNCTIONS.importShard) {
-                const { dryRun, rows } = args as ImportArgs;
-
-                // A check writes nothing, so it reports nothing inserted.
-                return { conflicts: 0, errors: [], inserted: dryRun === true ? {} : { messages: rows.length }, ...(dryRun === true ? { dryRun: true } : {}) };
+                return answerImport(args as ImportArgs);
             }
 
             throw new Error(`unexpected ${reference}`);
@@ -109,46 +114,14 @@ const dryChecks = (mock: MockClientHooks): ImportArgs[] =>
         .map((call) => call[1] as ImportArgs)
         .filter((args) => args.dryRun === true && args.rows.length > 0);
 
-/**
- * A server that answers `importShard` for a 1200-row file. A check (`dryRun: true`) refuses the row on `badLine` when a chunk holds it, and
- * a write inserts every row it is sent.
- */
-const createCheckingClient = (badLine?: number): MockClientHooks =>
-    createMockClient({
-        query: (reference, args): unknown => {
-            if (reference === ADMIN_FUNCTIONS.listTables) {
-                return [{ name: "messages", rowCount: 0 }];
-            }
-
-            if (reference === ADMIN_FUNCTIONS.importShard) {
-                const { dryRun, rows, startLine } = args as ImportArgs;
-                const refused = badLine !== undefined && badLine >= startLine && badLine < startLine + rows.length;
-
-                if (dryRun === true && refused) {
-                    return {
-                        conflicts: 0,
-                        dryRun: true,
-                        errors: [{ code: "VALIDATION_ERROR", line: badLine, message: "text must be a string", table: "messages" }],
-                        inserted: {},
-                    };
-                }
-
-                // A check writes nothing, so it reports nothing inserted.
-                return { conflicts: 0, errors: [], inserted: dryRun === true ? {} : { messages: rows.length }, ...(dryRun === true ? { dryRun: true } : {}) };
-            }
-
-            throw new Error(`unexpected ${reference}`);
-        },
-    });
-
 /** The columns of the CSV test table: two text columns, so every cell is kept as the text it was written as. */
 const CSV_COLUMNS: ColumnMeta[] = [
     { name: "id", optional: false, type: "string" },
     { name: "body", optional: false, type: "string" },
 ];
 
-/** A server for a CSV import into `messages`. `refusedRecord`, when given, is a record the check refuses; writes insert every row sent. */
-const createCsvServer = (refusedRecord?: number): MockClientHooks =>
+/** A server for an import into `messages`. `refusedLine`, when given, is the line the check refuses; writes insert every row sent. */
+const createCheckingClient = (refusedLine?: number): MockClientHooks =>
     createMockClient({
         query: (reference, args): unknown => {
             if (reference === ADMIN_FUNCTIONS.listTables) {
@@ -161,18 +134,16 @@ const createCsvServer = (refusedRecord?: number): MockClientHooks =>
 
             if (reference === ADMIN_FUNCTIONS.importShard) {
                 const { dryRun, rows, startLine } = args as ImportArgs;
-                const index = refusedRecord === undefined ? -1 : refusedRecord - startLine;
+                const index = refusedLine === undefined ? -1 : refusedLine - startLine;
 
                 if (dryRun === true && index >= 0 && index < rows.length) {
                     return {
-                        conflicts: 0,
-                        dryRun: true,
+                        ...checkPassed(),
                         errors: [{ code: "VALIDATION_ERROR", line: startLine + index, message: "text must be a string", table: "messages" }],
-                        inserted: {},
                     };
                 }
 
-                return { conflicts: 0, errors: [], inserted: dryRun === true ? {} : { messages: rows.length }, ...(dryRun === true ? { dryRun: true } : {}) };
+                return answerImport({ dryRun, rows, startLine });
             }
 
             throw new Error(`unexpected ${reference}`);
@@ -389,8 +360,8 @@ describe("exportImportPanel", () => {
         const mock = createMockClient({
             query: (reference, args): unknown => {
                 if (reference === ADMIN_FUNCTIONS.importShard) {
-                    if ((args as { dryRun?: boolean }).dryRun === true) {
-                        return { conflicts: 0, errors: [], inserted: {}, dryRun: true };
+                    if ((args as ImportArgs).dryRun === true) {
+                        return checkPassed();
                     }
 
                     imports += 1;
@@ -428,8 +399,8 @@ describe("exportImportPanel", () => {
         const mock = createMockClient({
             query: (reference, args): unknown => {
                 if (reference === ADMIN_FUNCTIONS.importShard) {
-                    if ((args as { dryRun?: boolean }).dryRun === true) {
-                        return { conflicts: 0, errors: [], inserted: {}, dryRun: true };
+                    if ((args as ImportArgs).dryRun === true) {
+                        return checkPassed();
                     }
 
                     writes += 1;
@@ -466,7 +437,7 @@ describe("exportImportPanel", () => {
                     const { dryRun, rows, startLine } = args as ImportArgs;
 
                     if (dryRun === true) {
-                        return { conflicts: 0, errors: [], inserted: {}, dryRun: true };
+                        return checkPassed();
                     }
 
                     // The first chunk (lines 1-500) writes every row. The second (lines 501-1000) refuses line 510 and writes the other 499.
@@ -507,8 +478,8 @@ describe("exportImportPanel", () => {
         const mock = createMockClient({
             query: (reference, args): unknown => {
                 if (reference === ADMIN_FUNCTIONS.importShard) {
-                    if ((args as { dryRun?: boolean }).dryRun === true) {
-                        return { conflicts: 0, errors: [], inserted: {}, dryRun: true };
+                    if ((args as ImportArgs).dryRun === true) {
+                        return checkPassed();
                     }
 
                     imports += 1;
@@ -544,8 +515,8 @@ describe("exportImportPanel", () => {
         const mock = createMockClient({
             query: (reference, args): unknown => {
                 if (reference === ADMIN_FUNCTIONS.importShard) {
-                    if ((args as { dryRun?: boolean }).dryRun === true) {
-                        return { conflicts: 0, errors: [], inserted: {}, dryRun: true };
+                    if ((args as ImportArgs).dryRun === true) {
+                        return checkPassed();
                     }
 
                     return {
@@ -594,8 +565,8 @@ describe("exportImportPanel", () => {
                 }
 
                 // The check the panel sends first is not a write, so it is not part of the round trip.
-                if ((args as { dryRun?: boolean }).dryRun === true) {
-                    return { conflicts: 0, errors: [], inserted: {}, dryRun: true };
+                if ((args as ImportArgs).dryRun === true) {
+                    return checkPassed();
                 }
 
                 imported.push(...(args as { rows: ExportRow[] }).rows);
@@ -971,7 +942,7 @@ describe("exportImportPanel", () => {
     it("chunks a CSV with blank lines, CRLF endings and a line break in a cell at its blank lines, keeping the cell's text", async () => {
         expect.assertions(4);
 
-        const mock = createCsvServer();
+        const mock = createCheckingClient();
 
         render(renderPanel(mock));
 
@@ -989,7 +960,7 @@ describe("exportImportPanel", () => {
         expect.assertions(3);
 
         // Record 454 is row 450, in the second chunk.
-        const mock = createCsvServer(454);
+        const mock = createCheckingClient(454);
 
         render(renderPanel(mock));
 
@@ -1006,7 +977,7 @@ describe("exportImportPanel", () => {
     it("reads a CSV file once for each of its three passes, the check, the dry run and the write, and never holds it whole", async () => {
         expect.assertions(2);
 
-        const mock = createCsvServer();
+        const mock = createCheckingClient();
         const file = new File([mixedCsv()], "rows.csv", { type: "text/csv" });
         const slice = vi.spyOn(file, "slice");
 
