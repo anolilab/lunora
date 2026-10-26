@@ -720,6 +720,43 @@ describe("rspack watch (real compiler)", () => {
     );
 
     it(
+        "re-runs the pass when a tsconfig.json appears nearer a nested schema directory",
+        async () => {
+            expect.assertions(1);
+
+            // With the schema directory at `web/lunora`, a new `web/tsconfig.json` is the one
+            // codegen resolves from then on. It does not exist yet, so only watching it as a
+            // missing file starts a build, and only listing it as a pass input lets that build regenerate.
+            const root = fixture({ scripts: { postcodegen: `node -e "require('fs').appendFileSync('.hook-runs', 'x')"` } });
+
+            mkdirSync(join(root, "web"));
+            renameSync(join(root, "lunora"), join(root, "web", "lunora"));
+
+            await runOnce(
+                rspack({
+                    context: root,
+                    entry: "./index.js",
+                    mode: "production",
+                    output: { path: join(root, "dist") },
+                    plugins: [lunoraRspack({ projectRoot: root, schemaDir: "web/lunora" })],
+                }),
+            );
+
+            await watchRun(
+                root,
+                () => {
+                    rmSync(join(root, ".hook-runs"), { force: true });
+                    writeFileSync(join(root, "web", "tsconfig.json"), '{ "compilerOptions": { "strict": true } }\n', "utf8");
+                },
+                { expectedBuilds: 2, schemaDir: "web/lunora", settleMs: 2500 },
+            );
+
+            expect(existsSync(join(root, ".hook-runs"))).toBe(true);
+        },
+        TEST_TIMEOUT_MS,
+    );
+
+    it(
         "stops re-running a pass that keeps failing on identical inputs",
         async () => {
             expect.assertions(2);

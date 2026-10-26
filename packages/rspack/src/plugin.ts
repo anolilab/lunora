@@ -69,17 +69,45 @@ const readFileOrEmpty = (path: string): string => {
 };
 
 /**
- * `path` with its directory resolved through symlinks, or `path` itself when that
- * fails. The watcher reports a changed file under its real path (on macOS the temp
- * directory alone is a symlink), so an input is matched in both forms. Only the
- * directory is resolved, so a file that does not exist yet still gets one.
+ * `path` resolved through symlinks, or `path` itself when that fails. The watcher
+ * reports a changed file under its real path (on macOS the temp directory alone is
+ * a symlink), so an input is matched in both forms. A path that does not exist yet
+ * gets its directory resolved instead.
  */
 const realPathOf = (path: string): string => {
     try {
-        return join(realpathSync(dirname(path)), basename(path));
+        return existsSync(path) ? realpathSync(path) : join(realpathSync(dirname(path)), basename(path));
     } catch {
         return path;
     }
+};
+
+/**
+ * The `tsconfig.json` paths `findTsconfig` tries before reaching `found`, from the
+ * schema directory up to the project root. Creating one switches the tsconfig codegen
+ * resolves, so each is watched as a missing file.
+ *
+ * ponytail: stops at the project root, so a tsconfig created above it goes unseen
+ * until the next `lunora/` edit; walk on to `found` if a monorepo needs that.
+ */
+const nearerTsconfigPaths = (schemaDirectory: string, projectRoot: string, found: string | undefined): string[] => {
+    const paths: string[] = [];
+
+    for (let directory = schemaDirectory; ; directory = dirname(directory)) {
+        const candidate = join(directory, "tsconfig.json");
+
+        if (candidate === found) {
+            break;
+        }
+
+        paths.push(candidate);
+
+        if (directory === projectRoot || directory === dirname(directory)) {
+            break;
+        }
+    }
+
+    return paths;
 };
 
 /** Whether `changed` is `input`, lies under it, or is a directory holding it — all three mean the input may have moved. */
@@ -298,6 +326,7 @@ class LunoraRspackPlugin {
                 ...WRANGLER_FILES.map((name) => resolve(this.#options.projectRoot, name)),
                 ...PROJECT_CONFIG_FILENAMES.map((name) => resolve(this.#options.projectRoot, name)),
                 ...projectConfigCandidatePaths(this.#schemaDirectory),
+                ...nearerTsconfigPaths(this.#schemaDirectory, resolve(this.#options.projectRoot), tsconfigPath),
             ];
 
             for (const path of new Set(watched)) {
