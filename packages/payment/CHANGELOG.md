@@ -1,3 +1,15 @@
+## @lunora/payment [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.243...@lunora/payment@1.0.0-alpha.244) (2026-10-26)
+
+### Features
+
+* **server:** require the table for ctx.db by-id reads and writes ([#1344](https://github.com/anolilab/lunora/issues/1344)) ([97244c5](https://github.com/anolilab/lunora/commit/97244c5eae27fb0c9ab19a71e7e0b50b02b13782))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.242
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.163
+
 ## @lunora/payment [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.242...@lunora/payment@1.0.0-alpha.243) (2026-10-26)
 
 
