@@ -5,7 +5,8 @@ import { defineDataset } from "../src/dataset";
 import { germany } from "../src/de";
 import type { DataPort } from "../src/ports";
 import { retain } from "../src/rules";
-import { exportFileOf, memoryRequests, NOW, setup } from "./harness";
+import type { TombstonePort } from "../src/tombstones";
+import { exportFileOf, memoryRequests, memoryTombstones, NOW, setup } from "./harness";
 
 type Row = Readonly<Record<string, unknown>>;
 
@@ -187,6 +188,55 @@ describe("retention during erasure", () => {
 
         store.rows.set(erasure.id, { ...store.rows.get(erasure.id)!, status: "received" });
         crashing = true;
+
+        await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "failed" });
+        expect(store.rows.get(erasure.id)?.nothingErased).toBe(false);
+
+        const exported = await privacy.requestExport();
+
+        await expect(privacy.runExport(exported.id)).resolves.toStrictEqual({ status: "failed" });
+    });
+
+    it("keeps a failed erasure blocking exports when its retry fails before the tombstone", async () => {
+        const { port } = rowData({ archive: false });
+        const memory = memoryTombstones();
+        let crashing = false;
+        let refusing = false;
+        const failingData = {
+            ...port,
+            eraseBatch: async (...args: Parameters<DataPort["eraseBatch"]>) => {
+                if (crashing) {
+                    throw new Error("storage unavailable");
+                }
+
+                return port.eraseBatch(...args);
+            },
+        };
+        const tombstones: TombstonePort = {
+            add: async (key, at) => {
+                if (refusing) {
+                    throw new Error("tombstone store unavailable");
+                }
+
+                return memory.add(key, at);
+            },
+            has: memory.has,
+            keys: memory.keys,
+        };
+        const { operator, privacy, store } = setup({ data: failingData, datasets: [billing], presets: [germany()], tombstones });
+        const erasure = await privacy.requestErasure();
+
+        store.rows.set(erasure.id, { ...store.rows.get(erasure.id)!, status: "received" });
+        crashing = true;
+
+        await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "failed" });
+        expect(store.rows.get(erasure.id)?.nothingErased).toBe(false);
+
+        // The retry gets past nothing: it fails at its own tombstone, but the first attempt already drained rows.
+        crashing = false;
+        refusing = true;
+
+        await operator.admin.retry(erasure.id);
 
         await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "failed" });
         expect(store.rows.get(erasure.id)?.nothingErased).toBe(false);

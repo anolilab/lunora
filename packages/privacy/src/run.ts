@@ -695,8 +695,10 @@ const failErasure = async (
     detail: string,
     { rowsMayBeGone, tombstoned }: { readonly rowsMayBeGone: boolean; readonly tombstoned: boolean },
 ): Promise<RequestStatus> => {
-    // The request is failed first: an expiry that throws must not leave the erasure in processing, where admin.retry cannot reach it.
-    const status = await failStep(scope, steps, requestId, detail, { nothingErased: !tombstoned });
+    // An earlier attempt that got past its tombstone may have deleted rows, and a later attempt that fails before its own tombstone
+    // does not undo that. The request is failed first: an expiry that throws must not leave the erasure in processing.
+    const { nothingErased } = await requireRequest(scope.ports.store, requestId);
+    const status = await failStep(scope, steps, requestId, detail, { nothingErased: !tombstoned && nothingErased !== false });
 
     if (rowsMayBeGone) {
         await steps.do("expire", async () => expireReadyExports(scope.ports, requestId));
