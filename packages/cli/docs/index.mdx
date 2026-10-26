@@ -1113,6 +1113,11 @@ intermediate NDJSON dump — without it the dump is staged in a private `0700`
 temp directory and discarded. Sharded tables are untouched: they live in
 per-Durable-Object SQLite, not in D1.
 
+`lunora migrate hyperdrive-to-d1` is the rollback. It takes the same flags with
+the Hyperdrive deployment as `--from-url` and the D1 one as `--to-url`. The
+export/import does not care about direction, because the target's `.global()`
+backend decides where the rows land.
+
 ### `lunora run`
 
 Send a single RPC to a running Worker without spinning up the client SDK:

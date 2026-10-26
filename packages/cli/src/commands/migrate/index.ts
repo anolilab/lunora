@@ -3,8 +3,8 @@ import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/
 import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
 
 const migrateCommand: Command = {
-    argument: { description: "generate | create | up | down | status | d1-to-hyperdrive [name|id]", name: "subcommand", type: String },
-    description: "Schema (generate), online data (create | up | down | status), and backend (d1-to-hyperdrive) migrations",
+    argument: { description: "generate | create | up | down | status | d1-to-hyperdrive | hyperdrive-to-d1 [name|id]", name: "subcommand", type: String },
+    description: "Schema (generate), online data (create | up | down | status), and backend (d1-to-hyperdrive | hyperdrive-to-d1) migrations",
     examples: [
         ["lunora migrate generate", "Diff lunora/schema.ts and emit a SQL migration"],
         ["lunora migrate create add_users_email", "Scaffold a data migration"],
@@ -12,6 +12,7 @@ const migrateCommand: Command = {
         ["lunora migrate status backfill-names", "Report a migration's per-shard status"],
         ["lunora migrate status backfill-names --format json", "Same, as a single JSON document on stdout"],
         ["lunora migrate d1-to-hyperdrive --from-url https://old --to-url https://new", "Copy .global() data from D1 to Hyperdrive"],
+        ["lunora migrate hyperdrive-to-d1 --from-url https://new --to-url https://old", "Roll .global() data back from Hyperdrive to D1"],
     ],
     group: "Data",
     loader: () =>
@@ -34,13 +35,13 @@ const migrateCommand: Command = {
             type: String,
         },
         { description: "Required with --prod for up/down — confirms running against production", name: "yes", type: Boolean },
-        // d1-to-hyperdrive backend migration.
-        { description: "d1-to-hyperdrive: source (D1) worker URL (defaults to --url)", name: "from-url", type: String },
-        { description: "d1-to-hyperdrive: source admin token (defaults to --token / LUNORA_ADMIN_TOKEN)", name: "from-token", type: String },
-        { description: "d1-to-hyperdrive: target (Hyperdrive) worker URL (defaults to --url)", name: "to-url", type: String },
-        { description: "d1-to-hyperdrive: target admin token (defaults to --token / LUNORA_ADMIN_TOKEN)", name: "to-token", type: String },
-        { description: "d1-to-hyperdrive: comma-separated .global() tables to move (default: all global tables)", name: "tables", type: String },
-        { description: "d1-to-hyperdrive: keep the intermediate NDJSON dump at this path", name: "out", type: String },
+        // d1-to-hyperdrive / hyperdrive-to-d1 backend migration.
+        { description: "backend migration: source worker URL (defaults to --url)", name: "from-url", type: String },
+        { description: "backend migration: source admin token (defaults to --token / LUNORA_ADMIN_TOKEN)", name: "from-token", type: String },
+        { description: "backend migration: target worker URL (defaults to --url)", name: "to-url", type: String },
+        { description: "backend migration: target admin token (defaults to --token / LUNORA_ADMIN_TOKEN)", name: "to-token", type: String },
+        { description: "backend migration: comma-separated .global() tables to move (default: all global tables)", name: "tables", type: String },
+        { description: "backend migration: keep the intermediate NDJSON dump at this path", name: "out", type: String },
     ],
 };
 

@@ -706,12 +706,16 @@ const runMigrateDataCommand = async (options: MigrateDataCommandOptions): Promis
     return { body, code: response.ok ? rollUpCode : exitCodeForStatus(response.status), requestUrl };
 };
 
-interface MigrateToHyperdriveOptions {
+type MigrateBackendDirection = "d1-to-hyperdrive" | "hyperdrive-to-d1";
+
+interface MigrateBackendOptions {
     batchSize?: number;
+    /** Which way the `.global()` data moves; also picks the backend names the log lines use. */
+    direction: MigrateBackendDirection;
     /** Injected fetch (tests); defaults to the global `fetch` inside the export/import helpers. */
     fetchImpl?: Parameters<typeof runExportCommand>[0]["fetchImpl"];
     fromToken?: string;
-    /** Source deployment (D1-backed). Defaults to `--url`/localhost. */
+    /** Source deployment. Defaults to `--url`/localhost. */
     fromUrl?: string;
     logger: Logger;
     /** Keep the intermediate NDJSON dump at this path instead of a private temp dir. */
@@ -720,30 +724,37 @@ interface MigrateToHyperdriveOptions {
     /** Comma-separated `.global()` tables to move; omit to move every global table. */
     tables?: string;
     toToken?: string;
-    /** Target deployment (Hyperdrive-backed). Defaults to `--url`/localhost. */
+    /** Target deployment. Defaults to `--url`/localhost. */
     toUrl?: string;
     /** Confirm the bulk write into the target — forwarded to the import leg, which refuses a remote target without it. */
     yes?: boolean;
 }
 
-interface MigrateToHyperdriveResult {
+interface MigrateBackendResult {
     /** Bytes in the intermediate NDJSON dump (0 when the run failed before exporting). */
     bytes: number;
     code: number;
     /** Why it failed, when the reason is known — the shared `CommandResult` contract. */
     error?: string;
-    /** Rows read out of the D1 source. */
+    /** Rows read out of the source. */
     exported: number;
-    /** Rows the Hyperdrive target accepted. Short of `exported` means the remainder already existed there. */
+    /** Rows the target accepted. Short of `exported` means the remainder already existed there. */
     imported: number;
 }
 
 /** Apply {@link normalizeAdminBaseUrl}, passing an absent URL straight through. */
 const normalizeOptionalUrl = (url: string | undefined): string | undefined => (url === undefined ? undefined : normalizeAdminBaseUrl(url));
 
+const BACKEND_NAMES: Record<MigrateBackendDirection, { source: string; target: string }> = {
+    "d1-to-hyperdrive": { source: "D1", target: "Hyperdrive" },
+    "hyperdrive-to-d1": { source: "Hyperdrive", target: "D1" },
+};
+
 /**
  * `lunora migrate d1-to-hyperdrive` — copy `.global()` table data from a
- * D1-backed deployment into a Hyperdrive-backed one. A thin, guided
+ * D1-backed deployment into a Hyperdrive-backed one; `hyperdrive-to-d1` is the
+ * rollback. Export/import is direction-agnostic: the target's
+ * `.global({ backend })` decides where the imported rows land. A thin, guided
  * orchestration over the existing admin export/import: it streams the source's
  * global rows to an NDJSON dump, imports them into the target (whose
  * `.global({ backend: "hyperdrive" })` tables route the writes to Hyperdrive
@@ -755,8 +766,9 @@ const normalizeOptionalUrl = (url: string | undefined): string | undefined => (u
  * For an in-place switch, export first (this command, same `--from`/`--to`
  * URL before the schema swap is risky) — the skill documents both.
  */
-const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions): Promise<MigrateToHyperdriveResult> => {
+const runMigrateBackendCommand = async (options: MigrateBackendOptions): Promise<MigrateBackendResult> => {
     const { logger } = options;
+    const { source, target } = BACKEND_NAMES[options.direction];
     // Normalized with the SAME rule `resolveAdminBaseUrl` applies to the request
     // it sends, so the guard below compares what the two legs will actually
     // address rather than what the user typed — `https://w/` and `https://w` are
@@ -772,8 +784,7 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
     // `undefined` and both default to the SAME worker, which is exactly the
     // self-migration this refuses — the guard used to skip that case.
     if (fromUrl === toUrl) {
-        const error =
-            "source and target are the same deployment — pass distinct --from-url and --to-url so the D1 export and Hyperdrive import don't run against one database";
+        const error = `source and target are the same deployment — pass distinct --from-url and --to-url so the ${source} export and ${target} import don't run against one database`;
 
         logger.error(error);
 
@@ -786,7 +797,7 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
     const dumpPath = options.out ?? join(temporaryDirectory as string, "dump.ndjson");
 
     try {
-        logger.info(`Exporting .global() data from the D1 source (${fromUrl ?? "http://localhost:8787"}) …`);
+        logger.info(`Exporting .global() data from the ${source} source (${fromUrl ?? "http://localhost:8787"}) …`);
 
         const exportResult = await runExportCommand({
             fetchImpl: options.fetchImpl,
@@ -809,7 +820,7 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
         }
 
         logger.info(`Exported ${String(exportResult.rows)} row(s) (${String(exportResult.bytes)} bytes).`);
-        logger.info(`Importing into the Hyperdrive target (${toUrl ?? "http://localhost:8787"}) …`);
+        logger.info(`Importing into the ${target} target (${toUrl ?? "http://localhost:8787"}) …`);
 
         const importResult = await runImportCommand({
             batchSize: options.batchSize,
@@ -834,7 +845,7 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
 
         if (importResult.inserted === exportResult.rows) {
             logger.info(
-                `✓ Migrated ${String(exportResult.rows)} row(s) — counts match. Verify your app reads from Hyperdrive, then decommission the D1 binding.`,
+                `✓ Migrated ${String(exportResult.rows)} row(s) — counts match. Verify your app reads from ${target}, then decommission the ${source} binding.`,
             );
         } else {
             logger.warn(
@@ -854,5 +865,5 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
     }
 };
 
-export type { MigrateDataCommandOptions, MigrateGenerateCommandOptions, MigrateGenerateCommandResult };
-export { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand, runMigrateToHyperdriveCommand };
+export type { MigrateBackendDirection, MigrateDataCommandOptions, MigrateGenerateCommandOptions, MigrateGenerateCommandResult };
+export { runMigrateBackendCommand, runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand };

@@ -163,6 +163,11 @@ already exists in the target are reported as conflicts and not duplicated.
 A count mismatch is a warning: inspect it with `--out`, resolve it, and re-run.
 Tokens default to `--token` / `LUNORA_ADMIN_TOKEN`.
 
+To roll back, run `lunora migrate hyperdrive-to-d1` with the same flags, the
+Hyperdrive deployment as `--from-url` and the D1 one as `--to-url`. The target's
+`.global()` backend decides where the rows land, so the copy works the same way
+in both directions.
+
 ## Common Pitfalls
 
 1. **Installing `@lunora/hyperdrive/global` as a package name.** It's a subpath.
