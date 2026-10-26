@@ -1,3 +1,19 @@
+## @lunora/cli [1.0.0-alpha.439](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.438...@lunora/cli@1.0.0-alpha.439) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.361
+* **@lunora/config:** upgraded to 1.0.0-alpha.415
+* **@lunora/seed:** upgraded to 1.0.0-alpha.259
+* **@lunora/testing:** upgraded to 1.0.0-alpha.307
+* **@visulima/cerebro:** 3.1.2 → 4.0.1
+* **@visulima/fs:** 6.0.29 → 7.0.0
+* **@visulima/pail:** 5.0.0 → 6.0.0
+* **@visulima/path:** 4.0.0 → 5.0.0
+* **@visulima/tui:** 4.0.29 → 5.0.0
+* **@visulima/tui-kit:** 1.0.32 → 1.0.34
+
 ## @lunora/cli [1.0.0-alpha.438](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.437...@lunora/cli@1.0.0-alpha.438) (2026-10-26)
 
 
