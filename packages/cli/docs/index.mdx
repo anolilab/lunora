@@ -347,10 +347,12 @@ A read-only preflight over the current project. It reports pass / warn / fail fo
 ```bash
 lunora doctor
 lunora doctor --format json    # machine-readable; one JSON document on stdout
+lunora doctor --fix           # create placeholder D1 databases and mint missing .dev.vars secrets
 ```
 
-It writes nothing and exits non-zero when any hard check fails, so it works as a
-CI gate. See [Debugging](/docs/concepts/debugging) for how to act on each finding.
+Without `--fix` it writes nothing. With `--fix` it writes only the two things named
+above, and `--fix --dry-run` shows them first. It exits non-zero when any hard check
+fails, so it works as a CI gate. See [Debugging](/docs/concepts/debugging) for how to act on each finding.
 
 #### Machine-readable output
 
