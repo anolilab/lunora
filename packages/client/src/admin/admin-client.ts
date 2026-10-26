@@ -394,7 +394,7 @@ class LunoraAdminClient extends LunoraClient {
      * server-side. Powers the global data browser's facet sidebar.
      *
      * Wire-encoded/decoded on both legs for the same reason
-     * {@link LunoraClient.readGlobalTablePage} is: a facet over a BLOB column
+     * {@link LunoraAdminClient.readGlobalTablePage} is: a facet over a BLOB column
      * returns bytes, which `Response.json` flattens to `{}` — and since a facet
      * value is exactly what a click sends back as a `filters` clause, that is a
      * broken drill-down rather than a display glitch.

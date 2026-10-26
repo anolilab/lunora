@@ -220,7 +220,7 @@ const DataBrowserSidebarHeader = ({
  * tables (via the `__lunora_admin__:listTables` RPC), then pages through the
  * rows of whichever table is selected (`__lunora_admin__:readTablePage`).
  *
- * Both calls travel over the ordinary `useLunora` client transport; the
+ * Both calls travel over the `LunoraAdminClient` from `useStudioClient`; the
  * admin RPCs are intercepted inside the Durable Object and are gated by the
  * server's `LUNORA_ADMIN_TOKEN`. The host is responsible for configuring the
  * client's auth token — this component issues no credentials of its own.

@@ -63,14 +63,14 @@ const root = mountStudio({ baseUrl: "https://my-app.workers.dev" });
 // root.unmount() to tear it down
 ```
 
-`mountStudio` constructs a `LunoraClient`, manages the admin token, and renders the whole console. To embed in your own React tree, render `<StudioApp>` (same self-contained shell) or compose `<Studio>` and the individual panels under a `<LunoraProvider>`:
+`mountStudio` constructs a `LunoraAdminClient`, manages the admin token, and renders the whole console. To embed in your own React tree, render `<StudioApp>` (same self-contained shell) or compose `<Studio>` and the individual panels under a `<LunoraProvider>`. `<Studio>` and every panel need a `LunoraAdminClient` (from `@lunora/client/admin`) in that provider; a plain `LunoraClient` has no admin methods, and they refuse it:
 
 ```tsx
-import { LunoraClient } from "@lunora/client";
+import { LunoraAdminClient } from "@lunora/client/admin";
 import { LunoraProvider } from "@lunora/react";
 import { Studio } from "@lunora/studio";
 
-const client = new LunoraClient({ url: "https://my-app.workers.dev" });
+const client = new LunoraAdminClient({ url: "https://my-app.workers.dev" });
 
 // `functions` populate the runner + API tabs; `kind` is a compile-time
 // phantom, so it must be named here.
