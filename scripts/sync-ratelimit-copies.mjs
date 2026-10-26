@@ -33,8 +33,11 @@ const limitsBlock = (lines, file) => {
     }
 
     let start = declaration;
+    const above = lines[start - 1]?.trim() ?? "";
 
-    if (lines[start - 1]?.trim() === "*/") {
+    if (above.startsWith("/**") && above.endsWith("*/")) {
+        start -= 1;
+    } else if (above === "*/") {
         while (!lines[start - 1].trimStart().startsWith("/**")) {
             start -= 1;
         }
@@ -61,11 +64,19 @@ const itemLines = readFileSync(itemPath, "utf8").replaceAll('from "@lunora/', 'f
 const [, itemHeaderEnd] = headerBlock(itemLines, itemPath);
 const [itemStart, itemEnd] = limitsBlock(itemLines, itemPath);
 
-const copies = ["templates", "examples"].flatMap((group) =>
-    readdirSync(join(ROOT, group))
-        .map((app) => join(ROOT, group, app, "lunora", "ratelimit", "schema.ts"))
-        .filter((file) => existsSync(file)),
-);
+// An app needs a copy when its schema imports one, so a deleted copy is reported rather than skipped.
+const apps = ["templates", "examples"].flatMap((group) => readdirSync(join(ROOT, group)).map((app) => join(ROOT, group, app, "lunora")));
+const needsCopy = (app) => existsSync(join(app, "schema.ts")) && readFileSync(join(app, "schema.ts"), "utf8").includes("./ratelimit/schema");
+const copies = apps.filter((app) => existsSync(join(app, "ratelimit", "schema.ts"))).map((app) => join(app, "ratelimit", "schema.ts"));
+const missing = apps.filter((app) => needsCopy(app) && !existsSync(join(app, "ratelimit", "schema.ts")));
+
+// Not regenerated: the header and limits that make a copy app-specific exist nowhere else.
+if (missing.length > 0) {
+    process.stderr.write(
+        `these apps import ./ratelimit/schema but have no copy — restore it from git, then re-run:\n${missing.map((app) => `  ${relative(ROOT, join(app, "ratelimit", "schema.ts"))}`).join("\n")}\n`,
+    );
+    process.exit(1);
+}
 
 const stale = [];
 
