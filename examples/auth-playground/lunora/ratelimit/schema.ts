@@ -1,8 +1,20 @@
 /**
- * Rate-limit schema extension + plugin.
+ * Rate-limit schema extension + plugin — added by `lunora add ratelimit`.
  *
- * Defines the `ratelimit_buckets` table used by `createDbStore` for durable,
- * DO-backed rate limiting. Included automatically in every Lunora project.
+ * This file is YOURS to own and edit. `lunora add` splices a managed
+ * `.extend(ratelimit.extension)` into `lunora/schema.ts` so the `buckets` table
+ * below merges into your schema as **`ratelimit_buckets`** (extension tables are
+ * auto-prefixed with the plugin key — write the bare name here).
+ *
+ * The column layout matches what `@lunora/ratelimit`'s `createDbStore` reads and
+ * writes for every `(limit-name, key)` pair:
+ *
+ *   - `key`   — opaque storage key the limiter derives from the limit name + sub-key.
+ *   - `value` — tokens left (token bucket / fixed window) or requests made (sliding window).
+ *   - `ts`    — last-refill time (token bucket) or window start (windowed algorithms).
+ *   - `prev`  — previous-window count, sliding-window only (hence optional).
+ *
+ * The `by_key` index is what `createDbStore` looks rows up by; keep it.
  */
 import type { RateLimitConfigMap } from "lunorash/ratelimit";
 import { createDbStore, RateLimiter } from "lunorash/ratelimit";
@@ -18,14 +30,27 @@ export const limits = {
     write: { kind: "token bucket", period: 60_000, rate: 60 },
 } as const satisfies RateLimitConfigMap;
 
+/** The limit names you've configured above. */
 export type LimitName = keyof typeof limits;
 
+/**
+ * Build a durable {@link RateLimiter} bound to this request's `ctx.db`. State is
+ * persisted in the `ratelimit_buckets` table, so limits survive Durable Object
+ * hibernation/eviction and are shared across every call into the same DO. Each
+ * `get`→`set` runs under the DO input gate, so the read-modify-write is atomic.
+ */
 export const makeRateLimiter = (ctx: { db: unknown }): RateLimiter<LimitName> =>
     new RateLimiter<LimitName>({
         config: limits,
+        // The merged table name carries the plugin prefix.
         store: createDbStore({ db: ctx.db as never, table: "ratelimit_buckets" }),
     });
 
+/**
+ * Middleware that injects `ctx.api.ratelimit` — a per-request limiter helper —
+ * for any procedure that opts in with `.use(ratelimit.middleware)`. Convention
+ * (see `@lunora/server` `definePlugin`): helpers hang off `ctx.api.<key>`.
+ */
 const middleware: Middleware<{ api?: Record<string, unknown>; db: unknown }, { api: Record<string, unknown>; db: unknown }> = ({ ctx, next }) =>
     next({
         ctx: {
@@ -34,9 +59,19 @@ const middleware: Middleware<{ api?: Record<string, unknown>; db: unknown }, { a
         },
     });
 
+/**
+ * The rate-limit plugin: a schema extension (`ratelimit_buckets`) + middleware
+ * (`ctx.api.ratelimit`). `lunora/schema.ts` wires the extension in via the
+ * managed `.extend(ratelimit.extension)` block; attach the middleware yourself
+ * with `c.mutation.use(ratelimit.middleware)`.
+ */
 export const ratelimit = definePlugin("ratelimit", {
     extension: defineSchemaExtension("ratelimit", {
         tables: {
+            // Bare name — auto-prefixes to `ratelimit_buckets` at merge time.
+            // `externallyManaged`: rows are written by `createDbStore` (via
+            // `makeRateLimiter`), not a discoverable `ctx.db.insert(...)`, so the
+            // `table_without_insert` advisor correctly skips it.
             buckets: defineTable({
                 key: v.string(),
                 value: v.number(),

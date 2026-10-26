@@ -114,7 +114,7 @@ export interface IndexNamesByTable {
     tasks: "byUser";
     invoices: "byUser";
     exportFiles: "byRequestAndName";
-    ratelimit_buckets: "by_key";
+    ratelimit_buckets: "by_key" | "by_ts";
     privacy_archive: "byRetainUntil";
     privacy_events: never;
     privacy_requests: "byRequestId" | "bySubject" | "byStatus";

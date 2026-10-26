@@ -16,10 +16,10 @@
  *
  * The `by_key` index is what `createDbStore` looks rows up by; keep it.
  */
-import type { Middleware } from "@lunora/server";
-import { defineSchemaExtension, defineTable, definePlugin, v } from "@lunora/server";
-import { createDbStore, RateLimiter } from "@lunora/ratelimit";
 import type { RateLimitConfigMap } from "@lunora/ratelimit";
+import { createDbStore, RateLimiter } from "@lunora/ratelimit";
+import type { Middleware } from "@lunora/server";
+import { definePlugin, defineSchemaExtension, defineTable, v } from "@lunora/server";
 
 /**
  * Named limits this app enforces. Edit freely — add your own named limits and

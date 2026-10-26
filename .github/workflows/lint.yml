@@ -378,11 +378,13 @@
               "run": "pnpm run lint:registry:items"
 
     # The auth-ui-* registry items are generated from @lunora/auth-ui by
-    # scripts/sync-auth-ui-registry.mjs. Its own job, on its own `registry_sync` filter:
+    # scripts/sync-auth-ui-registry.mjs, and every templates/examples copy of
+    # lunora/ratelimit/schema.ts from registry/ratelimit by
+    # scripts/sync-ratelimit-copies.mjs. Its own job, on its own `registry_sync` filter:
     # as a step inside `prettier` it was skipped on any PR without a frontend-lintable
     # file and masked whenever an earlier step failed, and drift reached `alpha` anyway.
     "registry-sync":
-        "name": "Lint (auth-ui registry sync)"
+        "name": "Lint (registry sync)"
         "if": "needs.files-changed.outputs.registry_sync == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
@@ -406,7 +408,7 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            - "name": "Lint (auth-ui registry sync)"
+            - "name": "Lint (registry sync)"
               "run": "pnpm run lint:registry:sync"
 
     # Guards packages/platform-node/docs/index.mdx's capability table against

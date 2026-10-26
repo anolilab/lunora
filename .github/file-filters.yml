@@ -251,6 +251,9 @@ registry_sync:
     - "packages/auth-ui/**"
     - "registry/**"
     - "scripts/sync-auth-ui-registry.mjs"
+    - "scripts/sync-ratelimit-copies.mjs"
+    - "templates/*/lunora/ratelimit/**"
+    - "examples/*/lunora/ratelimit/**"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
 

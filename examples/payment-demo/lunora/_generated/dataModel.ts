@@ -120,7 +120,7 @@ export interface IndexNamesByTable {
     payment_sessions: "by_provider_session" | "by_provider_subscription" | "by_reference";
     payment_subscriptions: "by_provider_subscription" | "by_reference";
     payment_usageEvents: "by_idempotency" | "by_reference_feature_created" | "by_reference_created";
-    ratelimit_buckets: "by_key";
+    ratelimit_buckets: "by_key" | "by_ts";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];

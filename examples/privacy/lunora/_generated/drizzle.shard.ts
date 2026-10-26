@@ -45,6 +45,7 @@ export const ratelimit_buckets = sqliteTable("ratelimit_buckets", {
     prev: real("prev"),
 }, (t) => ({
     by_key: index("by_key").on(t.key),
+    by_ts: index("by_ts").on(t.ts),
 }));
 
 export const privacy_archive = sqliteTable("privacy_archive", {
