@@ -1190,6 +1190,15 @@ const assertFieldInShape = (tableName: string, indexName: string, field: string,
         return;
     }
 
+    // A dotted path would reach the DDL as one quoted identifier: `node:sqlite` rejects it, while workerd's SQLite
+    // (and so D1) reads an unknown double-quoted name as a string literal and would index that constant instead.
+    if (field.includes(".")) {
+        throw new LunoraError(
+            "INDEX_FIELD_NESTED_PATH",
+            `defineSchema: table "${tableName}" index "${indexName}" indexes the nested path ${JSON.stringify(field)}, but indexes cover top-level columns only. Denormalise the value into its own column and index that instead.`,
+        );
+    }
+
     throw new LunoraError("INTERNAL", `defineSchema: table "${tableName}" index "${indexName}" names column "${field}" which is not in the table's shape`);
 };
 

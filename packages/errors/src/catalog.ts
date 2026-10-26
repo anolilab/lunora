@@ -208,6 +208,12 @@ export const ERROR_CATALOG = {
         status: 422,
         title: "Unacknowledged jurisdiction move",
     },
+    /** Schema-time only (`defineSchema`): an index names a dotted path. Never crosses the RPC wire. */
+    INDEX_FIELD_NESTED_PATH: {
+        hint: "Indexes cover top-level columns only. Denormalise the nested value into its own column, index that, and keep it in sync with a table `.triggers()` beforeInsert/beforeUpdate.",
+        status: 500,
+        title: "Index field is a nested path",
+    },
     /** Build-time-only — never crosses the RPC wire, so deliberately not `internal`. */
     SCHEMA_SNAPSHOT_PARSE: { status: 500, title: "Schema snapshot parse error" },
     /** Runtime-reachable (env.ts): message enumerates failing env key names — redact on the wire. */

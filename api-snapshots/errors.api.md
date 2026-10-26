@@ -247,6 +247,11 @@ const ERROR_CATALOG: {
         readonly status: 422;
         readonly title: "Unacknowledged jurisdiction move";
     };
+    readonly INDEX_FIELD_NESTED_PATH: {
+        readonly hint: "Indexes cover top-level columns only. Denormalise the nested value into its own column, index that, and keep it in sync with a table `.triggers()` beforeInsert/beforeUpdate.";
+        readonly status: 500;
+        readonly title: "Index field is a nested path";
+    };
     readonly SCHEMA_SNAPSHOT_PARSE: {
         readonly status: 500;
         readonly title: "Schema snapshot parse error";
