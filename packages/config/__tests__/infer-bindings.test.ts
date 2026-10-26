@@ -1597,6 +1597,26 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
     });
 
+    it("keys LUNORA_RELAY_SECRET for a star re-export that also forwards the replica EventLogDO under another name", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport class EventLogDO {}\nexport * from "./barrel";\n`);
+        write("src/server/barrel.ts", `export { EventLogDO as Log } from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET when a local EventLogDO hides the replica class a nested star re-exports", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport class EventLogDO {}\nexport * from "./barrel";\n`);
+        write("src/server/barrel.ts", `export * from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
     it("keys LUNORA_RELAY_SECRET for an entry that exports a subclass of the imported EventLogDO", async () => {
         expect.assertions(1);
 

@@ -401,7 +401,13 @@ const forwardedExports = (source: ts.SourceFile): ModuleExport[] => {
  * export reads, so `export { Log as EventLogDO } from "./barrel"` asks the barrel for `Log`. `visited` ends a barrel cycle: a module
  * asked for the same name twice forwards nothing new.
  */
-const forwardsReplicaExport = (modulePath: string, target: string, requested: string | undefined, visited: Set<string>): boolean => {
+const forwardsReplicaExport = (
+    modulePath: string,
+    target: string,
+    requested: string | undefined,
+    visited: Set<string>,
+    hidden: ReadonlySet<string> = new Set(),
+): boolean => {
     const key = JSON.stringify([modulePath, requested]);
 
     if (visited.has(key)) {
@@ -412,16 +418,30 @@ const forwardsReplicaExport = (modulePath: string, target: string, requested: st
 
     const source = ts.createSourceFile(modulePath, readFileSync(modulePath, "utf8"), ts.ScriptTarget.Latest);
     const forwards = forwardedExports(source);
-    const shadowed = new Set([...localExportNames(source), ...forwards.flatMap((forward) => (forward.exported === undefined ? [] : [forward.exported]))]);
+    // A star re-export's copy of a name is hidden by an export of that name in this module or in an outer one.
+    const shadowed = new Set([
+        ...hidden,
+        ...localExportNames(source),
+        ...forwards.flatMap((forward) => (forward.exported === undefined ? [] : [forward.exported])),
+    ]);
 
     return forwards.some((forward) => {
         if (requested !== undefined && forward.exported !== undefined && forward.exported !== requested) {
             return false;
         }
 
-        // A star re-export of a name the module exports explicitly is shadowed by that export, so it forwards nothing.
-        if (forward.exported === undefined && shadowed.has(requested ?? target)) {
+        // An explicit export that an outer module exports under the same name is hidden there, so it forwards nothing here.
+        if (forward.exported !== undefined && hidden.has(forward.exported)) {
             return false;
+        }
+
+        if (forward.exported === undefined) {
+            // A star of the replica package supplies `target` when no name is requested; any other star supplies only the requested name.
+            const suppliedName = requested ?? (forward.module === EVENT_LOG_PACKAGE ? target : undefined);
+
+            if (suppliedName !== undefined && shadowed.has(suppliedName)) {
+                return false;
+            }
         }
 
         // A star carries the requested name through; a named export reads the name its specifier names.
@@ -433,7 +453,8 @@ const forwardsReplicaExport = (modulePath: string, target: string, requested: st
 
         const barrel = resolveBarrel(modulePath, forward.module);
 
-        return barrel !== undefined && forwardsReplicaExport(barrel, target, name, visited);
+        // A star's copy of a name is hidden by every export of this module, so the barrel it reads is asked with those names hidden.
+        return barrel !== undefined && forwardsReplicaExport(barrel, target, name, visited, forward.exported === undefined ? shadowed : hidden);
     });
 };
 
