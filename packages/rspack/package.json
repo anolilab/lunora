@@ -58,9 +58,9 @@
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
-        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage"
+        "test:coverage": "vitest run --coverage",
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts"
     },
     "dependencies": {
         "@lunora/codegen": "1.0.0-alpha.352",

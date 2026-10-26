@@ -224,7 +224,10 @@ describe("rspack watch rebuild (real compiler)", () => {
         options,
     );
 
-    bench(
+    // Under CodSpeed's instrumentation a schema edit's full codegen pass inside a
+    // real watch rebuild runs past REBUILD_TIMEOUT_MS; `rebuild-hooks.bench.ts`
+    // measures the plugin's share of the same edit there.
+    bench.skipIf(reduced)(
         "lunora/schema.ts edited",
         async () => {
             await silence(async () => rebuildAfter(schemaFile, `${SCHEMA}\n// edit ${nextEdit()}\n`));
