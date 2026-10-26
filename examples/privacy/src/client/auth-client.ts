@@ -1,7 +1,7 @@
 import { createAuthClient } from "better-auth/react";
 
 /**
- * The sign-in client, on the same origin as the page. The session cookie it sets is the one the Worker
- * resolves the caller from, so every Lunora call that follows is made as the signed-in user.
+ * The sign-in client. It uses the same origin as the Lunora client (`VITE_LUNORA_URL`, else this page's origin),
+ * so the session cookie it sets is the one the Worker resolves the caller from.
  */
-export const authClient = createAuthClient({ baseURL: globalThis.location.origin });
+export const authClient = createAuthClient({ baseURL: (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? globalThis.location.origin });

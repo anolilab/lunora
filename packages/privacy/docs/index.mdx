@@ -136,6 +136,6 @@ A table with a `userId` column must be covered by a dataset, or excluded with a 
 
 ## What is not finished
 
-- The example has no `authDataset`. Its identity comes from the session's claims, not from shard rows, so there is nothing for it to cover. An app that adds `@lunora/auth` keeps its auth tables in its own database and should declare one over them.
+- An admin retry of an export that includes the D1 sign-in tables is recorded as failed. The retry runs inside a mutation, and a mutation has no D1 binding. Erasure retries restart the workflow and are unaffected.
 - The Studio's Privacy requests tab appears only when the app declares `@lunora/privacy`.
 - The legal and tax review of the defaults is still open. See the [legal basis page](/docs/packages/privacy/legal).

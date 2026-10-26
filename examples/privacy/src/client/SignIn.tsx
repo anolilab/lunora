@@ -12,6 +12,7 @@ export const SignIn = (): ReactElement => {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [error, setError] = useState<string | undefined>(undefined);
+    // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- an autocomplete hint for the browser, not a credential
     const passwordAutocomplete = mode === "sign-up" ? "new-password" : "current-password"; // secret-scanner:allow -- an autocomplete hint, not a credential
 
     const submit = async (event: SyntheticEvent<HTMLFormElement>): Promise<void> => {

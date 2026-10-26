@@ -27,10 +27,18 @@ const buildWorker = (env: WorkerEnv): ReturnType<typeof createWorker> =>
         // The session's cookie resolves the caller. `iat` is the sign-in time, which the package reads to refuse
         // an erasure from a sign-in older than 24 hours.
         resolveIdentity: async (request) => {
-            const auth = await authFor(env);
-            const session = await auth.api.getSession({ headers: request.headers });
+            // A sign-in database that cannot be reached leaves the caller anonymous, which refuses every
+            // subject call. It must not fail the request, since a session-free download needs no identity.
+            try {
+                const auth = await authFor(env);
+                const session = await auth.api.getSession({ headers: request.headers });
 
-            return session === null ? null : { iat: Math.floor(session.session.createdAt.getTime() / 1000), userId: session.user.id };
+                return session === null ? null : { iat: Math.floor(session.session.createdAt.getTime() / 1000), userId: session.user.id };
+            } catch (error) {
+                console.error("sign-in unavailable; caller treated as anonymous", error);
+
+                return null;
+            }
         },
         shardDO: env.SHARD,
     });

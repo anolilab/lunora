@@ -123,10 +123,10 @@
         "x-lunora-function-kind": "mutation"
       }
     },
-    "/_lunora/rpc#requests:downloadUrl": {
+    "/_lunora/rpc#requests:downloadLink": {
       "post": {
-        "description": "Invoke the `query` `requests:downloadUrl` over the Lunora RPC envelope (POST /_lunora/rpc).",
-        "operationId": "requests:downloadUrl",
+        "description": "Invoke the `mutation` `requests:downloadLink` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "requests:downloadLink",
         "requestBody": {
           "content": {
             "application/json": {
@@ -145,7 +145,7 @@
                     "type": "object"
                   },
                   "functionPath": {
-                    "const": "requests:downloadUrl",
+                    "const": "requests:downloadLink",
                     "type": "string"
                   },
                   "shardKey": {
@@ -177,11 +177,11 @@
             "$ref": "#/components/responses/LunoraError"
           }
         },
-        "summary": "query: requests:downloadUrl",
+        "summary": "mutation: requests:downloadLink",
         "tags": [
           "requests"
         ],
-        "x-lunora-function-kind": "query"
+        "x-lunora-function-kind": "mutation"
       }
     },
     "/_lunora/rpc#requests:myRequests": {

@@ -7,16 +7,6 @@ import { authClient } from "./auth-client";
 import { SignIn } from "./SignIn";
 
 /**
- * A finished export's download link. The server signs it and the `/privacy/files` route checks it, so
- * the link is only asked for while the export is ready.
- */
-const DownloadLink = ({ requestId }: { readonly requestId: string }): ReactElement | undefined => {
-    const link = useQuery(api.requests.downloadUrl, { requestId });
-
-    return link === undefined ? undefined : <a href={link}>Download</a>;
-};
-
-/**
  * The signed-in page: a task list, and the requests a user can open against their own data. Every request id
  * here comes from the server, and the server decides whose data it is from the signed-in session. It mounts
  * only once there is a session, so its live queries never subscribe as an anonymous caller.
@@ -29,6 +19,7 @@ const Workspace = ({ email }: { readonly email: string }): ReactElement => {
     const requests = useQuery(api.requests.myRequests, {});
     const { mutate: addTask } = useMutation(api.tasks.addTask);
     const { mutate: requestExport } = useMutation(api.requests.requestExport);
+    const { mutate: downloadLink } = useMutation(api.requests.downloadLink);
     const { mutate: requestErasure } = useMutation(api.requests.requestErasure);
     const { mutate: cancelRequest } = useMutation(api.requests.cancelRequest);
 
@@ -117,7 +108,20 @@ const Workspace = ({ email }: { readonly email: string }): ReactElement => {
                 <ul>
                     {(requests ?? []).map((request) => (
                         <li key={request.id}>
-                            {request.type} · {request.status} {request.status === "ready" ? <DownloadLink requestId={request.id} /> : undefined}
+                            {request.type} · {request.status}{" "}
+                            {request.status === "ready" ? (
+                                <button
+                                    onClick={() => {
+                                        void attempt("Download", async () => {
+                                            // A fresh link on each click: it expires after fifteen minutes.
+                                            globalThis.location.assign(await downloadLink({ requestId: request.id }));
+                                        });
+                                    }}
+                                    type="button"
+                                >
+                                    Download
+                                </button>
+                            ) : undefined}
                             {request.status === "grace" ? (
                                 <button
                                     onClick={() => {

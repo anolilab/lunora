@@ -65,7 +65,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "admin:restorePrivacyErasures": lunora_admin_0.restorePrivacyErasures as unknown as RegisteredLunoraFunction,
     "admin:retryPrivacyRequest": lunora_admin_0.retryPrivacyRequest as unknown as RegisteredLunoraFunction,
     "requests:cancelRequest": lunora_requests_1.cancelRequest as unknown as RegisteredLunoraFunction,
-    "requests:downloadUrl": lunora_requests_1.downloadUrl as unknown as RegisteredLunoraFunction,
+    "requests:downloadLink": lunora_requests_1.downloadLink as unknown as RegisteredLunoraFunction,
     "requests:exportFile": lunora_requests_1.exportFile as unknown as RegisteredLunoraFunction,
     "requests:myRequests": lunora_requests_1.myRequests as unknown as RegisteredLunoraFunction,
     "requests:privacyPort": lunora_requests_1.privacyPort as unknown as RegisteredLunoraFunction,
@@ -96,7 +96,7 @@ if (typeof source["requestId"] !== "string") return DEFER;
 if (source["requestId"].length > 64) return DEFER;
 return { "requestId": source["requestId"] };
 });
-installCompiledValidatorMap(lunora_requests_1.downloadUrl.args, (source) => {
+installCompiledValidatorMap(lunora_requests_1.downloadLink.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["requestId"] !== "string") return DEFER;
@@ -185,7 +185,7 @@ export interface Caller {
     };
     requests: {
         cancelRequest: (args: { requestId: string }) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;
-        downloadUrl: (args: { requestId: string }) => Promise<string>;
+        downloadLink: (args: { requestId: string }) => Promise<string>;
         exportFile: (args: { key: string }) => Promise<null | import("../privacy-files.js").StoredFile>;
         myRequests: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }[]>;
         privacyPort: (args: { method: string; payload: string }) => Promise<string>;
@@ -244,7 +244,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     },
     requests: {
         cancelRequest: (args) => callRegistered(context, "requests:cancelRequest", args),
-        downloadUrl: (args) => callRegistered(context, "requests:downloadUrl", args),
+        downloadLink: (args) => callRegistered(context, "requests:downloadLink", args),
         exportFile: (args) => callRegistered(context, "requests:exportFile", args),
         myRequests: (args) => callRegistered(context, "requests:myRequests", args),
         privacyPort: (args) => callRegistered(context, "requests:privacyPort", args),

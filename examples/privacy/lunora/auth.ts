@@ -16,6 +16,9 @@ const options = (env: { AUTH_SECRET: string }): LunoraAuthOptions => {
     return {
         appName: APP_NAME,
         emailAndPassword: { enabled: true },
+        // The erasure deletes sign-in rows directly, so it cannot clear a session that a signed cookie still
+        // carries. The cache is off so every request reads the session row, and an erased subject loses access at once.
+        session: { cookieCache: { enabled: false } },
         secret: env.AUTH_SECRET,
     };
 };

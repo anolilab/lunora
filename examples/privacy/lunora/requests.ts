@@ -78,10 +78,14 @@ export const myRequests = query.query(async ({ ctx }): Promise<RequestSummary[]>
     return requests.map((request) => view(request));
 });
 
-/** A link to a finished export. Refused for anyone but the subject, and once the export has expired. */
-export const downloadUrl = query
+/**
+ * A link to a finished export, minted when the subject asks for it. It is a mutation, not a query: a query's
+ * result stays on the page, and the link it holds expires after fifteen minutes. Refused for anyone but the
+ * subject, and once the export has expired.
+ */
+export const downloadLink = mutation
     .input({ requestId: v.string().max(64) })
-    .query(async ({ args: { requestId }, ctx }) => privacyFor(ctx, await identityOf(ctx)).downloadUrl({ requestId }));
+    .mutation(async ({ args: { requestId }, ctx }) => privacyFor(ctx, await identityOf(ctx)).downloadUrl({ requestId }));
 
 /** The daily deadline sweep. Internal: only the cron calls it. */
 export const privacyTick = internalMutation.mutation(async ({ ctx }) => {

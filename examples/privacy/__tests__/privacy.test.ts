@@ -14,7 +14,7 @@ import type { MutationCtx } from "../lunora/_generated/server.js";
 import { listOpenPrivacyRequests, restorePrivacyErasures, retryPrivacyRequest } from "../lunora/admin";
 import { privacyFor, privacyWorkflows } from "../lunora/privacy";
 import { fileResponse } from "../lunora/privacy-files";
-import { cancelRequest, downloadUrl, myRequests, privacyPort, readExportFile, requestErasure } from "../lunora/requests";
+import { cancelRequest, downloadLink, myRequests, privacyPort, readExportFile, requestErasure } from "../lunora/requests";
 import schema from "../lunora/schema";
 import { addTask, myTasks } from "../lunora/tasks";
 import { d1Double, seedSignIn } from "./d1-double";
@@ -133,8 +133,8 @@ describe("privacy example", () => {
 
         await privacyWorkflows.exportHandler(contextFor(t, request.id, tombstones));
 
-        await expect(t.withIdentity(SUBJECT).query(downloadUrl, { requestId: request.id })).resolves.toMatch(DOWNLOAD_PATH);
-        await expect(t.withIdentity(OTHER).query(downloadUrl, { requestId: request.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
+        await expect(t.withIdentity(SUBJECT).mutation(downloadLink, { requestId: request.id })).resolves.toMatch(DOWNLOAD_PATH);
+        await expect(t.withIdentity(OTHER).mutation(downloadLink, { requestId: request.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
     it("serves the archive through the subject's link, and answers 404 to an edited one", async () => {
@@ -144,7 +144,7 @@ describe("privacy example", () => {
 
         await privacyWorkflows.exportHandler(contextFor(t, request.id, tombstones));
 
-        const link = new URL(await t.withIdentity(SUBJECT).query(downloadUrl, { requestId: request.id }), "http://localhost");
+        const link = new URL(await t.withIdentity(SUBJECT).mutation(downloadLink, { requestId: request.id }), "http://localhost");
         const served = (params: URLSearchParams) =>
             fileResponse({ exp: params.get("exp"), key: params.get("key"), sig: params.get("sig") }, Date.now(), async (key) =>
                 t.run(async (ctx) => readExportFile(appCtx(ctx), key)),

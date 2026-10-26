@@ -13,8 +13,9 @@ route, mounted on the Worker, over the `exportFiles` table), a retained table (`
 entrypoints for the per-call handlers are checked by `__tests__/generated-workflows.test.ts`, which closes
 the §4.2 check. The summary PDF was re-measured on workerd with `@cantoo/pdf-lib` (600 datasets: 37 pages,
 96 KB, 300 ms; the earlier 40-page figure was for `pdf-lib` 1.17.1, so the two are not like-for-like).
-Still open: every LR/TR item in §10, and an `authDataset` for the example, which needs the example to
-adopt `@lunora/auth` first (its identity is claims, not shard rows).
+The example now declares `authDataset()` over better-auth's D1 tables (`user`, `session`, `account`). The
+workflow reads and erases them through `ctx.env.DB`. Still open: every LR/TR item in §10, and an admin
+retry of an export that includes those tables, which is recorded as failed (a mutation has no D1 binding).
 
 ## 0. Headline finding
 

@@ -2,6 +2,6 @@ PRIVACY_TOMBSTONE_SECRET=change-me-locally
 PRIVACY_FILE_SECRET=change-me-locally
 AUTH_SECRET="replace-with-openssl-rand-hex-32"
 # The Worker's public origin. A workflow calls back into Lunora functions through it, so an export or an erasure
-# fails with a clear message without it. Set the deployed Worker's URL with `wrangler secret put` or in `wrangler.jsonc`.
+# fails with a clear message without it. Deploys set it with `wrangler secret put LUNORA_ORIGIN_URL`.
 # The dev server prints its port at startup, and the value must name that port.
 LUNORA_ORIGIN_URL="http://localhost:5173"

@@ -104,6 +104,10 @@ existing link answers 404.
 Sign-in signs its session cookie with `AUTH_SECRET`, set the same way
 (`wrangler secret put AUTH_SECRET`). The Worker refuses to start sign-in without it.
 
+Workflows call back into the Worker through its public origin. Set it for a deploy with
+`wrangler secret put LUNORA_ORIGIN_URL`, and for local runs in `.dev.vars`. Without it an export or an
+erasure fails with a clear message.
+
 ## What is not wired up
 
 - **Object storage.** The archive is stored in the `exportFiles` table, base64-encoded,

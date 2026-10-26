@@ -20,8 +20,6 @@
         { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
         { "tag": "v2", "new_sqlite_classes": ["PrivacyTombstonesDO"] },
     ],
-    // The public origin of the deployed Worker. Empty here: set it before deploying (see `.dev.vars.example`).
-    "vars": { "LUNORA_ORIGIN_URL": "" },
     "observability": {
         "enabled": true,
         "head_sampling_rate": 1,

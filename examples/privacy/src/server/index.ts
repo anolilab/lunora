@@ -6,6 +6,9 @@ import { authFor } from "./auth";
 import type { WorkerEnv } from "./worker";
 import { buildWorker } from "./worker";
 
+/** The better-auth router's base path, as `@lunora/auth` mounts it. */
+const AUTH_PATH_PREFIX = "/api/auth/";
+
 // The two Workflow classes must be exported from the entry, or wrangler provisions no binding for them.
 export * from "../../lunora/_generated/workflows.js";
 
@@ -23,11 +26,14 @@ let worker: ReturnType<typeof buildWorker> | undefined;
  */
 export default {
     async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContextLike): Promise<Response> {
-        // Sign-in is better-auth's own router, mounted before Lunora's. Everything else falls through.
-        const authResponse = await handleAuthRequest(await authFor(env), request);
+        // Sign-in is better-auth's own router, mounted before Lunora's. Only its paths wait for the auth instance,
+        // so a session-free request such as an archive download does not depend on the sign-in database.
+        if (new URL(request.url).pathname.startsWith(AUTH_PATH_PREFIX)) {
+            const authResponse = await handleAuthRequest(await authFor(env), request);
 
-        if (authResponse) {
-            return authResponse;
+            if (authResponse) {
+                return authResponse;
+            }
         }
 
         worker ??= buildWorker(env);
