@@ -3,8 +3,9 @@
  * `node:sqlite` cannot reproduce: at most 100 bound parameters per statement, and
  * a function allowlist that decides whether `json_tree`/`json_each` may run.
  */
-import type { SqlExec } from "@lunora/shard-engine";
+import type { FilterClause, SqlExec } from "@lunora/shard-engine";
 import { findStorageReferences, readTablePage } from "@lunora/shard-engine";
+import { encodeWire } from "@lunora/wire";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
@@ -82,6 +83,43 @@ describe("admin introspection on workerd", () => {
 
             expect(idsWhere(true)).toStrictEqual(["on"]);
             expect(idsWhere(false)).toStrictEqual(["off"]);
+        });
+    });
+
+    it("filters a nested field by eq and a JSON array by has on real SQLite", async () => {
+        expect.assertions(2);
+
+        await withSql("admin-filter-nested", (sql) => {
+            createDocTable(sql, "orders");
+            sql.exec(
+                `INSERT INTO "orders" VALUES ('a', 1, ?), ('b', 1, ?)`,
+                JSON.stringify({ address: { city: "Berlin" }, tags: ["red", "blue"] }),
+                JSON.stringify({ address: { city: "Paris" }, tags: ["green"] }),
+            );
+
+            const ids = (filter: FilterClause): string[] =>
+                readTablePage(sql, { filters: [filter], table: "orders" }).rows.map((row) => (row as { id: string }).id);
+
+            expect(ids({ column: "address", operator: "eq", path: ["city"], value: "Berlin" })).toStrictEqual(["a"]);
+            expect(ids({ column: "tags", operator: "has", value: "blue" })).toStrictEqual(["a"]);
+        });
+    });
+
+    it("matches a user string under nested escaped arrays, and never a codec tag, on real SQLite", async () => {
+        expect.assertions(2);
+
+        await withSql("admin-search-escapes", (sql) => {
+            createDocTable(sql, "frames");
+            sql.exec(
+                `INSERT INTO "frames" VALUES ('a', 1, ?), ('b', 1, ?)`,
+                JSON.stringify(encodeWire({ deep: ["$lunora.wire$", "arr", ["$lunora.wire$", "arr", ["$lunora.wire$", "amber"]]] })),
+                JSON.stringify(encodeWire({ box: 1n })),
+            );
+
+            const idsFor = (search: string): string[] => readTablePage(sql, { search, table: "frames" }).rows.map((row) => (row as { id: string }).id);
+
+            expect(idsFor("amber")).toStrictEqual(["a"]);
+            expect(idsFor("bigint")).toStrictEqual([]);
         });
     });
 
