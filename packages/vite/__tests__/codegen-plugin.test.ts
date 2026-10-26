@@ -296,6 +296,8 @@ describe("codegen-plugin", () => {
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
 
             const buildContext = {
+                // Vite runs a build's hooks within an environment.
+                environment: { name: "client" },
                 error: (message: string): never => {
                     throw new Error(message);
                 },
@@ -330,6 +332,8 @@ describe("codegen-plugin", () => {
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
 
             const buildContext = {
+                // Vite runs a build's hooks within an environment.
+                environment: { name: "client" },
                 error: (message: string): never => {
                     throw new Error(message);
                 },
@@ -356,6 +360,8 @@ describe("codegen-plugin", () => {
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
 
             const buildContext = {
+                // Vite runs a build's hooks within an environment.
+                environment: { name: "client" },
                 error: (message: string): never => {
                     throw new Error(message);
                 },
@@ -379,6 +385,8 @@ describe("codegen-plugin", () => {
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "serve" });
 
             const buildContext = {
+                // Vite runs a build's hooks within an environment.
+                environment: { name: "client" },
                 error: (message: string): never => {
                     throw new Error(message);
                 },
@@ -862,6 +870,8 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
 
             const buildContext = {
+                // Vite runs a build's hooks within an environment.
+                environment: { name: "client" },
                 error: (message: string): never => {
                     throw new Error(message);
                 },
@@ -1255,6 +1265,33 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             vi.useRealTimers();
         });
 
+        it("the first save refreshes configResolved's Project instead of building another", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+            const createCalls = createCodegenProject as ReturnType<typeof vi.fn>;
+            const before = createCalls.mock.calls.length;
+
+            (plugin.config as (this: unknown, config: object, env: object) => void).call(undefined, {}, { command: "serve", mode: "development" });
+            (plugin.configResolved as (this: unknown) => void).call(undefined);
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            wireServer(plugin, server);
+
+            const changeListener = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.find((args) => args[0] === "change")?.[1] as (
+                file: string,
+            ) => void;
+
+            changeListener(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+        });
+
         it("a root tsconfig.json save drops the cached Project — the next codegen run builds a fresh one", async () => {
             expect.assertions(4);
 
@@ -1483,6 +1520,65 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             await vi.runAllTimersAsync();
 
             expect(findTsconfigCalls).toHaveBeenCalledWith(join(workdir, "lunora"));
+        });
+    });
+
+    describe("vite build environments", () => {
+        it("generates once for all environments, and none starts before the shared postcodegen finished", async () => {
+            expect.assertions(4);
+
+            // One instance serving both environments, as with plugins passed
+            // inline; `@cloudflare/vite-plugin` builds worker environments
+            // concurrently, so both `buildStart`s run at once.
+            writeFixture(workdir);
+            vi.mocked(runCodegen).mockClear();
+            vi.mocked(runPostCodegenHook).mockClear();
+
+            let finishHook: (() => void) | undefined;
+
+            vi.mocked(runPostCodegenHook).mockImplementationOnce(
+                async () =>
+                    new Promise((resolve) => {
+                        finishHook = () => {
+                            resolve({ ran: false });
+                        };
+                    }),
+            );
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const buildStart = plugin.buildStart as (this: object) => Promise<void>;
+            const contextFor = (name: string) => {
+                return {
+                    environment: { name },
+                    error: (message: string): never => {
+                        throw new Error(message);
+                    },
+                };
+            };
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
+            await (plugin.configResolved as (this: unknown) => Promise<void>).call(undefined);
+
+            let settled = 0;
+            const starts = [buildStart.call(contextFor("client")), buildStart.call(contextFor("worker"))].map(async (start) => {
+                await start;
+                settled += 1;
+            });
+
+            await vi.waitFor(() => {
+                expect(finishHook).toBeDefined();
+            });
+            await new Promise((resolve) => {
+                setTimeout(resolve, 20);
+            });
+
+            expect(settled).toBe(0);
+
+            finishHook?.();
+            await Promise.all(starts);
+
+            expect(runCodegen).toHaveBeenCalledTimes(1);
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
         });
     });
 
