@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { EventLogDO } from "../src/event-log-do";
 import { EventLogDOClient } from "../src/event-log-do-client";
-import { signedRequest, TEST_ENV } from "./_helpers/signed-request";
+import { signedRequest, TEST_ENV, TEST_INSTANCE } from "./_helpers/signed-request";
 
 // ── Mock SqlStorage with a REAL (rollback-on-throw) transaction ────────
 //
@@ -137,6 +137,7 @@ const createMockState = (): EventLogDO["state"] => {
     };
 
     return {
+        id: { toString: () => TEST_INSTANCE },
         storage: {
             sql: { exec },
             transaction,
@@ -302,6 +303,7 @@ describe("eventLogDO /append — replay", () => {
         const captured: Request[] = [];
         const client = new EventLogDOClient({
             env: TEST_ENV,
+            instance: TEST_INSTANCE,
             fetch: (req) => {
                 captured.push(req.clone());
                 return do_.fetch(req);

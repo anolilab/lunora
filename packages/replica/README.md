@@ -230,9 +230,11 @@ Every route of the DO requires a signed request. The client signs each request w
 read from the `env` you pass, and construction throws when that secret is not set. The DO must hold the same secret:
 
 ```ts
+const id = env.EVENT_LOG_DO.idFromName("my-app");
 const client = new EventLogDOClient({
     env,
-    fetch: (request) => env.EVENT_LOG_DO.get(env.EVENT_LOG_DO.idFromName("my-app")).fetch(request),
+    fetch: (request) => env.EVENT_LOG_DO.get(id).fetch(request),
+    instance: id.toString(),
 });
 
 // Append takes an ARRAY of events and returns them with their assigned `seq`s.

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { EventLogDO } from "../src/event-log-do";
 import { eventLogFrame } from "../src/event-log-frame";
-import { signedRequest, TEST_ENV } from "./_helpers/signed-request";
+import { signedRequest, TEST_ENV, TEST_INSTANCE } from "./_helpers/signed-request";
 
 /** A fresh idempotency key per append, so no test's batches collide in the ledger. */
 const nextBatchId = (): string => crypto.randomUUID();
@@ -112,10 +112,11 @@ const createMockSql = () => {
     return sql;
 };
 
-const createMockState = () => {
+const createMockState = (id = TEST_INSTANCE) => {
     const sql = createMockSql();
 
     return {
+        id: { toString: () => id },
         storage: {
             sql: sql as unknown as EventLogDO["state"]["storage"]["sql"],
         },
@@ -572,7 +573,7 @@ describe("eventLogDO relay gate", () => {
         expect.assertions(1);
 
         const { do_ } = gatedDO(TEST_ENV);
-        const signature = await signSiblingBody(TEST_ENV.LUNORA_RELAY_SECRET, eventLogFrame("POST", new URL("http://localhost/size"), ""));
+        const signature = await signSiblingBody(TEST_ENV.LUNORA_RELAY_SECRET, eventLogFrame(TEST_INSTANCE, "POST", new URL("http://localhost/size"), ""));
         const response = await do_.fetch(new Request("http://localhost/size", { headers: { [RELAY_SIGNATURE_HEADER]: signature }, method: "GET" }));
 
         expect(response.status).toBe(403);
@@ -582,10 +583,24 @@ describe("eventLogDO relay gate", () => {
         expect.assertions(1);
 
         const { do_ } = gatedDO(TEST_ENV);
-        const signature = await signSiblingBody(TEST_ENV.LUNORA_RELAY_SECRET, eventLogFrame("GET", new URL("http://localhost/size"), ""));
+        const signature = await signSiblingBody(TEST_ENV.LUNORA_RELAY_SECRET, eventLogFrame(TEST_INSTANCE, "GET", new URL("http://localhost/size"), ""));
         const response = await do_.fetch(new Request("http://localhost/state", { headers: { [RELAY_SIGNATURE_HEADER]: signature }, method: "GET" }));
 
         expect(response.status).toBe(403);
+    });
+
+    it("answers 403 to a request signed for another instance, which the same secret would otherwise serve", async () => {
+        expect.assertions(2);
+
+        const signedForA = await signedRequest("GET", "http://localhost/size", "", "instance-a");
+        const instanceB = new EventLogDO(createMockState("instance-b"), TEST_ENV);
+        const instanceA = new EventLogDO(createMockState("instance-a"), TEST_ENV);
+
+        const refused = await instanceB.fetch(signedForA.clone());
+        const served = await instanceA.fetch(signedForA);
+
+        expect(refused.status).toBe(403);
+        expect(served.status).toBe(200);
     });
 
     it("serves a correctly signed request", async () => {

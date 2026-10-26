@@ -194,9 +194,11 @@ Every route of the DO requires a signed request. The client signs each request w
 read from the `env` you pass, and construction throws when that secret is not set. The DO must hold the same secret:
 
 ```ts
+const id = env.EVENT_LOG_DO.idFromName("my-app");
 const client = new EventLogDOClient({
     env,
-    fetch: (request) => env.EVENT_LOG_DO.get(env.EVENT_LOG_DO.idFromName("my-app")).fetch(request),
+    fetch: (request) => env.EVENT_LOG_DO.get(id).fetch(request),
+    instance: id.toString(),
 });
 
 // `append` takes an ARRAY and returns the entries with their assigned `seq`s.
@@ -251,9 +253,11 @@ import { EventLogDOClient, eventsContext } from "@lunora/replica";
 
 import { action, v } from "@/lunora/_generated/server";
 
+const id = env.EVENT_LOG_DO.idFromName("my-app");
 const client = new EventLogDOClient({
     env,
-    fetch: (request) => env.EVENT_LOG_DO.get(env.EVENT_LOG_DO.idFromName("my-app")).fetch(request),
+    fetch: (request) => env.EVENT_LOG_DO.get(id).fetch(request),
+    instance: id.toString(),
 });
 
 export const myAction = action

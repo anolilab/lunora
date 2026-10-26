@@ -60,7 +60,7 @@ const createTestClient = (): EventLogDOClient => {
         return new Response("Not found", { status: 404 });
     };
 
-    return new EventLogDOClient({ env: { LUNORA_RELAY_SECRET: "s3cret" }, fetch: stub });
+    return new EventLogDOClient({ env: { LUNORA_RELAY_SECRET: "s3cret" }, fetch: stub, instance: "test-instance" });
 };
 
 // ── Middleware test helpers ─────────────────────────────────────────────

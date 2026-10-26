@@ -105,6 +105,9 @@ const fingerprintBatch = async (events: AppendRequestEvent[]): Promise<string> =
 // ── Types ──────────────────────────────────────────────────────────────
 
 interface EventLogDOState {
+    /** The object's own id; the relay signature is verified against it, never against the request. */
+    id: { toString: () => string };
+
     storage: {
         sql: {
             exec: (query: string, ...params: unknown[]) => unknown;
@@ -316,7 +319,7 @@ export class EventLogDO {
         const url = new URL(request.url);
         const raw = await request.text();
 
-        if (!(await verifySiblingBody(this.env, signature, eventLogFrame(request.method, url, raw)))) {
+        if (!(await verifySiblingBody(this.env, signature, eventLogFrame(this.state.id.toString(), request.method, url, raw)))) {
             return errorResponse(403, "FORBIDDEN", "missing or invalid event log signature");
         }
 

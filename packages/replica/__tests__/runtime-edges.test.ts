@@ -14,6 +14,7 @@ describe("eventLogDOClient wire contract", () => {
         const requests: Request[] = [];
         const client = new EventLogDOClient({
             env: { LUNORA_RELAY_SECRET: "s3cret" },
+            instance: "test-instance",
             fetch: async (request) => {
                 requests.push(request);
 

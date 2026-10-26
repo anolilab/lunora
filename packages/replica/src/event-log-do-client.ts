@@ -11,6 +11,7 @@
  * const client = new EventLogDOClient({
  *   env,
  *   fetch: (req) => env.EVENT_LOG_DO.get(id).fetch(req),
+ *   instance: id.toString(),
  * });
  *
  * const { entries } = await client.getSince(0); // first page — see `getSince`
@@ -67,6 +68,14 @@ export interface EventLogDOClientOptions {
      * ```
      */
     fetch: (request: Request) => Promise<Response>;
+
+    /**
+     * The `DurableObjectId` string of the instance `fetch` dispatches to:
+     * `id.toString()` for the `id` passed to `get()`. It is signed into every
+     * request, and the instance refuses a request signed for any other id, so
+     * a signed request captured from one log cannot be replayed against another.
+     */
+    instance: string;
 }
 
 // ── Client ─────────────────────────────────────────────────────────────
@@ -83,6 +92,8 @@ export class EventLogDOClient {
 
     readonly #secret: string;
 
+    readonly #instance: string;
+
     public constructor(options: EventLogDOClientOptions) {
         const secret = siblingSecretOf(options.env);
 
@@ -92,6 +103,7 @@ export class EventLogDOClient {
 
         this.#fetch = options.fetch;
         this.#secret = secret;
+        this.#instance = options.instance;
     }
 
     // ── Append ─────────────────────────────────────────────────────────
@@ -177,7 +189,7 @@ export class EventLogDOClient {
      */
     async #send(method: "GET" | "POST", path: string, body = ""): Promise<Response> {
         const url = new URL(`https://do${path}`);
-        const signature = await signSiblingBody(this.#secret, eventLogFrame(method, url, body));
+        const signature = await signSiblingBody(this.#secret, eventLogFrame(this.#instance, method, url, body));
         const headers: Record<string, string> = { [RELAY_SIGNATURE_HEADER]: signature };
 
         if (method === "POST") {
