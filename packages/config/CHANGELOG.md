@@ -1,3 +1,16 @@
+## @lunora/config [1.0.0-alpha.408](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.407...@lunora/config@1.0.0-alpha.408) (2026-10-26)
+
+### Bug Fixes
+
+* **seed:** validator bounds, unique indexes and dangling FKs ([#1284](https://github.com/anolilab/lunora/issues/1284)) ([8ede8ab](https://github.com/anolilab/lunora/commit/8ede8abc2e7434bc71443ad95388315ff4ec7dee))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.354
+* **@lunora/seed:** upgraded to 1.0.0-alpha.256
+* **@lunora/studio:** upgraded to 1.0.0-alpha.343
+
 ## @lunora/config [1.0.0-alpha.407](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.406...@lunora/config@1.0.0-alpha.407) (2026-10-26)
 
 
