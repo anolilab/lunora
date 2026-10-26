@@ -21,7 +21,7 @@ interface FunctionReference {
 const LUNORA_TABLE_REFS = ((): (() => Record<string, Record<string, string>>) => { let cached: Record<string, Record<string, string>> | undefined; return () => (cached ??= JSON.parse("{}") as Record<string, Record<string, string>>); })();
 
 /** Declared indexes per table (secondary, search, geo, rank, vector) for the schema viewer. */
-const LUNORA_TABLE_INDEXES = ((): (() => Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>) => { let cached: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> | undefined; return () => (cached ??= JSON.parse("{\"posts\":[{\"fields\":[\"publishedAt\"],\"name\":\"by_published\",\"type\":\"index\"},{\"fields\":[\"body\"],\"name\":\"posts_search\",\"type\":\"vector\"}],\"drafts\":[{\"fields\":[\"updatedAt\"],\"name\":\"by_updated\",\"type\":\"index\"},{\"fields\":[\"authorId\",\"updatedAt\"],\"name\":\"by_author_updated\",\"type\":\"index\"}],\"ratelimit_buckets\":[{\"fields\":[\"key\"],\"name\":\"by_key\",\"type\":\"index\"}]}") as Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>); })();
+const LUNORA_TABLE_INDEXES = ((): (() => Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>) => { let cached: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> | undefined; return () => (cached ??= JSON.parse("{\"posts\":[{\"fields\":[\"publishedAt\"],\"name\":\"by_published\",\"type\":\"index\"},{\"fields\":[\"body\"],\"name\":\"posts_search\",\"type\":\"vector\"}],\"drafts\":[{\"fields\":[\"authorId\",\"updatedAt\"],\"name\":\"by_author_updated\",\"type\":\"index\"},{\"fields\":[\"updatedAt\"],\"name\":\"by_updated\",\"type\":\"index\"}],\"ratelimit_buckets\":[{\"fields\":[\"key\"],\"name\":\"by_key\",\"type\":\"index\"}]}") as Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>); })();
 
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via `__lunora_admin__:describeTable`. */
 const LUNORA_TABLE_COLUMNS = ((): (() => Record<
@@ -872,7 +872,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         }
 
         protected override async runShardImport(args: RunShardImportArgs): Promise<ImportShardResult> {
-            this.ensureMigrated();
+            // A dry run checks row shapes and never writes. Migrating first would write the schema ledger and create tables on a cold shard.
+            if (args.dryRun !== true) {
+                this.ensureMigrated();
+            }
 
             const writer = this.adminWriter();
 

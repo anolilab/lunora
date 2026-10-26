@@ -10746,6 +10746,29 @@ abstract class ShardDO {
     }
 
     /**
+     * The `importShard` admin op: a dry run is answered without touching storage,
+     * a real import flushes live subscribers and is audited.
+     */
+    private async importAdminShard(args: Record<string, unknown>): Promise<Response> {
+        const parsed = parseImportShardArgs(args);
+        const result = await this.runShardImport({ dryRun: parsed.dryRun, rows: parsed.rows, startLine: parsed.startLine });
+
+        // A dry run writes nothing, so there is no table to flush and no change to audit. The echo is how a client tells a shard that
+        // honoured the flag from one built before it existed, which ignores the flag, writes the rows and answers the same body.
+        if (parsed.dryRun) {
+            return adminResponse({ ...result, dryRun: true });
+        }
+
+        // The import inserts rows through the writer, which records touched tables;
+        // flush so live subscribers re-run.
+        await this.flushChangedTables();
+
+        this.recordAudit("importShard", { detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted } });
+
+        return adminResponse(result);
+    }
+
+    /**
      * Serve a reserved admin-introspection RPC (`__lunora_admin__:*`) for the
      * data browser. Gated by `env.LUNORA_ADMIN_TOKEN`: introspection is
      * **disabled unless the token is configured**, and when it is, the request
@@ -10802,16 +10825,8 @@ abstract class ShardDO {
             }
 
             if (functionPath === ADMIN_FUNCTIONS.importShard) {
-                const parsed = parseImportShardArgs(args);
-                const result = await this.runShardImport({ rows: parsed.rows, startLine: parsed.startLine });
-
-                // The import inserts rows through the writer, which records
-                // touched tables; flush so live subscribers re-run.
-                await this.flushChangedTables();
-
-                this.recordAudit("importShard", { detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted } });
-
-                return adminResponse(result);
+                // Awaited so a rejected import reaches the catch below and answers with the structured error envelope.
+                return await this.importAdminShard(args);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.writeRow) {
@@ -11854,8 +11869,19 @@ abstract class ShardDO {
 
         const table = typeof args["table"] === "string" ? args["table"] : "";
         const columns = table === "" ? [] : this.tableColumns(table).map((column) => column.name);
+        // The storage-level names, which the filter compiler treats as physical; the
+        // suggestion is validated against the same set it will be compiled against.
+        const physical =
+            columns.length === 0
+                ? []
+                : (this.sql as SqlExec)
+                      .exec<{ name: string }>(`PRAGMA table_info(${quoteIdentifier(table)})`)
+                      .toArray()
+                      .map((column) => column.name);
+        // The declared kinds the filter compiler binds through, so a suggestion it would refuse is never offered.
+        const kinds = this.columnKinds(table) ?? {};
         const { generateFilter } = await loadSqlAssistant();
-        const result = await generateFilter((this.env as Record<string, unknown> | undefined)?.["AI"], args, columns);
+        const result = await generateFilter((this.env as Record<string, unknown> | undefined)?.["AI"], args, columns, physical, kinds);
 
         if (result.degraded && result.reason !== "no-ai-binding") {
             this.recordAudit("aiTableFilter", { detail: { reason: result.reason, table } });

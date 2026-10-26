@@ -27,6 +27,21 @@ const silentLogger = (): Logger => {
     };
 };
 
+/** A `dryRun` POST is the check that runs before a real import. It writes and records nothing, so the fakes below answer it without counting. */
+const isCheck = (url: string): boolean => new URL(url).searchParams.get("dryRun") === "true";
+
+const checkResponse = () => {
+    return {
+        body: null,
+        json: async () => {
+            return { conflicts: 0, dryRun: true, errors: [], inserted: {} };
+        },
+        ok: true,
+        status: 200,
+        text: async () => "",
+    };
+};
+
 let workDir: string;
 
 describe("lunora data-transfer", () => {
@@ -325,6 +340,10 @@ describe("lunora data-transfer", () => {
             const calls: { body: string; url: string }[] = [];
 
             const fetchImpl: StreamingFetchLike = async (url, init) => {
+                if (isCheck(url)) {
+                    return checkResponse();
+                }
+
                 calls.push({ body: bodyText(init?.body), url });
 
                 const rows = bodyText(init?.body)
@@ -366,7 +385,11 @@ describe("lunora data-transfer", () => {
 
             const captured: { body: string }[] = [];
 
-            const fetchImpl: StreamingFetchLike = async (_url, init) => {
+            const fetchImpl: StreamingFetchLike = async (url, init) => {
+                if (isCheck(url)) {
+                    return checkResponse();
+                }
+
                 captured.push({ body: bodyText(init?.body) });
 
                 return {
@@ -424,7 +447,11 @@ describe("lunora data-transfer", () => {
 
             const captured: string[] = [];
 
-            const fetchImpl: StreamingFetchLike = async (_url, init) => {
+            const fetchImpl: StreamingFetchLike = async (url, init) => {
+                if (isCheck(url)) {
+                    return checkResponse();
+                }
+
                 captured.push(bodyText(init?.body));
 
                 return {
@@ -552,6 +579,10 @@ describe("lunora data-transfer", () => {
 
             const calls: string[] = [];
             const fetchImpl: StreamingFetchLike = async (url) => {
+                if (isCheck(url)) {
+                    return checkResponse();
+                }
+
                 calls.push(url);
 
                 return {

@@ -463,6 +463,23 @@ describe("introspect", () => {
             expect(readTablePage(database.sql, { filters: [{ column: "authorId", operator: "ne", value: null }], table: "posts" }).total).toBe(2);
         });
 
+        // A boolean is stored as a JSON true/false, which `json_extract` returns as
+        // 1/0. The bound value must be that integer: a raw JS boolean is not a
+        // bindable SQLite value, so an unconverted `true` would not match its row.
+        it("matches a boolean doc field by its JSON truth value", () => {
+            expect.assertions(2);
+
+            database.raw(`INSERT INTO "posts" VALUES ('p5', 5, '{"title":"On","published":true}'), ('p6', 6, '{"title":"Off","published":false}')`);
+
+            const idsWhere = (value: boolean): string[] =>
+                readTablePage(database.sql, { filters: [{ column: "published", operator: "eq", value }], table: "posts" }).rows.map(
+                    (row) => (row as { id: string }).id,
+                );
+
+            expect(idsWhere(true)).toEqual(["p5"]);
+            expect(idsWhere(false)).toEqual(["p6"]);
+        });
+
         it("matches the NULL group on a physical column too", () => {
             expect.assertions(1);
 

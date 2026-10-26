@@ -268,6 +268,7 @@ interface RunShardFindRelatedArgs {
 
 ```ts
 interface RunShardImportArgs {
+    dryRun?: boolean;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }

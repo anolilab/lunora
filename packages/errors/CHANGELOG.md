@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.70...@lunora/errors@1.0.0-alpha.71) (2026-10-26)
+
+### Features
+
+* **studio:** import a CSV file into a table ([#1321](https://github.com/anolilab/lunora/issues/1321)) ([360930a](https://github.com/anolilab/lunora/commit/360930a9edc00a56f90c5cdf6a9d3218e428aeea))
+
 ## @lunora/errors [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.69...@lunora/errors@1.0.0-alpha.70) (2026-10-25)
 
 ### Bug Fixes
