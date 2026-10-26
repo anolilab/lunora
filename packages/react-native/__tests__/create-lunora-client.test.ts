@@ -208,6 +208,26 @@ describe("withAuthWebSocket", () => {
         expect(calls[0]!.options).toBeUndefined();
     });
 
+    it("drops the browser bearer subprotocol when the bearer rides Authorization", () => {
+        expect.assertions(3);
+
+        const { calls, FakeWebSocket } = makeFakeWebSocket();
+        let headers: Record<string, string> | undefined = { Authorization: "Bearer tok" };
+        const Wrapped = withAuthWebSocket(FakeWebSocket, () => headers);
+
+        // The handshake stays exactly what it was before the subprotocol existed.
+        const native = new Wrapped("wss://api.example.com/_lunora/ws", ["lunora", "lunora.bearer.dG9r"]);
+
+        headers = undefined;
+
+        const headerless = new Wrapped("wss://api.example.com/_lunora/ws", ["lunora", "lunora.bearer.dG9r"]);
+
+        expect([native, headerless].every((socket) => socket instanceof Wrapped)).toBe(true);
+        expect(calls[0]!.protocols).toBeUndefined();
+        // Without an Authorization header the offer is the socket's only credential, so it stays.
+        expect(calls[1]!.protocols).toStrictEqual(["lunora", "lunora.bearer.dG9r"]);
+    });
+
     it("re-reads the factory per socket so a reconnect picks up a new token", () => {
         expect.assertions(4);
 

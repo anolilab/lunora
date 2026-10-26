@@ -7,6 +7,15 @@ import type { AuthHeadersFactory, CreateLunoraClientOptions } from "./types";
 // this widened constructor type and the subclass is re-cast to `typeof WebSocket`.
 type WebSocketWithOptions = new (url: string | URL, protocols?: string | string[], options?: unknown) => WebSocket;
 
+/** `protocols` without the client's `lunora` bearer offer; `undefined` when nothing else remains. */
+const withoutLunoraProtocols = (protocols: string | string[] | undefined): string[] | undefined => {
+    const kept = (typeof protocols === "string" ? [protocols] : (protocols ?? [])).filter(
+        (protocol) => protocol !== "lunora" && !protocol.startsWith("lunora.bearer."),
+    );
+
+    return kept.length > 0 ? kept : undefined;
+};
+
 /**
  * True when this bundle is running on native React Native rather than in a
  * browser (`react-native-web`).
@@ -109,8 +118,13 @@ export const withAuthWebSocket = (WebSocketImpl: typeof WebSocket, getAuthHeader
     class AuthWebSocket extends (WebSocketImpl as unknown as WebSocketWithOptions) {
         public constructor(url: string | URL, protocols?: string | string[]) {
             const headers = getAuthHeaders();
+            const hasAuthorization = headers !== undefined && Object.keys(headers).some((name) => name.toLowerCase() === "authorization");
 
-            super(url, protocols, headers ? { headers } : undefined);
+            // The client offers its bearer as a `lunora` / `lunora.bearer.*` subprotocol for
+            // browsers, which cannot set headers. With a real `Authorization` header that offer
+            // is redundant, so drop it: the native handshake stays exactly as before (a worker
+            // that selects no subprotocol is still accepted) and the token rides one header.
+            super(url, hasAuthorization ? withoutLunoraProtocols(protocols) : protocols, headers ? { headers } : undefined);
         }
     } as unknown as typeof WebSocket;
 
