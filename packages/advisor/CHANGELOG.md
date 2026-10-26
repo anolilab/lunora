@@ -1,3 +1,14 @@
+## @lunora/advisor [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.260...@lunora/advisor@1.0.0-alpha.261) (2026-10-26)
+
+### Features
+
+* **server:** require the table for ctx.db by-id reads and writes ([#1344](https://github.com/anolilab/lunora/issues/1344)) ([97244c5](https://github.com/anolilab/lunora/commit/97244c5eae27fb0c9ab19a71e7e0b50b02b13782))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.242
+
 ## @lunora/advisor [1.0.0-alpha.260](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.259...@lunora/advisor@1.0.0-alpha.260) (2026-10-26)
 
 
