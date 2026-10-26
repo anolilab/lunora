@@ -1038,7 +1038,6 @@ const forgetUnscanned = (project: Project, scanned: ReadonlySet<SourceFile>): vo
 const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<string>, lunoraDirectory: string): Capabilities => {
     const lunoraRoot = join(projectRoot, lunoraDirectory);
     const project = scanProjectOf(projectRoot);
-
     const candidates: { file: string; inLunora: boolean }[] = [];
     const lunoraFiles: SourceCapabilitySignals[] = [];
     const otherFiles: SourceCapabilitySignals[] = [];
