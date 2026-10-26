@@ -108,7 +108,7 @@ export const ERROR_CATALOG = {
         hint: [
             "The index was not built, so the shard refuses user traffic until it is.",
             "",
-            "Write a `defineMigration` in `lunora/migrations.ts` that deletes or merges the duplicate rows so one row keeps each key. Run `lunora migrate up`, then redeploy. The `lunora-migration-helper` skill covers the pattern.",
+            "Write a `defineMigration` in `lunora/migrations.ts` that deletes or merges the duplicate rows so one row keeps each key. Deploy it, then run `lunora migrate up`. The shard retries the index build on its own, so no second deploy is needed. The `lunora-migration-helper` skill covers the pattern.",
         ],
         status: 409,
         title: "Unique index blocked by duplicate rows",

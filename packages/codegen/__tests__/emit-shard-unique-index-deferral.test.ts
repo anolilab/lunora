@@ -40,7 +40,7 @@ describe("emitShard — blocked unique index", () => {
     it("refuses user dispatch while an index is outstanding", () => {
         expect.assertions(2);
 
-        expect(methodBody("private ensureServable()")).toContain('throw new LunoraError("INTERNAL", this.blockedUniqueIndexes.join("; "))');
+        expect(methodBody("private ensureServable()")).toContain('throw new LunoraError("UNIQUE_INDEX_DUPLICATES", this.blockedUniqueIndexes.join("; "))');
         expect(methodBody("public override async handleRpc(")).toContain("this.ensureServable();");
     });
 
@@ -94,8 +94,11 @@ const compileShard = () => {
                 }
             }
             class LunoraError extends Error {
-                public constructor(_code: string, message: string) {
+                public readonly code: string;
+
+                public constructor(code: string, message: string) {
                     super(message);
+                    this.code = code;
                 }
             }
             // eslint-disable-next-line sonarjs/code-eval -- runs the emitter's own output in a sandbox of stubs
@@ -134,6 +137,22 @@ describe("emitShard — blocked unique index retry", () => {
 
     afterEach(() => {
         vi.useRealTimers();
+    });
+
+    it("refuses user dispatch under the duplicate-rows code, which the wire does not redact", () => {
+        expect.assertions(1);
+
+        const { build } = compileShard();
+        const shard = build(() => ["unique index users_email blocked by duplicates"]);
+        let thrown: unknown;
+
+        try {
+            shard.ensureServable();
+        } catch (error) {
+            thrown = error;
+        }
+
+        expect((thrown as { code?: unknown }).code).toBe("UNIQUE_INDEX_DUPLICATES");
     });
 
     it("does not rescan on every refused call, only once per retry interval", () => {

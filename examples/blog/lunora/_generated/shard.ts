@@ -997,7 +997,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.ensureMigrated();
 
             if (this.blockedUniqueIndexes.length > 0) {
-                throw new LunoraError("INTERNAL", this.blockedUniqueIndexes.join("; "));
+                throw new LunoraError("UNIQUE_INDEX_DUPLICATES", this.blockedUniqueIndexes.join("; "));
             }
         }
 
