@@ -72,8 +72,9 @@ interface DoctorFixResult {
 
 interface D1Placeholder {
     binding: string;
-    index: number;
     name: string | undefined;
+    /** Where the `database_id` sits in the config: the top level, or an `env` block's own array. */
+    path: ReadonlyArray<string | number>;
 }
 
 const defaultRunner = async (args: ReadonlyArray<string>, cwd: string): Promise<WranglerRunnerResult> => {
@@ -124,10 +125,9 @@ const listD1Databases = async (runner: WranglerRunner, cwd: string): Promise<Map
     return databases;
 };
 
-/** The `d1_databases` entries whose `database_id` is still a placeholder, by their index in the array. */
-const placeholdersIn = (text: string): D1Placeholder[] => {
-    const parsed = parseJsonc(text) as { d1_databases?: unknown } | undefined;
-    const databases = Array.isArray(parsed?.d1_databases) ? parsed.d1_databases : [];
+/** The placeholder entries of one `d1_databases` array, with the path that reaches it from the document root. */
+const placeholdersInScope = (databasesValue: unknown, prefix: ReadonlyArray<string>): D1Placeholder[] => {
+    const databases = Array.isArray(databasesValue) ? databasesValue : [];
 
     return databases.flatMap((entry, index): D1Placeholder[] => {
         if (entry === null || typeof entry !== "object") {
@@ -144,11 +144,28 @@ const placeholdersIn = (text: string): D1Placeholder[] => {
         return [
             {
                 binding: typeof database.binding === "string" && database.binding !== "" ? database.binding : "<unnamed>",
-                index,
+                path: [...prefix, "d1_databases", index],
                 name: typeof database.database_name === "string" && database.database_name !== "" ? database.database_name : undefined,
             },
         ];
     });
+};
+
+/**
+ * The `d1_databases` entries whose `database_id` is still a placeholder, at the
+ * top level and in every `env` block: `deploy --env` reads those blocks, so a
+ * placeholder there blocks the deploy that `doctor --fix` must be able to clear.
+ */
+const placeholdersIn = (text: string): D1Placeholder[] => {
+    const parsed = parseJsonc(text) as { d1_databases?: unknown; env?: Record<string, { d1_databases?: unknown } | undefined> } | undefined;
+    const scopes: { config: { d1_databases?: unknown } | undefined; prefix: ReadonlyArray<string> }[] = [
+        { config: parsed, prefix: [] },
+        ...Object.entries(parsed?.env ?? {}).map(([name, block]) => {
+            return { config: block, prefix: ["env", name] };
+        }),
+    ];
+
+    return scopes.flatMap(({ config, prefix }) => placeholdersInScope(config?.d1_databases, prefix));
 };
 
 /**
@@ -233,7 +250,7 @@ const fixD1Placeholders = async (options: DoctorFixOptions, result: DoctorFixRes
         const uuid = await resolveD1Id({ ...placeholder, name: placeholder.name }, options, runner, result);
 
         if (uuid !== undefined) {
-            const edits = modify(edited, ["d1_databases", placeholder.index, "database_id"], uuid, {
+            const edits = modify(edited, [...placeholder.path, "database_id"], uuid, {
                 formattingOptions: { eol: "\n", insertSpaces: true, tabSize: 4 },
             });
 

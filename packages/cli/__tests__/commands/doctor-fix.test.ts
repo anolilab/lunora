@@ -91,6 +91,32 @@ describe("lunora doctor --fix", () => {
         }
     });
 
+    it("fills a placeholder in an env block too, since deploy --env reads that block", async () => {
+        expect.hasAssertions();
+
+        writeFileSync(
+            join(workdir, "wrangler.jsonc"),
+            `{
+    "name": "app",
+    "d1_databases": [{ "binding": "DB", "database_name": "app-db", "database_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }],
+    "env": {
+        "staging": {
+            "d1_databases": [{ "binding": "DB", "database_name": "staging-db", "database_id": "${PLACEHOLDER}" }],
+        },
+    },
+}
+`,
+        );
+        const { runner } = stubWrangler([{ name: "staging-db", uuid: "11111111-2222-3333-4444-555555555555" }]);
+
+        await applyDoctorFixes({ configPath: join(workdir, "wrangler.jsonc"), cwd: workdir, dryRun: false, logger: silentLogger, runner });
+
+        const written = readFileSync(join(workdir, "wrangler.jsonc"), "utf8");
+
+        expect(written).toContain('"database_id": "11111111-2222-3333-4444-555555555555"');
+        expect(written).not.toContain(PLACEHOLDER);
+    });
+
     it("points a placeholder D1 id at the existing database and keeps the config's comments", async () => {
         expect.hasAssertions();
 
