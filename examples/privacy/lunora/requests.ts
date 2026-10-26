@@ -111,6 +111,17 @@ export const privacySweep = internalMutation.mutation(async ({ ctx }) => {
 /** The archive part a `${requestId}/${name}` key names, or `null`. The download route calls it only after the link checks out. */
 export const readExportFile = async (ctx: Pick<QueryCtx, "db">, key: string): Promise<null | StoredFile> => {
     const [requestId = "", ...rest] = key.split("/");
+    // A link can outlive the export it names. Serve the file only while that export is ready and its window is open.
+    const request =
+        (await ctx.db
+            .query("privacy_requests")
+            .withIndex("byRequestId", (q) => q.eq("requestId", requestId))
+            .first()) ?? null;
+
+    if (request?.status !== "ready" || (request.expiresAt ?? Infinity) <= Date.now()) {
+        return null;
+    }
+
     const row = await ctx.db
         .query("exportFiles")
         .withIndex("byRequestAndName", (q) => q.eq("requestId", requestId).eq("name", rest.join("/")))

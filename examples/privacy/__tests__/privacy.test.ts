@@ -277,6 +277,34 @@ describe("privacy example", () => {
             ]);
         });
 
+        it("stops serving an export's file once the export's window has closed, even under a link still valid", async () => {
+            expect.assertions(2);
+
+            const request = await t.run(async (ctx) => privacyFor(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
+
+            await privacyWorkflows.exportHandler(contextFor(t, request.id, tombstones));
+
+            const key = `${request.id}/export.zip`;
+
+            await expect(t.run(async (ctx) => readExportFile(appCtx(ctx), key))).resolves.toMatchObject({ name: "export.zip" });
+
+            await t.run(async (ctx) => {
+                const database = appCtx(ctx).db;
+                const row = await database
+                    .query("privacy_requests")
+                    .withIndex("byRequestId", (q) => q.eq("requestId", request.id))
+                    .first();
+
+                if (row === null) {
+                    throw new Error(`No privacy request row for ${request.id}.`);
+                }
+
+                await database.patch(row._id, { expiresAt: Date.now() - 1000 });
+            });
+
+            await expect(t.run(async (ctx) => readExportFile(appCtx(ctx), key))).resolves.toBeNull();
+        });
+
         it("records a retried export as failed when it needs the sign-in tables, which only the workflow reaches", async () => {
             expect.assertions(2);
 
