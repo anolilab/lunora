@@ -282,7 +282,7 @@ interface DatabaseWriterLike {
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
 
-    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
+    get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
 
     /**
      * Group + reduce. Same `baseWhere` injection as `aggregate`: the per-group
@@ -1012,37 +1012,23 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     /**
      * Resolve the raw row for `id` and which policy-gated table (if any) owns
      * it. The single source of truth shared by `get()` and the write gate.
-     * Two paths:
      *
-     * - **Fast path** — when the writer implements the optional `lookupById`
-     * seam it already knows the owning table from its internal index, so we
-     * get `{ row, tableName }` in a single round-trip and only need to check
-     * whether that table participates in RLS.
-     * - **Fallback** — older writers expose only `get(id)`, so we fetch the
-     * row, then probe every policy table with a `findFirst` to discover
-     * ownership. The probes run concurrently (latency bounded by the slowest
-     * single probe, not their sum). The unwrapped `base.*` is intentionally
-     * used so policy enforcement on writes doesn't recurse through itself.
+     * - **Pinned** (`expectedTable`): read the bound table with `get(table, id)`.
+     * The owner is that table when the row exists, so a foreign id resolves to
+     * absent. A `.global()` table is included: the writer's D1 fallback reaches it.
+     * - **Unpinned**: try the optional `lookupById` seam, which knows the owning
+     * table from its shard-local index, in one round-trip. A miss is not "absent":
+     * a `.global()` row always misses the seam. Those rows are found by probing
+     * every policy table with `findFirst`, which also returns the row. The probes
+     * run concurrently. Reporting the miss as absent would let the write gate
+     * perform update/delete with the policy never evaluated.
      *
-     * A `lookupById` MISS falls through to the probe path rather than reporting
-     * "no such row": the seam is shard-local, so every `.global()` row misses it
-     * (those rows live in D1 and only `get`/`findFirst` reach them through the
-     * writer's global fallback). Reporting the miss as absent is what let
-     * `gateById` classify a global row as "in no policy-gated table" and perform
-     * update/delete with the policy never evaluated. Resolving global rows inside
-     * `lookupById` itself was the alternative; it would have to probe every
-     * global table across the D1 hop for a bare id, whereas falling through here
-     * keeps the common case — a shard-local row that hits — at the ONE round-trip
-     * the seam exists for, and charges the extra probes only to a miss.
-     *
-     * `expectedTable` pins the lookup to one table (an id owned by another table
-     * resolves to "absent"); `probeTable` scopes only the FALLBACK probe set. A
-     * pin does NOT block the writer's global fallback: when `expectedTable` names
-     * a `.global()` table the engine still reaches its D1 row — `globalFallbackFor`
-     * allows the fall-through and re-applies the pin on the D1 writer — so
-     * `deleteAll`/`deleteWhere` pin `tableName` safely (their ids came from that
-     * table's own filtered read) and skip the per-policy-table probe fan-out that
-     * put a chunked erase into workerd's 1000-subrequest ceiling partway through.
+     * `probeTable` scopes only the unpinned probe set. A pin does NOT block the
+     * writer's global fallback: `deleteAll`/`deleteWhere` pin `tableName` safely
+     * (their ids came from that table's own filtered read) and skip the
+     * per-policy-table probe fan-out that put a chunked erase into workerd's
+     * 1000-subrequest ceiling partway through. The unguarded `raw` writer is read
+     * so policy enforcement on writes doesn't recurse through itself.
      *
      * `row` is `null` when the id doesn't exist. `tableName` is `undefined` when
      * the row exists but isn't in any policy-gated table (no policy applies →
@@ -1053,46 +1039,49 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         expectedTable?: string,
         probeTable?: string,
     ): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
+        if (expectedTable !== undefined) {
+            const row = await raw.get(expectedTable, id);
+
+            if (!row) {
+                // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
+                return { row: null, tableName: undefined };
+            }
+
+            return { row, tableName: policyTables.has(expectedTable) ? expectedTable : undefined };
+        }
+
         if (raw.lookupById) {
-            // Pin the lookup to the bound table when the by-id facade forwards
-            // one, so a foreign id resolves to "absent" rather than another
-            // table's row (IDOR). Read through the UNGUARDED `raw` writer: this
-            // is a policy-evaluation probe, not caller-visible data, so it must
-            // not be denied by the secure-by-default guard.
-            const located = await raw.lookupById(id, expectedTable);
+            // Read through the UNGUARDED `raw` writer: this is a policy-evaluation
+            // probe, not caller-visible data, so it must not be denied by the
+            // secure-by-default guard.
+            const located = await raw.lookupById(id);
 
             if (located) {
                 // Owned by a table that isn't policy-gated → tableName undefined.
                 return { row: located.row, tableName: policyTables.has(located.tableName) ? located.tableName : undefined };
             }
-
-            // A miss is NOT "absent" — see the docblock: a `.global()` row can
-            // only be reached through the probe path below.
         }
 
-        const row = await raw.get(id, expectedTable);
-
-        if (!row) {
-            // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
-            return { row: null, tableName: undefined };
-        }
-
-        // Ids are globally unique, so at most one probe hits; settle all of
-        // them in parallel and pick the hit instead of serializing the
-        // round-trips. When the caller named a table — pinned via `expectedTable`
-        // or scoped via `probeTable` — only that table's policy can apply, so the
-        // probe set is that one table (or none, when it carries no policy).
-        const scopedTable = expectedTable ?? probeTable;
-        const probeTables = scopedTable === undefined ? [...policyTables.keys()] : [scopedTable].filter((table) => policyTables.has(table));
+        // Unpinned, and the seam did not answer: probe the policy tables. Ids are
+        // globally unique, so at most one hits; settle them in parallel. The probe
+        // returns the row too, which is why a `.global()` row in a policy table still
+        // gets its policy checked here.
+        const probeTables = probeTable === undefined ? [...policyTables.keys()] : [probeTable].filter((table) => policyTables.has(table));
         const probes = await Promise.all(
             probeTables.map(async (tableName) => {
                 const probe = await raw.findFirst(tableName, { limit: 1, where: { _id: id } });
 
-                return probe?.["_id"] === id ? tableName : undefined;
+                return probe?.["_id"] === id ? { row: probe, tableName } : undefined;
             }),
         );
+        const hit = probes.find((entry): entry is { row: Record<string, unknown>; tableName: string } => entry !== undefined);
 
-        return { row, tableName: probes.find((entry): entry is string => entry !== undefined) };
+        if (!hit) {
+            // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
+            return { row: null, tableName: undefined };
+        }
+
+        return { row: hit.row, tableName: hit.tableName };
     };
 
     /**
@@ -1481,14 +1470,13 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             });
         },
 
-        async get(id, expectedTable) {
+        async get(table, id) {
             // Step 1 — **membership + raw fetch in one pass**. `locateRow`
             // returns the raw row (so an absent row is `null` and a row in no
             // policy-gated table falls through unrestricted) plus the owning
-            // policy-gated `tableName` when one exists. `expectedTable` (when
-            // the by-id facade forwards it) pins the lookup to the bound table
-            // so a foreign id can't read another table's row.
-            const located = await locateRow(id, expectedTable);
+            // policy-gated `tableName` when one exists. The bound table pins the
+            // lookup so a foreign id can't read another table's row.
+            const located = await locateRow(id, table);
 
             if (!located.row) {
                 // eslint-disable-next-line unicorn/no-null -- RlsDatabase.get structurally mirrors @lunora/do's writer, which returns `null` for an absent row
@@ -1502,7 +1490,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // return a protected row to the caller. For a non-guarded schema
             // `base === raw`, so this is the plain unrestricted read.
             if (located.tableName === undefined) {
-                return base.get(id, expectedTable);
+                return base.get(table, id);
             }
 
             const { baseWhere, restricts } = readBase(located.tableName);
@@ -1515,7 +1503,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // fails closed under `.rls("required")` and a `.public()` one returns
             // the row. Mirrors the `route`/`guardWriter` fail-closed parity.
             if (!restricts) {
-                return base.get(id, expectedTable);
+                return base.get(table, id);
             }
 
             // The owning table participates in RLS and the read policy grants
@@ -1675,7 +1663,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
 
             // Under `.rls("required")` a table with no read policy makes the guarded read throw,
             // after the write has committed. The caller cannot read that row, so it is not visible.
-            const visible = await wrapped.get(id, tableName).then(
+            const visible = await wrapped.get(tableName, id).then(
                 (row) => row !== null,
                 (error: unknown) => {
                     if (isLunoraError(error) && error.code === "RLS_REQUIRED") {

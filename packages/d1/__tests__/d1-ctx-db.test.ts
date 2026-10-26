@@ -352,20 +352,20 @@ describe("d1 ctx-db", () => {
 
             const id = await writer.insert("todos", { _id: "r1", archived: false, priority: "high", projectId: "p1", seq: 1 }, { allowExplicitId: true });
 
-            const inserted = await writer.get(id);
+            const inserted = await writer.get("todos", id);
 
             expect(inserted?.["priority"]).toBe("high");
 
             await writer.patch(id, { priority: "low" });
 
-            const patched = await writer.get(id);
+            const patched = await writer.get("todos", id);
 
             expect(patched?.["priority"]).toBe("low");
             expect(patched?.["projectId"]).toBe("p1");
 
             await writer.delete(id);
 
-            await expect(writer.get(id)).resolves.toBeNull();
+            await expect(writer.get("todos", id)).resolves.toBeNull();
         });
 
         it("replace overwrites unspecified fields with null", async () => {
@@ -377,7 +377,7 @@ describe("d1 ctx-db", () => {
 
             await writer.replace("r2", { priority: "medium", projectId: "p1" });
 
-            const replaced = await writer.get("r2");
+            const replaced = await writer.get("todos", "r2");
 
             expect(replaced?.["priority"]).toBe("medium");
             expect(replaced?.["seq"]).toBeNull();
@@ -438,7 +438,7 @@ describe("d1 ctx-db", () => {
             const { writer } = setupItems();
 
             const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-            const doc = await writer.get(id);
+            const doc = await writer.get("items", id);
 
             expect(doc?.["status"]).toBe("todo");
             expect(doc?.["seq"]).toBe(7);
@@ -450,7 +450,7 @@ describe("d1 ctx-db", () => {
             const { writer } = setupItems();
 
             const id = await writer.insert("items", { _id: "i1", seq: 99, slug: "a", status: "done", title: "first" }, { allowExplicitId: true });
-            const doc = await writer.get(id);
+            const doc = await writer.get("items", id);
 
             expect(doc?.["status"]).toBe("done");
             expect(doc?.["seq"]).toBe(99);
@@ -462,7 +462,7 @@ describe("d1 ctx-db", () => {
             const { revCalls, writer } = setupItems();
 
             const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-            const doc = await writer.get(id);
+            const doc = await writer.get("items", id);
 
             expect(doc?.["rev"]).toBeNull();
             expect(revCalls()).toBe(0);
@@ -479,13 +479,13 @@ describe("d1 ctx-db", () => {
 
             await writer.patch("i1", { title: "second" });
 
-            const afterFirstPatch = await writer.get("i1");
+            const afterFirstPatch = await writer.get("items", "i1");
 
             expect(afterFirstPatch?.["rev"]).toBe(1);
 
             await writer.patch("i1", { title: "third" });
 
-            const afterSecondPatch = await writer.get("i1");
+            const afterSecondPatch = await writer.get("items", "i1");
 
             expect(afterSecondPatch?.["rev"]).toBe(2);
             expect(revCalls()).toBe(2);
@@ -500,7 +500,7 @@ describe("d1 ctx-db", () => {
 
             await writer.patch("i1", { rev: 99 });
 
-            const afterExplicitPatch = await writer.get("i1");
+            const afterExplicitPatch = await writer.get("items", "i1");
 
             expect(afterExplicitPatch?.["rev"]).toBe(99);
             expect(revCalls()).toBe(0);
@@ -515,13 +515,13 @@ describe("d1 ctx-db", () => {
 
             await writer.replace("i1", { slug: "a", title: "auto" });
 
-            const afterAutoReplace = await writer.get("i1");
+            const afterAutoReplace = await writer.get("items", "i1");
 
             expect(afterAutoReplace?.["rev"]).toBe(1);
 
             await writer.replace("i1", { rev: 42, slug: "a", title: "manual" });
 
-            const afterManualReplace = await writer.get("i1");
+            const afterManualReplace = await writer.get("items", "i1");
 
             expect(afterManualReplace?.["rev"]).toBe(42);
         });
@@ -736,8 +736,8 @@ describe("d1 ctx-db", () => {
 
             await writer.delete("u1");
 
-            await expect(writer.get("m1")).resolves.toBeNull();
-            await expect(writer.get("r1")).resolves.toBeNull();
+            await expect(writer.get("messages", "m1")).resolves.toBeNull();
+            await expect(writer.get("reactions", "r1")).resolves.toBeNull();
         });
 
         it("onDelete set null clears the FK", async () => {
@@ -750,7 +750,7 @@ describe("d1 ctx-db", () => {
 
             await writer.delete("u1");
 
-            const message = await writer.get("m1");
+            const message = await writer.get("messages", "m1");
 
             expect(message).not.toBeNull();
             expect(message!["authorId"]).toBeNull();
@@ -765,7 +765,7 @@ describe("d1 ctx-db", () => {
             await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
 
             await expect(writer.delete("u1")).rejects.toBeInstanceOf(ConflictError);
-            await expect(writer.get("u1")).resolves.not.toBeNull();
+            await expect(writer.get("users", "u1")).resolves.not.toBeNull();
         });
 
         it("cross-backend (global → shardBy) cascade is refused with a clear message", async () => {
@@ -907,7 +907,7 @@ describe("d1 ctx-db", () => {
             await writer.insert("messages", { _id: "m1", body: "hi", locked: true }, { allowExplicitId: true });
 
             await expect(writer.delete("m1")).rejects.toBeInstanceOf(ConflictError);
-            await expect(writer.get("m1")).resolves.not.toBeNull();
+            await expect(writer.get("messages", "m1")).resolves.not.toBeNull();
         });
 
         it("an afterInsert handler writing another table via ctx.db persists", async () => {
@@ -1074,7 +1074,7 @@ describe("d1 ctx-db", () => {
 
             // The competing writer's value survives — the guarded UPDATE matched
             // zero rows rather than clobbering it.
-            const reloaded = (await writer.get("t1")) as Record<string, unknown>;
+            const reloaded = (await writer.get("todos", "t1")) as Record<string, unknown>;
 
             expect(reloaded["seq"]).toBe(999);
             expect(reloaded["priority"]).toBe("high");
@@ -1092,7 +1092,7 @@ describe("d1 ctx-db", () => {
             // surface as a false conflict here.
             await writer.patch("t1", { archived: true, priority: "low", seq: 42 });
 
-            const patched = (await writer.get("t1")) as Record<string, unknown>;
+            const patched = (await writer.get("todos", "t1")) as Record<string, unknown>;
 
             expect(patched["archived"]).toBe(true);
             expect(patched["priority"]).toBe("low");
@@ -1101,7 +1101,7 @@ describe("d1 ctx-db", () => {
             // replace overwrites the whole row.
             await writer.replace("t2", { archived: false, priority: "medium", projectId: "p9", seq: 7 });
 
-            const replaced = (await writer.get("t2")) as Record<string, unknown>;
+            const replaced = (await writer.get("todos", "t2")) as Record<string, unknown>;
 
             expect(replaced["projectId"]).toBe("p9");
             expect(replaced["seq"]).toBe(7);
@@ -1109,7 +1109,7 @@ describe("d1 ctx-db", () => {
             // delete removes it cleanly.
             await writer.delete("t3");
 
-            await expect(writer.get("t3")).resolves.toBeNull();
+            await expect(writer.get("todos", "t3")).resolves.toBeNull();
         });
     });
 });

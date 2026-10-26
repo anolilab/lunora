@@ -125,7 +125,7 @@ describe("createNodePlatform", () => {
             const writer = store.writer({ schema });
             const id = await writer.insert("notes", { body: "hello" });
 
-            await expect(writer.get(id)).resolves.toMatchObject({ body: "hello" });
+            await expect(writer.get("notes", id)).resolves.toMatchObject({ body: "hello" });
 
             // Nothing declared, nothing bound — same reasoning as the bucket: a
             // store silently rooted at `:memory:` loses every write on exit.

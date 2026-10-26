@@ -626,8 +626,8 @@ describe("ctx-db relations", () => {
 
             await writer.delete("u1");
 
-            await expect(writer.get("m1")).resolves.toBeNull();
-            await expect(writer.get("r1")).resolves.toBeNull();
+            await expect(writer.get("messages", "m1")).resolves.toBeNull();
+            await expect(writer.get("reactions", "r1")).resolves.toBeNull();
         });
 
         it("set null clears the FK on holder rows", async () => {
@@ -640,7 +640,7 @@ describe("ctx-db relations", () => {
 
             await writer.delete("u1");
 
-            const message = await writer.get("m1");
+            const message = await writer.get("messages", "m1");
 
             expect(message).not.toBeNull();
             expect(message!["authorId"]).toBeNull();
@@ -655,7 +655,7 @@ describe("ctx-db relations", () => {
             await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
 
             await expect(writer.delete("u1")).rejects.toThrow(/still references it/);
-            await expect(writer.get("u1")).resolves.not.toBeNull();
+            await expect(writer.get("users", "u1")).resolves.not.toBeNull();
         });
 
         it("restrict allows deletion once no holders remain", async () => {
@@ -667,7 +667,7 @@ describe("ctx-db relations", () => {
 
             await writer.delete("u1");
 
-            await expect(writer.get("u1")).resolves.toBeNull();
+            await expect(writer.get("users", "u1")).resolves.toBeNull();
         });
 
         const seedMessages = async (writer: DatabaseWriterLike, authorId: string, count: number): Promise<void> => {
@@ -703,7 +703,7 @@ describe("ctx-db relations", () => {
             await seedMessages(writer, "u1", 10_001);
 
             await expect(writer.delete("u1")).rejects.toMatchObject({ code: "CASCADE_LIMIT" });
-            await expect(writer.get("u1")).resolves.not.toBeNull();
+            await expect(writer.get("users", "u1")).resolves.not.toBeNull();
             await expect(writer.count("messages", { authorId: "u1" })).resolves.toBe(10_001);
         });
 
@@ -743,9 +743,9 @@ describe("ctx-db relations", () => {
 
             await writer.delete("u1");
 
-            await expect(writer.get("c1")).resolves.toBeNull();
-            await expect(writer.get("c2")).resolves.toMatchObject({ authorId: null, postId: "p2" });
-            await expect(writer.get("u1")).resolves.toBeNull();
+            await expect(writer.get("comments", "c1")).resolves.toBeNull();
+            await expect(writer.get("comments", "c2")).resolves.toMatchObject({ authorId: null, postId: "p2" });
+            await expect(writer.get("users", "u1")).resolves.toBeNull();
         });
     });
 
@@ -879,7 +879,7 @@ describe("ctx-db relations", () => {
 
                     return { continueCursor: null, isDone: true, page: [...rows.values()] };
                 },
-                async get(id: string) {
+                async get(_table: string, id: string) {
                     calls.push(`get:${id}`);
 
                     return rows.get(id) ?? null;
@@ -945,7 +945,7 @@ describe("ctx-db relations", () => {
                 sql: harness.sql,
             });
 
-            const row = await writer.get("g1");
+            const row = await writer.get("globals", "g1");
 
             expect(fake.calls).toContain("get:g1");
             expect(row).toMatchObject({ value: "alpha" });

@@ -69,7 +69,7 @@ describe("ctx-db soft delete", () => {
         await expect(writer.count("todos")).resolves.toBe(2);
 
         // …but it's still physically there, marker stamped, reachable by id.
-        const row = await writer.get("t2", "todos");
+        const row = await writer.get("todos", "t2");
 
         expect(row?.["deletedAt"]).toBe(1_700_000_000_000);
         expect(row?.["title"]).toBe("two");
@@ -108,7 +108,7 @@ describe("ctx-db soft delete", () => {
         await seedTodos(writer);
         await writer.delete("t3", "todos", { hard: true });
 
-        await expect(writer.get("t3", "todos")).resolves.toBeNull();
+        await expect(writer.get("todos", "t3")).resolves.toBeNull();
         // Even includeDeleted can't see a hard-deleted row.
         expect(ids(await writer.findMany("todos", { includeDeleted: true }))).toStrictEqual(["t1", "t2"]);
     });

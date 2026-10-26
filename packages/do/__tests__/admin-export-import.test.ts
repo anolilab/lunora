@@ -200,8 +200,8 @@ describe("exportShardRows / importShardRows roundtrip", () => {
         expect(result.errors).toEqual([]);
         expect(result.conflicts).toBe(0);
 
-        await expect(freshWriter.get("u9")).resolves.toMatchObject({ name: "Nina" });
-        await expect(freshWriter.get("m9")).resolves.toMatchObject({ text: "hello" });
+        await expect(freshWriter.get("users", "u9")).resolves.toMatchObject({ name: "Nina" });
+        await expect(freshWriter.get("messages", "m9")).resolves.toMatchObject({ text: "hello" });
 
         freshDatabase.close();
     });
@@ -243,7 +243,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
         expect(result.inserted).toEqual({ users: 1 });
 
         // The original row is still there, unchanged.
-        const existing = await writer.get("u1");
+        const existing = await writer.get("users", "u1");
 
         expect(existing).toMatchObject({ email: "u1@x.io" });
     });
@@ -271,7 +271,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
         for (const original of exported) {
             const id = original.doc["_id"] as string;
             // eslint-disable-next-line no-await-in-loop -- sequential per-row reload to verify round-trip
-            const reloaded = await freshWriter.get(id);
+            const reloaded = await freshWriter.get(original.table, id);
 
             expect(reloaded).not.toBeNull();
             expect(reloaded!["_id"]).toBe(id);

@@ -241,8 +241,8 @@ To go the other direction (child → parent), read the FK off the child and
 `get` the parent by id:
 
 ```ts
-const post = await ctx.db.get(postId);
-const author = post && (await ctx.db.get(post.authorId));
+const post = await ctx.db.get("posts", postId);
+const author = post && (await ctx.db.get("users", post.authorId));
 ```
 
 **Load related rows declaratively with `with`.** The typed table accessor's

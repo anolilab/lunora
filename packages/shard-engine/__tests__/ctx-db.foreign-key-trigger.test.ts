@@ -51,8 +51,8 @@ describe("foreign keys are checked after the before trigger", () => {
 
         const id = await writer.insert("orders", { customerId: "from-trigger", note: "x" });
 
-        await expect(writer.get(id)).resolves.toMatchObject({ customerId: "from-trigger" });
-        await expect(writer.get("from-trigger")).resolves.toMatchObject({ name: "made by trigger" });
+        await expect(writer.get("orders", id)).resolves.toMatchObject({ customerId: "from-trigger" });
+        await expect(writer.get("customers", "from-trigger")).resolves.toMatchObject({ name: "made by trigger" });
     });
 
     it("patch succeeds when a before trigger creates the new parent", async () => {

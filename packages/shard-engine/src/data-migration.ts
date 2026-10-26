@@ -523,7 +523,7 @@ const rewriteRow = async (options: {
         // timestamp it means rather than leaning on `replace`'s default.
         await writer.replace(id, document, undefined, { allowExplicitId: true });
     } catch (error) {
-        const after = await writer.get(id, table);
+        const after = await writer.get(table, id);
 
         if (after !== null && stableWireKey(after) !== stableWireKey(previous)) {
             onSettled("changed");
@@ -604,7 +604,7 @@ const applyTransformToRow = async (options: {
         // Pinned to the migration's own table: a bare `get` probes every table in
         // the schema for the id, which is a per-row O(tables) scan here.
         // eslint-disable-next-line no-await-in-loop -- the re-read must sit between THIS attempt's transform and its write; hoisting it would reopen the gap it closes
-        const latest = await writer.get(id, table);
+        const latest = await writer.get(table, id);
 
         if (latest === null) {
             // Deleted under us. Rewriting it would resurrect a row the

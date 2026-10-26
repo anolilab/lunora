@@ -2457,7 +2457,7 @@ export default schema;
 
             // The regex used to be `[!=]==?`, which also matched `!==`. An
             // inequality filter is "every row except this one" — not something
-            // `ctx.db.get(id)` can express — so flagging it inverted the query.
+            // `ctx.db.get(table, id)` can express — so flagging it inverted the query.
             writeFileSync(
                 join(workdir, "lunora", "reads.ts"),
                 `import { query, v } from "./_generated/server.js";
@@ -3308,7 +3308,7 @@ export { createPost as makePost };
             // per-procedure lint must see it too: a newly callable endpoint must not
             // get weaker coverage than the keyword-exported twin below.
             const body = `mutation.input({ id: v.any(), note: v.string() }).mutation(async ({ ctx, args }) => {
-    const row = await ctx.db.get(args.id);
+    const row = await ctx.db.get("posts", args.id);
     await ctx.db.insert("posts", { userId: args.id, title: String(Math.random()) });
     return row;
 })`;

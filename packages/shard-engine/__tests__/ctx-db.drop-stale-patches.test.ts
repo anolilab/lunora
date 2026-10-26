@@ -90,7 +90,7 @@ describe("ctx-db .dropStalePatches()", () => {
         setBaseline(baseline);
         await writer.patch(id, { title: "mine" });
 
-        const titleRow = await writer.get(id);
+        const titleRow = await writer.get("documents", id);
 
         expect(titleRow?.["title"]).toBe("theirs");
         expect(dropped).toHaveLength(1);
@@ -112,7 +112,7 @@ describe("ctx-db .dropStalePatches()", () => {
             applied: false,
             doc: expect.objectContaining({ title: "theirs" }),
         });
-        await expect(writer.get(id)).resolves.toMatchObject({ title: "theirs" });
+        await expect(writer.get("documents", id)).resolves.toMatchObject({ title: "theirs" });
         expect(dropped).toHaveLength(1);
     });
 
@@ -130,7 +130,7 @@ describe("ctx-db .dropStalePatches()", () => {
         setBaseline(baseline);
         await writer.patch(id, { views: { increment: 1 } });
 
-        const row = await writer.get(id);
+        const row = await writer.get("documents", id);
 
         expect(row?.["views"]).toBe(2);
         expect(dropped).toHaveLength(0);
@@ -138,7 +138,7 @@ describe("ctx-db .dropStalePatches()", () => {
         // The same holds through patchIf.
         await writer.patchIf?.("documents", id, { patch: { views: { increment: 5 } }, where: { body: "b" } });
 
-        const afterPatchIf = await writer.get(id);
+        const afterPatchIf = await writer.get("documents", id);
 
         expect(afterPatchIf?.["views"]).toBe(7);
     });
@@ -155,7 +155,7 @@ describe("ctx-db .dropStalePatches()", () => {
         setBaseline(baseline);
         await writer.patch(id, { title: "mine", views: { increment: 1 } });
 
-        const row = await writer.get(id);
+        const row = await writer.get("documents", id);
 
         expect(row?.["title"]).toBe("theirs");
         expect(row?.["views"]).toBe(0);
@@ -175,7 +175,7 @@ describe("ctx-db .dropStalePatches()", () => {
         setBaseline(baseline);
         await writer.patch(id, { body: "mine" });
 
-        const row = await writer.get(id);
+        const row = await writer.get("documents", id);
 
         expect(row?.["body"]).toBe("mine");
         expect(row?.["title"]).toBe("theirs");
@@ -197,7 +197,7 @@ describe("ctx-db .dropStalePatches()", () => {
         setBaseline(baseline);
         await writer.patch(id, { body: "mine", title: "mine" });
 
-        const row = await writer.get(id);
+        const row = await writer.get("documents", id);
 
         expect(row?.["body"]).toBe("original");
         expect(row?.["title"]).toBe("theirs");
@@ -218,7 +218,7 @@ describe("ctx-db .dropStalePatches()", () => {
         setBaseline(baseline);
         await writer.patch(id, { title: "mine" });
 
-        const titleRow = await writer.get(id);
+        const titleRow = await writer.get("documents", id);
 
         expect(titleRow?.["title"]).toBe("mine");
         expect(dropped).toHaveLength(0);
@@ -236,7 +236,7 @@ describe("ctx-db .dropStalePatches()", () => {
         setBaseline(baseline);
         await writer.patch(id, { title: "mine" });
 
-        const titleRow = await writer.get(id);
+        const titleRow = await writer.get("notes", id);
 
         expect(titleRow?.["title"]).toBe("mine");
         expect(dropped).toHaveLength(0);
@@ -254,7 +254,7 @@ describe("ctx-db .dropStalePatches()", () => {
         setBaseline(undefined);
         await writer.patch(id, { title: "mine" });
 
-        const titleRow = await writer.get(id);
+        const titleRow = await writer.get("documents", id);
 
         expect(titleRow?.["title"]).toBe("mine");
         expect(dropped).toHaveLength(0);
@@ -274,7 +274,7 @@ describe("ctx-db .dropStalePatches()", () => {
         setBaseline(0);
         await writer.patch(id, { title: "mine" });
 
-        const titleRow = await writer.get(id);
+        const titleRow = await writer.get("documents", id);
 
         expect(titleRow?.["title"]).toBe("mine");
         expect(dropped).toHaveLength(0);
@@ -310,7 +310,7 @@ describe("ctx-db .dropStalePatches()", () => {
         expect(readCdcCursor(harness.sql)).toBe(cursorBefore);
         expect(broadcast).toHaveBeenCalledTimes(broadcasts);
 
-        const titleRow = await writer.get(id);
+        const titleRow = await writer.get("documents", id);
 
         expect(titleRow?.["title"]).toBe("theirs");
     });
@@ -349,14 +349,14 @@ describe("ctx-db .dropStalePatches()", () => {
         // use the wire-safe one or this write path dies on a perfectly ordinary row.
         await writer.patch(id, { size: 7n });
 
-        const sizeRow = await writer.get(id);
+        const sizeRow = await writer.get("documents", id);
 
         expect(sizeRow?.["size"]).toBe(42n);
 
         // A field that did NOT move still applies, bigint neighbours and all.
         await writer.patch(id, { title: "fresh" });
 
-        const titleRow = await writer.get(id);
+        const titleRow = await writer.get("documents", id);
 
         expect(titleRow?.["title"]).toBe("fresh");
     });

@@ -69,7 +69,7 @@ describe("shard admin export/import — commit-ordered tables", () => {
         // Re-minted from the TARGET shard's own counter, not replayed: the
         // sequence is per-shard, and `_commitSeq > cursor` changefeed reads
         // depend on it being monotonic there.
-        const reloaded = await restored.get("e1");
+        const reloaded = await restored.get("events", "e1");
 
         expect(typeof reloaded?.["_commitSeq"]).toBe("number");
     });

@@ -60,7 +60,7 @@ describe("createSqlCtxDb insert applies an object default without sharing it", (
         (seen?.["tags"] as string[]).push("leaked");
 
         const id = await writer.insert("notes", { title: "second" });
-        const row = await writer.get(id);
+        const row = await writer.get("notes", id);
 
         expect(row?.["tags"]).toStrictEqual([]);
         expect(seen?.["tags"]).toStrictEqual([]);

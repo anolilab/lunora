@@ -3480,26 +3480,27 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return { params, plan: steps.map((step) => planStepText(step)), sql: text };
         },
 
-        async get(id, expectedTable) {
-            const tableName = await resolveTableName(id, expectedTable);
-
-            if (!tableName) {
-                // eslint-disable-next-line unicorn/no-null -- writer.get's public return is `doc | null`; an unresolved id returns null.
-                return null;
-            }
-
-            const definition = schema.tables[tableName];
+        async get(table, id) {
+            // `hasOwn` keeps a name such as `constructor` from resolving to a prototype member.
+            const definition = Object.hasOwn(schema.tables, table) ? schema.tables[table] : undefined;
 
             if (!definition) {
-                // eslint-disable-next-line unicorn/no-null -- writer.get's public return is `doc | null` (see above).
+                throw new LunoraError("BAD_REQUEST", `ctx.db.get(table, id): "${table}" is not a table in this schema`);
+            }
+
+            // Only `.global()` tables are provisioned in D1; a shard-local row never lives here.
+            if (definition.shardMode !== undefined && definition.shardMode.kind !== "global") {
+                // eslint-disable-next-line unicorn/no-null -- writer.get's public return is `doc | null`; an absent row returns null.
                 return null;
             }
 
-            // Coalesced: every `get` issued in this tick against `tableName`
+            await ensureMigrated();
+
+            // Coalesced: every `get` issued in this tick against `table`
             // becomes ONE `IN (…)` round-trip. `Promise.all(ids.map(ctx.db.get))`
             // is the idiomatic join, and against a remote store each of those
             // would otherwise be its own network hop.
-            return decodeRow(definition, await pointReads.load(tableName, id));
+            return decodeRow(definition, await pointReads.load(table, id));
         },
 
         async groupBy(tableName, groupOptions: GroupByOptions): Promise<ReadonlyArray<GroupByEntry>> {

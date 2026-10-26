@@ -182,10 +182,10 @@ export const create = ${kind}({
 
     it.each([
         ["a destructured `auth`", `const { auth } = ctx;\n    await ctx.db.insert("posts", { userId: auth.userId }); // @write`],
-        ["a row read by an args id", `await ctx.db.insert("posts", { userId: (await ctx.db.get(args.id)).ownerId }); // @write`],
+        ["a row read by an args id", `await ctx.db.insert("posts", { userId: (await ctx.db.get("posts", args.id)).ownerId }); // @write`],
         [
             "a const bound to such a row's owner",
-            `const owner = (await ctx.db.get(args.id)).ownerId;\n    await ctx.db.insert("posts", { userId: owner }); // @write`,
+            `const owner = (await ctx.db.get("posts", args.id)).ownerId;\n    await ctx.db.insert("posts", { userId: owner }); // @write`,
         ],
     ])("does not record an identity column rooted in ctx through %s", (_label, body) => {
         expect.assertions(1);

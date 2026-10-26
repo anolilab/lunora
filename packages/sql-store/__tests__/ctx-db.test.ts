@@ -118,7 +118,7 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
 
         expect(typeof id).toBe("string");
 
-        const doc = await writer.get(id);
+        const doc = await writer.get("notes", id);
 
         expect(doc).toMatchObject({ archived: false, body: "hello", priority: 3, slug: "a" });
         expect(doc?._id).toBe(id);
@@ -154,7 +154,7 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
 
         const writer = makeWriter();
         const id = await writer.insert("notes", { archived: true, body: "x", priority: 7, slug: "b" });
-        const doc = await writer.get(id);
+        const doc = await writer.get("notes", id);
 
         expect(doc?.archived).toBe(true);
         expect(doc?.priority).toBe(7);
@@ -168,7 +168,7 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
 
         await writer.patch(id, { body: "patched" });
 
-        const doc = await writer.get(id);
+        const doc = await writer.get("notes", id);
 
         expect(doc).toMatchObject({ archived: false, body: "patched", priority: 1, slug: "c" });
     });
@@ -190,7 +190,7 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
         );
 
         // …and the stored value is untouched by the refused write.
-        await expect(writer.get(id)).resolves.toMatchObject({ body: "keep-me" });
+        await expect(writer.get("notes", id)).resolves.toMatchObject({ body: "keep-me" });
     });
 
     it("delete removes the row", async () => {
@@ -201,7 +201,7 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
 
         await writer.delete(id);
 
-        await expect(writer.get(id)).resolves.toBeNull();
+        await expect(writer.get("notes", id)).resolves.toBeNull();
     });
 
     it("maps a UNIQUE-constraint breach to a ConflictError", async () => {
@@ -252,8 +252,8 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
         const writer = makeWriter();
         const id = await writer.insert("notes", { archived: false, body: "x", priority: 1, slug: "idor" });
 
-        // Pin a different (non-existent) table — a branded id must resolve to its own table only.
-        await expect(writer.get(id, "other")).resolves.toBeNull();
+        // A table the schema does not have is refused outright, so an id can only ever be read through a real table.
+        await expect(writer.get("other", id)).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
 });
 
@@ -413,7 +413,7 @@ describe("createSqlCtxDb — the column ceiling", () => {
 
         expect(Math.max(...bound)).toBeLessThanOrEqual(100);
         // …and the writes actually landed rather than being silently skipped.
-        await expect(writer.get(hardId)).resolves.toBeNull();
+        await expect(writer.get("wide", hardId)).resolves.toBeNull();
     });
 });
 
@@ -2087,7 +2087,7 @@ describe("createSqlCtxDb — a NULL in an optional column decodes as absent", ()
 
         // An explicit `null` on a `.nullable()` column is a VALUE, not an absent field.
         const id = await writer.insert("drafts", { subtitle: null, title: "t" });
-        const row = await writer.get(id, "drafts");
+        const row = await writer.get("drafts", id);
 
         // `optional(string).parse(null)` throws, so decoding an unset optional
         // column as `null` broke the export/import round trip outright.
@@ -2138,11 +2138,11 @@ describe("createSqlCtxDb — a bigint in an untyped column", () => {
 
         const id = await writer.insert("payments", { amount: 900n, tenant: "a" });
 
-        await expect(writer.get(id)).resolves.toMatchObject({ amount: 900n });
+        await expect(writer.get("payments", id)).resolves.toMatchObject({ amount: 900n });
 
         const negative = await writer.insert("payments", { amount: -900n, tenant: "a" });
 
-        await expect(writer.get(negative)).resolves.toMatchObject({ amount: -900n });
+        await expect(writer.get("payments", negative)).resolves.toMatchObject({ amount: -900n });
     });
 
     it("recomputes both extremes of an untyped column from the decoded bigints", async () => {
@@ -2192,12 +2192,12 @@ describe("createSqlCtxDb — a bigint in an untyped column", () => {
         const id = await writer.insert("payments", { amount: collides, tenant: "a" });
 
         // Reads back as the bigint that shape encodes, NOT as the string written.
-        await expect(writer.get(id)).resolves.toMatchObject({ amount: 900n });
+        await expect(writer.get("payments", id)).resolves.toMatchObject({ amount: 900n });
 
         // One character outside the shape is unambiguous and survives as a string.
         const safe = await writer.insert("payments", { amount: `2${"0".repeat(36)}900`, tenant: "a" });
 
-        await expect(writer.get(safe)).resolves.toMatchObject({ amount: `2${"0".repeat(36)}900` });
+        await expect(writer.get("payments", safe)).resolves.toMatchObject({ amount: `2${"0".repeat(36)}900` });
     });
 });
 
@@ -2880,7 +2880,7 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
             applied: true,
             doc: expect.objectContaining({ _id: id, name: "a", value: 2 }),
         });
-        await expect(writer.get(id)).resolves.toMatchObject({ value: 2 });
+        await expect(writer.get("counters", id)).resolves.toMatchObject({ value: 2 });
     });
 
     it("leaves a row that does not match untouched", async () => {
@@ -2893,7 +2893,7 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
             applied: false,
             doc: expect.objectContaining({ _id: id, value: 1 }),
         });
-        await expect(writer.get(id)).resolves.toMatchObject({ value: 1 });
+        await expect(writer.get("counters", id)).resolves.toMatchObject({ value: 1 });
     });
 
     it("matches an absent optional field with a null filter", async () => {
@@ -2930,7 +2930,7 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
         );
 
         expect(results.filter((result) => result?.applied)).toHaveLength(1);
-        await expect(writer.get(id)).resolves.toMatchObject({ value: 1 });
+        await expect(writer.get("counters", id)).resolves.toMatchObject({ value: 1 });
     });
 
     it("gives up with a conflict when every attempt loses the row to another writer", async () => {
@@ -3007,7 +3007,7 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
 
             await writer.patch(id, { value: { increment: 3 } });
 
-            await expect(writer.get(id)).resolves.toMatchObject({ value: 8 });
+            await expect(writer.get("counters", id)).resolves.toMatchObject({ value: 8 });
         });
 
         it("lands every one of ten concurrent increments instead of conflicting", async () => {
@@ -3018,7 +3018,7 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
 
             await Promise.all(Array.from({ length: 10 }, async () => writer.patch(id, { value: { increment: 1 } })));
 
-            await expect(writer.get(id)).resolves.toMatchObject({ value: 10 });
+            await expect(writer.get("counters", id)).resolves.toMatchObject({ value: 10 });
         });
 
         it("gives up with a conflict after the bounded number of re-reads", async () => {
@@ -3066,7 +3066,7 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
                 code: "FORBIDDEN",
             });
             expect(seen).toStrictEqual([1, -1]);
-            await expect(writer.get(id)).resolves.toMatchObject({ value: 1 });
+            await expect(writer.get("counters", id)).resolves.toMatchObject({ value: 1 });
         });
 
         it("rejects an operator the stored value cannot take", async () => {
@@ -3267,8 +3267,8 @@ describe("createSqlCtxDb — dotted paths into an object column", () => {
 
             await writer.patch("a", { "profile.plan": "team" });
 
-            const row = await writer.get("a");
-            const untouched = await writer.get("b");
+            const row = await writer.get("users", "a");
+            const untouched = await writer.get("users", "b");
 
             expect(row?.["profile"]).toStrictEqual({ age: 30, plan: "team" });
             expect(untouched?.["profile"]).toStrictEqual({ plan: "free" });
@@ -3281,7 +3281,7 @@ describe("createSqlCtxDb — dotted paths into an object column", () => {
 
             await writer.patch("d", { "profile.plan": "pro" });
 
-            const row = await writer.get("d");
+            const row = await writer.get("users", "d");
 
             expect(row?.["profile"]).toStrictEqual({ plan: "pro" });
             expect(idsOf(await writer.findMany("users", { where: { "profile.plan": "pro" } }))).toStrictEqual(["a", "c", "d"]);
@@ -3311,7 +3311,7 @@ describe("createSqlCtxDb — dotted paths into an object column", () => {
 
             await writer.patch("a", { "profile.plan": "team" });
 
-            const row = await writer.get("a");
+            const row = await writer.get("users", "a");
 
             expect(row?.["profile"]).toStrictEqual({ age: 30, plan: "team" });
             expect(updates).toBe(2);
@@ -3328,7 +3328,7 @@ describe("createSqlCtxDb — dotted paths into an object column", () => {
 
             await expect(writer.patch("a", patch as never)).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
 
-            const row = await writer.get("a");
+            const row = await writer.get("users", "a");
 
             expect(row?.["profile"]).toStrictEqual({ age: 30, plan: "pro" });
         });
@@ -3363,7 +3363,7 @@ describe("createSqlCtxDb — $onUpdateFn on a .global() table", () => {
 
         await writer.patchIf?.("notes", id, { patch: { slug: "b" }, where: { slug: "a" } });
 
-        const row = await writer.get(id);
+        const row = await writer.get("notes", id);
 
         expect(row?.touched).toBe(99);
     });

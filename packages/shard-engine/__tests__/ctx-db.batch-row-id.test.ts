@@ -87,7 +87,7 @@ describe("insertManyUnsafe applies column defaults once per row", () => {
             );
 
             expect(calls).toBe(2);
-            await expect(writer.get("n2")).resolves.toMatchObject({ owner: "owner" });
+            await expect(writer.get("notes", "n2")).resolves.toMatchObject({ owner: "owner" });
         } finally {
             harness2.close();
         }

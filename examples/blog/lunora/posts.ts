@@ -33,7 +33,9 @@ export const list = query.query(async ({ ctx }): Promise<PostDocument[]> =>
     ctx.db.query("posts").withIndex("by_published").order("desc").collect(),
 );
 
-export const get = query.input({ id: v.id("posts") }).query(async ({ args: { id }, ctx }): Promise<PostDocument | null> => (await ctx.db.get(id)) ?? null);
+export const get = query
+    .input({ id: v.id("posts") })
+    .query(async ({ args: { id }, ctx }): Promise<PostDocument | null> => (await ctx.db.get("posts", id)) ?? null);
 
 /**
  * Semantic search over post bodies. `.vectorize("body", …)` keeps the

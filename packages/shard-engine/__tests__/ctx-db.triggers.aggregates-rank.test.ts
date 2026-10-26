@@ -217,7 +217,7 @@ describe("ctx-db triggers — aggregates and rank", () => {
             // The competing patch survived (not clobbered) and the row stays
             // in its original partition — proof the aggregate -prev step never
             // ran against the stale snapshot.
-            const row = await competitor.get("t1");
+            const row = await competitor.get("todos", "t1");
 
             expect(row).toMatchObject({ projectId: "p1", title: "concurrent" });
 
