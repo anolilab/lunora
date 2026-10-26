@@ -219,6 +219,26 @@ export default defineSchema({
         }).toThrow(/privacy_table_unclassified: "notes"/u);
     });
 
+    it("classifies a v.id of a renamed auth user table when the renames are held in a variable", () => {
+        expect.assertions(1);
+
+        writeApp({
+            files: {
+                "privacy.ts": `import { authDataset, definePrivacy } from "@lunora/privacy";\n\nconst names = { user: "people" };\n\nexport const auth = authDataset(names);\n\nexport const privacy = definePrivacy({ datasets: [auth] });\n`,
+            },
+            schema: `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    notes: defineTable({ body: v.string(), author: v.optional(v.id("people")) }),
+});
+`,
+        });
+
+        expect(() => {
+            generate();
+        }).toThrow(/privacy_table_unclassified: "notes"/u);
+    });
+
     it("classifies a table by a nullable v.id of the users table, a union with v.null()", () => {
         expect.assertions(1);
 

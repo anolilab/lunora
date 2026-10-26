@@ -110,36 +110,6 @@ const coverDataset = (call: CallExpression, state: CoverageState): void => {
     }
 };
 
-/** `authDataset(renames?)`: the default better-auth names, minus the renamed ones, plus the renamed values. */
-const coverAuth = (call: CallExpression, state: CoverageState): void => {
-    const argument = call.getArguments()[0];
-    const renames = argument !== undefined && Node.isObjectLiteralExpression(argument) ? assignmentsOf(argument) : [];
-    const overridden = new Set(renames.map((rename) => keyOf(rename)));
-
-    for (const table of AUTH_DEFAULT_TABLES) {
-        if (!overridden.has(table)) {
-            state.datasets.set(table, "authDataset");
-        }
-    }
-
-    for (const rename of renames) {
-        const value = Node.isPropertyAssignment(rename) ? stringValue(rename.getInitializer()) : undefined;
-
-        if (value !== undefined) {
-            state.datasets.set(value, "authDataset");
-
-            if (keyOf(rename) === "user") {
-                state.userTables.add(value);
-            }
-        }
-    }
-};
-
-/** `documentHistoryDataset(table?)` and `actionCacheDataset(table?)`: the named table, or the default. */
-const coverNamedTable = (call: CallExpression, state: CoverageState, fallback: string): void => {
-    state.datasets.set(stringValue(call.getArguments()[0]) ?? fallback, fallback);
-};
-
 /** How many identifiers or spreads the config reader follows before it gives up, so a cycle cannot loop. */
 const MAX_RESOLVE_DEPTH = 8;
 
@@ -166,6 +136,37 @@ const resolveExpression = (node: Node, depth = 0): Node | undefined => {
     const initializer = Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
 
     return initializer === undefined ? undefined : resolveExpression(initializer, depth + 1);
+};
+
+/** `authDataset(renames?)`: the default better-auth names, minus the renamed ones, plus the renamed values. */
+const coverAuth = (call: CallExpression, state: CoverageState): void => {
+    const argument = call.getArguments()[0];
+    const object = argument === undefined ? undefined : resolveExpression(argument);
+    const renames = object !== undefined && Node.isObjectLiteralExpression(object) ? assignmentsOf(object) : [];
+    const overridden = new Set(renames.map((rename) => keyOf(rename)));
+
+    for (const table of AUTH_DEFAULT_TABLES) {
+        if (!overridden.has(table)) {
+            state.datasets.set(table, "authDataset");
+        }
+    }
+
+    for (const rename of renames) {
+        const value = Node.isPropertyAssignment(rename) ? stringValue(rename.getInitializer()) : undefined;
+
+        if (value !== undefined) {
+            state.datasets.set(value, "authDataset");
+
+            if (keyOf(rename) === "user") {
+                state.userTables.add(value);
+            }
+        }
+    }
+};
+
+/** `documentHistoryDataset(table?)` and `actionCacheDataset(table?)`: the named table, or the default. */
+const coverNamedTable = (call: CallExpression, state: CoverageState, fallback: string): void => {
+    state.datasets.set(stringValue(call.getArguments()[0]) ?? fallback, fallback);
 };
 
 /** The name and value expression of one plain or shorthand property, or `undefined` for any other member. */
