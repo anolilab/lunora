@@ -3237,6 +3237,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/jwt-auth':
+        specifier: workspace:*
+        version: link:../jwt-auth
       jose:
         specifier: 6.2.12
         version: 6.2.12

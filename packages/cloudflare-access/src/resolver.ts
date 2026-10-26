@@ -1,26 +1,10 @@
+import { ANONYMOUS, nonEmpty } from "@lunora/jwt-auth";
+
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { readIdentityGroups, rolesForGroups } from "./identity-groups";
 import readPlatformIdentity from "./platform-identity";
 import type { AccessClaims, CreateAccessResolverOptions, ResolvedAccessIdentity, ResolvedIdentityLike, ResolveIdentityFunction } from "./types";
 import { assertJwtFallbackOptions, verifyRequest } from "./verify";
-
-/**
- * The "anonymous" identity. `null` is the runtime's `resolveIdentity` contract
- * for an unauthenticated caller (its return type is `… | null`); `undefined`
- * would not be assignable. Centralized so the rest of the file stays free of
- * inline `null` literals.
- */
-// eslint-disable-next-line unicorn/no-null -- runtime resolveIdentity contract value for "anonymous"
-const ANONYMOUS = null;
-
-/**
- * Narrow a claim to a non-empty string. `""` (and any non-string / nullish value)
- * is treated as absent, so an empty `email` / `common_name` / `mapClaims.userId`
- * never mints an identity whose `userId` is the empty string — every such caller
- * would otherwise collide on one shared id and RLS ownership defaults would stamp
- * rows with `""`.
- */
-const nonEmpty = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 
 /**
  * Derive the stable caller id from verified claims: the IdP `sub` for SSO users,

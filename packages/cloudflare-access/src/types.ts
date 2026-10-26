@@ -1,4 +1,5 @@
-import type { JWTPayload, JWTVerifyGetKey, KeyObject } from "jose";
+import type { JwtKeySet } from "@lunora/jwt-auth";
+import type { JWTPayload } from "jose";
 
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import type { AccessRoleMap } from "./identity-groups";
@@ -82,7 +83,7 @@ export interface ResolvedAccessIdentity extends ResolvedIdentityLike {
  * or a single public key (handy for tests that mint their own RS256 tokens).
  * When omitted, a cached remote JWKS is built from `teamDomain`.
  */
-export type AccessKeySet = CryptoKey | JWTVerifyGetKey | KeyObject | Uint8Array;
+export type AccessKeySet = JwtKeySet;
 
 /** Options for `verifyAccessJwt`. */
 export interface VerifyAccessJwtOptions {
