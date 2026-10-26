@@ -113,7 +113,7 @@ describe("retention during erasure", () => {
         // files were removed. The erasure then fails at verify, and only that failure can expire the export.
         const racing = {
             ...port,
-            remaining: async (dataset: Parameters<typeof port.remaining>[0], subjectId: string) => {
+            remaining: async (...args: Parameters<DataPort["remaining"]>) => {
                 if (claiming !== undefined) {
                     store.rows.set(claiming, {
                         ...store.rows.get(claiming)!,
@@ -124,7 +124,7 @@ describe("retention during erasure", () => {
                     claiming = undefined;
                 }
 
-                return port.remaining(dataset, subjectId);
+                return port.remaining(...args);
             },
         };
         const { privacy } = setup({ data: racing, datasets: [billing], presets: [germany()], store });
