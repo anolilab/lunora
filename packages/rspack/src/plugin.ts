@@ -87,6 +87,24 @@ const consoleLogger: CodegenLogger = {
 };
 
 /**
+ * The project's secret sources, read with the schema directory the plugin was given. When its bindings cannot be read, every dev
+ * secret is generated as before the sources were passed, so a broken tsconfig or barrel does not stop dev startup.
+ */
+const secretSourcesOrUndefined = async (
+    projectRoot: string,
+    schemaDirectory: string,
+    info: (message: string) => void,
+): Promise<ReadonlyArray<string> | undefined> => {
+    try {
+        return secretSourcesFromBindings(await inferLunoraBindings({ projectRoot, schemaDir: schemaDirectory }));
+    } catch (error) {
+        info(`could not read the project's bindings, so every dev secret is generated: ${error instanceof Error ? error.message : String(error)}`);
+
+        return undefined;
+    }
+};
+
+/**
  * Prepare `.dev.vars` and nudge for the agent rules — the watch-mode-only
  * courtesies `lunora dev` and `@lunora/vite` both perform at startup.
  *
@@ -102,7 +120,7 @@ const prepareDevSession = async (options: ResolvedLunoraRspackOptions): Promise<
 
     await ensureDevVariables({ confirm: createConfirm("[lunora] "), cwd: options.projectRoot, info });
 
-    const secretSources = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: options.projectRoot }));
+    const secretSources = await secretSourcesOrUndefined(options.projectRoot, options.schemaDir, info);
     fillDevSecrets({ cwd: options.projectRoot, info, secretSources });
     // `wrangler dev` loads `.dev.vars` but sets no `WORKER_ENV` of its own, and
     // this plugin never runs the Worker — so without this a developer running
