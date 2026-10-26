@@ -232,7 +232,7 @@ describe("retention during erasure", () => {
         await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "failed" });
         expect(store.rows.get(erasure.id)?.nothingErased).toBe(false);
 
-        // The retry gets past nothing: it fails at its own tombstone, but the first attempt already drained rows.
+        // The retry fails at its own tombstone, after the first attempt had already drained rows.
         crashing = false;
         refusing = true;
 
