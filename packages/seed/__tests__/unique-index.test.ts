@@ -1,12 +1,18 @@
 import { defineSchema, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { createSeedClient } from "../src/client";
+import { copycat } from "../src/copycat";
 import { seedPlan } from "../src/plan";
 
 const rowsOf = (plan: ReturnType<typeof seedPlan>, table: string): ReadonlyArray<Record<string, unknown>> => plan.find((entry) => entry.table === table)!.rows;
 
 describe("seedPlan — multi-column unique indexes", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
     const through = defineSchema({
         authors: defineTable({ name: v.string() }),
         books: defineTable({ title: v.string() }),
@@ -371,21 +377,111 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(() => seedPlan(exact, { counts: { flags: 3 } })).toThrow(/by_tags_on/u);
     });
 
-    it("refuses a url column covered by a single-column unique index, as .unique() does", () => {
+    it("seeds a url column under a single-column unique index with every value distinct", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            links: defineTable({ website: v.string().url() }).index("by_website", ["website"], { unique: true }),
+        });
+        const rows = rowsOf(seedPlan(schema, { counts: { links: 300 } }), "links");
+
+        expect(new Set(rows.map((row) => row.website)).size).toBe(300);
+    });
+
+    it("redraws a url value that collides with an earlier row's value", () => {
+        expect.hasAssertions();
+
+        const duplicate = "https://duplicate.example/";
+        const schema = defineSchema({
+            links: defineTable({ website: v.string().url() }).index("by_website", ["website"], { unique: true }),
+        });
+
+        // Row 0 draws the duplicate, and so does row 1's first draw (its cell input is the first one seen after row 0).
+        // Any draw on that same input keeps returning the duplicate, so only a redraw on a new input can escape it.
+        const original = copycat.url.bind(copycat);
+        let draws = 0;
+        let rowOneInput: string | undefined;
+
+        vi.spyOn(copycat, "url").mockImplementation((input) => {
+            draws += 1;
+
+            if (draws === 1) {
+                return duplicate;
+            }
+
+            const key = JSON.stringify(input);
+
+            if (rowOneInput === undefined) {
+                rowOneInput = key;
+
+                return duplicate;
+            }
+
+            return key === rowOneInput ? duplicate : original(input);
+        });
+
+        const rows = rowsOf(seedPlan(schema, { counts: { links: 2 } }), "links");
+
+        expect(rows[0]?.website).toBe(duplicate);
+        expect(rows[1]?.website).not.toBe(duplicate);
+    });
+
+    it("refuses the plan when a url value still collides after the redraw limit", () => {
         expect.hasAssertions();
 
         const schema = defineSchema({
             links: defineTable({ website: v.string().url() }).index("by_website", ["website"], { unique: true }),
         });
 
-        expect(() => seedPlan(schema, { counts: { links: 5 } })).toThrow(/format "uri"/u);
+        // Every draw is the same URL, so no redraw can ever be distinct: row 0's draw, row 1's colliding draw, then the 8 redraws.
+        const draws = vi.spyOn(copycat, "url").mockReturnValue("https://duplicate.example/");
 
+        expect(() => seedPlan(schema, { counts: { links: 2 } })).toThrow(/cannot generate unique values for "links"\."website".*8 redraws/u);
+        expect(draws).toHaveBeenCalledTimes(10);
+    });
+
+    it("persists no rows when the redraw limit is exhausted", async () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            links: defineTable({ website: v.string().url() }).index("by_website", ["website"], { unique: true }),
+        });
+
+        vi.spyOn(copycat, "url").mockReturnValue("https://duplicate.example/");
+
+        const persisted: string[] = [];
+        const seed = createSeedClient<{ links: { website: string } }>(schema, {
+            persist: (table) => {
+                persisted.push(table);
+            },
+        });
+
+        await expect(seed.links(2)).rejects.toThrow(/8 redraws/u);
+        expect(persisted).toEqual([]);
+    });
+
+    it("lets overrides supply a url column under a single-column unique index", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            links: defineTable({ website: v.string().url() }).index("by_website", ["website"], { unique: true }),
+        });
         const supplied = seedPlan(schema, {
             counts: { links: 5 },
             overrides: { links: { website: ({ index }: { index: number }) => `https://example.com/${String(index)}` } },
         });
 
         expect(new Set(rowsOf(supplied, "links").map((row) => row.website)).size).toBe(5);
+    });
+
+    it("keeps refusing a url column that is both .unique() and covered by a unique index", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            links: defineTable({ website: v.string().url().unique() }).index("by_website", ["website"], { unique: true }),
+        });
+
+        expect(() => seedPlan(schema, { counts: { links: 5 } })).toThrow(/format "uri"/u);
     });
 
     it("checks a later index that shares a column an earlier index dealt", () => {

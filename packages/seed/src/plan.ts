@@ -305,7 +305,10 @@ const generateField = (field: FieldSpec, context: RowContext): unknown => {
     if (deal !== undefined) {
         // Derived from the ABSOLUTE index, and `planUniqueDeals` has already
         // proven the deal's capacity covers every index this batch reaches.
-        return deal.valueAt(index, () => generateValue(field.validator, field.name, input, now));
+        // A redraw (attempt > 0) hashes a new input for the same cell; attempt 0 is the cell's own value.
+        return deal.valueAt(index, (attempt = 0) =>
+            generateValue(field.validator, field.name, attempt === 0 ? input : [...input, "unique-redraw", attempt], now),
+        );
     }
 
     return generateValue(field.validator, field.name, input, now);

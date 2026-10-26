@@ -47,6 +47,8 @@ interface FieldSpec {
     optional: boolean;
     /** True when the column carries `.unique()` — generated values must not collide across rows. */
     unique: boolean;
+    /** True when `unique` comes only from a single-column unique index, not a `.unique()` declaration. */
+    uniqueFromIndex: boolean;
     /** The validator to generate a value from (the inner one when optional). */
     validator: Validator;
 }
@@ -96,13 +98,15 @@ const describeField = (name: string, validator: Validator): FieldSpec => {
         nullable: meta.column?.notNull === false,
         optional: validator.kind === "optional",
         unique: meta.column?.unique === true,
+        uniqueFromIndex: false,
         validator: inner,
     };
 };
 
 /**
  * Reduce a `defineSchema` result to a {@link TableSpec} per table. A single-column
- * `unique` index makes that column `unique`, exactly as `.unique()` would.
+ * `unique` index makes that column `unique`, exactly as `.unique()` would, but
+ * is flagged `uniqueFromIndex` so the planner can tell it from an explicit `.unique()`.
  */
 const introspectSchema = (schema: Schema): ReadonlyArray<TableSpec> => {
     const { tables } = schema;
@@ -115,7 +119,7 @@ const introspectSchema = (schema: Schema): ReadonlyArray<TableSpec> => {
             fields: Object.entries(table.shape).map(([fieldName, validator]) => {
                 const field = describeField(fieldName, validator);
 
-                return singles.has(fieldName) ? { ...field, unique: true } : field;
+                return singles.has(fieldName) && !field.unique ? { ...field, unique: true, uniqueFromIndex: true } : field;
             }),
             name,
             uniqueIndexes: unique

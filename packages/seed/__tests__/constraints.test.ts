@@ -134,7 +134,7 @@ describe("generateValue — validator constraints the generator must honour", ()
             expect.hasAssertions();
 
             const { capacity, valueAt } = planUniqueDeal(
-                { hasServerDefault: false, kind: "number", name: "amount", nullable: false, optional: false, unique: true, validator },
+                { hasServerDefault: false, kind: "number", name: "amount", nullable: false, optional: false, unique: true, uniqueFromIndex: false, validator },
                 { now: NOW, table: "t" },
             );
             const values = Array.from({ length: Math.min(capacity, 3) }, (_, index) => valueAt(index, () => 0) as number);
@@ -153,7 +153,7 @@ describe("generateValue — validator constraints the generator must honour", ()
 
             const validator = { ...v.number(), _meta: { constraints: { exclusiveMinimum, ...extra } } } as unknown as Validator;
             const { valueAt } = planUniqueDeal(
-                { hasServerDefault: false, kind: "number", name: "amount", nullable: false, optional: false, unique: true, validator },
+                { hasServerDefault: false, kind: "number", name: "amount", nullable: false, optional: false, unique: true, uniqueFromIndex: false, validator },
                 { now: NOW, table: "t" },
             );
             const values = Array.from({ length: 4 }, (_, index) => valueAt(index, () => 0) as number);

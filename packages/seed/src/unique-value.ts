@@ -11,12 +11,14 @@ import { metaOf, unwrapOptional } from "./introspect";
  * How a `.unique()` column turns a row's ABSOLUTE index into a value no other
  * row will produce.
  *
- * Every arm is a function of the index alone, so uniqueness holds by
+ * Every arm but {@link redrawingDeal} is a function of the index alone, so uniqueness holds by
  * construction rather than by luck — including across the several calls
  * `indexOffset` exists to support. {@link UniqueDeal.capacity} is how many
  * distinct values the arm can produce; the planner refuses up front when a
  * batch asks for more, so an impossible schema fails with the column named
- * instead of as a raw UNIQUE-constraint error from the database.
+ * instead of as a raw UNIQUE-constraint error from the database. The redraw
+ * arm keeps the values it has taken, so its uniqueness is per plan and it has
+ * no capacity to check.
  */
 interface UniqueDeal {
     /** How many distinct values this column can yield. `Infinity` when unbounded. */
@@ -33,8 +35,9 @@ interface UniqueDeal {
      * The value for one row.
      * @param index the row's absolute index, always below {@link UniqueDeal.capacity}.
      * @param generate produces the value the normal generator would have emitted; called only by the arms that build on it.
+     * `attempt` 0 is the row's own draw; a redraw passes a higher attempt to get a different value from the same cell.
      */
-    valueAt: (index: number, generate: () => unknown) => unknown;
+    valueAt: (index: number, generate: (attempt?: number) => unknown) => unknown;
 }
 
 /** Options {@link planUniqueDeal} needs beyond the column itself. */
@@ -190,6 +193,45 @@ const countingDeal: UniqueDeal = { capacity: Number.POSITIVE_INFINITY, valueAt: 
  * stands and there is no capacity to refuse past.
  */
 const anonymousDeal: UniqueDeal = { capacity: Number.POSITIVE_INFINITY, valueAt: (_index, generate) => generate() };
+
+/**
+ * Redraws a generated value gets, after its first draw, before the plan refuses. A redraw hashes a
+ * different input for the same cell, so a collision that survives them all means the column's generated
+ * domain is too small for the rows, not that an unlucky draw repeated.
+ */
+const UNIQUE_REDRAW_LIMIT = 8;
+
+/**
+ * The deal for an index-only column the generator still makes but no index tag can make unique (a
+ * `.url()` string). Every value comes from the generator; one an earlier row of this plan already took
+ * is redrawn up to {@link UNIQUE_REDRAW_LIMIT} times, and the plan is refused past that rather than
+ * emitting a duplicate. The taken set is per plan, so values an earlier call already stored are not
+ * seen here; a later call can repeat one.
+ */
+const redrawingDeal = (table: string, column: string): UniqueDeal => {
+    const taken = new Set<unknown>();
+
+    return {
+        capacity: Number.POSITIVE_INFINITY,
+        valueAt: (_index, generate) => {
+            for (let attempt = 0; attempt <= UNIQUE_REDRAW_LIMIT; attempt += 1) {
+                const value = generate(attempt);
+
+                if (!taken.has(value)) {
+                    taken.add(value);
+
+                    return value;
+                }
+            }
+
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `@lunora/seed: cannot generate unique values for "${table}"."${column}" — the generator's draw and its ${String(UNIQUE_REDRAW_LIMIT)} redraws ` +
+                    `all collided with a value an earlier row already took. Supply "${column}" via \`overrides\` (\`{ ${table}: { ${column}: … } }\`).`,
+            );
+        },
+    };
+};
 
 /**
  * Pick the numeric deal for a column: the declared range when it has one (the
@@ -513,9 +555,10 @@ const arrayDeal = (field: FieldSpec, constraints: Constraints, table: string): U
  *
  * A string column is the only shape whose value still comes from the normal
  * generator (the field-name heuristics are worth keeping); every other kind is
- * derived from the index directly. Kinds with no index-derivable form —
- * pattern- or format-constrained strings — are refused here rather than seeded
- * with a value the column's own validator would reject on insert.
+ * derived from the index directly. Kinds with no index-derivable form are refused
+ * here rather than seeded with a value the column's own validator would reject on
+ * insert — except a string an index tag would break, which an index-only column
+ * takes from the generator and redraws (see {@link redrawingDeal}).
  */
 const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDeal => {
     const { now, table } = options;
@@ -531,6 +574,12 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
         // the same tagging; it simply never carries string constraints.
         case "any":
         case "string": {
+            // An index-only column whose format an index tag would break is generated and redrawn on a
+            // collision. A pattern is left refused: the generator cannot produce a value matching one.
+            if (field.uniqueFromIndex && constraints.pattern === undefined && untaggableReason(constraints) !== undefined) {
+                return redrawingDeal(table, field.name);
+            }
+
             return stringDeal(constraints, table, field.name);
         }
 
