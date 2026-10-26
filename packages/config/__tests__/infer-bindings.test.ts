@@ -1587,6 +1587,36 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
     });
 
+    it("keys LUNORA_RELAY_SECRET when the entry exports a relative barrel's EventLogDO under its own name", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { Log as EventLogDO } from "./barrel";\n`);
+        write("src/server/barrel.ts", `export { EventLogDO as Log } from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET when a barrel exports an imported EventLogDO under another name", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport * from "./barrel";\n`);
+        write("src/server/barrel.ts", `import { EventLogDO as Log } from "@lunora/replica";\n\nexport { Log };\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET when the entry's name is another barrel export, not EventLogDO", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { Foo as EventLogDO } from "./barrel";\n`);
+        write("src/server/barrel.ts", `export { EventLogDO as Log } from "@lunora/replica";\nexport { Other as Foo } from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
     it("keys LUNORA_RELAY_SECRET for a remote-only worker that constructs EventLogDOClient for another worker's log", async () => {
         expect.assertions(3);
 
@@ -1641,6 +1671,49 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         write("src/server/events.ts", `import type { EventLogDOClient } from "@lunora/replica";\n\nexport type Log = EventLogDOClient;\n`);
 
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("does not key the client's relay secret for a namespace import that reads only other replica exports", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/replica.ts", `import * as replica from "@lunora/replica";\n\nexport const host = replica.EventLogDO;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the client's relay secret for a namespace import that passes the whole namespace on", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/replica.ts", `import * as replica from "@lunora/replica";\n\nexport const all = replica;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("does not key the client's relay secret for a dynamic import that destructures only other replica exports", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "src/server/load.ts",
+            `export const load = async () => {\n    const { EventLogDO } = await import("@lunora/replica");\n\n    return EventLogDO;\n};\n`,
+        );
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the client's relay secret for a dynamic import whose module object is kept as a value", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/load.ts", `const replicaModule = await import("@lunora/replica");\n\nexport const load = () => replicaModule;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
     });
 
     it("keys the client's relay secret for a worker that reaches EventLogDOClient through a namespace import", async () => {
