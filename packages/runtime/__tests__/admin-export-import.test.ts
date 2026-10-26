@@ -792,6 +792,70 @@ describe("createWorker — admin import endpoint", () => {
         expect(capturedRows.map((row) => row.line)).toEqual([1, 3]);
     });
 
+    describe("dry run of global rows", () => {
+        const dryRunGlobals = async (workerOptions: {
+            importGlobalsSupportsDryRun?: boolean;
+        }): Promise<{ body: { errors: { code: string; line: number }[]; inserted: Record<string, number> }; importGlobals: ReturnType<typeof vi.fn> }> => {
+            const importGlobals = vi.fn<(request: { dryRun?: boolean; rows: { doc: Record<string, unknown>; table: string }[] }) => Promise<unknown>>(
+                async () => {
+                    return { conflicts: 0, errors: [], inserted: {} };
+                },
+            );
+
+            const worker = createWorker({
+                adminToken: ADMIN_TOKEN,
+                importGlobals: importGlobals as never,
+                queryCoordinator: {
+                    fanOut: vi.fn<() => never>(),
+                    orchestrateApplyCdc: vi.fn<() => never>(),
+                    orchestrateCdcSync: vi.fn<() => never>(),
+                    orchestrateExport: vi.fn<() => never>(),
+                    orchestrateImport: orchestrateImport as never,
+                    orchestrateMigration: vi.fn<() => never>(),
+                    orchestrateRank: vi.fn<() => never>(),
+                    orchestrateRankPage: vi.fn<() => never>(),
+                    orchestrateShardTraffic: vi.fn<() => never>(),
+                    registry: {} as never,
+                },
+                resolveTableSharding: (table: string): ShardingInfo | undefined =>
+                    table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
+                shardDO: noopNamespace,
+                ...workerOptions,
+            });
+
+            const response = await worker.fetch(
+                new Request("https://app.example/_lunora/admin/import?dryRun=true", {
+                    body: JSON.stringify({ doc: { _id: "g1" }, table: "settings" }),
+                    headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            return { body: await response.json(), importGlobals };
+        };
+
+        it("refuses the rows without calling an importer that has not opted in", async () => {
+            expect.assertions(3);
+
+            const { body, importGlobals } = await dryRunGlobals({});
+
+            expect(importGlobals).not.toHaveBeenCalled();
+            expect(body.errors).toHaveLength(1);
+            expect(body.errors[0]).toMatchObject({ code: "GLOBAL_DRY_RUN_UNSUPPORTED", line: 1 });
+        });
+
+        it("passes the dry run to an importer that has opted in", async () => {
+            expect.assertions(2);
+
+            const { body, importGlobals } = await dryRunGlobals({ importGlobalsSupportsDryRun: true });
+
+            expect(importGlobals).toHaveBeenCalledWith(expect.objectContaining({ dryRun: true }));
+            expect(body.errors).toHaveLength(0);
+        });
+    });
+
     it("reports global rows as errors when importGlobals is not configured", async () => {
         expect.assertions(2);
 
@@ -830,6 +894,40 @@ describe("createWorker — admin import endpoint", () => {
 
         expect(body.errors).toHaveLength(1);
         expect(body.errors[0]!.code).toBe("GLOBAL_NOT_CONFIGURED");
+    });
+
+    it("echoes the dry run in its answer, and a real import carries no echo", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const post = async (url: string): Promise<Record<string, unknown>> => {
+            const response = await worker.fetch(
+                new Request(url, { body: "\n", headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
+                {},
+                fakeContext,
+            );
+
+            return response.json();
+        };
+
+        await expect(post("https://app.example/_lunora/admin/import?dryRun=true")).resolves.toMatchObject({ dryRun: true });
+        await expect(post("https://app.example/_lunora/admin/import")).resolves.not.toHaveProperty("dryRun");
     });
 });
 

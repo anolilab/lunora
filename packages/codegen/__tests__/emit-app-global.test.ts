@@ -11,11 +11,12 @@ import baseOptions from "./emit-app-options";
 // emits them the same way it already emits `runShardExport`/`runShardImport`.
 describe("emitApp — admin bulk-import wiring (.global())", () => {
     it("wires options.importGlobals when the app has a .global() table", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
         expect(output).toContain("options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);");
+        expect(output).toContain("options.importGlobalsSupportsDryRun = true;");
         expect(output).toContain("const buildGlobalImporter =");
     });
 
@@ -49,11 +50,13 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
 
         const output = emitApp({ ...baseOptions, tables: [{ name: "messages", shardMode: { field: "channelId", kind: "shardBy" } }] });
 
-        expect(output).toContain("public shardRegistry(selector: Selector<Env, ShardNamespaceLike>): this {");
+        expect(output).toContain("public shardRegistry(selector: Selector<Env, ShardNamespaceLike | ShardRegistryRpc>): this {");
         expect(output).toContain(
             "...(this.shardRegistrySelector ? { shardRegistry: (rawEnv: Record<string, unknown>) => this.shardRegistrySelector?.(rawEnv as Env) } : {}),",
         );
-        expect(output).toContain("options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ namespace: shardRegistry }) });");
+        expect(output).toContain(
+            "options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ env, namespace: shardRegistry }) });",
+        );
         expect(output).toContain("import { createDynamicShardRegistry, createQueryCoordinator, createWorker, resolveLogArchiveFromEnv }");
     });
 
@@ -67,7 +70,7 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
     });
 
     it("importGlobals routes rows through @lunora/d1's importGlobalRows over the same D1 writer", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
@@ -75,6 +78,8 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
             'import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";',
         );
         expect(output).toContain("return importGlobalRows(writer, schema as unknown as");
+        // A dry run must reach the D1 importer, or a global table would be written by a check.
+        expect(output).toContain("dryRun: request.dryRun === true,");
     });
 
     it("wraps the D1 exec so .global() reads retry D1's transient failures", () => {

@@ -3,9 +3,9 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { useQueryClient, useSuspenseQuery as useTanStackSuspenseQuery } from "@tanstack/react-query";
 
-import { lunoraQueryKeyFromArgsKey } from "./cache";
+import { getSubscriptionRegistry, lunoraQueryKeyFromArgsKey } from "./cache";
 import { useLunora } from "./lunora-provider";
-import { fetchQuerySnapshot, useQuerySubscription } from "./query-core";
+import useQuerySubscription from "./query-core";
 import { stableWireKey } from "./query-key";
 import type { UseQueryOptions } from "./types";
 
@@ -39,13 +39,22 @@ const useSuspenseQuery = <F extends FunctionReference>(function_: F, args: ArgsO
     // eslint-disable-next-line @tanstack/query/exhaustive-deps -- `client` is the provider-stable, non-serializable client and is deliberately not a key member (see `useQuery`); `queryKey` IS this key.
     const { data } = useTanStackSuspenseQuery<ReturnOf<F>>({
         initialData: cachedData,
-        queryFn: async () => {
+        queryFn: async ({ signal }) => {
             await client.whenReady();
 
             // `initialData` above could not see the durable cache if it was still loading at first render.
             const hydrated = client.peekHydratedQueryByKey(function_.__lunoraRef, argsKey, shardKey) as ReturnOf<F> | undefined;
 
-            return hydrated ?? fetchQuerySnapshot(client, queryClient, function_, argsRecord, shardKey, queryKey);
+            // `waitForPush: false`: never wait for a push. This component's subscription attaches
+            // in an effect, and a suspended component never commits one, so on a cold
+            // mount nothing would push. A push that lands during the fetch still wins.
+            return (
+                hydrated ??
+                getSubscriptionRegistry(client).liveValue(queryClient, queryKey, signal, {
+                    fetch: async () => client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey }),
+                    waitForPush: false,
+                })
+            );
         },
         queryKey,
         // Lunora is push-driven: once the first value resolves, the WS owns freshness.

@@ -1,3 +1,78 @@
+## @lunora/client [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.249...@lunora/client@1.0.0-alpha.250) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/do:** upgraded to 1.0.0-alpha.247
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.239
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.159
+
+## @lunora/client [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.248...@lunora/client@1.0.0-alpha.249) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.246
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.238
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.158
+
+## @lunora/client [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.247...@lunora/client@1.0.0-alpha.248) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.245
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.237
+
+## @lunora/client [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.246...@lunora/client@1.0.0-alpha.247) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/do:** upgraded to 1.0.0-alpha.244
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.236
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.157
+
+## @lunora/client [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.245...@lunora/client@1.0.0-alpha.246) (2026-10-24)
+
+### Features
+
+* **mcp:** serve each app function as an MCP tool, with progress for streams ([#1315](https://github.com/anolilab/lunora/issues/1315)) ([5202bfb](https://github.com/anolilab/lunora/commit/5202bfb2f4508d7e03f64cd96e0edd20aa58dab5))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/do:** upgraded to 1.0.0-alpha.243
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.235
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+
+## @lunora/client [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.244...@lunora/client@1.0.0-alpha.245) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.242
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.234
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.155
+
+## @lunora/client [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.243...@lunora/client@1.0.0-alpha.244) (2026-10-23)
+
+### Bug Fixes
+
+* **client:** pace the SSE resubscribe burst ([#1311](https://github.com/anolilab/lunora/issues/1311)) ([547c97e](https://github.com/anolilab/lunora/commit/547c97eb7ee830cba216d5a3a149b9c7a619e945))
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.233
+
 ## @lunora/client [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.242...@lunora/client@1.0.0-alpha.243) (2026-10-22)
 
 ### Performance Improvements

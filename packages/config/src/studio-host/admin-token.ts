@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseDevVariableEntries } from "../dev-variables-format";
@@ -51,4 +51,20 @@ export const resolveAdminToken = (root: string): string | undefined => {
     }
 
     return fromDevVariables;
+};
+
+/**
+ * A cheap change stamp for the project's `.dev.vars` (`"0"` when absent), so a
+ * host that caches the Studio document can re-render it when the admin token is
+ * edited mid-session instead of embedding the one read at startup.
+ */
+export const devVariablesStamp = (root: string): string => {
+    try {
+        const stats = statSync(join(root, ".dev.vars"));
+
+        // ctime, not mtime: `touch` and `cp -p` can set mtime back, but nothing can set ctime.
+        return `${String(stats.ctimeMs)}:${String(stats.size)}`;
+    } catch {
+        return "0";
+    }
 };

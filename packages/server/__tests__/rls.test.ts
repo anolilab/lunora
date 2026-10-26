@@ -2025,6 +2025,48 @@ describe("rls — batch write path", () => {
         expect(database.calls.filter((call) => call.method === "delete")).toHaveLength(1);
     });
 
+    it("deleteWhere accepts an Infinity limit and reads every match instead of a capped page", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "P", table: "plain" }]);
+
+        const handler = lunora.action
+            .use(rlsForTest<TestContext>([]))
+            .action(async ({ ctx }) => ctx.db.deleteWhere("plain", {}, { limit: Number.POSITIVE_INFINITY }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toStrictEqual({ deleted: 1 });
+        expect(database.calls.find((call) => call.method === "findMany")?.args).not.toHaveProperty("limit");
+    });
+
+    it("refuses an over-cap deleteMany with the writer's BATCH_LIMIT_EXCEEDED code and message", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([]);
+        const ids = Array.from({ length: 501 }, (_, index) => `d${String(index)}`);
+
+        const handler = lunora.action.use(rlsForTest<TestContext>([])).action(async ({ ctx }) => ctx.db.deleteMany(ids));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
+            code: "BATCH_LIMIT_EXCEEDED",
+            message: "deleteMany: batch of 501 exceeds the limit of 500 (raise options.limit or chunk the call)",
+            status: 400,
+        });
+    });
+
+    it("refuses a negative deleteWhere limit before reading", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "P", table: "plain" }]);
+
+        const handler = lunora.action.use(rlsForTest<TestContext>([])).action(async ({ ctx }) => ctx.db.deleteWhere("plain", {}, { limit: -1 }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
+            code: "BATCH_LIMIT_EXCEEDED",
+            message: "deleteWhere: batch limit must be a non-negative integer",
+        });
+        expect(database.calls.some((call) => call.method === "findMany")).toBe(false);
+    });
+
     it("wipeShard fails closed under rls() instead of erasing only policy-visible rows", async () => {
         expect.assertions(2);
 

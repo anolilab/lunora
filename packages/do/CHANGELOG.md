@@ -1,3 +1,77 @@
+## @lunora/do [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.246...@lunora/do@1.0.0-alpha.247) (2026-10-26)
+
+### Features
+
+* **studio:** import a CSV file into a table ([#1321](https://github.com/anolilab/lunora/issues/1321)) ([360930a](https://github.com/anolilab/lunora/commit/360930a9edc00a56f90c5cdf6a9d3218e428aeea))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/observability:** upgraded to 1.0.0-alpha.171
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.109
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.159
+* **@lunora/values:** upgraded to 1.0.0-alpha.81
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.135
+
+## @lunora/do [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.245...@lunora/do@1.0.0-alpha.246) (2026-10-25)
+
+### Bug Fixes
+
+* **config:** celld audit fixes ([#1283](https://github.com/anolilab/lunora/issues/1283)) ([6fd7854](https://github.com/anolilab/lunora/commit/6fd78547928d41d3569ba71cf94683dac7f49b94))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.170
+* **@lunora/platform:** upgraded to 1.0.0-alpha.75
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.108
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.158
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.134
+
+## @lunora/do [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.244...@lunora/do@1.0.0-alpha.245) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.169
+
+## @lunora/do [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.243...@lunora/do@1.0.0-alpha.244) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/observability:** upgraded to 1.0.0-alpha.168
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.107
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.157
+* **@lunora/values:** upgraded to 1.0.0-alpha.80
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.133
+
+## @lunora/do [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.242...@lunora/do@1.0.0-alpha.243) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/observability:** upgraded to 1.0.0-alpha.167
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.106
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+* **@lunora/values:** upgraded to 1.0.0-alpha.79
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.132
+
+## @lunora/do [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.241...@lunora/do@1.0.0-alpha.242) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.166
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.155
+
 ## @lunora/do [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.240...@lunora/do@1.0.0-alpha.241) (2026-10-22)
 
 ### Performance Improvements

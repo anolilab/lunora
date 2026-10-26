@@ -90,6 +90,8 @@ interface RunShardExportArgs {
 
 /** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
 interface RunShardImportArgs {
+    /** Check the rows and report their shape errors, writing nothing. See `ImportShardArgs.dryRun` in `@lunora/shard-engine`. */
+    dryRun?: boolean;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }

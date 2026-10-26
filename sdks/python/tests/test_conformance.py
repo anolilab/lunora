@@ -176,6 +176,9 @@ class TestWsFrameBuilders(unittest.TestCase):
 
         resent: list = []
         client.attach_socket(resent.append)
+        # Attaching sends `connect` first; the resend below is what follows it.
+        self.assertEqual(resent[0]["type"], "connect")
+        resent.clear()
         client.resend_subscriptions()
 
         # BOTH registries. A resend that walks only the queries leaves every

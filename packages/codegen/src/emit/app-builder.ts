@@ -91,7 +91,7 @@ const buildFieldLines = (options: ResolvedAppOptions): string[] => [
     `    private readonly routeMap: Record<string, Route> = {};`,
     ...(options.hasScheduler ? [`    private schedulerDeclaration?: SchedulerDeclaration<Env>;`] : []),
     ...(hasShardExtras(options) ? [`    private readonly shardExtras: Partial<ShardConfig> = {};`] : []),
-    ...(hasShardedTables(options) ? [`    private shardRegistrySelector?: Selector<Env, ShardNamespaceLike>;`] : []),
+    ...(hasShardedTables(options) ? [`    private shardRegistrySelector?: Selector<Env, ShardNamespaceLike | ShardRegistryRpc>;`] : []),
     `    private shardSelector?: Selector<Env, ShardNamespaceLike>;`,
     ...(options.hasSourcedTables ? [`    private sourceClientFactory?: NonNullable<ShardConfig["sourceClient"]>;`] : []),
     ...(options.hasStorage ? [`    private storageDeclaration?: StorageDeclaration<Env>;`] : []),
@@ -280,7 +280,7 @@ const buildMethodBlocks = (options: ResolvedAppOptions): string[] => [
     ...(hasShardedTables(options)
         ? [
               `    /** The \`ShardRegistryDO\` namespace (typically \`env.SHARD_REGISTRY\`). Each shard registers itself for the \`.shardBy()\` tables it writes, and cross-shard export, CDC sync and migrations fan out to the shards it lists. Without it they refuse a \`.shardBy()\` table. */
-    public shardRegistry(selector: Selector<Env, ShardNamespaceLike>): this {
+    public shardRegistry(selector: Selector<Env, ShardNamespaceLike | ShardRegistryRpc>): this {
         this.shardRegistrySelector = selector;
 
         return this;

@@ -23,8 +23,8 @@ export const drafts = sqliteTable("drafts", {
     body: text("body").notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
-    by_updated: index("by_updated").on(t.updatedAt),
     by_author_updated: index("by_author_updated").on(t.authorId, t.updatedAt),
+    by_updated: index("by_updated").on(t.updatedAt),
 }));
 
 export const ratelimit_buckets = sqliteTable("ratelimit_buckets", {

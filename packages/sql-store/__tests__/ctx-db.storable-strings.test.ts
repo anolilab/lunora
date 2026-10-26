@@ -143,3 +143,24 @@ describe("createSqlCtxDb — a NUL in the stored row on Postgres", () => {
         expect(writes()).toHaveLength(1);
     });
 });
+
+describe("createSqlCtxDb — a NUL in a trusted-import row id", () => {
+    it.each(["postgres", "sqlite"] as const)("refuses an explicit _id holding a NUL on %s, before any write", async (engine) => {
+        expect.assertions(2);
+
+        const { db, writes } = open(engine);
+
+        await expect(db.insert("docs", { clean: "c", code: "ok", label: "l", _id: `a${NUL}b` }, { allowExplicitId: true })).rejects.toThrow(/NUL/u);
+        expect(writes()).toHaveLength(0);
+    });
+
+    it("keeps refusing a NUL-bearing id when the import is not trusted, which mints a fresh id instead", async () => {
+        expect.assertions(1);
+
+        const { db, writes } = open("sqlite");
+
+        await db.insert("docs", { clean: "c", code: "ok", label: "l", _id: `a${NUL}b` });
+
+        expect(writes()).toHaveLength(1);
+    });
+});

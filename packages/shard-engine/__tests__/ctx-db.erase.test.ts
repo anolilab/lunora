@@ -91,13 +91,12 @@ describe("ctx-db.deleteAll", () => {
         await expect(writer.deleteAll("messages")).resolves.toStrictEqual({ deleted: 0 });
     });
 
-    it("actually erases a .global() table instead of no-op'ing through a pinned id", async () => {
+    it("actually erases a .global() table instead of no-op'ing", async () => {
         expect.assertions(3);
 
-        // A `.global()` row lives in D1, so the by-id delete only reaches it through
-        // `globalFallback()` — which is skipped when a table is pinned (the by-id IDOR
-        // guard). Pinning here made every delete a silent no-op: an inflated count,
-        // surviving rows, and an infinite loop once the table held >= chunkSize rows.
+        // A `.global()` row lives in D1, so a delete that never reaches the D1 writer
+        // is a silent no-op: an inflated count, surviving rows, and an infinite loop
+        // once the table held >= chunkSize rows.
         const rows = new Map<string, Record<string, unknown>>([
             ["p1", { _id: "p1", userId: "u1" }],
             ["p2", { _id: "p2", userId: "u2" }],
@@ -132,6 +131,142 @@ describe("ctx-db.deleteAll", () => {
 
         // And the loop terminated (it would spin forever on a no-op delete).
         await expect(writer.deleteAll("profiles")).resolves.toStrictEqual({ deleted: 0 });
+    });
+
+    it("never runs the shard-local row probe for a .global() deleteAll / deleteWhere", async () => {
+        expect.assertions(4);
+
+        const rows = new Map<string, Record<string, unknown>>([
+            ["p1", { _id: "p1", userId: "u1" }],
+            ["p2", { _id: "p2", userId: "u2" }],
+        ]);
+        const globalDb = {
+            delete: async (id: string) => {
+                rows.delete(id);
+            },
+            deleteMany: async (ids: ReadonlyArray<string>) => {
+                for (const id of ids) {
+                    rows.delete(id);
+                }
+
+                return { deleted: ids.length };
+            },
+            findMany: async () => {
+                return { continueCursor: null, isDone: true, page: [...rows.values()] };
+            },
+        } as unknown as DatabaseWriterLike;
+
+        const { sql } = createSqliteExec();
+
+        runShardMigrations(sql, messagesSchema);
+
+        const statements: string[] = [];
+        const spied: typeof sql = {
+            exec: (query: string, ...bindings: unknown[]) => {
+                statements.push(query);
+
+                return sql.exec(query, ...bindings);
+            },
+        };
+
+        const writer = createShardContextDatabase({
+            broadcast: () => undefined,
+            clock: () => fixedTime,
+            globalDb,
+            schema: messagesSchema,
+            sql: spied,
+        }) as EraseWriter & Required<Pick<DatabaseWriterLike, "deleteWhere">>;
+        // The row probe tags each UNION branch with its source table.
+        const probes = (): number => statements.filter((query) => query.includes("__t__")).length;
+
+        await expect(writer.deleteWhere("profiles", { userId: "u1" })).resolves.toStrictEqual({ deleted: 2 });
+        expect(probes()).toBe(0);
+
+        rows.set("p3", { _id: "p3", userId: "u3" });
+
+        await expect(writer.deleteAll("profiles")).resolves.toStrictEqual({ deleted: 1 });
+        expect(probes()).toBe(0);
+    });
+
+    it("pins every id of a .global() deleteAll to the table being erased", async () => {
+        expect.assertions(1);
+
+        const rows = new Map<string, Record<string, unknown>>([
+            ["p1", { _id: "p1", userId: "u1" }],
+            ["p2", { _id: "p2", userId: "u2" }],
+        ]);
+        const pinned: (string | undefined)[] = [];
+        const globalDb = {
+            delete: async (id: string, expectedTable?: string) => {
+                pinned.push(expectedTable);
+                rows.delete(id);
+            },
+            findMany: async () => {
+                return { continueCursor: null, isDone: true, page: [...rows.values()] };
+            },
+        } as unknown as DatabaseWriterLike;
+        const { sql } = createSqliteExec();
+
+        runShardMigrations(sql, messagesSchema);
+
+        const writer = createShardContextDatabase({
+            broadcast: () => undefined,
+            clock: () => fixedTime,
+            globalDb,
+            schema: messagesSchema,
+            sql,
+        }) as EraseWriter;
+
+        await writer.deleteAll("profiles");
+
+        expect(pinned).toStrictEqual(["profiles", "profiles"]);
+    });
+
+    it("scopes a .global() deleteWhere to the requested table on both delete paths", async () => {
+        expect.assertions(2);
+
+        const batchTables: (string | undefined)[] = [];
+        const batchDb = {
+            deleteMany: async (ids: ReadonlyArray<string>, _options?: unknown, expectedTable?: string) => {
+                batchTables.push(expectedTable);
+
+                return { deleted: ids.length };
+            },
+            findMany: async () => {
+                return { continueCursor: null, isDone: true, page: [{ _id: "p1", userId: "u1" }] };
+            },
+        } as unknown as DatabaseWriterLike;
+        const perIdTables: (string | undefined)[] = [];
+        const perIdDb = {
+            delete: async (_id: string, expectedTable?: string) => {
+                perIdTables.push(expectedTable);
+            },
+            findMany: async () => {
+                return { continueCursor: null, isDone: true, page: [{ _id: "p1", userId: "u1" }] };
+            },
+        } as unknown as DatabaseWriterLike;
+
+        const deleteWhereThrough = async (globalDb: DatabaseWriterLike): Promise<void> => {
+            const { sql } = createSqliteExec();
+
+            runShardMigrations(sql, messagesSchema);
+
+            const writer = createShardContextDatabase({
+                broadcast: () => undefined,
+                clock: () => fixedTime,
+                globalDb,
+                schema: messagesSchema,
+                sql,
+            }) as EraseWriter & Required<Pick<DatabaseWriterLike, "deleteWhere">>;
+
+            await writer.deleteWhere("profiles", { userId: "u1" });
+        };
+
+        await deleteWhereThrough(batchDb);
+        await deleteWhereThrough(perIdDb);
+
+        expect(batchTables).toStrictEqual(["profiles"]);
+        expect(perIdTables).toStrictEqual(["profiles"]);
     });
 
     it("rejects an unknown table", async () => {

@@ -152,7 +152,7 @@ const handlePost = (request: SchemaEditRequest, schemaPath: string): SchemaEditR
     let diagnostics: ReadonlyArray<string>;
 
     try {
-        diagnostics = runStudioCodegen(request);
+        diagnostics = runStudioCodegen(request, { path: schemaPath, text: applied.text });
     } catch (error: unknown) {
         return { body: { error: error instanceof Error ? error.message : String(error), ok: false }, status: 500 };
     }

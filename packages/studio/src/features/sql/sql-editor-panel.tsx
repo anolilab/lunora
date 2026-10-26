@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { explainQueryPlan } from "../../../../../shared/sql-readonly";
 import { classifyOne, splitStatements } from "../../../../../shared/sql-split-statements";
@@ -27,6 +27,8 @@ import { makeTab } from "./sql-tabs";
 interface SqlEditorPanelProps {
     /** Shard key the query runs against on first load. Defaults to the root shard. */
     readonly initialShardKey?: string;
+    /** Clock the run timer reads. Injected by tests so a duration is asserted, not measured. */
+    readonly now?: () => number;
 }
 
 const RUN_SQL = adminRef(ADMIN_FUNCTIONS.runSql);
@@ -36,6 +38,31 @@ const SPLIT_VIEW_KEY = "lunora-studio-sql-split-view";
 /** The tab the editor opens with on a fresh browser: the first template. */
 const seedTab = (): SqlTab => makeTab(TEMPLATES[0]?.sql ?? "");
 
+// Wrapped rather than passing `performance.now` itself: the browser throws
+// "Illegal invocation" when the method is called detached from `performance`.
+const defaultNow = (): number => performance.now();
+
+/**
+ * Per-tab run generations. Replacing a tab's draft advances its generation, and a run
+ * lands its output only if the generation it started under is still current — else
+ * the tab would show the replaced query's result under the new draft.
+ */
+const useRunGenerations = (): { readonly advance: (tabId: string) => void; readonly begin: (tabId: string) => () => boolean } => {
+    const generations = useRef(new Map<string, number>());
+
+    return {
+        advance: (tabId) => {
+            generations.current.set(tabId, (generations.current.get(tabId) ?? 0) + 1);
+        },
+        // The check is true only while no load has superseded the run it was taken for.
+        begin: (tabId) => {
+            const generation = generations.current.get(tabId) ?? 0;
+
+            return () => (generations.current.get(tabId) ?? 0) === generation;
+        },
+    };
+};
+
 /**
  * A full-height, Supabase-style SQL editor: a left query sidebar (search + new,
  * a browser-persisted PRIVATE list, and REFERENCE templates), a line-numbered
@@ -44,7 +71,7 @@ const seedTab = (): SqlTab => makeTab(TEMPLATES[0]?.sql ?? "");
  * SELECT / WITH / EXPLAIN, so raw writes can't desync the doc-store's shadow
  * tables (use the Data grid's inline edit for mutations).
  */
-export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactElement => {
+export const SqlEditorPanel = ({ initialShardKey, now = defaultNow }: SqlEditorPanelProps): ReactElement => {
     const client = useLunora();
 
     // Multiple editor tabs: each persisted tab owns its draft + the saved-query it
@@ -53,14 +80,17 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const editorTabs = useSqlEditorTabs(seedTab);
     const { activeTab, output, patchActiveOutput, patchActiveTab, setActiveTabId, unlinkQuery } = editorTabs;
 
+    const runGenerations = useRunGenerations();
+
     // Load `sql` into the active tab as a fresh draft, link it to `savedId` (or
     // unlink with `null`), and clear that tab's stale result/error.
     const loadIntoActiveTab = (sql: string, savedId: null | string): void => {
+        runGenerations.advance(activeTab.id);
         patchActiveTab({ activeId: savedId, sql });
         // `script` too: without it the previous run's statement strip survives into
         // a new draft, and selecting one of its entries shows a result belonging to
-        // a query the editor no longer holds.
-        patchActiveOutput({ chart: undefined, error: null, failed: undefined, result: null, script: undefined });
+        // a query the editor no longer holds. `running` too: a superseded run never clears it.
+        patchActiveOutput({ chart: undefined, durationMs: undefined, error: null, failed: undefined, result: null, running: false, script: undefined });
     };
 
     const library = useSqlLibrary({ loadIntoActiveTab, unlinkQuery });
@@ -109,12 +139,14 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
     /** Run one statement, never a script: the gate refuses a `;`-joined string. */
     const runOne = async (sql: string): Promise<ScriptRun> => {
+        const started = now();
         try {
             const next = (await client.query(RUN_SQL, { sql }, callOptions(shardKey))) as SqlConsoleResult;
+            const durationMs = now() - started;
 
             recordHistory(sql);
 
-            return { error: null, result: next, sql };
+            return { durationMs, error: null, result: next, sql };
         } catch (error_: unknown) {
             return { error: errorMessage(error_), result: null, sql };
         }
@@ -140,6 +172,8 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         // keeps `running` (and the result it guards) scoped to the tab that
         // actually ran the query, not whichever tab happens to be active when the
         // response lands.
+        const stillCurrent = runGenerations.begin(activeTab.id);
+
         patchActiveOutput({ running: true });
 
         // EXPLAIN wraps the whole draft, so the wrapper must be gated as ONE
@@ -168,6 +202,11 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
         recordShard(shardKey);
 
+        // The draft was replaced while this ran: its output must not land in the tab.
+        if (!stillCurrent()) {
+            return;
+        }
+
         // The last statement is what the panes show — the one an operator writing
         // a script is looking for. Everything before it stays reachable through
         // the statement strip.
@@ -176,6 +215,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
         patchActiveOutput({
             chart: undefined,
+            durationMs: shown?.durationMs,
             error: shown?.error ?? null,
             failed: shown?.error === null || shown === undefined ? undefined : { error: shown.error, sql: shown.sql },
             pane: mode,
@@ -196,6 +236,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
         patchActiveOutput({
             chart: undefined,
+            durationMs: shown.durationMs,
             error: shown.error,
             failed: shown.error === null ? undefined : { error: shown.error, sql: shown.sql },
             result: shown.result,
@@ -305,6 +346,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                         assistant={assistant}
                         chart={inferredChart}
                         className={resultsClass}
+                        durationMs={output.durationMs}
                         error={error}
                         onFormat={formatDraft}
                         onInferChart={inferChart}

@@ -64,7 +64,7 @@ export type Doc<T extends keyof DataModel> = DataModel[T];
  */
 export interface IndexNamesByTable {
     posts: "by_published";
-    drafts: "by_updated" | "by_author_updated";
+    drafts: "by_author_updated" | "by_updated";
     ratelimit_buckets: "by_key";
 }
 

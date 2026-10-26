@@ -1644,6 +1644,18 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
             expect(result.generated.functions).toContain("await run.call(context, { __lunoraRef: functionPath }, args ?? {})");
         });
 
+        it("refuses a stream over RPC and keeps a stream's ctx read-only, as its declared query ctx is", () => {
+            expect.assertions(2);
+
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
+
+            // OpenRPC lists streams for MCP, but generated RPC dispatch rejects a stream call before it
+            // invokes the handler, so a stream is never run as a single RPC result.
+            expect(result.generated.shard).toContain('if (registered.kind === "stream") {');
+            // A stream's typed ctx is the query ctx, so its `run*` must refuse a write as a query's does.
+            expect(result.generated.shard).toContain('if ((callerKind === "query" || callerKind === "stream") && expected !== "query") {');
+        });
+
         it("keeps dataModel.ts importable by a package with no server dependency (#18)", () => {
             expect.assertions(4);
 
@@ -4374,6 +4386,54 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // optional on insert and must NOT be offered a control that writes null.
             expect(columns.get("slug")).toHaveProperty("optional", true);
             expect(columns.get("slug")).not.toHaveProperty("nullable");
+        });
+
+        it("reports v.union(<scalar>, v.null()) as the scalar's kind and nullable, the way .nullable() is", () => {
+            expect.assertions(8);
+
+            const output = emitShard({
+                schema: {
+                    tables: [
+                        {
+                            indexes: [],
+                            name: "posts",
+                            rankIndexes: [],
+                            relations: [],
+                            searchIndexes: [],
+                            shape: {
+                                // Either order, and `v.literal(null)` spells the null member too.
+                                score: { kind: "union", members: [{ kind: "number" }, { kind: "null" }] },
+                                shown: { kind: "union", members: [{ kind: "literal", literalValue: "null" }, { kind: "boolean" }] },
+                                // `v.union(v.optional(v.number()), v.null())`: the scalar sits inside an optional member.
+                                rating: { kind: "union", members: [{ inner: { kind: "number" }, kind: "optional" }, { kind: "null" }] },
+                                // The wrapper may be the field's own too; the field stays insert-optional.
+                                maybe: {
+                                    inner: { kind: "union", members: [{ kind: "null" }, { inner: { kind: "timestamp" }, kind: "optional" }] },
+                                    kind: "optional",
+                                },
+                                // Not a nullable scalar: a string accepts the text a number cell would be turned from.
+                                label: { kind: "union", members: [{ kind: "string" }, { kind: "null" }] },
+                                // Two non-null members: the column holds more than one type.
+                                mixed: { kind: "union", members: [{ kind: "number" }, { kind: "string" }] },
+                            },
+                            shardMode: "root",
+                            vectorIndexes: [],
+                        },
+                    ],
+                    vectorIndexes: [],
+                },
+            });
+
+            const columns = columnsOf(output, "posts");
+
+            expect(columns.get("score")).toMatchObject({ nullable: true, type: "number" });
+            expect(columns.get("shown")).toMatchObject({ nullable: true, type: "boolean" });
+            expect(columns.get("rating")).toMatchObject({ nullable: true, optional: false, type: "number" });
+            expect(columns.get("maybe")).toMatchObject({ nullable: true, optional: true, type: "timestamp" });
+            expect(columns.get("label")).toMatchObject({ type: "union" });
+            expect(columns.get("label")).not.toHaveProperty("nullable");
+            expect(columns.get("mixed")).toMatchObject({ type: "union" });
+            expect(columns.get("mixed")).not.toHaveProperty("nullable");
         });
 
         it("names the bucket a v.storage(bucket) column's keys live in", () => {

@@ -1,3 +1,28 @@
+## @lunora/flags [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.85...@lunora/flags@1.0.0-alpha.86) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+
+## @lunora/flags [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.84...@lunora/flags@1.0.0-alpha.85) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+
+## @lunora/flags [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.83...@lunora/flags@1.0.0-alpha.84) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+
 ## @lunora/flags [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.82...@lunora/flags@1.0.0-alpha.83) (2026-10-20)
 
 

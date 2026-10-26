@@ -27,7 +27,7 @@ When a plan ships: delete its file and remove its row here in the same change.
 | [463](./463-experimental-graduation.md)          | Graduate the experimental tier to stable                            | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages                                |
 | [166](./166-enterprise-auth-saml-scim.md)        | Enterprise auth: SAML SSO + SCIM                                    | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated                                        |
 | [464](./464-replay-conflict-resolution.md)       | Replayed offline writes that conflict                               | Phase A shipped (docs + test); Phase B waits on a real app needing a merge the handler can't express |
-| [468](./468-gdpr-package.md)                     | `@lunora/privacy`: data-subject rights (export, erasure, holds)     | Phase 0: codegen spike; legal and tax review open (§10)                                              |
+| [468](./468-gdpr-package.md)                     | `@lunora/privacy`: data-subject rights (export, erasure, holds)     | Built end to end; example covers download, retention and expiry; open: legal and tax review (§10)    |
 
 ## Open (TODO)
 
@@ -71,6 +71,23 @@ landed the plan; a follow-up commit that completed it is listed after the first.
 | 481  | Cap presence by distinct user and bound the sweep read                      | #1129 (9acca8722)    |
 | 488  | Serve the Node scheduler dispatch route for queue and topic handlers        | #1129 (9acca8722)    |
 
+## Audit 2026-10-19 — still open after PR #1272
+
+Full table with evidence in [issue #1271](https://github.com/anolilab/lunora/issues/1271);
+direction findings in [#1274](https://github.com/anolilab/lunora/issues/1274). Plans
+532–535 and the second revision of #1272 fixed the rest. Recorded here so the next
+audit does not re-report them:
+
+- **ShardDO has no caller secret** (`do/src/shard-do.ts:14818-14845`): safe by host topology; add `LUNORA_SHARD_SECRET` like the registry/event-log secrets if a host ever exposes shard RPC on a socket.
+- **Relay hub** (`shard-engine/src/relay-hub.ts`): cohort registry has no refcount and pins the op-log floor (`:1165-1170, 796-814, 566-570`); sibling HMAC signs bytes only, no seq/target binding, no key rotation (`sibling-channel.ts:45-67`); owner promotion latch is in-memory and counts owner-local sockets (`:605, 737-751`). M each, protocol design.
+- **Persisted bearer fingerprint** (`len:fnv1a32:djb2`, `@lunora/client` and all 8 SDKs): offline oracle for low-entropy tokens; reference client moves first.
+- **SDK vendoring path untested** (`cli/src/commands/sdk/vendor.ts:210-273`): `generated-check.sh` always passes `--from`.
+- **RAG lexical join O(corpus)** (`ai/src/rag/sql-lexical-store.ts:216`), **`payments.check` ledger fold** (`payment/src/database-store.ts:299`), **`payment_events` / scheduler `dead:` retention** (needs a window: age, count, and how refund-claim rows are identified). The agent history read is bounded to the newest 200 messages when no compaction is set.
+- **Studio edit runs codegen twice** (`config/src/studio-host/schema-edit-handler.ts:155`): the endpoint returns the synchronous run's diagnostics, so one owner must hand them back. **Codegen fixpoint re-infers everything per pass** (`codegen/src/run-codegen.ts:208`), **watcher refreshes the whole program** (`codegen-project.ts:117`).
+- **Request log writes every successful dispatch** (`do/src/shard-do.ts:11663`): `LUNORA_REQUEST_LOG_SAMPLE` defaults to 1.0; metrics now flush every 8 dispatches. Decide a production sample default.
+- **Payment reconcile has no conditional write** (`payment/src/reconcile.ts:139-158`): a webhook landing between the `after` read and the upsert is still overwritten; needs a version-conditional upsert on `PaymentStore`.
+- **Studio chart `<style>` from config strings** (`studio/src/components/evilcharts/ui/chart.tsx:169`): confirm no SQL alias can reach it.
+
 ## Perf audit 2026-10-16 — measured and rejected
 
 Recorded with numbers so a later audit does not re-report them.
@@ -104,3 +121,4 @@ follow-on ships or is rejected.
 | [334](./334-mutation-determinism.md)                | Determinism: ctx.random, ctx.fetch refusal shipped; research open       |
 | [386](./386-queue-workpool-observability-design.md) | Observability for the Queues-backed workpool                            |
 | [395](./395-sdk-stream-forms-design.md)             | Stream subscription forms for the non-Dart SDKs                         |
+| [445](./445-agent-approvals-inbox-design.md)        | Pending-approvals inbox for the HITL surface                            |

@@ -514,3 +514,24 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
         expect(runtime.appliedSeq).toBe(0);
     });
 });
+
+describe("eventLogDO secret", () => {
+    const createSecuredDO = (): EventLogDO => {
+        const state = { storage: { sql: createMockSql() as unknown as EventLogDO["state"]["storage"]["sql"] } };
+
+        return new EventLogDO(state, { EVENT_LOG_DO_SECRET: "s3cret" });
+    };
+
+    it("rejects a client without the secret and serves one that sends it", async () => {
+        expect.assertions(3);
+
+        const do_ = createSecuredDO();
+
+        await expect(new EventLogDOClient({ fetch: (req) => do_.fetch(req) }).append([{ payload: {}, type: "a" }])).rejects.toThrow(/401/u);
+
+        const client = new EventLogDOClient({ fetch: (req) => do_.fetch(req), secret: "s3cret" });
+
+        await expect(client.append([{ payload: {}, type: "a" }])).resolves.toHaveLength(1);
+        await expect(client.getSince(0)).resolves.toMatchObject({ truncated: false });
+    });
+});

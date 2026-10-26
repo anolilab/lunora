@@ -56,8 +56,31 @@ const createShard = (): { handleRpc: (path: string, args: Record<string, unknown
     return shard;
 };
 
-const register = (path: string, kind: "action" | "mutation" | "query", handler: (ctx: TestCtx) => unknown): void => {
+const register = (path: string, kind: "action" | "mutation" | "query" | "stream", handler: (ctx: TestCtx) => unknown): void => {
     (LUNORA_FUNCTIONS as unknown as Record<string, unknown>)[path] = { args: {}, handler, kind };
+};
+
+/** The shard's protected stream entry point, as the harness reaches it. */
+interface StreamHost {
+    executeStream: (path: string, args: Record<string, unknown>) => { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } | null;
+}
+
+/**
+ * `executeStream` is protected: a WebSocket upgrade is not needed to test what a
+ * stream's ctx may do, so the harness calls it directly.
+ */
+const streamOf = (shard: object): StreamHost => shard as StreamHost;
+
+/** Every chunk a stream yields, or the error it throws, on a fresh shard. */
+const collect = async (path: string): Promise<unknown[]> => {
+    const chunks: unknown[] = [];
+    const stream = streamOf(createShard()).executeStream(path, {});
+
+    for await (const chunk of stream?.iterator(new AbortController().signal) ?? []) {
+        chunks.push(chunk);
+    }
+
+    return chunks;
 };
 
 describe("emitted shard — composed ctx.runQuery", () => {
@@ -79,6 +102,14 @@ describe("emitted shard — composed ctx.runQuery", () => {
         });
 
         register("composed:actionTryMutate", "action", async (ctx) => ctx.runQuery({ __lunoraRef: "composed:tryMutate" }, {}));
+
+        register("composed:feed", "stream", async function* feed() {
+            yield "chunk";
+        });
+
+        register("composed:feedWrites", "stream", async function* feedWrites(ctx) {
+            yield await ctx.runMutation({ __lunoraRef: "composed:noop" }, {});
+        });
     });
 
     it("gives a query no request origin however it is reached, while the mutation keeps its own", async () => {
@@ -99,5 +130,26 @@ describe("emitted shard — composed ctx.runQuery", () => {
         expect.assertions(1);
 
         await expect(createShard().handleRpc("composed:actionTryMutate", {})).rejects.toThrow("a query may only compose other queries");
+    });
+
+    it("refuses a stream over RPC before its handler runs, since its iterator cannot be one result", async () => {
+        expect.assertions(2);
+
+        const shard = createShard();
+
+        await expect(shard.handleRpc("composed:feed", {})).rejects.toThrow('"composed:feed" is a stream: open it over the WebSocket, not RPC');
+        await expect(shard.handleRpc("composed:feed", {})).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("refuses a mutation composed from a stream, so a stream ctx cannot write", async () => {
+        expect.assertions(1);
+
+        await expect(collect("composed:feedWrites")).rejects.toThrow("a stream may only compose other queries");
+    });
+
+    it("still opens a stream over its own socket path", async () => {
+        expect.assertions(1);
+
+        await expect(collect("composed:feed")).resolves.toStrictEqual(["chunk"]);
     });
 });

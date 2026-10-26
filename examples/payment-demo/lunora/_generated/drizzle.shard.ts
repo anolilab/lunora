@@ -40,6 +40,7 @@ export const payment_sessions = sqliteTable("payment_sessions", {
     refundedMinor: real("refundedMinor").notNull(),
     state: text("state").notNull(),
     subscriptionId: text("subscriptionId"),
+    revision: real("revision"),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_provider_session: uniqueIndex("by_provider_session").on(t.provider, t.providerSessionId),
@@ -62,6 +63,7 @@ export const payment_subscriptions = sqliteTable("payment_subscriptions", {
     quantity: real("quantity").notNull(),
     referenceId: text("referenceId").notNull(),
     state: text("state").notNull(),
+    revision: real("revision"),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_provider_subscription: uniqueIndex("by_provider_subscription").on(t.provider, t.providerSubscriptionId),

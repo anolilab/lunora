@@ -223,6 +223,7 @@
                         "packages/do",
                         "packages/observability",
                         "packages/payment",
+                        "packages/privacy",
                         "packages/queue",
                         "packages/ratelimit",
                         "packages/runtime",
@@ -255,7 +256,7 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # The matrix is a hand-typed list of directories (19 packages, one example),
+            # The matrix is a hand-typed list of directories (20 packages, one example),
             # duplicated verbatim in test.yml and nightly.yml, with nothing tying either
             # copy to the packages/* and examples/* that actually declare a `workerd`
             # vitest project. Drop one from either copy and its workerd suites stop

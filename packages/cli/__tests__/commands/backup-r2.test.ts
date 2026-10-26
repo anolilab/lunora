@@ -95,6 +95,19 @@ const createWorkerDouble = (): { bucket: Map<string, Buffer>; fetchImpl: Streami
     const bucket = new Map<string, Buffer>();
     const imported: string[] = [];
 
+    /** A `dryRun` POST is the check before the import: it records nothing. A real POST records its rows and reports them inserted. */
+    const importAnswer = (url: URL, body: string): ReturnType<typeof jsonResponse> => {
+        if (url.searchParams.get("dryRun") === "true") {
+            return jsonResponse({ dryRun: true, inserted: {}, received: 0 });
+        }
+
+        imported.push(body);
+
+        const rows = body.split("\n").filter(Boolean).length;
+
+        return jsonResponse({ inserted: { users: rows }, received: rows });
+    };
+
     const fetchImpl: StreamingFetchLike = async (input, init) => {
         const url = new URL(input);
         const method = init?.method ?? "GET";
@@ -105,11 +118,7 @@ const createWorkerDouble = (): { bucket: Map<string, Buffer>; fetchImpl: Streami
         }
 
         if (url.pathname === "/_lunora/admin/import") {
-            const body = String(init?.body ?? "");
-
-            imported.push(body);
-
-            return jsonResponse({ inserted: { users: body.split("\n").filter(Boolean).length }, received: body.split("\n").filter(Boolean).length });
+            return importAnswer(url, String(init?.body ?? ""));
         }
 
         if (url.pathname === "/_lunora/admin/storage/object") {

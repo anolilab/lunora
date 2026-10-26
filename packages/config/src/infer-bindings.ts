@@ -182,6 +182,9 @@ const FLAG_PACKAGES: ReadonlyArray<readonly [CapabilityFlag, string]> = [
 const SECRET_SOURCE_FLAGS = [
     ["usesNotifyFcm", "@lunora/notify:fcm"],
     ["usesNotifyWebPush", "@lunora/notify:webPush"],
+    // `ShardRegistryDO` refuses unsigned requests, so an app with a registry needs
+    // `LUNORA_RELAY_SECRET` in `.dev.vars` and on deploy, with no package import to say so.
+    ["hostsShardRegistry", "@lunora/do:shardRegistry"],
     // The secret store behind `requestSecretTool`. The tool's own import is the
     // signal, not `@lunora/agent`: an app that imports the package for something
     // else needs no key.
@@ -274,6 +277,9 @@ interface InferredBindings {
      * un-mintable `app_id`, so it is reconciled as a hint, not auto-written.
      */
     flagshipBinding?: string;
+
+    /** The app hosts the registry (exports or binds `ShardRegistryDO`, or is merged with its module), so it mints the `LUNORA_RELAY_SECRET` its registry checks. */
+    hostsShardRegistry: boolean;
 
     /**
      * The schema's `.jurisdiction("…")`, when it declares one. Read by the binding
@@ -628,6 +634,15 @@ const describeSignals = (
 };
 
 /**
+ * Whether the app hosts `ShardRegistryDO`: it exports or binds the class, or a merged app carries the
+ * registry in `LunoraDO`. codegen writes `shardRegistry.ts` for every `.shardBy()` schema, so the file's
+ * presence alone does not host the registry.
+ */
+const hostsShardRegistry = (durableObjects: ReadonlyArray<DurableObjectSpec>, generatedDirectory: string): boolean =>
+    durableObjects.some((object) => object.binding === "SHARD_REGISTRY") ||
+    (isMergedProject(generatedDirectory) && existsSync(join(generatedDirectory, "shardRegistry.ts")));
+
+/**
  * Scan a Lunora project and report which Cloudflare bindings its code implies.
  * Read-only: performs no writes. Binding provisioning is driven by the worker
  * entry's Durable Object exports plus the schema's D1 need; capability imports
@@ -682,6 +697,8 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const notifyChannels = notifyIr.error === undefined ? notifyIr.value : { hasFcm: true, hasWebPush: true };
     const flagshipBinding = flags?.provider === "flagship" && flags.mode === "binding" ? flags.bindingName : undefined;
 
+    const hostsRegistry = hostsShardRegistry(durableObjects, join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY));
+
     const signals = describeSignals(durableObjects, schema, capabilities, containers, workflows, agents);
 
     // A hand-written entry opts in by exporting `LunoraDO` itself; with the merge
@@ -729,6 +746,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         usesFlags: flags !== undefined,
         usesNotifyFcm: notifyChannels?.hasFcm ?? false,
         usesNotifyWebPush: notifyChannels?.hasWebPush ?? false,
+        hostsShardRegistry: hostsRegistry,
         workflows,
     };
 };

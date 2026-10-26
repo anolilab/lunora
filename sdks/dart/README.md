@@ -38,10 +38,9 @@ retries and socket library:
 
 ```dart
 final client = LunoraClient(url: 'https://my-app.example.com', post: myPoster, authToken: '…')
-  ..attachSocket((frame) => socket.add(jsonEncode(frame)))
+  ..sessionToken = session // the WebSocket credential: sent as `connect.token`, never in the URL
+  ..attachSocket((frame) => socket.add(jsonEncode(frame))) // writes `connect` first
   ..setConnected(true);
-// On every socket open, before anything else: the session credential rides here, never the URL.
-socket.add(jsonEncode(LunoraClient.buildConnectFrame(token: session)));
 
 final messages = await client.query('messages:list', args: {'channel': 'general'});
 await client.mutation('messages:send', args: {'channel': 'general', 'text': 'hi'});
@@ -55,6 +54,23 @@ redirect would replay your bearer token to another host. With `dart:io`, set
 `client.resendSubscriptions()` re-subscribes everything after a reconnect,
 carrying each subscription's resume cursor.
 
+`attachSocket(send)` writes the `connect` frame as the socket's first frame, then
+rejoins every whisper topic. `connect` carries the `sessionToken` and, when you
+pass one, `attachSocket(send, context: {…})`. `detachSocket(code, reason)` takes
+the close frame the socket ended with, or nothing when there was none. Pass the
+code and reason so the client can tell an expired or refused session apart from
+an ordinary drop. It reports the first to `onTokenExpired(listener)`, which
+returns a handle that unregisters it, and it reports a refusal once per
+`sessionToken`. A refusal is a 4003 close, except the connect deadline's, which
+refuses no credential. Set a fresh `sessionToken` in the listener, and the next
+`attachSocket` carries it.
+
+Whispers are ephemeral, unacknowledged messages between the members of a topic.
+`whisperSubscribe(topic, listener)` joins a topic and returns the handle that
+leaves it. `whisper(topic, data)` sends to it and returns `false`, without
+queueing, when no socket is attached. `connectRoom(name, listener)` joins the
+topic `room:<name>` and returns a handle with `send` and `close`.
+
 Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
 (`handleFrame` returns the frame's type). Each socket open sends the `connect` frame
 first, then resubscribes; `setConnected(true)` starts the flush of this shard's queued
@@ -63,15 +79,16 @@ writes, which never throws:
 ```dart
 var attempt = 0;
 while (!client.closed) {
+  int? closeCode;
+  String? closeReason;
   try {
     final socket = await connect(); // your socket library
     if (client.closed) {
       socket.close(); // closed while dialing: never attach a socket to a closed client
       break;
     }
-    void send(Map<String, Object?> frame) => socket.add(jsonEncode(frame));
-    send(LunoraClient.buildConnectFrame(token: session)); // connect first: the server's onConnect hook fires on it
-    client.attachSocket(send);
+    // attachSocket writes `connect` first, so the server's onConnect hook fires before any subscription.
+    client.attachSocket((frame) => socket.add(jsonEncode(frame)));
     client.resendSubscriptions();
     client.setConnected(true);
     await for (final raw in socket) {
@@ -87,9 +104,11 @@ while (!client.closed) {
         stderr.writeln('lunora: subscription callback threw: $error\n$stack');
       }
     }
+    closeCode = socket.closeCode; // dart:io's WebSocket; a 4001 or 4003 close reports the expired or refused session
+    closeReason = socket.closeReason;
   } catch (_) {}
   client.setConnected(false);
-  client.detachSocket(); // subscriptions made during backoff wait for the next resend
+  client.detachSocket(closeCode, closeReason); // subscriptions made during backoff wait for the next resend
   if (client.closed) break; // the app closed the client: stop, do not back off and dial again
   final ms = min(30000, 1000 * (1 << min(attempt++, 5)));
   await Future<void>.delayed(Duration(milliseconds: ms ~/ 2 + Random().nextInt(ms ~/ 2)));

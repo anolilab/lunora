@@ -590,9 +590,10 @@ interface DynamicShardRegistry extends ShardRegistry {
 ```ts
 interface DynamicShardRegistryOptions {
     cacheTtlMs?: number;
+    env?: unknown;
     instanceName?: string;
     jurisdiction?: DurableObjectJurisdiction;
-    namespace: ShardNamespaceLike;
+    namespace: ShardNamespaceLike | ShardRegistryRpc;
 }
 ```
 
@@ -812,6 +813,7 @@ type GlobalExportFunction = (request: {
 
 ```ts
 type GlobalImportFunction = (request: {
+    dryRun?: boolean;
     rows: ReadonlyArray<{
         doc: Record<string, unknown>;
         line: number;
@@ -1039,6 +1041,7 @@ interface ImportFanOutRequest {
         shardKey: string;
         startLine?: number;
     }>;
+    dryRun?: boolean;
     headers?: Record<string, string>;
 }
 ```
@@ -2073,6 +2076,17 @@ interface ShardRegistry {
 }
 ```
 
+### `ShardRegistryRpc` (interface)
+
+```ts
+interface ShardRegistryRpc {
+    listShardKeys: (table: string) => Promise<string[]>;
+    register: (table: string, shardKey: string) => Promise<void>;
+    snapshot: () => Promise<Record<string, string[]>>;
+    unregister: (table: string, shardKey: string) => Promise<void>;
+}
+```
+
 ### `ShardTrafficEntry` (interface)
 
 ```ts
@@ -2326,9 +2340,11 @@ interface WorkerOptions {
     httpRouter?: HttpRouterLike;
     identity?: IdentityContractLike;
     importGlobals?: GlobalImportFunction;
+    importGlobalsSupportsDryRun?: boolean;
     jurisdiction?: DurableObjectJurisdiction;
     kvIntrospector?: KvIntrospector;
     listSchemaTables?: () => ReadonlyArray<string>;
+    liveStreamRoutes?: ReadonlyArray<string>;
     liveStreams?: boolean;
     logArchive?: LogArchiveConfig;
     notifySubscriptionStore?: NotifySubscriptionStoreLike;

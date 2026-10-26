@@ -690,6 +690,10 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Batch limit exceeded";
     };
+    readonly CASCADE_LIMIT: {
+        readonly status: 400;
+        readonly title: "Cascade limit exceeded";
+    };
     readonly CROSS_SHARD_RANK_UNSUPPORTED: {
         readonly status: 400;
         readonly title: "Cross-shard rank() is unsupported";
@@ -723,6 +727,10 @@ const ERROR_CATALOG: {
     readonly FORBIDDEN_TOPIC: {
         readonly status: 403;
         readonly title: "Live topic publish forbidden";
+    };
+    readonly GLOBAL_DRY_RUN_UNSUPPORTED: {
+        readonly status: 400;
+        readonly title: "Global table dry run not supported";
     };
     readonly GLOBAL_NOT_CONFIGURED: {
         readonly status: 400;
@@ -1042,6 +1050,7 @@ class LunoraError extends Error {
     readonly data: unknown;
     readonly why: string | undefined;
     readonly internal: Record<string, unknown> | undefined;
+    readonly headers: Readonly<Record<string, string>> | undefined;
     constructor(code: LunoraErrorCodeInput, message?: string, options?: LunoraErrorOptions);
 }
 ```
@@ -1079,6 +1088,7 @@ interface LunoraErrorOptions {
     cause?: unknown;
     data?: unknown;
     docsUrl?: string;
+    headers?: Readonly<Record<string, string>>;
     hint?: ErrorHint;
     internal?: Record<string, unknown>;
     location?: ErrorLocation;

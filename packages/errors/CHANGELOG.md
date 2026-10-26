@@ -1,3 +1,21 @@
+## @lunora/errors [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.70...@lunora/errors@1.0.0-alpha.71) (2026-10-26)
+
+### Features
+
+* **studio:** import a CSV file into a table ([#1321](https://github.com/anolilab/lunora/issues/1321)) ([360930a](https://github.com/anolilab/lunora/commit/360930a9edc00a56f90c5cdf6a9d3218e428aeea))
+
+## @lunora/errors [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.69...@lunora/errors@1.0.0-alpha.70) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+## @lunora/errors [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.68...@lunora/errors@1.0.0-alpha.69) (2026-10-24)
+
+### Features
+
+* **mcp:** serve each app function as an MCP tool, with progress for streams ([#1315](https://github.com/anolilab/lunora/issues/1315)) ([5202bfb](https://github.com/anolilab/lunora/commit/5202bfb2f4508d7e03f64cd96e0edd20aa58dab5))
+
 ## @lunora/errors [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.67...@lunora/errors@1.0.0-alpha.68) (2026-10-20)
 
 ### Bug Fixes

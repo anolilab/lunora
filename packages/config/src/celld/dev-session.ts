@@ -21,6 +21,8 @@ import { readServiceBindings } from "@lunora/codegen";
 import type { DevProcess, DevProcessSpawner } from "../dev-process";
 import { acceptsConnection, startDevProcess } from "../dev-process";
 import { planCelldConfig, planCelldServiceConfig } from "./celld-config";
+import type { CelldToolchainProbe } from "./celld-toolchain";
+import { probeCelldToolchain } from "./celld-toolchain";
 
 /** How long one `celld dev` gets to accept connections. */
 const READY_TIMEOUT_MS = 60_000;
@@ -47,6 +49,8 @@ interface CelldDevSessionOptions {
     log: (line: string, origin: CelldLineOrigin) => void;
     /** Port the app serves on. */
     port: number;
+    /** Checks the celld toolchain before anything starts; defaults to the host's `celld` and `PATH`. */
+    probe?: () => Promise<CelldToolchainProbe>;
     projectRoot: string;
     spawn?: DevProcessSpawner;
 }
@@ -106,6 +110,26 @@ const watchSourceChanges = (directory: string, onChange: () => void, onError: (e
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+const probeForDev = async (): Promise<CelldToolchainProbe> => probeCelldToolchain({ env: process.env, purpose: "dev" });
+
+/**
+ * Write the app's dev projection without starting anything, for a `--no-worker`
+ * run whose external runner executes `celld dev` on it. The toolchain is probed
+ * first, so a missing tool leaves the project untouched, as a session does.
+ * @returns the warnings that do not stop it; throws, with nothing written, when a tool is missing.
+ */
+const writeCelldDevProjection = async (options: { probe?: () => Promise<CelldToolchainProbe>; projectRoot: string }): Promise<string[]> => {
+    const toolchain = await (options.probe ?? probeForDev)();
+
+    if (toolchain.errors.length > 0) {
+        throw new Error(toolchain.errors.join("; "));
+    }
+
+    planCelldConfig(options.projectRoot, "dev").write();
+
+    return toolchain.warnings;
+};
+
 /**
  * Start the session: register every service, run the app, then watch the
  * service folders. Resolves once the app accepts connections; rejects, with
@@ -117,6 +141,15 @@ const startCelldDevSession = async (options: CelldDevSessionOptions): Promise<Ce
     const notice = (line: string, stream: CelldLineOrigin["stream"] = "stdout"): void => {
         log(line, { stream, tag: "celld" });
     };
+    const toolchain = await (options.probe ?? probeForDev)();
+
+    for (const warning of toolchain.warnings) {
+        notice(warning, "stderr");
+    }
+
+    if (toolchain.errors.length > 0) {
+        throw new Error(toolchain.errors.join("; "));
+    }
 
     if (await acceptsConnection(port)) {
         throw new Error(`port ${String(port)} is already in use — stop whatever is serving there (another dev server?), or pick another worker port`);
@@ -282,4 +315,4 @@ const startCelldDevSession = async (options: CelldDevSessionOptions): Promise<Ce
 };
 
 export type { CelldDevSession, CelldDevSessionOptions, CelldLineOrigin };
-export { startCelldDevSession };
+export { startCelldDevSession, writeCelldDevProjection };

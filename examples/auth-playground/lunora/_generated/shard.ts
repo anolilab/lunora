@@ -19,7 +19,7 @@ interface FunctionReference {
 const LUNORA_TABLE_REFS = ((): (() => Record<string, Record<string, string>>) => { let cached: Record<string, Record<string, string>> | undefined; return () => (cached ??= JSON.parse("{}") as Record<string, Record<string, string>>); })();
 
 /** Declared indexes per table (secondary, search, geo, rank, vector) for the schema viewer. */
-const LUNORA_TABLE_INDEXES = ((): (() => Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>) => { let cached: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> | undefined; return () => (cached ??= JSON.parse("{\"documents\":[{\"fields\":[\"ownerId\",\"createdAt\"],\"name\":\"by_owner_created\",\"type\":\"index\"}],\"ratelimit_buckets\":[{\"fields\":[\"ts\"],\"name\":\"by_ts\",\"type\":\"index\"},{\"fields\":[\"key\"],\"name\":\"by_key\",\"type\":\"index\"}]}") as Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>); })();
+const LUNORA_TABLE_INDEXES = ((): (() => Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>) => { let cached: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> | undefined; return () => (cached ??= JSON.parse("{\"documents\":[{\"fields\":[\"ownerId\",\"createdAt\"],\"name\":\"by_owner_created\",\"type\":\"index\"}],\"ratelimit_buckets\":[{\"fields\":[\"key\"],\"name\":\"by_key\",\"type\":\"index\"},{\"fields\":[\"ts\"],\"name\":\"by_ts\",\"type\":\"index\"}]}") as Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>); })();
 
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via `__lunora_admin__:describeTable`. */
 const LUNORA_TABLE_COLUMNS = ((): (() => Record<
@@ -197,16 +197,16 @@ const dispatchRun = async (
     callerKind?: "stream" | FunctionKind,
     runTransactional?: (work: () => Promise<unknown>) => Promise<unknown>,
 ): Promise<unknown> => {
-    // A query is read-only. The ctx object installs `run*` on every kind (one
-    // shape, built once), so the TYPE is all that stops a query from writing —
-    // and a cast walks straight past it, inside a subscription re-run that can
-    // execute many times per write. Checked on the CALLER, before the registry
-    // lookup, so `ctx.runMutation` from a query fails identically whatever it
-    // aimed at.
-    if (callerKind === "query" && expected !== "query") {
+    // A query and a stream are read-only: their declared ctx is the query ctx. The
+    // ctx object installs `run*` on every kind (one shape, built once), so the
+    // TYPE is all that stops them writing — and a cast walks straight past it,
+    // inside a subscription re-run that can execute many times per write. Checked
+    // on the CALLER, before the registry lookup, so `ctx.runMutation` from a
+    // query or stream fails identically whatever it aimed at.
+    if ((callerKind === "query" || callerKind === "stream") && expected !== "query") {
         throw new LunoraError(
             "RUN_KIND_FORBIDDEN",
-            `ctx.run${expected[0]!.toUpperCase()}${expected.slice(1)}: a query may only compose other queries (tried to run "${functionPath}")`,
+            `ctx.run${expected[0]!.toUpperCase()}${expected.slice(1)}: a ${callerKind} may only compose other queries (tried to run "${functionPath}")`,
         );
     }
 
@@ -318,6 +318,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // internals stay not-found and never leak across the external boundary.
             if (!registered || (registered.visibility === "internal" && !this.isSystemDispatch())) {
                 throw new LunoraError("FUNCTION_NOT_FOUND", `function not registered: ${functionPath}`);
+            }
+
+            // A stream yields chunks over its WebSocket procedure stream. Run here it
+            // would return an async iterator, which the wire encoder cannot carry as a
+            // single result, so refuse it before the handler runs.
+            if (registered.kind === "stream") {
+                throw new LunoraError("BAD_REQUEST", `"${functionPath}" is a stream: open it over the WebSocket, not RPC`);
             }
 
             this.ensureServable();
@@ -841,7 +848,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         }
 
         protected override async runShardImport(args: RunShardImportArgs): Promise<ImportShardResult> {
-            this.ensureMigrated();
+            // A dry run checks row shapes and never writes. Migrating first would write the schema ledger and create tables on a cold shard.
+            if (args.dryRun !== true) {
+                this.ensureMigrated();
+            }
 
             const writer = this.adminWriter();
 
@@ -942,6 +952,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             }
 
             this.blockedUniqueIndexes = runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, deferBlockedUniqueIndexes: true, schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT });
+            this.invalidateCompanionMemo();
             this.migrated = this.blockedUniqueIndexes.length === 0;
             this.migrationRetryAt = now + BLOCKED_MIGRATION_RETRY_MS;
         }

@@ -12,6 +12,7 @@ import {
     inferLunoraBindings,
     MissingBuildOutputError,
     planToolchainInvocation,
+    probeCelldToolchain,
     readApiSpecMarker,
     resolveDeployDriver,
     resolveLazyFunctions,
@@ -699,6 +700,30 @@ const apiSpecFor = (options: DeployCommandOptions, cwd: string): ApiSpec | undef
     options.apiSpec ?? (options.clientBuildRan === true ? readApiSpecMarker(cwd) : undefined);
 
 /**
+ * The celld toolchain a deploy runs (`celld`, `esbuild`, and `CELLD_BUCKET` for a
+ * live deploy): its warnings print, and its errors come back as the deploy's
+ * refusal. `prepare` writes nothing to the bucket, so it is probed as a dry run.
+ * Nothing for any other target.
+ */
+const celldToolchainError = async (options: DeployCommandOptions, target: string, command: PreDeployCommand): Promise<string | undefined> => {
+    if (target !== "celld") {
+        return undefined;
+    }
+
+    const probe = await (options.celldToolchain ?? probeCelldToolchain)({
+        dryRun: command === "prepare" || options.dryRun === true,
+        env: process.env,
+        purpose: "deploy",
+    });
+
+    for (const warning of probe.warnings) {
+        options.logger.warn(warning);
+    }
+
+    return probe.errors.length > 0 ? probe.errors.join("; ") : undefined;
+};
+
+/**
  * Everything both `lunora prepare` and `lunora deploy` must do before anything
  * ships: resolve the target, run codegen (with its post-hook, platform
  * diagnostics and ERROR-advisory gate), gate on schema drift, provision the
@@ -735,6 +760,18 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     }
 
     const { target } = preflight;
+
+    // The same stop for a missing celld toolchain (`celld`, `esbuild`, the fleet
+    // bucket): it is checked before codegen or provisioning writes a file.
+    const toolchainError = await celldToolchainError(options, target, command);
+
+    if (toolchainError !== undefined) {
+        options.logger.error(toolchainError);
+
+        // Not a usage error: the project is fine and the machine is not — the same
+        // bucket the Docker check uses.
+        return { code: EXIT_CODE.MISSING_DEPENDENCY, error: toolchainError, target, validation: empty };
+    }
 
     let codegen: CodegenResult | undefined;
 
@@ -803,7 +840,7 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
         return { error: hyperdriveError, target, validation: NO_VALIDATION };
     }
 
-    const checkError = runPreDeployChecks(cwd, options, command);
+    const checkError = runPreDeployChecks(cwd, options, command, target);
 
     if (checkError !== undefined) {
         return { code: checkError.code, error: checkError.error, target, validation: NO_VALIDATION };

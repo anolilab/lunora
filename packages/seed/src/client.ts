@@ -59,6 +59,9 @@ type SeedClient<InsertModel> = SeedClientState & {
 
 /** Options for {@link createSeedClient}. */
 interface SeedClientOptions {
+    /** Let a required foreign key with no parent row take a dangling id instead of refusing (see `SeedOptions.allowOrphans`). */
+    allowOrphans?: boolean;
+
     /** Default row count when a table call passes no spec (default `10`). */
     defaultCount?: number;
 
@@ -149,7 +152,7 @@ const buildOverrides = <Row>(
  * // posts.authorId values are drawn from `users`.
  */
 const createSeedClient = <InsertModel = Record<string, Record<string, unknown>>>(schema: Schema, options: SeedClientOptions = {}): SeedClient<InsertModel> => {
-    const { defaultCount = 10, now, persist, seed = 0 } = options;
+    const { allowOrphans = false, defaultCount = 10, now, persist, seed = 0 } = options;
 
     const store: Record<string, Record<string, unknown>[]> = {};
     const idsByTable: Record<string, string[]> = {};
@@ -164,6 +167,7 @@ const createSeedClient = <InsertModel = Record<string, Record<string, unknown>>>
         const offset = createdCount[table] ?? 0;
 
         const plan = seedPlan(schema, {
+            allowOrphans,
             counts: { [table]: count },
             existingIds: idsByTable,
             indexOffset: { [table]: offset },

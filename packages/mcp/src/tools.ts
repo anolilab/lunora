@@ -548,6 +548,7 @@ export {
     DATA_READ_SCOPE,
     OBSERVABILITY_SCOPE,
     READ_ONLY_TOOL_DEFINITIONS,
+    readArgumentsBag,
     SCOPED_GATES,
     scopeForTool,
     toolDefinitions,

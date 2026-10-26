@@ -41,9 +41,10 @@ interface RegenerateSchedulerOptions {
     /**
      * Run one regeneration for `changedFile`, calling `onHookSettled` with the
      * fingerprint of the sources it consumed if — and only if — a `postcodegen`
-     * actually ran. Must never reject.
+     * actually ran. `codegen: false` skips codegen itself and runs only the steps
+     * after it. Must never reject.
      */
-    regenerate: (changedFile: string, onHookSettled: (consumedSources: string) => void) => void;
+    regenerate: (changedFile: string, onHookSettled: (consumedSources: string) => void, codegen: boolean) => void;
 }
 
 /**
@@ -61,12 +62,17 @@ const createRegenerateScheduler = (
     cancelPending: () => void;
     dispose: () => void;
     onSave: (changedFile: string) => void;
+    onStudioWrite: (changedFile: string) => void;
 } => {
     // Per-server-generation. Scoped to one scheduler (not the plugin factory) so
     // a `server.restart()` — which configures the NEW server before closing the
     // OLD one — can't have the old server's teardown cancel a codegen run the new
     // server just armed.
     let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+    // Whether the debounced run has to run codegen. Only a studio write's event
+    // can clear it, and a save coalesced into the same burst sets it again.
+    let debounceNeedsCodegen = false;
 
     // Armed after a `postcodegen` run to re-examine the schema sources once its
     // settle window has passed. Its own timer, NOT `debounceTimer`: the drop path
@@ -123,12 +129,33 @@ const createRegenerateScheduler = (
     };
 
     /** One regeneration, with the recheck it may arm wired back into this scheduler. */
-    const fire = (changedFile: string): void => {
-        options.regenerate(changedFile, (consumedSources) => {
-            armSettleRecheck(consumedSources, () => {
-                fire(changedFile);
-            });
-        });
+    const fire = (changedFile: string, codegen: boolean): void => {
+        options.regenerate(
+            changedFile,
+            (consumedSources) => {
+                // The sources moved since that run, so the rerun needs codegen whatever the first one skipped.
+                armSettleRecheck(consumedSources, () => {
+                    fire(changedFile, true);
+                });
+            },
+            codegen,
+        );
+    };
+
+    /** Coalesce a burst of changes, and start the runaway-hook budget over. */
+    const debounce = (changedFile: string, codegen: boolean): void => {
+        const needsCodegen = codegen || (debounceTimer !== undefined && debounceNeedsCodegen);
+
+        cancelPending();
+
+        settleReruns = 0;
+        debounceNeedsCodegen = needsCodegen;
+
+        debounceTimer = setTimeout(() => {
+            debounceTimer = undefined;
+
+            fire(changedFile, needsCodegen);
+        }, DEBOUNCE_MS);
     };
 
     return {
@@ -148,17 +175,18 @@ const createRegenerateScheduler = (
             }
         },
 
-        /** A real developer save: coalesce the burst, and start the runaway-hook budget over. */
+        /** A real developer save. */
         onSave: (changedFile: string): void => {
-            cancelPending();
+            debounce(changedFile, true);
+        },
 
-            settleReruns = 0;
-
-            debounceTimer = setTimeout(() => {
-                debounceTimer = undefined;
-
-                fire(changedFile);
-            }, DEBOUNCE_MS);
+        /**
+         * The event of a studio handler's own write. The handler already ran
+         * codegen from it, so this runs only what comes after: `postcodegen`,
+         * module invalidation and the reload.
+         */
+        onStudioWrite: (changedFile: string): void => {
+            debounce(changedFile, false);
         },
     };
 };

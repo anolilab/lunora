@@ -1,3 +1,89 @@
+## @lunora/runtime [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.238...@lunora/runtime@1.0.0-alpha.239) (2026-10-26)
+
+### Features
+
+* **studio:** import a CSV file into a table ([#1321](https://github.com/anolilab/lunora/issues/1321)) ([360930a](https://github.com/anolilab/lunora/commit/360930a9edc00a56f90c5cdf6a9d3218e428aeea))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.135
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/observability:** upgraded to 1.0.0-alpha.171
+* **@lunora/do:** upgraded to 1.0.0-alpha.247
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.159
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.95
+
+## @lunora/runtime [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.237...@lunora/runtime@1.0.0-alpha.238) (2026-10-25)
+
+### Bug Fixes
+
+* **config:** celld audit fixes ([#1283](https://github.com/anolilab/lunora/issues/1283)) ([6fd7854](https://github.com/anolilab/lunora/commit/6fd78547928d41d3569ba71cf94683dac7f49b94))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.134
+* **@lunora/observability:** upgraded to 1.0.0-alpha.170
+* **@lunora/platform:** upgraded to 1.0.0-alpha.75
+* **@lunora/do:** upgraded to 1.0.0-alpha.246
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.158
+
+## @lunora/runtime [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.236...@lunora/runtime@1.0.0-alpha.237) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.169
+* **@lunora/do:** upgraded to 1.0.0-alpha.245
+
+## @lunora/runtime [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.235...@lunora/runtime@1.0.0-alpha.236) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.133
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/observability:** upgraded to 1.0.0-alpha.168
+* **@lunora/do:** upgraded to 1.0.0-alpha.244
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.157
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.94
+
+## @lunora/runtime [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.234...@lunora/runtime@1.0.0-alpha.235) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.132
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/observability:** upgraded to 1.0.0-alpha.167
+* **@lunora/do:** upgraded to 1.0.0-alpha.243
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.93
+
+## @lunora/runtime [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.233...@lunora/runtime@1.0.0-alpha.234) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.166
+* **@lunora/do:** upgraded to 1.0.0-alpha.242
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.155
+
+## @lunora/runtime [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.232...@lunora/runtime@1.0.0-alpha.233) (2026-10-23)
+
+### Features
+
+* **server:** mount declared live streams without app routes ([#1314](https://github.com/anolilab/lunora/issues/1314)) ([45f31b6](https://github.com/anolilab/lunora/commit/45f31b6781c3e0bfe300264b9d8f59175424d47a)), closes [#1204](https://github.com/anolilab/lunora/issues/1204)
+
+### Bug Fixes
+
+* **runtime:** share one /list request across concurrent registry misses ([#1312](https://github.com/anolilab/lunora/issues/1312)) ([ae0f1cd](https://github.com/anolilab/lunora/commit/ae0f1cd300613af2f5fc3228b392132ff3d94cac))
+
 ## @lunora/runtime [1.0.0-alpha.232](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.231...@lunora/runtime@1.0.0-alpha.232) (2026-10-22)
 
 

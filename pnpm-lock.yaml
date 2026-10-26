@@ -2194,6 +2194,9 @@ importers:
 
   examples/privacy:
     dependencies:
+      '@lunora/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@lunora/privacy':
         specifier: workspace:*
         version: link:../../packages/privacy
@@ -2209,6 +2212,9 @@ importers:
       '@lunora/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow
+      better-auth:
+        specifier: catalog:auth
+        version: 1.7.7(84ebbefaea2f0371e8cc0eff3e1685c9)
       lunorash:
         specifier: workspace:*
         version: link:../../packages/lunora
@@ -4254,6 +4260,9 @@ importers:
       '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime
+      '@lunora/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
@@ -4428,6 +4437,9 @@ importers:
         specifier: catalog:privacy
         version: 0.8.3
     devDependencies:
+      '@cloudflare/vitest-plugin':
+        specifier: catalog:cloudflare
+        version: 1.4.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)(vitest@4.1.11)
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
@@ -4639,12 +4651,18 @@ importers:
       '@tanstack/react-query':
         specifier: catalog:frontend
         version: 5.101.4(react@19.3.0)
+      '@testing-library/react':
+        specifier: catalog:frontend
+        version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
       '@types/react':
         specifier: catalog:frontend
         version: 19.3.0
+      '@types/react-dom':
+        specifier: catalog:frontend
+        version: 19.3.0(@types/react@19.3.0)
       '@visulima/packem':
         specifier: catalog:build
         version: 2.1.0(17cfc78d5faadd1bea255bd403bf926c)
@@ -4660,9 +4678,15 @@ importers:
       fallow:
         specifier: catalog:lint
         version: 3.31.0
+      jsdom:
+        specifier: catalog:frontend
+        version: 30.1.2(@noble/hashes@2.2.0)
       react:
         specifier: 19.3.0
         version: 19.3.0
+      react-dom:
+        specifier: 19.3.0
+        version: 19.3.0(react@19.3.0)
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -5897,6 +5921,9 @@ importers:
       '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
+      '@lunora/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
       '@lunora/scheduler':
         specifier: workspace:*
         version: link:../../packages/scheduler
