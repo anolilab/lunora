@@ -301,17 +301,20 @@ describe("subscriptionFrames — sockets sharing one result", () => {
         const next = [...previous, row("shared-new")];
         const previousJson = JSON.stringify(previous);
         const otherBaseline = JSON.stringify(previous.slice(0, 19));
+        // One run's outcome, which every socket the run serves passes as its key.
+        const diffKey = {};
         const parse = vi.spyOn(JSON, "parse");
 
         try {
             for (const subId of ["a", "b", "c"]) {
-                subscriptionFrames({ cursorSuffix: "", nextResult: next, previousJson, snapshotJson: JSON.stringify(next), subId, table: "messages" });
+                subscriptionFrames({ cursorSuffix: "", diffKey, nextResult: next, previousJson, snapshotJson: JSON.stringify(next), subId, table: "messages" });
             }
 
             expect(parse.mock.calls.filter(([text]) => text === previousJson)).toHaveLength(1);
 
             subscriptionFrames({
                 cursorSuffix: "",
+                diffKey,
                 nextResult: next,
                 previousJson: otherBaseline,
                 snapshotJson: JSON.stringify(next),
@@ -323,6 +326,32 @@ describe("subscriptionFrames — sockets sharing one result", () => {
         } finally {
             parse.mockRestore();
         }
+    });
+
+    it("diffs a result the handler edited in place again on the next run", () => {
+        expect.assertions(2);
+
+        // A handler may return the same array on every run and edit it in place;
+        // only the run's outcome, new each time, may carry its diff forward.
+        const previous = Array.from({ length: 20 }, (_, index) => row(`inplace-${String(index)}`));
+        const previousJson = JSON.stringify(previous);
+        const live = [...previous, row("inplace-a")];
+        const frame = (diffKey: object): string[] =>
+            subscriptionFrames({
+                cursorSuffix: "",
+                diffKey,
+                nextResult: live,
+                previousJson,
+                snapshotJson: JSON.stringify(live),
+                subId: "s",
+                table: "messages",
+            });
+
+        expect(frame({}).join("")).toContain(`"key":"inplace-a"`);
+
+        live[20] = row("inplace-b");
+
+        expect(frame({}).join("")).toContain(`"key":"inplace-b"`);
     });
 
     it("diffs the same result separately against each distinct baseline and table", () => {

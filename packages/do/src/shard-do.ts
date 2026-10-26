@@ -16161,6 +16161,8 @@ abstract class ShardDO {
         // finding d).
         const frames = subscriptionFrames({
             cursorSuffix,
+            // New on every run, and shared by the sockets one run serves.
+            diffKey: outcome,
             lastMutationId: clientWatermark,
             nextResult: outcome.result,
             pageDeltas,
