@@ -766,6 +766,7 @@ interface InferredBindings {
     containers: InferredContainer[];
     durableObjects: DurableObjectSpec[];
     flagshipBinding?: string;
+    hostsEventLog: boolean;
     hostsShardRegistry: boolean;
     jurisdiction?: SchemaInfo["jurisdiction"];
     needsD1: boolean;
@@ -780,6 +781,7 @@ interface InferredBindings {
     usesAuth: boolean;
     usesBrowser: boolean;
     usesCimdWorkers: boolean;
+    usesEventLogClient: boolean;
     usesFlags: boolean;
     usesHyperdrive: boolean;
     usesImages: boolean;
@@ -1495,6 +1497,7 @@ const fillDevSecrets: (deps: {
     cwd: string;
     info?: (message: string) => void;
     randomHex?: (bytes: number) => string;
+    secretSources?: ReadonlyArray<string>;
 }) => FillDevSecretsResult;
 ```
 
@@ -1570,7 +1573,7 @@ const isMergedRoleModule: (module: string) => boolean;
 ### `isMintableSecretKey` (const)
 
 ```ts
-const isMintableSecretKey: (key: string, value: string) => boolean;
+const isMintableSecretKey: (key: string, value: string, mintable?: ReadonlySet<string>) => boolean;
 ```
 
 ### `isPlaceholderValue` (const)
@@ -1647,6 +1650,7 @@ const parseSchema: (source: string) => ParseSchemaResult;
 ```ts
 const planDevSecretsFill: (input: {
     existingContent: string;
+    mintable?: ReadonlySet<string>;
     randomHex?: (bytes: number) => string;
 }) => DevSecretsFillPlan;
 ```

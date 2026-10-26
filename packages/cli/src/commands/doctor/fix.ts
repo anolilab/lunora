@@ -5,9 +5,13 @@ import { join } from "node:path";
 import {
     DEV_VARS_FILE,
     generateSecretValue,
+    inferLunoraBindings,
     isMintableSecretKey,
     isPlaceholderValue,
+    mintableSecretKeysFor,
     parseDevVariableEntries,
+    resolveSchemaDirectory,
+    secretSourcesFromBindings,
     upsertDevVariableLine,
     writeDevVariablesFileAtomically,
 } from "@lunora/config";
@@ -271,8 +275,28 @@ const devVariablesIsIgnored = (cwd: string): boolean => {
     );
 };
 
+/**
+ * The keys this project's role may mint. A worker that only constructs the client takes the host's relay key, so it is not minted one.
+ * When the bindings cannot be read, every registry key stays mintable, as before, and the fallback is reported.
+ */
+const mintableKeysFor = async (cwd: string, result: DoctorFixResult): Promise<ReadonlySet<string> | undefined> => {
+    try {
+        return mintableSecretKeysFor(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) })));
+    } catch {
+        result.skipped.push(`${DEV_VARS_FILE}: could not read the project's bindings, so the relay key was not checked against its role.`);
+
+        return undefined;
+    }
+};
+
 /** The keys `.dev.vars` needs minted: the admin token when absent, and mintable secrets still at a placeholder. */
-const keysToMint = (cwd: string, content: string, entries: ReadonlyArray<{ key: string; value: string }>, result: DoctorFixResult): string[] => {
+const keysToMint = (
+    cwd: string,
+    content: string,
+    entries: ReadonlyArray<{ key: string; value: string }>,
+    result: DoctorFixResult,
+    mintable: ReadonlySet<string> | undefined,
+): string[] => {
     const minted: string[] = [];
     // A key with a real value anywhere in the file is never minted over, even when a later
     // duplicate line is a placeholder. The later line wins at read time, but the real value
@@ -297,7 +321,7 @@ const keysToMint = (cwd: string, content: string, entries: ReadonlyArray<{ key: 
             continue;
         }
 
-        if (isMintableSecretKey(entry.key, entry.value)) {
+        if (isMintableSecretKey(entry.key, entry.value, mintable)) {
             minted.push(entry.key);
         } else {
             result.skipped.push(`${DEV_VARS_FILE}: ${entry.key} is a provider key and cannot be minted here; fill it in by hand.`);
@@ -312,10 +336,10 @@ const keysToMint = (cwd: string, content: string, entries: ReadonlyArray<{ key: 
  * cannot be minted locally are left for the operator and reported. Existing
  * non-placeholder values are never touched.
  */
-const fixDevVariables = (options: DoctorFixOptions, result: DoctorFixResult): void => {
+const fixDevVariables = async (options: DoctorFixOptions, result: DoctorFixResult): Promise<void> => {
     const path = join(options.cwd, DEV_VARS_FILE);
     const content = existsSync(path) ? readFileSync(path, "utf8") : "";
-    const minted = keysToMint(options.cwd, content, parseDevVariableEntries(content), result);
+    const minted = keysToMint(options.cwd, content, parseDevVariableEntries(content), result, await mintableKeysFor(options.cwd, result));
 
     if (minted.length === 0) {
         return;
@@ -354,7 +378,7 @@ const applyDoctorFixes = async (options: DoctorFixOptions): Promise<DoctorFixRes
     const result: DoctorFixResult = { applied: [], skipped: [] };
 
     await fixD1Placeholders(options, result);
-    fixDevVariables(options, result);
+    await fixDevVariables(options, result);
 
     return result;
 };

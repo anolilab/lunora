@@ -9,15 +9,18 @@
  *
  * ```ts
  * const client = new EventLogDOClient({
+ *   env,
  *   fetch: (req) => env.EVENT_LOG_DO.get(id).fetch(req),
+ *   instance: id.toString(),
  * });
  *
  * const { entries } = await client.getSince(0); // first page — see `getSince`
  * await client.append([{ type: "chat.messageSent", payload: { text: "hi" } }]);
  * ```
  */
-import { EVENT_LOG_SECRET_HEADER } from "../../../shared/internal-secret";
+import { RELAY_SIGNATURE_HEADER, siblingSecretOf, signSiblingBody } from "../../../shared/relay-signature";
 import type { EventLogEntry } from "./event-log";
+import { eventLogFrame } from "./event-log-frame";
 import type { InputEvent, Seq } from "./seq";
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -50,6 +53,12 @@ export interface AppendEventInput {
  */
 export interface EventLogDOClientOptions {
     /**
+     * The Worker env. The client signs every request with `LUNORA_RELAY_SECRET`
+     * read from it, and construction throws when that secret is not set.
+     */
+    env: unknown;
+
+    /**
      * A function that dispatches an HTTP request to the target EventLogDO
      * instance. In a Cloudflare Worker this is:
      *
@@ -58,8 +67,14 @@ export interface EventLogDOClientOptions {
      * ```
      */
     fetch: (request: Request) => Promise<Response>;
-    /** The DO's `EVENT_LOG_DO_SECRET`, sent on every request; omit when none is provisioned. */
-    secret?: string;
+
+    /**
+     * The `DurableObjectId` string of the instance `fetch` dispatches to:
+     * `id.toString()` for the `id` passed to `get()`. It is signed into every
+     * request, and the instance refuses a request signed for any other id, so
+     * a signed request captured from one log cannot be replayed against another.
+     */
+    instance: string;
 }
 
 // ── Client ─────────────────────────────────────────────────────────────
@@ -74,11 +89,22 @@ export interface EventLogDOClientOptions {
 export class EventLogDOClient {
     readonly #fetch: (request: Request) => Promise<Response>;
 
-    readonly #secretHeaders: Record<string, string>;
+    readonly #secret: string;
+
+    readonly #instance: string;
 
     public constructor(options: EventLogDOClientOptions) {
+        const secret = siblingSecretOf(options.env);
+
+        if (secret === undefined) {
+            throw new Error(
+                "EventLogDOClient requires LUNORA_RELAY_SECRET in env: set it to the relay secret of the worker that hosts EventLogDO (in .dev.vars for local development, or with `wrangler secret put` on deploy)",
+            );
+        }
+
         this.#fetch = options.fetch;
-        this.#secretHeaders = options.secret ? { [EVENT_LOG_SECRET_HEADER]: options.secret } : {};
+        this.#secret = secret;
+        this.#instance = options.instance;
     }
 
     // ── Append ─────────────────────────────────────────────────────────
@@ -87,21 +113,16 @@ export class EventLogDOClient {
      * Append one or more events to the log.
      * @param events The events to append.
      * @param options Idempotency controls for the batch.
-     * @param options.batchId Optional idempotency key for the whole batch — a
-     * retried `append` call with the same `batchId` (e.g. after a network
-     * timeout that hid a successful response) returns the originally-persisted
-     * entries instead of inserting duplicates.
+     * @param options.batchId Idempotency key for the whole batch. Omit it for a
+     * fresh key per call; pass the same key to retry a call whose response was
+     * lost (e.g. a network timeout that hid a successful append), which returns
+     * the originally-persisted entries instead of inserting duplicates.
      * @returns The persisted entries with their assigned `seq` numbers.
      */
     public async append(events: AppendEventInput[], options?: { batchId?: string }): Promise<EventLogEntry[]> {
-        const body = JSON.stringify({ events, batchId: options?.batchId });
-        const response = await this.#fetch(
-            new Request("https://do/append", {
-                method: "POST",
-                headers: { "content-type": "application/json", ...this.#secretHeaders },
-                body,
-            }),
-        );
+        // Every append carries a key: the DO refuses one without it, and the key is what makes a captured, replayed request a no-op.
+        const body = JSON.stringify({ events, batchId: options?.batchId ?? crypto.randomUUID() });
+        const response = await this.#send("POST", "/append", body);
 
         if (!response.ok) {
             throw await EventLogDOClient.#toError(response, "append");
@@ -162,12 +183,29 @@ export class EventLogDOClient {
 
     // ── Internal ────────────────────────────────────────────────────────
 
+    /**
+     * Send one signed request. The URL is built once and both the request and
+     * the signed frame are taken from it, so the path the DO verifies is the
+     * path it receives.
+     */
+    async #send(method: "GET" | "POST", path: string, body = ""): Promise<Response> {
+        const url = new URL(`https://do${path}`);
+        const signature = await signSiblingBody(this.#secret, eventLogFrame(this.#instance, method, url, body));
+        const headers: Record<string, string> = { [RELAY_SIGNATURE_HEADER]: signature };
+
+        if (method === "POST") {
+            headers["content-type"] = "application/json";
+        }
+
+        return this.#fetch(new Request(url.href, { method, headers, body: method === "POST" ? body : undefined }));
+    }
+
     /** GET `path` from the DO, throwing a descriptive error on a non-OK status. */
-    async #get<T>(path: string, method: string): Promise<T> {
-        const response = await this.#fetch(new Request(`https://do${path}`, { headers: this.#secretHeaders }));
+    async #get<T>(path: string, operation: string): Promise<T> {
+        const response = await this.#send("GET", path);
 
         if (!response.ok) {
-            throw await EventLogDOClient.#toError(response, method);
+            throw await EventLogDOClient.#toError(response, operation);
         }
 
         return (await response.json()) as T;

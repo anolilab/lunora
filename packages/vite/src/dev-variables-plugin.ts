@@ -1,7 +1,33 @@
-import { createConfirm, ensureDevVariables, ensureDevWorkerEnv, fillDevSecrets, lunoraLine } from "@lunora/config";
+import {
+    createConfirm,
+    ensureDevVariables,
+    ensureDevWorkerEnv,
+    fillDevSecrets,
+    inferLunoraBindings,
+    lunoraLine,
+    secretSourcesFromBindings,
+} from "@lunora/config";
 import type { Plugin } from "vite";
 
 import type { ResolvedLunoraPluginOptions } from "./types";
+
+/**
+ * The project's secret sources, read with the schema directory the plugin was given. When its bindings cannot be read, every dev
+ * secret is generated as before the sources were passed, so a broken tsconfig or barrel does not stop dev startup.
+ */
+const secretSourcesOrUndefined = async (
+    projectRoot: string,
+    schemaDirectory: string,
+    info: (message: string) => void,
+): Promise<ReadonlyArray<string> | undefined> => {
+    try {
+        return secretSourcesFromBindings(await inferLunoraBindings({ projectRoot, schemaDir: schemaDirectory }));
+    } catch (error) {
+        info(`could not read the project's bindings, so every dev secret is generated: ${error instanceof Error ? error.message : String(error)}`);
+
+        return undefined;
+    }
+};
 
 /**
  * Dev-only Vite plugin that prepares `.dev.vars` before the worker boots.
@@ -46,7 +72,8 @@ const devVariablesPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
 
             await ensureDevVariables({ confirm: createConfirm("[lunora] "), cwd: options.projectRoot, info });
 
-            fillDevSecrets({ cwd: options.projectRoot, info });
+            const secretSources = await secretSourcesOrUndefined(options.projectRoot, options.schemaDir, info);
+            fillDevSecrets({ cwd: options.projectRoot, info, secretSources });
             ensureDevWorkerEnv(options.projectRoot, info);
         },
         enforce: "pre",

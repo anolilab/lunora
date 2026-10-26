@@ -101,6 +101,29 @@ describe("shardRegistryDO — authentication", () => {
         expect(state.storage.entries.size).toBe(0);
     });
 
+    it("answers 403 to an unsigned request without reading its body", async () => {
+        expect.assertions(2);
+
+        const registry = new ShardRegistryDO(createFakeState(), ENV);
+        const request = unsigned("POST", "/register", { shardKey: "a", table: "x".repeat(1_048_576) });
+
+        const response = await registry.fetch(request);
+
+        expect(response.status).toBe(403);
+        expect(request.bodyUsed).toBe(false);
+    });
+
+    it("refuses a signature made for another method", async () => {
+        expect.assertions(1);
+
+        const registry = new ShardRegistryDO(createFakeState(), ENV);
+        const signature = await signSiblingBody(SECRET, shardRegistryFrame("POST", `${BASE}/snapshot`, ""));
+
+        const response = await registry.fetch(new Request(`${BASE}/snapshot`, { headers: { [RELAY_SIGNATURE_HEADER]: signature }, method: "GET" }));
+
+        expect(response.status).toBe(403);
+    });
+
     it("caps the body it buffers, so an oversized request is refused before its signature is checked", async () => {
         expect.assertions(2);
 

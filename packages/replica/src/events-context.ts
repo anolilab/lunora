@@ -12,7 +12,9 @@
  * import { EventLogDOClient } from "@lunora/replica";
  *
  * const client = new EventLogDOClient({
+ *   env,
  *   fetch: (req) => env.EVENT_LOG_DO.get(id).fetch(req),
+ *   instance: id.toString(),
  * });
  *
  * export const track = mutation
@@ -83,7 +85,9 @@ export interface EventsContextOutput {
  *
  * ```ts
  * const client = new EventLogDOClient({
+ * env,
  * fetch: (req) => env.EVENTS.get(id).fetch(req),
+ * instance: id.toString(),
  * });
  *
  * export const logEvent = mutation

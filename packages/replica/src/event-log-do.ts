@@ -10,15 +10,17 @@
  *
  * | Method | Path                    | Description                          |
  * |--------|-------------------------|--------------------------------------|
- * | POST   | `/append`               | Insert events, return assigned seqs  |
+ * | POST   | `/append`               | Insert events (needs `batchId`),     |
+ * |        |                         | return assigned seqs                 |
  * | GET    | `/since?seq=N&limit=M`  | ONE bounded page of `seq >= N`       |
  * | GET    | `/size`                 | Number of stored events              |
  * | GET    | `/state`                | Whole log in one body; 413 when over |
  * |        |                         | the entry count or payload budget    |
  */
 
-import { EVENT_LOG_SECRET_ENV, EVENT_LOG_SECRET_HEADER, hasInternalSecret } from "../../../shared/internal-secret";
+import { RELAY_SIGNATURE_HEADER, siblingSecretOf, verifySiblingBody } from "../../../shared/relay-signature";
 import type { EventLogEntry } from "./event-log";
+import { eventLogFrame } from "./event-log-frame";
 
 // ── Idempotency fingerprint ─────────────────────────────────────────────
 
@@ -73,13 +75,8 @@ const canonicalizeForFingerprint = (value: unknown): unknown => {
         // eslint-disable-next-line sonarjs/no-alphabetical-sort -- code-unit order is required for cross-machine determinism; a localeCompare comparator is the bug, not the fix
         sortedKeys.sort();
 
-        const result: Record<string, unknown> = {};
-
-        for (const key of sortedKeys) {
-            result[key] = canonicalizeForFingerprint(record[key]);
-        }
-
-        return result;
+        // `fromEntries` defines each key as an own property. Assigning into `{}` would make an own `__proto__` key set the prototype and vanish.
+        return Object.fromEntries(sortedKeys.map((key) => [key, canonicalizeForFingerprint(record[key])]));
     }
 
     return value;
@@ -102,6 +99,9 @@ const fingerprintBatch = async (events: AppendRequestEvent[]): Promise<string> =
 // ── Types ──────────────────────────────────────────────────────────────
 
 interface EventLogDOState {
+    /** The object's own id; the relay signature is verified against it, never against the request. */
+    id: { toString: () => string };
+
     storage: {
         sql: {
             exec: (query: string, ...params: unknown[]) => unknown;
@@ -131,11 +131,12 @@ interface AppendRequestEvent {
 
 interface AppendRequest {
     /**
-     * Optional idempotency key for the whole batch. A retried `/append` with
-     * the same `batchId` returns the originally-persisted entries instead of
-     * inserting duplicates — see `#handleAppend`.
+     * Idempotency key for the whole batch, required. A `/append` with a
+     * `batchId` already persisted returns the originally-persisted entries
+     * instead of inserting duplicates, so a captured signed request replayed
+     * later writes nothing — see `#runAppendBatch`.
      */
-    batchId?: string;
+    batchId: string;
     events: AppendRequestEvent[];
 }
 
@@ -297,18 +298,30 @@ export class EventLogDO {
     // ── Fetch (RPC dispatch) ──────────────────────────────────────────
 
     public async fetch(request: Request): Promise<Response> {
-        // Opt-in: with `EVENT_LOG_DO_SECRET` set, every route needs it in `x-lunora-event-log-do-secret`.
-        if (!hasInternalSecret(request, EVENT_LOG_SECRET_HEADER, (this.env as Record<string, unknown> | undefined)?.[EVENT_LOG_SECRET_ENV])) {
-            return errorResponse(401, "UNAUTHORIZED", "missing or invalid event log secret");
+        // Fail closed: without the relay secret no route answers, GET included, so the log is never readable unauthenticated.
+        if (siblingSecretOf(this.env) === undefined) {
+            return errorResponse(403, "FORBIDDEN", "event log requires LUNORA_RELAY_SECRET");
+        }
+
+        // Refuse before the body is read: a request with no signature cannot verify, and buffering its body first is memory the caller spends for free.
+        const signature = request.headers.get(RELAY_SIGNATURE_HEADER);
+
+        if (signature === null) {
+            return errorResponse(403, "FORBIDDEN", "missing or invalid event log signature");
+        }
+
+        const url = new URL(request.url);
+        const raw = await request.text();
+
+        if (!(await verifySiblingBody(this.env, signature, eventLogFrame(this.state.id.toString(), request.method, url, raw)))) {
+            return errorResponse(403, "FORBIDDEN", "missing or invalid event log signature");
         }
 
         this.#ensureTable();
 
-        const url = new URL(request.url);
-
         try {
             if (request.method === "POST" && url.pathname === "/append") {
-                return await this.#handleAppend(request);
+                return await this.#handleAppend(raw);
             }
             if (request.method === "GET" && url.pathname === "/since") {
                 return this.#handleSince(url);
@@ -335,11 +348,11 @@ export class EventLogDO {
     // ── Handlers ──────────────────────────────────────────────────────
 
     /** POST /append — insert events, return entries with assigned seqs. */
-    async #handleAppend(request: Request): Promise<Response> {
+    async #handleAppend(raw: string): Promise<Response> {
         let body: AppendRequest;
 
         try {
-            body = (await request.json()) as AppendRequest;
+            body = JSON.parse(raw) as AppendRequest;
         } catch {
             return errorResponse(400, "BAD_REQUEST", "invalid JSON body");
         }
@@ -356,16 +369,17 @@ export class EventLogDO {
 
         // Run the whole batch (lookup + inserts) inside the DO's native
         // transaction primitive so a mid-batch failure persists nothing —
-        // the caller sees a 500 and can safely retry the whole batch (which,
-        // with a `batchId`, is now also idempotent). Test doubles whose
+        // the caller sees a 500 and can safely retry the whole batch (the
+        // `batchId` makes that retry idempotent). Test doubles whose
         // storage lacks `transaction` fall back to a bare call — their fakes
         // carry no transactional semantics anyway (see ShardDO.runInTransaction
         // in `@lunora/do` for the same convention).
-        const { transaction } = this.state.storage;
+        // Called through `storage`, not a destructured copy: workerd throws "Illegal invocation" on an unbound native method.
+        const { storage } = this.state;
         let entries: EventLogEntry[];
 
         try {
-            entries = typeof transaction === "function" ? await transaction(runBatch) : await runBatch();
+            entries = typeof storage.transaction === "function" ? await storage.transaction(runBatch) : await runBatch();
         } catch (error) {
             if (isIdempotencyConflictError(error)) {
                 return errorResponse(409, "CONFLICT", error.message);
@@ -391,21 +405,16 @@ export class EventLogDO {
      * event batch throws an idempotency-conflict error instead of silently
      * dropping the new events and returning unrelated entries.
      */
-    static async #runAppendBatch(sql: SqlExec, body: AppendRequest, batchId: string | undefined): Promise<EventLogEntry[]> {
-        let fingerprint: string | undefined;
+    static async #runAppendBatch(sql: SqlExec, body: AppendRequest, batchId: string): Promise<EventLogEntry[]> {
+        const fingerprint = await fingerprintBatch(body.events);
+        const existing = EventLogDO.#findBatch(sql, batchId);
 
-        if (typeof batchId === "string") {
-            fingerprint = await fingerprintBatch(body.events);
-
-            const existing = EventLogDO.#findBatch(sql, batchId);
-
-            if (existing) {
-                if (existing.fingerprint !== fingerprint) {
-                    throw createIdempotencyConflictError(`batchId "${batchId}" was already used for a different event batch`);
-                }
-
-                return existing.entries;
+        if (existing) {
+            if (existing.fingerprint !== fingerprint) {
+                throw createIdempotencyConflictError(`batchId "${batchId}" was already used for a different event batch`);
             }
+
+            return existing.entries;
         }
 
         const now = Date.now();
@@ -426,13 +435,11 @@ export class EventLogDO {
             entries.push(entry);
         }
 
-        if (typeof batchId === "string" && fingerprint !== undefined) {
-            const firstSeq = entries[0]?.seq;
-            const lastSeq = entries.at(-1)?.seq;
+        const firstSeq = entries[0]?.seq;
+        const lastSeq = entries.at(-1)?.seq;
 
-            if (firstSeq !== undefined && lastSeq !== undefined) {
-                EventLogDO.#recordBatch(sql, batchId, firstSeq, lastSeq, fingerprint);
-            }
+        if (firstSeq !== undefined && lastSeq !== undefined) {
+            EventLogDO.#recordBatch(sql, batchId, firstSeq, lastSeq, fingerprint);
         }
 
         return entries;
@@ -450,7 +457,9 @@ export class EventLogDO {
             return "events[] with a non-empty string `type` required";
         }
 
-        if (body.batchId !== undefined && (typeof body.batchId !== "string" || body.batchId.length === 0)) {
+        // Required, not optional: a signature proves who sent a frame, not that it is new, so a
+        // captured signed append replays forever. Only the batch ledger turns a replay into a no-op.
+        if (typeof body.batchId !== "string" || body.batchId.length === 0) {
             return "batchId must be a non-empty string";
         }
 
@@ -633,7 +642,7 @@ export class EventLogDO {
                 "parent_seq INTEGER" +
                 ")",
         );
-        // Idempotency ledger for `/append`'s optional `batchId`: one row per
+        // Idempotency ledger for `/append`'s required `batchId`: one row per
         // batch, `batch_id` UNIQUE so a concurrent double-insert of the same
         // batch (belt-and-suspenders alongside the `#findBatch` pre-check
         // inside the same transaction) fails loudly instead of duplicating.

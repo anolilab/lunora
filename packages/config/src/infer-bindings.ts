@@ -21,7 +21,7 @@
  */
 import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 import type { CapabilityKey, ServiceBindingIR, SourceCapabilitySignals } from "@lunora/codegen";
 import {
@@ -37,8 +37,8 @@ import {
 } from "@lunora/codegen";
 // `worker-entry.ts` lexes the entry's exports; the lexer's wasm must be initialised first.
 import { init as initLexer } from "es-module-lexer";
-import type { SourceFile } from "ts-morph";
-import { Project } from "ts-morph";
+import type { BindingElement, CallExpression, Identifier, SourceFile } from "ts-morph";
+import { Node, Project, ts } from "ts-morph";
 
 import type { AgentIR } from "./agent-info";
 import { discoverAgentInfo } from "./agent-info";
@@ -187,6 +187,10 @@ const SECRET_SOURCE_FLAGS = [
     // `ShardRegistryDO` refuses unsigned requests, so an app with a registry needs
     // `LUNORA_RELAY_SECRET` in `.dev.vars` and on deploy, with no package import to say so.
     ["hostsShardRegistry", "@lunora/do:shardRegistry"],
+    // `EventLogDO` refuses every request without the same secret, and the app that exports it hosts the log.
+    ["hostsEventLog", "@lunora/replica:eventLog"],
+    // A worker that only constructs `EventLogDOClient` takes the host's value, so its line is a template, never minted.
+    ["usesEventLogClient", "@lunora/replica:eventLogClient"],
     // The secret store behind `requestSecretTool`. The tool's own import is the
     // signal, not `@lunora/agent`: an app that imports the package for something
     // else needs no key.
@@ -196,6 +200,560 @@ const SECRET_SOURCE_FLAGS = [
 /** The packages whose sandbox tools (`browserTool`, `jsCodeTool`) provision `BROWSER` / `LOADER` when imported under `lunora/`. */
 const SANDBOX_PACKAGES = ["@lunora/agent", "@lunora/agent/sandbox"] as const;
 
+/** The package whose barrel exports `EventLogDO` and `EventLogDOClient`, so a star re-export of it forwards the host class. */
+const EVENT_LOG_PACKAGE = "@lunora/replica";
+
+/** The export a worker constructs to reach a log, so the one whose use asks for the relay secret. */
+const EVENT_LOG_CLIENT = "EventLogDOClient";
+
+/** The source extension a `.js`-style relative specifier names, so it can be probed against the `.ts` file. */
+const SOURCE_SPECIFIER_EXTENSION = /\.[cm]?[jt]sx?$/u;
+
+/** Barrel source extensions in probe order: TypeScript first, so a `.js` specifier resolves to its `.ts` source. */
+const BARREL_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+
+/** Barrel files parsed so far, keyed by path. An entry is reused while the file keeps its modification time. */
+const parsedModules = new Map<string, { mtimeMs: number; source: ts.SourceFile }>();
+
+const parseModule = (modulePath: string): ts.SourceFile => {
+    const { mtimeMs } = statSync(modulePath);
+    const cached = parsedModules.get(modulePath);
+
+    if (cached?.mtimeMs === mtimeMs) {
+        return cached.source;
+    }
+
+    const source = ts.createSourceFile(modulePath, readFileSync(modulePath, "utf8"), ts.ScriptTarget.Latest);
+    parsedModules.set(modulePath, { mtimeMs, source });
+
+    return source;
+};
+
+/** The identifiers of a file, walked once per file: each namespace check reads this list rather than the tree. */
+const identifierCache = new WeakMap<SourceFile, Identifier[]>();
+
+const identifiersOf = (sourceFile: SourceFile): Identifier[] => {
+    const cached = identifierCache.get(sourceFile);
+
+    // A re-parse of the file forgets every node it held, so a list whose first node is forgotten is stale.
+    if (cached !== undefined && cached[0]?.wasForgotten() !== true) {
+        return cached;
+    }
+
+    const identifiers = sourceFile.getDescendantsOfKind(ts.SyntaxKind.Identifier);
+    identifierCache.set(sourceFile, identifiers);
+
+    return identifiers;
+};
+
+/** A file's modification time, or `-1` when it is missing, which never matches a cached entry. */
+const mtimeOf = (file: string): number => (ts.sys.fileExists(file) ? statSync(file).mtimeMs : -1);
+
+/**
+ * Parsed tsconfig options by config path. An entry holds while the config and every file it extends keep their modification
+ * times, so editing a base config's `paths` reaches a long-running process.
+ */
+const parsedCompilerOptions = new Map<string, { mtimes: Map<string, number>; options: ts.CompilerOptions }>();
+
+/** The compiler options of the nearest tsconfig.json, read the way TypeScript reads them. Empty when the project has none. */
+const compilerOptionsFor = (fromFile: string): ts.CompilerOptions => {
+    const configPath = ts.findConfigFile(dirname(fromFile), (path) => ts.sys.fileExists(path));
+
+    if (configPath === undefined) {
+        return {};
+    }
+
+    const cached = parsedCompilerOptions.get(configPath);
+
+    if (cached !== undefined && [...cached.mtimes].every(([file, mtimeMs]) => mtimeOf(file) === mtimeMs)) {
+        return cached.options;
+    }
+
+    const sourceFile = ts.readJsonConfigFile(configPath, (path) => ts.sys.readFile(path));
+    const { options } = ts.parseJsonSourceFileConfigFileContent(sourceFile, ts.sys, dirname(configPath));
+    const mtimes = new Map([configPath, ...(sourceFile.extendedSourceFiles ?? [])].map((file) => [file, mtimeOf(file)]));
+
+    parsedCompilerOptions.set(configPath, { mtimes, options });
+
+    return options;
+};
+
+/**
+ * The file a re-export's specifier names. A relative specifier is probed against the TypeScript source extensions and a
+ * directory's `index`. Any other specifier (a tsconfig `paths` alias, `baseUrl`) resolves the way the project's own TypeScript
+ * resolves it. The replica package is matched by name before a barrel is resolved, so it is never read as a file here.
+ */
+const resolveBarrel = (fromFile: string, specifier: string): string | undefined => {
+    if (specifier === EVENT_LOG_PACKAGE) {
+        return undefined;
+    }
+
+    if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
+        const options: ts.CompilerOptions = { moduleResolution: ts.ModuleResolutionKind.Bundler, ...compilerOptionsFor(fromFile) };
+
+        // Only the project's own sources are followed. An installed package's exports map is not read, so no node_modules file is parsed.
+        const resolved = ts.resolveModuleName(specifier, fromFile, options, ts.sys).resolvedModule;
+
+        return resolved?.isExternalLibraryImport === true ? undefined : resolved?.resolvedFileName;
+    }
+
+    const stem = join(dirname(fromFile), specifier.replace(SOURCE_SPECIFIER_EXTENSION, ""));
+    const files = BARREL_SOURCE_EXTENSIONS.map((extension) => `${stem}${extension}`);
+    const indexes = BARREL_SOURCE_EXTENSIONS.map((extension) => join(stem, `index${extension}`));
+
+    return [...files, ...indexes].find((candidate) => existsSync(candidate));
+};
+
+/** Where a binding reads a name from: the module it is imported or re-exported from, and the name it has there. */
+interface NameSource {
+    module: string;
+    name: string;
+}
+
+/**
+ * The named imports a file binds, keyed by local name. A type-only import compiles away, so it binds nothing the file can forward.
+ */
+const namedImportSources = (source: ts.SourceFile): Map<string, NameSource> => {
+    const imported = new Map<string, NameSource>();
+
+    for (const statement of source.statements) {
+        if (
+            !ts.isImportDeclaration(statement) ||
+            statement.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword ||
+            !ts.isStringLiteral(statement.moduleSpecifier)
+        ) {
+            continue;
+        }
+
+        const bindings = statement.importClause?.namedBindings;
+        const elements = bindings !== undefined && ts.isNamedImports(bindings) ? bindings.elements : [];
+
+        for (const element of elements) {
+            if (!element.isTypeOnly) {
+                imported.set(element.name.text, { module: statement.moduleSpecifier.text, name: (element.propertyName ?? element.name).text });
+            }
+        }
+    }
+
+    return imported;
+};
+
+/** The namespace imports a file binds, keyed by local name, with the module each is imported from. A type-only import binds nothing at runtime. */
+const namespaceImportSources = (source: ts.SourceFile): Map<string, string> => {
+    const namespaces = new Map<string, string>();
+
+    for (const statement of source.statements) {
+        if (
+            !ts.isImportDeclaration(statement) ||
+            statement.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword ||
+            !ts.isStringLiteral(statement.moduleSpecifier)
+        ) {
+            continue;
+        }
+
+        const bindings = statement.importClause?.namedBindings;
+
+        if (bindings !== undefined && ts.isNamespaceImport(bindings)) {
+            namespaces.set(bindings.name.text, statement.moduleSpecifier.text);
+        }
+    }
+
+    return namespaces;
+};
+
+/**
+ * One export a module makes that forwards from another module. `exported` is the name it is exported under, or `undefined` for a
+ * star re-export, which carries the requested name through unchanged. `name` is the name read from `module`, or `undefined` for a star.
+ */
+interface ModuleExport {
+    exported: string | undefined;
+    module: string;
+    name: string | undefined;
+}
+
+/** Whether a declaration carries the `export` keyword. */
+const isExported = (statement: ts.Node): boolean =>
+    ts.canHaveModifiers(statement) && (ts.getModifiers(statement) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
+
+/** The names one top-level statement exports from its own declaration: a local `export`, or the local names of `export { a }`. */
+const localNamesExportedBy = (statement: ts.Statement): string[] => {
+    if (ts.isVariableStatement(statement)) {
+        return isExported(statement)
+            ? statement.declarationList.declarations.flatMap((declaration) => (ts.isIdentifier(declaration.name) ? [declaration.name.text] : []))
+            : [];
+    }
+
+    if ((ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement)) && isExported(statement)) {
+        return statement.name === undefined ? [] : [statement.name.text];
+    }
+
+    if (
+        ts.isExportDeclaration(statement) &&
+        statement.moduleSpecifier === undefined &&
+        !statement.isTypeOnly &&
+        statement.exportClause !== undefined &&
+        ts.isNamedExports(statement.exportClause)
+    ) {
+        return statement.exportClause.elements.map((element) => element.name.text);
+    }
+
+    return [];
+};
+
+/**
+ * The names a module exports from its own declarations: `export class`, `export function`, `export const`, and `export { a }` of a
+ * local binding. An explicit export shadows a star re-export of the same name, so these are not forwarded from the star.
+ */
+const localExportNames = (source: ts.SourceFile): Set<string> => new Set(source.statements.flatMap((statement) => localNamesExportedBy(statement)));
+
+/**
+ * The export an initializer reads when it names an imported binding (`EventLogDO`) or a property of an imported namespace
+ * (`replica.EventLogDO`). Any other expression reads no export.
+ */
+const importedExportOf = (
+    expression: ts.Expression,
+    imported: ReadonlyMap<string, NameSource>,
+    namespaces: ReadonlyMap<string, string>,
+): NameSource | undefined => {
+    if (ts.isIdentifier(expression)) {
+        return imported.get(expression.text);
+    }
+
+    if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
+        const module = namespaces.get(expression.expression.text);
+
+        return module === undefined ? undefined : { module, name: expression.name.text };
+    }
+
+    return undefined;
+};
+
+/**
+ * The exports an `export const x = y` statement makes when `y` reads an imported name: a value copy of the imported class forwards it
+ * as surely as a re-export does. Any other initializer forwards nothing.
+ */
+const valueExportsOf = (
+    statement: ts.VariableStatement,
+    imported: ReadonlyMap<string, NameSource>,
+    namespaces: ReadonlyMap<string, string>,
+): ModuleExport[] => {
+    if (!isExported(statement)) {
+        return [];
+    }
+
+    return statement.declarationList.declarations.flatMap((declaration): ModuleExport[] => {
+        if (!ts.isIdentifier(declaration.name) || declaration.initializer === undefined) {
+            return [];
+        }
+
+        const binding = importedExportOf(declaration.initializer, imported, namespaces);
+
+        return binding === undefined ? [] : [{ exported: declaration.name.text, module: binding.module, name: binding.name }];
+    });
+};
+
+/**
+ * The export an exported class makes when it extends a name the file imported, such as `export class Log extends EventLogDO`. A subclass
+ * inherits the base's `fetch`, so it serves the same routes as the imported class does.
+ */
+const subclassExportsOf = (statement: ts.ClassDeclaration, imported: ReadonlyMap<string, NameSource>): ModuleExport[] => {
+    const base = statement.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types[0]?.expression;
+
+    if (!isExported(statement) || statement.name === undefined || base === undefined || !ts.isIdentifier(base)) {
+        return [];
+    }
+
+    const binding = imported.get(base.text);
+
+    return binding === undefined ? [] : [{ exported: statement.name.text, module: binding.module, name: binding.name }];
+};
+
+/**
+ * Every export of a module that forwards from another module: `export { a as b } from "m"`, an export of a name it imported,
+ * `export const b = a` of a name it imported, and `export * from "m"`. Read from the syntax tree, so a comment or string forwards
+ * nothing. `export * as ns` binds a namespace, not the names, so it is skipped.
+ */
+const forwardedExports = (source: ts.SourceFile): ModuleExport[] => {
+    const imported = namedImportSources(source);
+    const namespaces = namespaceImportSources(source);
+
+    return source.statements.flatMap((statement): ModuleExport[] => {
+        if (ts.isVariableStatement(statement)) {
+            return valueExportsOf(statement, imported, namespaces);
+        }
+
+        if (ts.isClassDeclaration(statement)) {
+            return subclassExportsOf(statement, imported);
+        }
+
+        if (!ts.isExportDeclaration(statement) || statement.isTypeOnly) {
+            return [];
+        }
+
+        const { exportClause, moduleSpecifier } = statement;
+        const from = moduleSpecifier !== undefined && ts.isStringLiteral(moduleSpecifier) ? moduleSpecifier.text : undefined;
+
+        if (exportClause === undefined) {
+            return from === undefined ? [] : [{ exported: undefined, module: from, name: undefined }];
+        }
+
+        if (!ts.isNamedExports(exportClause)) {
+            return [];
+        }
+
+        return exportClause.elements.flatMap((element): ModuleExport[] => {
+            if (element.isTypeOnly) {
+                return [];
+            }
+
+            const exported = element.name.text;
+            const local = (element.propertyName ?? element.name).text;
+
+            if (from !== undefined) {
+                return [{ exported, module: from, name: local }];
+            }
+
+            const binding = imported.get(local);
+
+            return binding === undefined ? [] : [{ exported, module: binding.module, name: binding.name }];
+        });
+    });
+};
+
+/**
+ * Whether a module forwards the replica package's `target` export under `requested`, or under any name when `requested` is `undefined`
+ * (the worker entry: any export the worker makes of the event-log class hosts the log). A relative barrel is asked for the name its
+ * export reads, so `export { Log as EventLogDO } from "./barrel"` asks the barrel for `Log`. `visited` ends a barrel cycle: a module
+ * asked for the same name twice forwards nothing new.
+ */
+const forwardsReplicaExport = (
+    modulePath: string,
+    target: string,
+    requested: string | undefined,
+    visited: Set<string>,
+    hidden: ReadonlySet<string> = new Set(),
+): boolean => {
+    // The result depends on the names hidden along this path, so a module reached under different hiding is visited again.
+    const key = JSON.stringify([modulePath, requested, [...hidden]]);
+
+    if (visited.has(key)) {
+        return false;
+    }
+
+    visited.add(key);
+
+    const source = parseModule(modulePath);
+    const forwards = forwardedExports(source);
+    // A star re-export's copy of a name is hidden by an export of that name in this module or in an outer one.
+    const shadowed = new Set([
+        ...hidden,
+        ...localExportNames(source),
+        ...forwards.flatMap((forward) => (forward.exported === undefined ? [] : [forward.exported])),
+    ]);
+
+    return forwards.some((forward) => {
+        if (requested !== undefined && forward.exported !== undefined && forward.exported !== requested) {
+            return false;
+        }
+
+        // An explicit export that an outer module exports under the same name is hidden there, so it forwards nothing here.
+        if (forward.exported !== undefined && hidden.has(forward.exported)) {
+            return false;
+        }
+
+        if (forward.exported === undefined) {
+            // A star of the replica package supplies `target` when no name is requested; any other star supplies only the requested name.
+            const suppliedName = requested ?? (forward.module === EVENT_LOG_PACKAGE ? target : undefined);
+
+            if (suppliedName !== undefined && shadowed.has(suppliedName)) {
+                return false;
+            }
+        }
+
+        // A star carries the requested name through; a named export reads the name its specifier names.
+        const name = forward.exported === undefined ? requested : forward.name;
+
+        if (forward.module === EVENT_LOG_PACKAGE) {
+            return name === undefined || name === target;
+        }
+
+        const barrel = resolveBarrel(modulePath, forward.module);
+
+        // A star's copy of a name is hidden by every export of this module, so the barrel it reads is asked with those names hidden.
+        return barrel !== undefined && forwardsReplicaExport(barrel, target, name, visited, forward.exported === undefined ? shadowed : hidden);
+    });
+};
+
+/**
+ * Whether a file reads `EventLogDOClient` through the namespace import bound as `localName`. A member read of another export builds
+ * no client, so `ns.EventLogDO` asks for nothing. Any other use (the bare namespace, `ns["…"]`, `typeof ns`) could reach the client.
+ */
+const namespaceReachesClient = (sourceFile: SourceFile, localName: string): boolean =>
+    identifiersOf(sourceFile).some((identifier) => {
+        const parent = identifier.getParent();
+
+        // The namespace's own declaration, and a property that only shares its name, are not uses of it.
+        if (
+            identifier.getText() !== localName ||
+            Node.isNamespaceImport(parent) ||
+            (Node.isPropertyAccessExpression(parent) && parent.getNameNode() === identifier) ||
+            (Node.isQualifiedName(parent) && parent.getRight() === identifier)
+        ) {
+            return false;
+        }
+
+        if (Node.isPropertyAccessExpression(parent)) {
+            return parent.getName() === EVENT_LOG_CLIENT;
+        }
+
+        if (Node.isQualifiedName(parent)) {
+            // A type reference names a type, which builds nothing, so `ns.EventLogDOClient` in a type position is not a runtime use.
+            return !Node.isTypeReference(parent.getParent()) && parent.getRight().getText() === EVENT_LOG_CLIENT;
+        }
+
+        return true;
+    });
+
+/** Whether `call` is `import()` of the replica package, with a string or no-substitution template specifier. */
+const isReplicaImportCall = (call: CallExpression): boolean => {
+    const [specifier] = call.getArguments();
+
+    return (
+        call.getExpression().getKind() === ts.SyntaxKind.ImportKeyword &&
+        specifier !== undefined &&
+        (Node.isStringLiteral(specifier) || Node.isNoSubstitutionTemplateLiteral(specifier)) &&
+        specifier.getLiteralValue() === EVENT_LOG_PACKAGE
+    );
+};
+
+/** The name a destructured element reads from the module: a quoted or computed string key names its value, not its source text. */
+const bindingKeyOf = (element: BindingElement): string => {
+    const key = element.getPropertyNameNode();
+
+    if (key === undefined) {
+        return element.getNameNode().getText();
+    }
+
+    const literal = Node.isComputedPropertyName(key) ? key.getExpression() : key;
+
+    return Node.isStringLiteral(literal) || Node.isNoSubstitutionTemplateLiteral(literal) ? literal.getLiteralValue() : key.getText();
+};
+
+/**
+ * Whether a dynamic `import("@lunora/replica")` reaches `EventLogDOClient`. Unawaited it is a promise that any `.then` can read, so it
+ * counts. Awaited, its members are reachable: a destructuring counts when it names the client or takes a rest element, and a member
+ * read counts only when it is the client.
+ */
+const dynamicImportReachesClient = (call: CallExpression): boolean => {
+    let value: Node = call;
+    let awaited = false;
+
+    // Step over parentheses and `await` to the expression that consumes the module object.
+    for (let parent = call.getParent(); Node.isParenthesizedExpression(parent) || Node.isAwaitExpression(parent); parent = value.getParent()) {
+        awaited ||= Node.isAwaitExpression(parent);
+        value = parent;
+    }
+
+    if (!awaited) {
+        return true;
+    }
+
+    const consumer = value.getParent();
+
+    if (Node.isVariableDeclaration(consumer)) {
+        const binding = consumer.getNameNode();
+
+        return (
+            !Node.isObjectBindingPattern(binding) ||
+            binding.getElements().some((element) => element.getDotDotDotToken() !== undefined || bindingKeyOf(element) === EVENT_LOG_CLIENT)
+        );
+    }
+
+    if (Node.isPropertyAccessExpression(consumer) && consumer.getExpression() === value) {
+        return consumer.getName() === EVENT_LOG_CLIENT;
+    }
+
+    return true;
+};
+
+/** Whether a module re-exports the replica package as a namespace under `name`: `export * as name from "@lunora/replica"`. */
+const exportsReplicaNamespace = (modulePath: string, name: string): boolean =>
+    parseModule(modulePath).statements.some(
+        (statement) =>
+            ts.isExportDeclaration(statement) &&
+            statement.moduleSpecifier !== undefined &&
+            ts.isStringLiteral(statement.moduleSpecifier) &&
+            statement.moduleSpecifier.text === EVENT_LOG_PACKAGE &&
+            statement.exportClause !== undefined &&
+            ts.isNamespaceExport(statement.exportClause) &&
+            statement.exportClause.name.text === name,
+    );
+
+/**
+ * Whether a file reaches `EventLogDOClient` through a relative module that forwards it from the replica package, through any chain of
+ * barrels: by a named import, or through a namespace import the file reads the client from. Such a file constructs the client without
+ * naming the package itself.
+ */
+const importsClientFromBarrel = (sourceFile: SourceFile): boolean =>
+    sourceFile.getImportDeclarations().some((declaration) => {
+        // The cheap check first: the barrel is only read for an import that names the client or reads it through a namespace.
+        const namespace = declaration.getNamespaceImport();
+        const namedImports = declaration.isTypeOnly() ? [] : declaration.getNamedImports().filter((specifier) => !specifier.isTypeOnly());
+        const namesClient = namedImports.some((specifier) => specifier.getNameNode().getText() === EVENT_LOG_CLIENT);
+        const namedNamespaces = namedImports.filter((specifier) =>
+            namespaceReachesClient(sourceFile, (specifier.getAliasNode() ?? specifier.getNameNode()).getText()),
+        );
+        const namespaceClient = namespace !== undefined && namespaceReachesClient(sourceFile, namespace.getText());
+
+        if (!namesClient && !namespaceClient && namedNamespaces.length === 0) {
+            return false;
+        }
+
+        const barrel = resolveBarrel(sourceFile.getFilePath(), declaration.getModuleSpecifierValue());
+
+        if (barrel === undefined) {
+            return false;
+        }
+
+        // A namespace the barrel re-exports from the replica package carries the client under the name the file reads it by.
+        return (
+            ((namesClient || namespaceClient) && forwardsReplicaExport(barrel, EVENT_LOG_CLIENT, EVENT_LOG_CLIENT, new Set())) ||
+            namedNamespaces.some((specifier) => exportsReplicaNamespace(barrel, specifier.getNameNode().getText()))
+        );
+    });
+
+/**
+ * Whether a file constructs `EventLogDOClient`. The client throws at construction without the relay secret, so a type-only binding,
+ * which builds nothing, asks for none. A namespace import or a dynamic `import()` of the package asks only where it reaches the client:
+ * a worker that loads other replica exports must not be told to set a secret it never reads.
+ */
+const constructsEventLogClient = (sourceFile: SourceFile): boolean => {
+    const replicaImports = sourceFile
+        .getImportDeclarations()
+        .filter((declaration) => declaration.getModuleSpecifierValue() === EVENT_LOG_PACKAGE && !declaration.isTypeOnly());
+
+    return (
+        replicaImports.some((declaration) =>
+            declaration.getNamedImports().some((specifier) => !specifier.isTypeOnly() && specifier.getNameNode().getText() === EVENT_LOG_CLIENT),
+        ) ||
+        replicaImports.some((declaration) => {
+            const namespace = declaration.getNamespaceImport();
+
+            return namespace !== undefined && namespaceReachesClient(sourceFile, namespace.getText());
+        }) ||
+        sourceFile
+            .getExportDeclarations()
+            .some(
+                (declaration) =>
+                    declaration.getModuleSpecifierValue() === EVENT_LOG_PACKAGE &&
+                    !declaration.isTypeOnly() &&
+                    declaration.getNamedExports().some((specifier) => !specifier.isTypeOnly() && specifier.getNameNode().getText() === EVENT_LOG_CLIENT),
+            ) ||
+        importsClientFromBarrel(sourceFile) ||
+        sourceFile.getDescendantsOfKind(ts.SyntaxKind.CallExpression).some((call) => isReplicaImportCall(call) && dynamicImportReachesClient(call))
+    );
+};
+
 /**
  * The parse prefilter: a file naming no capability package in quotes — the form
  * every static import, re-export and literal dynamic `import()` takes — and
@@ -204,7 +762,7 @@ const SANDBOX_PACKAGES = ["@lunora/agent", "@lunora/agent/sandbox"] as const;
  * rejects (JSX, a mid-edit syntax error), which used to be parsed unconditionally.
  */
 const CAPABILITY_PACKAGE_PATTERN = new RegExp(
-    String.raw`["'\x60](?:${[...FLAG_PACKAGES.map(([, source]) => source), ...SANDBOX_PACKAGES].map((source) => escapeRegExp(source)).join("|")})["'\x60]`,
+    String.raw`["'\x60](?:${[...FLAG_PACKAGES.map(([, source]) => source), ...SANDBOX_PACKAGES, EVENT_LOG_PACKAGE].map((source) => escapeRegExp(source)).join("|")})["'\x60]`,
     "u",
 );
 
@@ -280,6 +838,9 @@ interface InferredBindings {
      */
     flagshipBinding?: string;
 
+    /** The worker entry exports `EventLogDO`, so the app mints the `LUNORA_RELAY_SECRET` the event log checks on every request. */
+    hostsEventLog: boolean;
+
     /** The app hosts the registry (exports or binds `ShardRegistryDO`, or is merged with its module), so it mints the `LUNORA_RELAY_SECRET` its registry checks. */
     hostsShardRegistry: boolean;
 
@@ -325,6 +886,8 @@ interface InferredBindings {
     usesBrowser: boolean;
     /** `@lunora/auth/cimd/workers` is imported → needs the `global_fetch_strictly_public` compatibility flag (no binding; `lunora doctor` checks it). */
     usesCimdWorkers: boolean;
+    /** The app constructs an `EventLogDOClient`, so it needs the `LUNORA_RELAY_SECRET` its host minted, hosting the log or not. */
+    usesEventLogClient: boolean;
     /** `lunora/flags.ts` declares a feature-flag provider (any OpenFeature provider — Flagship or custom). */
     usesFlags: boolean;
     /** `@lunora/hyperdrive` is imported or `ctx.sql` read (reconcile writes `{ binding: "HYPERDRIVE" }` with a placeholder `id`; `lunora deploy` swaps in the created config's). */
@@ -380,7 +943,10 @@ interface InferredBindings {
  * the two not driven by a package import, so they are added explicitly. A `Pick`
  * of {@link InferredBindings}, so a flag the result does not declare fails to compile.
  */
-type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesRequestSecretTool" | "usesWorkerLoader">;
+type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesEventLogClient" | "usesRequestSecretTool" | "usesWorkerLoader">;
+
+/** A capability scan and every file it read, so a later walk from the worker entry leaves those files alone. */
+type CapabilityScan = Capabilities & { scannedFiles: ReadonlySet<string> };
 
 /** A relative module specifier in an import or re-export: `from "./x"`, `from "../y"`. */
 const RELATIVE_IMPORT_PATTERN = /\bfrom\s+["']\.{1,2}\//u;
@@ -491,11 +1057,11 @@ const forgetUnscanned = (project: Project, scanned: ReadonlySet<SourceFile>): vo
  * `src/`-only `browserTool` never registers the dispatcher and a `src/`-only
  * `jsCodeTool` never reaches the `workerLoaders` gate.
  */
-const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<string>, lunoraDirectory: string): Capabilities => {
+const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<string>, lunoraDirectory: string): CapabilityScan => {
     const lunoraRoot = join(projectRoot, lunoraDirectory);
     const project = scanProjectOf(projectRoot);
-
     const candidates: { file: string; inLunora: boolean }[] = [];
+    const scannedFiles = new Set<string>();
     const lunoraFiles: SourceCapabilitySignals[] = [];
     const otherFiles: SourceCapabilitySignals[] = [];
     // One scope for the whole scan: a target a barrel reaches from several files is parsed once.
@@ -515,6 +1081,8 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
         collectSourceFiles(absolute, files);
 
         for (const file of files) {
+            scannedFiles.add(file);
+
             const code = readFileSync(file, "utf8");
             const inLunora = isWithinDirectory(file, lunoraRoot);
 
@@ -523,7 +1091,12 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
 
             // A `lunora/` file that imports a relative module can reach a capability through that module (a barrel that
             // re-exports the agent package's tool), so it is parsed even without a package name or context read there.
-            if (CAPABILITY_PACKAGE_PATTERN.test(code) || (inLunora && (mayReadCapabilityContext(code) || RELATIVE_IMPORT_PATTERN.test(code)))) {
+            // A file that names the client may import it from a barrel that is not a candidate, so it is parsed for that import too.
+            if (
+                CAPABILITY_PACKAGE_PATTERN.test(code) ||
+                code.includes(EVENT_LOG_CLIENT) ||
+                (inLunora && (mayReadCapabilityContext(code) || RELATIVE_IMPORT_PATTERN.test(code)))
+            ) {
                 // Registered now, while the program is not built, so the text is not kept for the signal pass. A file
                 // whose text is unchanged since the last scan keeps its parse — and with it codegen's per-file caches.
                 parseIfChanged(project, file, code);
@@ -561,12 +1134,14 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
     return {
         ...flags,
         needsD1: usesEnvDatabase,
+        usesEventLogClient: candidates.some(({ file }) => constructsEventLogClient(project.getSourceFileOrThrow(file))),
         usesRequestSecretTool: lunora.requestSecretTool,
         usesAi: used.has("ai") || usesEnvAi,
         // A sandbox `browserTool` provisions BROWSER even without a direct
         // `@lunora/browser` import: the browser op runs on the dispatcher's ctx.
         usesBrowser: used.has("browser") || lunora.sandboxTools.usesSandboxBrowser,
         usesWorkerLoader: lunora.sandboxTools.usesSandboxLoader,
+        scannedFiles,
     };
 };
 
@@ -690,6 +1265,83 @@ const hostsShardRegistry = (durableObjects: ReadonlyArray<DurableObjectSpec>, ge
     (isMergedProject(generatedDirectory) && existsSync(join(generatedDirectory, "shardRegistry.ts")));
 
 /**
+ * The module specifiers a file loads at run time: static imports and re-exports, and an `import()` of a string literal. A type-only
+ * declaration compiles away, so it loads nothing.
+ */
+const runtimeSpecifiersOf = (source: ts.SourceFile): string[] => {
+    const specifiers: string[] = [];
+
+    const visit = (node: ts.Node): void => {
+        if (ts.isImportDeclaration(node) && node.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword && ts.isStringLiteral(node.moduleSpecifier)) {
+            specifiers.push(node.moduleSpecifier.text);
+        } else if (ts.isExportDeclaration(node) && !node.isTypeOnly && node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier)) {
+            specifiers.push(node.moduleSpecifier.text);
+        } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+            const [argument] = node.arguments;
+
+            if (argument !== undefined && (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument))) {
+                specifiers.push(argument.text);
+            }
+        }
+
+        ts.forEachChild(node, visit);
+    };
+
+    visit(source);
+
+    return specifiers;
+};
+
+/**
+ * Whether the worker entry constructs `EventLogDOClient`, in its own file or in a module it reaches through local imports. The entry can
+ * sit outside the scanned directories (a root-level `worker.ts`), and so can the modules it imports, while construction needs the secret
+ * wherever it is. A module `scanCapabilities` already read is a leaf: its constructions were counted there, and it is not parsed twice.
+ * Generated modules are leaves too, since codegen never emits a client construction. Imports are read from the TypeScript parse of each
+ * module, and a file only reaches the ts-morph parse when its text names the client or a capability package.
+ */
+const entryConstructsEventLogClient = (entryPath: string, scannedFiles: ReadonlySet<string>, generatedRoot: string): boolean => {
+    const project = new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true });
+    const pending = [entryPath];
+    const visited = new Set<string>();
+
+    for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
+        if (visited.has(file)) {
+            continue;
+        }
+
+        visited.add(file);
+
+        const source = parseModule(file);
+        const code = source.text;
+
+        if (
+            (CAPABILITY_PACKAGE_PATTERN.test(code) || code.includes(EVENT_LOG_CLIENT)) &&
+            constructsEventLogClient(project.createSourceFile(file, code, { overwrite: true }))
+        ) {
+            return true;
+        }
+
+        for (const specifier of runtimeSpecifiersOf(source)) {
+            const target = resolveBarrel(file, specifier);
+
+            if (target !== undefined && !scannedFiles.has(target) && !isWithinDirectory(target, generatedRoot)) {
+                pending.push(target);
+            }
+        }
+    }
+
+    return false;
+};
+
+/**
+ * Whether the worker entry hosts `EventLogDO`. A composed entry star-re-exports only the generated
+ * modules, so it never hosts the log by itself. A hand-written entry can reach the class through a
+ * barrel, so star re-exports are followed rather than reading only the entry's own export list.
+ */
+const hostsEventLog = (entry: ReturnType<typeof resolveWorkerEntry>): boolean =>
+    !entry.composed && entry.path !== undefined && forwardsReplicaExport(entry.path, "EventLogDO", undefined, new Set());
+
+/**
  * Scan a Lunora project and report which Cloudflare bindings its code implies.
  * Read-only: performs no writes. Binding provisioning is driven by the worker
  * entry's Durable Object exports plus the schema's D1 need; capability imports
@@ -701,8 +1353,8 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const schemaDirectory = options.schemaDir ?? "lunora";
     const scanDirectories = options.scanDirs ?? DEFAULT_SCAN_DIRECTORIES;
 
-    const scan = (): Capabilities => scanCapabilities(options.projectRoot, scanDirectories, schemaDirectory);
-    const capabilities =
+    const scan = (): CapabilityScan => scanCapabilities(options.projectRoot, scanDirectories, schemaDirectory);
+    const { scannedFiles, ...capabilities } =
         options.cache === undefined ? scan() : options.cache.memo(`capabilities:${options.projectRoot}:${schemaDirectory}:${scanDirectories.join(",")}`, scan);
     const entry = resolveWorkerEntry(options.projectRoot);
     let durableObjects: DurableObjectSpec[];
@@ -744,7 +1396,10 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const notifyChannels = notifyIr.error === undefined ? notifyIr.value : { hasFcm: true, hasWebPush: true };
     const flagshipBinding = flags?.provider === "flagship" && flags.mode === "binding" ? flags.bindingName : undefined;
 
-    const hostsRegistry = hostsShardRegistry(durableObjects, join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY));
+    const generatedRoot = join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY);
+    const hostsRegistry = hostsShardRegistry(durableObjects, generatedRoot);
+    const hostsLog = hostsEventLog(entry);
+    const entryUsesClient = !entry.composed && entry.path !== undefined && entryConstructsEventLogClient(entry.path, scannedFiles, generatedRoot);
 
     const signals = describeSignals(durableObjects, schema, capabilities, containers, workflows, agents);
 
@@ -781,6 +1436,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         // The scanned flags first: `needsD1` below replaces the raw `env.DB` flag
         // with the schema-augmented value computed above.
         ...capabilities,
+        usesEventLogClient: capabilities.usesEventLogClient || entryUsesClient,
         agents,
         containers,
         durableObjects,
@@ -793,6 +1449,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         usesFlags: flags !== undefined,
         usesNotifyFcm: notifyChannels?.hasFcm ?? false,
         usesNotifyWebPush: notifyChannels?.hasWebPush ?? false,
+        hostsEventLog: hostsLog,
         hostsShardRegistry: hostsRegistry,
         workflows,
     };
