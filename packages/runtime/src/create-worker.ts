@@ -2475,8 +2475,20 @@ const resolveX402Charge = (envelope: RpcEnvelope, options: WorkerOptions): Funct
     return x402Tag;
 };
 
-/** The envelope keys whose original text may be forwarded to the shard verbatim (see {@link parseEnvelope}). */
+/** The envelope keys whose original text may be forwarded to the shard verbatim (see {@link forwardsVerbatim}). */
 const FORWARDABLE_ENVELOPE_KEYS = new Set(["args", "functionPath", "shardKey"]);
+
+/**
+ * Whether the request text can go to the shard as it arrived. The shard reads
+ * `args` and `functionPath`, ignores `shardKey`, and parses with the same
+ * `JSON.parse`, so it sees exactly the values validated here. Skipping the
+ * re-stringify lets `-0` and an out-of-range numeral (`Infinity`) through
+ * unnormalised — as a socket frame already delivers them. Any other key, and any
+ * fan-out, takes the re-stringified body, so the shard never sees a field it did
+ * not see before.
+ */
+const forwardsVerbatim = (body: object, fanOut: FanOutSpec | undefined): boolean =>
+    fanOut === undefined && Object.keys(body).every((key) => FORWARDABLE_ENVELOPE_KEYS.has(key));
 
 interface ParsedRpcEnvelope extends RpcEnvelope {
     /** The request body as received, when it is safe to forward unchanged; otherwise `undefined`. */
@@ -2548,14 +2560,7 @@ const parseEnvelope = async (request: Request): Promise<ParsedRpcEnvelope> => {
     return {
         args,
         fanOut,
-        // Every key is one the shard either reads (`args`, `functionPath`) or
-        // ignores (`shardKey`), and it parses the text with the same `JSON.parse`,
-        // so it sees exactly the values validated above. The skipped re-stringify
-        // only normalised `-0` to `0` and an out-of-range numeral (`Infinity`) to
-        // `null` — values a socket frame already delivers to the shard unchanged.
-        // Any other key falls back to the re-stringified body, so the shard never
-        // sees a field the client typed that it did not see before.
-        forwardBody: fanOut === undefined && Object.keys(body).every((key) => FORWARDABLE_ENVELOPE_KEYS.has(key)) ? text : undefined,
+        forwardBody: forwardsVerbatim(body, fanOut) ? text : undefined,
         functionPath: envelope.functionPath,
         shardKey: envelope.shardKey,
     };
@@ -2638,7 +2643,7 @@ const resolveShardBindingName = (env: unknown, namespace: ShardNamespaceLike): s
     return Object.entries(env).find(([, value]) => value === namespace)?.[0];
 };
 
-/** Build the POST the shard's `/rpc` route expects: `{ args, functionPath }` under the caller's headers. */
+/** Build the POST the shard's `/rpc` route expects: `{ args, functionPath }` under the caller's headers, or `body` when the caller already holds that text. */
 const shardRpcRequest = (
     functionPath: string,
     args: Record<string, unknown>,
@@ -4745,7 +4750,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         forwardBody: string | undefined,
     ): Promise<Response> => {
         const replica = replicaTargetFor(request, functionPath, shardKey);
-        const body = forwardBody ?? JSON.stringify({ args, functionPath });
 
         if (replica !== undefined) {
             const replicaHeaders: Record<string, string> = {
@@ -4764,14 +4768,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 replicaHeaders["x-lunora-min-seq"] = String(minSeq);
             }
 
-            const fromReplica = await forwardToShard(shardDO, replica.name, shardRpcRequest(functionPath, args, replicaHeaders, body), replica.region);
+            const fromReplica = await forwardToShard(shardDO, replica.name, shardRpcRequest(functionPath, args, replicaHeaders, forwardBody), replica.region);
 
             if (fromReplica.status !== 421) {
                 return fromReplica;
             }
         }
 
-        return forwardToShard(shardDO, shardKey, shardRpcRequest(functionPath, args, outgoingHeaders, body));
+        return forwardToShard(shardDO, shardKey, shardRpcRequest(functionPath, args, outgoingHeaders, forwardBody));
     };
 
     /**
