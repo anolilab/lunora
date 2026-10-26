@@ -50,15 +50,17 @@ const uniqueColumnsFor = (indexes: ReadonlyArray<TableIndexInfo> | undefined): R
  * is a field absent from this document, which the filter reads as NULL, so it
  * qualifies too. An object, array or blob would bind as serialised text that the
  * stored form never equals, so the action is withheld rather than filtering to
- * zero rows.
+ * zero rows. A bigint qualifies only in a field declared `bigint`: a top-level bigint is
+ * stored as a sort key whatever the field's declared type, and the decimal text the action
+ * sends matches that key only where the declared kind binds it. Elsewhere it would match nothing.
  */
-const isFilterableCellValue = (value: unknown): boolean =>
+const isFilterableCellValue = (value: unknown, declaredType: string | undefined): boolean =>
     value === undefined ||
     value === null ||
     typeof value === "string" ||
     (typeof value === "number" && Number.isFinite(value)) ||
     typeof value === "boolean" ||
-    typeof value === "bigint";
+    (typeof value === "bigint" && declaredType === "bigint");
 
 /**
  * The box text and pinned literal for an AI-suggested value. Membership is pinned: `has`
@@ -629,7 +631,7 @@ export const DataBrowser = ({
                     column={expandedCell.column}
                     onClose={closeExpandedCell}
                     onFilter={
-                        isFilterableCellValue(expandedCell.storedValue)
+                        isFilterableCellValue(expandedCell.storedValue, editorColumnMeta[expandedCell.column]?.type)
                             ? () => {
                                   facetFilter(expandedCell.column, expandedCell.storedValue ?? null);
                                   closeExpandedCell();

@@ -2493,6 +2493,37 @@ describe("dataBrowser — filter by cell value", () => {
         },
     );
 
+    it.each([
+        { declared: "any", offered: false },
+        { declared: "bigint", offered: true },
+    ])("offers the filter action on a bigint only in a field declared bigint (declared $declared)", async ({ declared, offered }) => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 1 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.describeTables) {
+                    return { columnsByTable: { messages: [{ name: "n", optional: false, type: declared }] } };
+                }
+
+                return { columns: ["__id__", "n"], rows: [{ __id__: "m1", n: 123n }], total: 1 };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getAllByTestId("db-expand-n")[0] as HTMLElement);
+        await screen.findByTestId("grid-cell-value");
+
+        expect(screen.queryByTestId("grid-cell-filter") !== null).toBe(offered);
+    });
+
     it("closes the expanded cell when the table changes under it, so its filter cannot reach the new table", async () => {
         expect.assertions(3);
 
