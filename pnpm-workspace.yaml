@@ -484,21 +484,21 @@ catalogs:
   # convention; react-reconciler is the custom renderer behind @visulima/tui.
   cli:
     "@bomb.sh/tab": 0.0.22
-    "@visulima/cerebro": 3.1.2
-    "@visulima/colorize": 2.1.1
+    "@visulima/cerebro": 4.0.1
+    "@visulima/colorize": 3.0.0
     "@visulima/find-ai-runner": 1.0.2
-    "@visulima/fs": 6.0.29
-    "@visulima/package": 5.0.42
-    "@visulima/pail": 5.0.0
-    "@visulima/path": 4.0.0
+    "@visulima/fs": 7.0.0
+    "@visulima/package": 6.0.0
+    "@visulima/pail": 6.0.0
+    "@visulima/path": 5.0.0
     "@visulima/spinner": 1.0.1
     # v4 split the library: `@visulima/tui` keeps the runtime (`render`) plus the
     # primitives (`components/box`, `components/text`) and every `hooks/*`, while
     # the widget set moved to `@visulima/tui-kit` at flat subpaths — the CLI's
     # prompts import CommandPalette/ConfirmInput/SelectInput/Spinner/TextInput from
     # there now. tui-kit peers `@visulima/tui` EXACTLY, so bump the two together.
-    "@visulima/tui": 4.0.29
-    "@visulima/tui-kit": 1.0.32
+    "@visulima/tui": 5.0.0
+    "@visulima/tui-kit": 1.0.34
     giget: 3.3.1
     magic-string: ^1.4.2
     react-reconciler: ^0.33.0
@@ -678,11 +678,11 @@ catalogs:
     react-native: 0.86.3
     react-native-safe-area-context: ~5.10.1
   mail:
-    "@visulima/email": 3.0.28
+    "@visulima/email": 4.2.0
     "@react-email/render": 2.1.0
     "postal-mime": 3.0.1
   notify:
-    "@visulima/notification": 1.2.0
+    "@visulima/notification": 2.0.2
   mcp:
     "@modelcontextprotocol/sdk": ^1.32.0
     # The SDK's eval-free JSON Schema provider (`sdk/validation/cfworker`) needs
@@ -696,7 +696,7 @@ catalogs:
   # adapters (React/Vue/Solid/Svelte) with progress, pause/resume and per-part
   # retry. Both follow the repo's exact-pinned `@visulima/*` convention.
   storage:
-    "@visulima/storage": 2.0.37
+    "@visulima/storage": 3.0.0
     "@visulima/storage-client": 1.0.9
     # aws4fetch is @visulima/storage's Workers-friendly S3 signer, an optional
     # peer pulled in by the `aws-light` provider that backs `createR2UploadStorage`.
@@ -714,7 +714,7 @@ catalogs:
     # was last published 2022-05-12. Re-check the workerd output before raising this pin.
     "@cantoo/pdf-lib": 2.11.1
   workflow:
-    "@visulima/workflow": 3.0.0
+    "@visulima/workflow": 4.0.0
   # x402 agentic payments (@lunora/x402) — the Coinbase/x402 v2 protocol SDK
   # (Apache-2.0) plus chain signers. EXACT-pinned (saveExact); all versions are
   # >24h old so no `minimumReleaseAgeExclude` entry is needed. `@x402/core`'s
@@ -964,9 +964,9 @@ catalogs:
   redact:
     "@visulima/redact": 5.0.0
   email:
-    "@visulima/disposable-email-domains": 1.1.25
-    "@visulima/free-email-domains": 1.0.2
-    "@visulima/email-verifier": 1.0.42
+    "@visulima/disposable-email-domains": 2.0.10
+    "@visulima/free-email-domains": 2.0.0
+    "@visulima/email-verifier": 1.0.54
 
 # multi-semantic-release rewrites every intra-repo dependency from `workspace:*`
 # to the exact released version (e.g. "@lunora/errors": "1.0.0-alpha.9") and
@@ -1119,22 +1119,13 @@ minimumReleaseAgeExclude:
   # `cron-parser` + `luxon` repo-wide. 1.1.0 is the alpha lockfile's pin; 2.0.0
   # (published 2026-10-15 16:23 UTC) is the current one. Drop both after 2026-10-16.
   - '@visulima/cron-parser@1.1.0 || 2.0.0'
-  # Disk loader resolved lazily — no import-time fileURLToPath(import.meta.url),
-  # so the barrel is safe to evaluate on workerd. Published 2026-10-14 11:06 UTC,
-  # inside the 24h window; drop after 2026-10-15.
-  - '@visulima/disposable-email-domains@1.1.25'
-  # Published 2026-10-14 11:15 UTC (pulls the two list packages above/below),
-  # inside the 24h window; drop after 2026-10-15.
-  - '@visulima/email-verifier@1.0.42'
+  # Daily domain-list sync. Published 2026-10-26 03:15 UTC, inside the 24h window;
+  # drop after 2026-10-27.
+  - '@visulima/disposable-email-domains@2.0.10'
+  # Published 2026-10-26 03:22 UTC (pulls disposable-email-domains 2.0.10 above),
+  # inside the 24h window; drop after 2026-10-27.
+  - '@visulima/email-verifier@1.0.54'
   - '@visulima/find-ai-runner@1.0.0-alpha.9'
-  # Same lazy disk-loader fix as disposable-email-domains. Published 2026-10-14
-  # 11:11 UTC, inside the 24h window; drop after 2026-10-15.
-  - '@visulima/free-email-domains@1.0.2'
-  # Per-message ttl/urgency (visulima/visulima#936), published 2026-10-08 —
-  # dead weight after 2026-10-09, drop it then.
-  - '@visulima/notification@1.2.0'
-  # Published 2026-10-09 15:44 UTC, inside the 24h window; drop after 2026-10-10.
-  - '@visulima/storage@2.0.37'
   # vis 4.2.0 (affectedIgnore, visulima/visulima#937) + its task-runner 1.1.0, published
   # 2026-10-09 ~11:00 UTC. Remove the vis + task-runner entries after 2026-10-10 11:00 UTC.
   - '@visulima/task-runner@1.1.0'
@@ -1226,8 +1217,11 @@ packageExtensions:
   # imports it unconditionally, so any consumer that reads a YAML file throws
   # ERR_MODULE_NOT_FOUND — and one of those consumers is `@visulima/tsconfig`,
   # reached from `@anolilab/eslint-config`, which takes down ESLint config load for
-  # every package in the repo. Promote it to a real dependency.
-  "@visulima/fs":
+  # every package in the repo. Promote it to a real dependency. Scoped to `@6`:
+  # fs@7 (our own pin) moved the YAML readers to the `@visulima/fs/yaml` subpath,
+  # so its root entry no longer imports `@visulima/yaml`; it also peers yaml@2
+  # exactly, which an unscoped 1.0.0 extension would contradict.
+  "@visulima/fs@6":
     dependencies:
       "@visulima/yaml": "1.0.0"
 
