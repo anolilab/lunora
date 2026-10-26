@@ -201,9 +201,8 @@ const ERROR_CATALOG: {
         readonly title: "Shard HTTP error";
     };
     readonly SHARD_DRY_RUN_UNSUPPORTED: {
-        readonly internal: true;
-        readonly status: 503;
-        readonly title: "Shard cannot dry-run imports";
+        readonly status: 501;
+        readonly title: "Shard cannot dry-run an import";
     };
     readonly SUBSCRIPTION_PERSIST_FAILED: {
         readonly status: 500;
