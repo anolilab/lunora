@@ -9,8 +9,8 @@ import type { ResolvedLunoraPluginOptions } from "./types";
 type SessionProject = Pick<ResolvedLunoraPluginOptions, "apiSpec" | "lazyFunctions" | "projectRoot" | "schemaDir" | "target">;
 
 interface Session {
-    /** Each step's result, by step name. */
-    done: Map<string, unknown>;
+    /** Each step's run, by step name — in flight or settled, so overlapping passes share one. */
+    done: Map<string, Promise<unknown>>;
     /** The inputs as last seen — re-taken after every step, so Lunora's own writes don't end the session. */
     fingerprint: string;
     /** Set once the build itself starts: the next config pass belongs to a new build. */
@@ -40,8 +40,9 @@ const inputsOf = (project: SessionProject): string =>
 
 /**
  * Run a project-level startup `step` once per `vite build`: the first config pass
- * runs it, later passes of the same build get its result. A step that throws is
- * not recorded, so the next pass runs it again (and fails the same way).
+ * runs it, later passes of the same build get its result — or await it, when they
+ * overlap the first. A step that throws is not recorded, so the next pass runs it
+ * again (and fails the same way).
  */
 const oncePerBuild = async <T>(project: SessionProject, step: string, run: () => Promise<T> | T): Promise<T> => {
     const key = keyOf(project);
@@ -53,16 +54,28 @@ const oncePerBuild = async <T>(project: SessionProject, step: string, run: () =>
         sessions.set(key, session);
     }
 
-    if (session.done.has(step)) {
-        return session.done.get(step) as T;
+    const owner = session;
+    let pending = owner.done.get(step) as Promise<T> | undefined;
+
+    if (pending === undefined) {
+        // An async wrapper, so a step that throws synchronously (the wrangler
+        // check) still rejects here and is dropped below.
+        pending = (async (): Promise<T> => run())().then(
+            (value) => {
+                owner.fingerprint = inputsOf(project);
+
+                return value;
+            },
+            (error: unknown) => {
+                owner.done.delete(step);
+
+                throw error;
+            },
+        );
+        owner.done.set(step, pending);
     }
 
-    const value = await run();
-
-    session.done.set(step, value);
-    session.fingerprint = inputsOf(project);
-
-    return value;
+    return pending;
 };
 
 /** The build has started; whatever config pass comes next is a new build's. */

@@ -73,7 +73,7 @@ const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions, discovery
         assertWranglerSatisfiesSchema(
             { ...options, cache: discovery },
             (message) => {
-                // eslint-disable-next-line no-console
+                // eslint-disable-next-line no-console -- runs in `configResolved`, before Vite's logger reaches plugins
                 console.warn(message);
             },
             "Update your wrangler.jsonc and restart the dev server.",

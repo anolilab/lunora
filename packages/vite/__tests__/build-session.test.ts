@@ -81,6 +81,29 @@ describe(oncePerBuild, () => {
         expect(runs).toBe(1);
     });
 
+    it("shares one run between passes that overlap", async () => {
+        expect.assertions(2);
+
+        let runs = 0;
+        let finish: (() => void) | undefined;
+        const run = async (): Promise<void> => {
+            runs += 1;
+
+            await new Promise<void>((resolve) => {
+                finish = resolve;
+            });
+        };
+
+        const first = oncePerBuild(project(), "step", run);
+        const second = oncePerBuild(project(), "step", run);
+
+        finish?.();
+        await Promise.all([first, second]);
+
+        expect(runs).toBe(1);
+        await expect(oncePerBuild(project(), "step", run)).resolves.toBeUndefined();
+    });
+
     it("does not record a step that threw", async () => {
         expect.assertions(2);
 
