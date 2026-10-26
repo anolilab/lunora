@@ -132,7 +132,7 @@ A mutation opens the request with `privacyFor(ctx, identity).requestExport()` an
 
 ## Coverage
 
-A table with a `userId` column must be covered by a dataset, or excluded with a reason, once the app uses `definePrivacy`. Otherwise the build fails with `privacy_table_unclassified`, which names the table.
+A table that holds user data must be covered by a dataset, or excluded with a reason, once the app uses `definePrivacy`. A table holds user data when it has a `userId` column, or a `v.id` of the user table (`users`, or the renamed table `authDataset` names for `user`). An optional, array or nullable reference counts too. Otherwise the build fails with `privacy_table_unclassified`, which names the table.
 
 ## What is not finished
 
