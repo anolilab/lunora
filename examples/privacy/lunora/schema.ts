@@ -18,6 +18,13 @@ export default defineSchema({
         title: v.string(),
         userId: v.string(),
     }).index("byUser", ["userId"]),
+    /** Invoices carry a `de.voucher` retention rule, so erasure keeps them and their `issuedAt` starts the period. */
+    invoices: defineTable({
+        amount: v.number(),
+        issuedAt: v.number(),
+        number: v.string(),
+        userId: v.string(),
+    }).index("byUser", ["userId"]),
     exportFiles: defineTable({
         body: v.string(),
         encoding: v.union(v.literal("text"), v.literal("base64")),

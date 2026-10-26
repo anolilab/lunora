@@ -11,6 +11,7 @@ import { LunoraError } from "lunorash/errors";
 import { v } from "lunorash/values";
 
 import type { PrivacyRequestRow } from "../../../shared/privacy-request-row";
+import type { QueryCtx } from "./_generated/server.js";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server.js";
 import { privacyFor } from "./privacy";
 
@@ -56,17 +57,27 @@ export const retryPrivacyRequest = internalMutation.input({ requestId: v.string(
 });
 
 /**
+ * Every subject id the shard's live personal-data tables hold: the subjects a restore may have brought back with
+ * rows to erase. An archived row is already erased data, so its subject has nothing left to erase and is not listed.
+ */
+export const restoredSubjectIdsOf = async (ctx: { readonly db: { readonly query: QueryCtx["db"]["query"] } }): Promise<string[]> => {
+    const [tasks, invoices] = await Promise.all([ctx.db.query("tasks").collect(), ctx.db.query("invoices").collect()]);
+
+    return [...new Set([...tasks.map((row) => row.userId), ...invoices.map((row) => row.userId)])];
+};
+
+/**
  * Run after a point-in-time restore of the shard (`lunora backup pitr --restore`). The restored shard
  * can hold rows of subjects who were erased after the backup was taken. This starts the restore
- * workflow with every subject id the restored `tasks` table holds; the workflow reads the tombstone
- * store, which the restore did not roll back, and erases those subjects again.
+ * workflow with every subject id the restored `tasks` and `invoices` tables hold, so a subject with
+ * only invoices is covered too. The workflow reads the tombstone store, which the restore did not roll
+ * back, and erases those subjects again.
  *
  * Internal, like the other operator functions: only the admin plane and server code can call it. It
- * reads the whole `tasks` table once, which an operator does once per restore.
+ * reads the whole of both tables once, which an operator does once per restore.
  */
 export const restorePrivacyErasures = internalAction.action(async ({ ctx }) => {
-    const rows = await ctx.db.query("tasks").collect();
-    const restoredSubjectIds = [...new Set(rows.map((row) => row.userId))];
+    const restoredSubjectIds = await restoredSubjectIdsOf(ctx);
     const id = `privacy-restore-${String(ctx.now)}`;
 
     try {
