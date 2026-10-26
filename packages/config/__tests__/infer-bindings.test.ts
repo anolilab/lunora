@@ -1900,6 +1900,17 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
     });
 
+    it("keys the client's relay secret for a named import of a namespace a barrel re-exports from the replica package", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/barrel.ts", `export * as replica from "@lunora/replica";\n`);
+        write("src/server/events.ts", `import { replica } from "./barrel";\n\nexport const log = (env: Env) => new replica.EventLogDOClient({ env });\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
     it("keys the client's relay secret for a dynamic import that destructures the client under a computed key", async () => {
         expect.assertions(1);
 

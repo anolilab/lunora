@@ -37,7 +37,7 @@ import {
 } from "@lunora/codegen";
 // `worker-entry.ts` lexes the entry's exports; the lexer's wasm must be initialised first.
 import { init as initLexer } from "es-module-lexer";
-import type { BindingElement, CallExpression, SourceFile } from "ts-morph";
+import type { BindingElement, CallExpression, ImportSpecifier, SourceFile } from "ts-morph";
 import { Node, Project, ts } from "ts-morph";
 
 import type { AgentIR } from "./agent-info";
@@ -605,21 +605,47 @@ const dynamicImportReachesClient = (call: CallExpression): boolean => {
  * barrels: by a named import, or through a namespace import the file reads the client from. Such a file constructs the client without
  * naming the package itself.
  */
+/** Whether a module re-exports the replica package as a namespace under `name`: `export * as name from "@lunora/replica"`. */
+const exportsReplicaNamespace = (modulePath: string, name: string): boolean =>
+    ts
+        .createSourceFile(modulePath, readFileSync(modulePath, "utf8"), ts.ScriptTarget.Latest)
+        .statements.some(
+            (statement) =>
+                ts.isExportDeclaration(statement) &&
+                statement.moduleSpecifier !== undefined &&
+                ts.isStringLiteral(statement.moduleSpecifier) &&
+                statement.moduleSpecifier.text === EVENT_LOG_PACKAGE &&
+                statement.exportClause !== undefined &&
+                ts.isNamespaceExport(statement.exportClause) &&
+                statement.exportClause.name.text === name,
+        );
+
 const importsClientFromBarrel = (sourceFile: SourceFile): boolean =>
     sourceFile.getImportDeclarations().some((declaration) => {
-        // The cheap check first: the barrel is only read for an import that names the client, which is almost none.
+        // The cheap check first: the barrel is only read for an import that names the client or reads it through a namespace.
         const namespace = declaration.getNamespaceImport();
-        const namesClient =
-            declaration.getNamedImports().some((specifier) => !specifier.isTypeOnly() && specifier.getNameNode().getText() === EVENT_LOG_CLIENT) ||
-            (namespace !== undefined && namespaceReachesClient(sourceFile, namespace.getText()));
+        const namedImports = declaration.isTypeOnly() ? [] : declaration.getNamedImports().filter((specifier) => !specifier.isTypeOnly());
+        const namesClient = namedImports.some((specifier) => specifier.getNameNode().getText() === EVENT_LOG_CLIENT);
+        const readsNamespace = (specifier: ImportSpecifier): boolean =>
+            namespaceReachesClient(sourceFile, (specifier.getAliasNode() ?? specifier.getNameNode()).getText());
+        const namedNamespaces = namedImports.filter((specifier) => readsNamespace(specifier));
+        const namespaceClient = namespace !== undefined && namespaceReachesClient(sourceFile, namespace.getText());
 
-        if (!namesClient || declaration.isTypeOnly()) {
+        if (!namesClient && !namespaceClient && namedNamespaces.length === 0) {
             return false;
         }
 
         const barrel = resolveBarrel(sourceFile.getFilePath(), declaration.getModuleSpecifierValue());
 
-        return barrel !== undefined && forwardsReplicaExport(barrel, EVENT_LOG_CLIENT, EVENT_LOG_CLIENT, new Set());
+        if (barrel === undefined) {
+            return false;
+        }
+
+        // A namespace the barrel re-exports from the replica package carries the client under the name the file reads it by.
+        return (
+            ((namesClient || namespaceClient) && forwardsReplicaExport(barrel, EVENT_LOG_CLIENT, EVENT_LOG_CLIENT, new Set())) ||
+            namedNamespaces.some((specifier) => exportsReplicaNamespace(barrel, specifier.getNameNode().getText()))
+        );
     });
 
 /**
