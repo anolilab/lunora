@@ -92,12 +92,12 @@ const requestRow = async (db: Database, requestId: string): Promise<undefined | 
     return rows.find((row) => row.requestId === requestId) as undefined | { status: string };
 };
 
-/** The request's status and the events it recorded, so a run that failed names its code in the assertion. */
-const runOf = async (db: Database, requestId: string): Promise<{ events: string[]; status?: string }> => {
+/** The request's status and the detail of each failure it recorded, so a run that failed names its code in the assertion. */
+const runOf = async (db: Database, requestId: string): Promise<{ failures: string[]; status?: string }> => {
     const events = await db.query("privacy_events").collect();
 
     return {
-        events: events.filter((row) => row.requestId === requestId).map((row) => `${String(row.kind)}: ${String(row.detail ?? "")}`),
+        failures: events.filter((row) => row.requestId === requestId && row.kind === "failed").map((row) => String(row.detail ?? "")),
         status: (await requestRow(db, requestId))?.status,
     };
 };
@@ -272,7 +272,7 @@ describe("privacy example lifecycle (workerd)", () => {
             await privacyWorkflows.exportHandler(contextFor(db, request.id));
 
             // The sweep only expires a ready export, so a failed run here is the reason the sweep below finds nothing.
-            await expect(runOf(db, request.id)).resolves.toMatchObject({ status: "ready" });
+            await expect(runOf(db, request.id)).resolves.toMatchObject({ failures: [], status: "ready" });
 
             // The typed mutation context, so the row id keeps its table type for `patch`.
             const ctx = appCtx(db);
@@ -308,7 +308,7 @@ describe("privacy example lifecycle (workerd)", () => {
 
             await privacyWorkflows.exportHandler(contextFor(db, request.id));
 
-            await expect(runOf(db, request.id)).resolves.toMatchObject({ status: "ready" });
+            await expect(runOf(db, request.id)).resolves.toMatchObject({ failures: [], status: "ready" });
 
             const files = await db.query("exportFiles").collect();
             const part = files.find((row) => row.requestId === request.id && (row.name as string).endsWith("/parts/auth.json"));
