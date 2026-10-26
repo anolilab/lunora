@@ -784,11 +784,18 @@ const fillDevSecrets = (deps: {
     const exists = existsSync(devVariablesPath);
     const existingContent = exists ? readFileSync(devVariablesPath, "utf8") : "";
 
-    const plan = planDevSecretsFill({
-        existingContent,
-        mintable: deps.secretSources === undefined ? undefined : mintableSecretKeysFor(deps.secretSources),
-        randomHex: deps.randomHex,
-    });
+    const mintable = deps.secretSources === undefined ? undefined : mintableSecretKeysFor(deps.secretSources);
+    const plan = planDevSecretsFill({ existingContent, mintable, randomHex: deps.randomHex });
+
+    // A worker that only constructs the client takes the host's value, which fill cannot mint. Say so here: the template would otherwise
+    // reach a request as a secret and fail every signed call with a 403.
+    const relayValue = parseDevVariableEntries(plan.content).find((entry) => entry.key === SHARD_RELAY_SECRET_KEY)?.value;
+
+    if (mintable !== undefined && !mintable.has(SHARD_RELAY_SECRET_KEY) && relayValue !== undefined && isPlaceholderValue(relayValue)) {
+        deps.info?.(
+            `${SHARD_RELAY_SECRET_KEY} is still a placeholder. This worker only calls an event log hosted elsewhere, so set it to the ${SHARD_RELAY_SECRET_KEY} of the worker that hosts EventLogDO.`,
+        );
+    }
 
     if (plan.filledKeys.length === 0 && plan.addedKeys.length === 0) {
         return { addedKeys: [], filledKeys: [], status: "unchanged" };

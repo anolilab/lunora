@@ -871,3 +871,22 @@ describe("planDevSecretsFill — relay key follows the project's role", () => {
         expect(plan.content).toContain(`LUNORA_RELAY_SECRET="${"a".repeat(64)}"`);
     });
 });
+
+describe("fillDevSecrets — a client-only worker's relay key", () => {
+    it("says where the relay key comes from when the worker only constructs the client", () => {
+        expect.assertions(1);
+
+        const dir = mkdtempSync(join(tmpdir(), "lunora-relay-client-"));
+
+        try {
+            writeFileSync(join(dir, ".dev.vars"), 'LUNORA_RELAY_SECRET="<your-eventlogdo-host-relay-secret>"\n');
+            const info = vi.fn<(message: string) => void>();
+
+            fillDevSecrets({ cwd: dir, info, secretSources: ["@lunora/replica:eventLogClient"] });
+
+            expect(info).toHaveBeenCalledWith(expect.stringContaining("hosts EventLogDO"));
+        } finally {
+            rmSync(dir, { force: true, recursive: true });
+        }
+    });
+});
