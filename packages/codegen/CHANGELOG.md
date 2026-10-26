@@ -1,3 +1,20 @@
+## @lunora/codegen [1.0.0-alpha.356](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.355...@lunora/codegen@1.0.0-alpha.356) (2026-10-26)
+
+### Features
+
+* **server:** require the table in ctx.db.get(table, id) ([#1342](https://github.com/anolilab/lunora/issues/1342)) ([92cca06](https://github.com/anolilab/lunora/commit/92cca0604d33fc93db2ad49530572e8b99508f3b))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.259
+* **@lunora/agent:** upgraded to 1.0.0-alpha.249
+* **@lunora/client:** upgraded to 1.0.0-alpha.252
+* **@lunora/do:** upgraded to 1.0.0-alpha.249
+* **@lunora/payment:** upgraded to 1.0.0-alpha.242
+* **@lunora/server:** upgraded to 1.0.0-alpha.240
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.161
+
 ## @lunora/codegen [1.0.0-alpha.355](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.354...@lunora/codegen@1.0.0-alpha.355) (2026-10-26)
 
 

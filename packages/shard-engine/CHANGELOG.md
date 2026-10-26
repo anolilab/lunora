@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.161](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.160...@lunora/shard-engine@1.0.0-alpha.161) (2026-10-26)
+
+### Features
+
+* **server:** require the table in ctx.db.get(table, id) ([#1342](https://github.com/anolilab/lunora/issues/1342)) ([92cca06](https://github.com/anolilab/lunora/commit/92cca0604d33fc93db2ad49530572e8b99508f3b))
+
 ## @lunora/shard-engine [1.0.0-alpha.160](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.159...@lunora/shard-engine@1.0.0-alpha.160) (2026-10-26)
 
 ### Features
