@@ -9,26 +9,29 @@
  * forwarded request's own `Authorization` and `connect` frame.
  */
 
-import { decodeBearerProtocol, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
+import { BEARER_PROTOCOL_PREFIX, decodeBearerProtocol, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
 
 /** What an upgrade offered in `Sec-WebSocket-Protocol`, parsed once per upgrade. */
 interface BearerUpgrade {
-    /** Whether the `lunora` subprotocol was offered, which the handshake must then select. */
-    offersLunora: boolean;
+    /** The offered subprotocols other than the bearer entry, which is the only one the shard must not see. */
+    forwarded: string[];
 
     /** The decoded `lunora.bearer.*` token, or `undefined`. */
     token: string | undefined;
 }
 
 const bearerUpgrade = (request: Request): BearerUpgrade => {
-    const offered = (request.headers.get("sec-websocket-protocol") ?? "").split(",").map((entry) => entry.trim());
+    const offered = (request.headers.get("sec-websocket-protocol") ?? "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
     let token: string | undefined;
 
     for (const entry of offered) {
         token ??= decodeBearerProtocol(entry);
     }
 
-    return { offersLunora: offered.includes(LUNORA_WS_PROTOCOL), token };
+    return { forwarded: offered.filter((entry) => !entry.startsWith(BEARER_PROTOCOL_PREFIX)), token };
 };
 
 /**
@@ -48,12 +51,12 @@ const identityRequestForUpgrade = (request: Request, upgrade: BearerUpgrade): Re
     return new Request(request, { headers });
 };
 
-/** `headers` without the bearer offer: only `lunora` stays when it was offered. */
+/** `headers` without the bearer entry; every other offered subprotocol is forwarded as it came. */
 const withoutBearerProtocol = (headers: Headers, upgrade: BearerUpgrade): Headers => {
     const stripped = new Headers(headers);
 
-    if (upgrade.offersLunora) {
-        stripped.set("sec-websocket-protocol", LUNORA_WS_PROTOCOL);
+    if (upgrade.forwarded.length > 0) {
+        stripped.set("sec-websocket-protocol", upgrade.forwarded.join(", "));
     } else {
         stripped.delete("sec-websocket-protocol");
     }
@@ -71,7 +74,7 @@ const withoutBearerProtocol = (headers: Headers, upgrade: BearerUpgrade): Header
 const selectLunoraProtocol = (upgrade: BearerUpgrade, response: Response): Response => {
     const { webSocket } = response as Response & { webSocket?: unknown };
 
-    if (response.status !== 101 || !webSocket || !upgrade.offersLunora) {
+    if (response.status !== 101 || !webSocket || !upgrade.forwarded.includes(LUNORA_WS_PROTOCOL)) {
         return response;
     }
 

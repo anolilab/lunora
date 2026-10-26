@@ -126,6 +126,15 @@ describe("ws upgrade — bearer offered as a Sec-WebSocket-Protocol", () => {
         expect(forwarded.headers.get("x-lunora-userid")).toBe("native");
     });
 
+    it("forwards a raw client's own subprotocols and drops only the bearer entry", async () => {
+        expect.assertions(4);
+
+        const forwarded = await upgrade({ "sec-websocket-protocol": `chat.v2, ${bearerProtocol("user:alice")}` });
+
+        expect(forwarded.headers.get("sec-websocket-protocol")).toBe("chat.v2");
+        expect(forwarded.headers.get("x-lunora-userid")).toBe("alice");
+    });
+
     it("stays anonymous without a bearer subprotocol", async () => {
         expect.assertions(4);
 
