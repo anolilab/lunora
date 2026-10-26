@@ -1,0 +1,7 @@
+{
+    "$comment": "Committed first-load baseline for Lunora Studio's standalone bundle (packages/studio/dist/standalone): studio.js plus every chunk it reaches through static imports, measured by scripts/check-studio-size.js against a production build. Lazy (dynamic-import) chunks are excluded on purpose. `pnpm run studio-size:update` re-baselines an intentional increase.",
+    "files": 36,
+    "gzipBytes": 316815,
+    "rawBytes": 941745,
+    "allowanceBytes": 10240
+}

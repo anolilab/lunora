@@ -30,6 +30,30 @@ type TFunction = (id: MessageId, values?: Record<string, unknown>) => string;
 
 const BUILTIN_CATALOGS: StudioCatalogs = { en: enMessages };
 
+type CompiledMessage = ReturnType<typeof compileMessage>;
+
+const compiledMessages = new Map<string, CompiledMessage>();
+
+/**
+ * `compileMessage`, memoized per source string. Lingui does not cache: `i18n._`
+ * re-runs the compiler (a moo lexer + ICU parse) on EVERY call for an
+ * uncompiled message, and every studio message is uncompiled — so each `t(...)`
+ * in a render, once per visible row or cell, re-parsed the same string. The
+ * result depends only on the string (locale is applied later, by Lingui's
+ * interpolation, which only reads it), and the strings are the finite
+ * {@link MessageId} set plus their translations, so the cache is bounded.
+ */
+const compileMessageCached = (message: string): CompiledMessage => {
+    let compiled = compiledMessages.get(message);
+
+    if (compiled === undefined) {
+        compiled = compileMessage(message);
+        compiledMessages.set(message, compiled);
+    }
+
+    return compiled;
+};
+
 /**
  * Build a studio-scoped Lingui instance. We deliberately use `@lingui/core`'s
  * `setupI18n` (a fresh instance) rather than the global singleton so the
@@ -48,7 +72,7 @@ const BUILTIN_CATALOGS: StudioCatalogs = { en: enMessages };
 const createStudioI18n = (locale: string = DEFAULT_LOCALE, catalogs: StudioCatalogs = BUILTIN_CATALOGS): I18n => {
     const instance = setupI18n();
 
-    instance.setMessagesCompiler(compileMessage);
+    instance.setMessagesCompiler(compileMessageCached);
 
     for (const [code, catalog] of Object.entries(catalogs)) {
         instance.load(code, catalog);

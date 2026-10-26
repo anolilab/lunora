@@ -1,6 +1,5 @@
-// react-doctor-disable-next-line react-doctor/use-lazy-motion -- `m` + LazyMotion needs a provider above every consumer; this package exports individual panels that hosts mount without the studio shell, so a missing provider would throw at runtime in someone else's app
-import { motion } from "motion/react";
 import type { ReactElement } from "react";
+import { lazy, Suspense } from "react";
 
 import { useT } from "../i18n/i18n-context";
 import type { ThemePreference } from "../lib/theme";
@@ -54,6 +53,14 @@ const MoonIcon = (): ReactElement => (
     </svg>
 );
 
+// The animated indicator pulls in `motion` (~130 KiB), so it loads on demand
+// instead of in the static first-load closure. Until it lands, the fallback
+// paints the same box without the spring — the indicator only animates between
+// segments, so nothing is lost on first paint.
+const ThemeIndicator = lazy(() => import("./theme-indicator"));
+
+const INDICATOR_CLASS = "absolute inset-0 rounded-md border border-muted-foreground/40 bg-background/40";
+
 const OPTIONS: ReadonlyArray<{ readonly Icon: () => ReactElement; readonly value: ThemePreference }> = [
     { Icon: MonitorIcon, value: "system" },
     { Icon: SunIcon, value: "light" },
@@ -104,11 +111,9 @@ const ThemeToggle = (): ReactElement => {
                         type="button"
                     >
                         {active && (
-                            <motion.span
-                                className="absolute inset-0 rounded-md border border-muted-foreground/40 bg-background/40"
-                                layoutId="studio-theme-active"
-                                transition={{ bounce: 0.1, duration: 0.45, type: "spring" }}
-                            />
+                            <Suspense fallback={<span className={INDICATOR_CLASS} />}>
+                                <ThemeIndicator className={INDICATOR_CLASS} />
+                            </Suspense>
                         )}
                         <span className="relative">
                             <Icon />
