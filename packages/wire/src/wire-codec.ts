@@ -144,6 +144,17 @@ const setField = (target: Record<string, unknown>, key: string, fieldValue: unkn
 };
 
 /**
+ * An own accessor property. Reading it runs a getter, and the caller may read it
+ * again when stringifying the original, so it is not identity: the encoder reads
+ * it once.
+ */
+const isAccessorField = (value: object, key: string): boolean => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+
+    return descriptor !== undefined && ("get" in descriptor || "set" in descriptor);
+};
+
+/**
  * Would {@link encodeWire} change this value, or is it already the JSON it will
  * become?
  *
@@ -229,16 +240,10 @@ const needsWireEncoding = (value: unknown, depth = 0): boolean => {
         return true;
     }
 
-    for (const key of Object.keys(value)) {
-        const field = value[key];
-
-        // Both sides drop an `undefined` object field, so it is not a difference.
-        if (field !== undefined && needsWireEncoding(field, depth + 1)) {
-            return true;
-        }
-    }
-
-    return false;
+    // An accessor is not identity: reading it runs a getter, and the caller may read
+    // it again when stringifying the original. The `||` checks it first, so a getter
+    // is never read here.
+    return Object.keys(value).some((key) => isAccessorField(value, key) || (value[key] !== undefined && needsWireEncoding(value[key], depth + 1)));
 };
 
 const encodeBigint = (value: bigint): unknown[] => {
