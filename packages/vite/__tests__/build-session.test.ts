@@ -104,6 +104,29 @@ describe(oncePerBuild, () => {
         await expect(oncePerBuild(project(), "step", run)).resolves.toBeUndefined();
     });
 
+    it("keeps the session when an overlapping pass sees a running step's write", async () => {
+        expect.assertions(1);
+
+        let runs = 0;
+        let finish: (() => void) | undefined;
+        const run = async (): Promise<void> => {
+            runs += 1;
+            writeFileSync(join(workdir, "wrangler.jsonc"), '{ "name": "app", "durable_objects": { "bindings": [] } }\n');
+
+            await new Promise<void>((resolve) => {
+                finish = resolve;
+            });
+        };
+
+        const first = oncePerBuild(project(), "step", run);
+        const second = oncePerBuild(project(), "step", run);
+
+        finish?.();
+        await Promise.all([first, second]);
+
+        expect(runs).toBe(1);
+    });
+
     it("does not record a step that threw", async () => {
         expect.assertions(2);
 

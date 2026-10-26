@@ -13,6 +13,8 @@ interface Session {
     done: Map<string, Promise<unknown>>;
     /** The inputs as last seen — re-taken after every step, so Lunora's own writes don't end the session. */
     fingerprint: string;
+    /** Steps still running. Their writes land before the fingerprint is re-taken, so they must not end the session either. */
+    running: number;
     /** Set once the build itself starts: the next config pass belongs to a new build. */
     started: boolean;
 }
@@ -49,8 +51,8 @@ const oncePerBuild = async <T>(project: SessionProject, step: string, run: () =>
     const fingerprint = inputsOf(project);
     let session = sessions.get(key);
 
-    if (session === undefined || session.started || session.fingerprint !== fingerprint) {
-        session = { done: new Map(), fingerprint, started: false };
+    if (session === undefined || session.started || (session.fingerprint !== fingerprint && session.running === 0)) {
+        session = { done: new Map(), fingerprint, running: 0, started: false };
         sessions.set(key, session);
     }
 
@@ -58,15 +60,18 @@ const oncePerBuild = async <T>(project: SessionProject, step: string, run: () =>
     let pending = owner.done.get(step) as Promise<T> | undefined;
 
     if (pending === undefined) {
+        owner.running += 1;
         // An async wrapper, so a step that throws synchronously (the wrangler
         // check) still rejects here and is dropped below.
         pending = (async (): Promise<T> => run())().then(
             (value) => {
+                owner.running -= 1;
                 owner.fingerprint = inputsOf(project);
 
                 return value;
             },
             (error: unknown) => {
+                owner.running -= 1;
                 owner.done.delete(step);
 
                 throw error;
