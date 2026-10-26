@@ -21,6 +21,7 @@
  */
 import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 
 import type { CapabilityKey, ServiceBindingIR, SourceCapabilitySignals } from "@lunora/codegen";
 import {
@@ -442,26 +443,23 @@ const schemaFacts = (projectRoot: string, schemaDirectory: string, cache?: Disco
 };
 
 /**
- * The parse each project's last {@link scanCapabilities} left, keyed by project
- * root. A watch session scans on every codegen pass, and re-parsing every
- * candidate file each time was most of the scan; a file is re-parsed only when
- * its text changed, so nothing stale is ever read.
- *
- * ponytail: holds the scanned files' ASTs for the life of the process, one
- * project per root; evict by root if a host ever scans many projects.
+ * The parse the last {@link scanCapabilities} left, for the project it scanned. A
+ * watch session scans on every codegen pass, and re-parsing every candidate file
+ * each time was most of the scan; a file is re-parsed only when its text changed,
+ * so nothing stale is ever read. Only the latest project is kept: a host scans one,
+ * and one that alternates re-parses on each switch, no worse than not caching.
  */
-const SCAN_PROJECTS = new Map<string, Project>();
+let lastScan: { project: Project; root: string } | undefined;
 
-/** The project {@link SCAN_PROJECTS} keeps for `projectRoot`, created on first use. */
+/** The project {@link lastScan} keeps for `projectRoot`, replacing another root's. */
 const scanProjectOf = (projectRoot: string): Project => {
-    let project = SCAN_PROJECTS.get(projectRoot);
+    const root = resolve(projectRoot);
 
-    if (project === undefined) {
-        project = new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true });
-        SCAN_PROJECTS.set(projectRoot, project);
+    if (lastScan?.root !== root) {
+        lastScan = { project: new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true }), root };
     }
 
-    return project;
+    return lastScan.project;
 };
 
 /** Parse `code` into `project` as `file`, unless the file is already there with exactly this text. */

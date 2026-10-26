@@ -37,7 +37,7 @@ const voiceBindingName = (exportName: string): string => `VOICE_${exportName.rep
  *
  * A static table so codegen can auto-register the functions without importing
  * `@lunora/agent/component`, whose module graph (`@lunora/server`, the shard
- * engine, drizzle, hono) cost every codegen process ~55 ms at load, agents or
+ * engine, drizzle, hono) every codegen process would otherwise load, agents or
  * not. `__tests__/component.test.ts` fails when it drifts from the component.
  * @experimental
  */

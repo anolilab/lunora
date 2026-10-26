@@ -240,9 +240,8 @@ const listLunoraSourceFiles = (directory: string, options: { includeSkipped?: bo
 /**
  * Run `run` with {@link listLunoraSourceFiles} memoized for its duration.
  *
- * Some forty discoverers each walk the same tree, and on a 200-module app those
- * walks — a `statSync` and a `realpathSync` per entry, every time — were a
- * quarter of a codegen pass. Within one synchronous run the tree cannot change
+ * Some forty discoverers each walk the same tree, and each walk costs a
+ * `statSync` and a `realpathSync` per entry. Within one synchronous run the tree cannot change
  * under codegen (its own writes land in the skipped `_generated/`), so one walk
  * serves them all. Outside a run nothing is memoized, so a long-lived caller (a
  * watcher's fingerprint) always sees the tree as it is now. Re-entrant: a nested
