@@ -246,6 +246,15 @@ const identifiersOf = (sourceFile: SourceFile): Identifier[] => {
     return identifiers;
 };
 
+/** A file's modification time, or `-1` when it is missing, which never matches a cached entry. */
+const mtimeOf = (file: string): number => (ts.sys.fileExists(file) ? statSync(file).mtimeMs : -1);
+
+/**
+ * Parsed tsconfig options by config path. An entry holds while the config and every file it extends keep their modification
+ * times, so editing a base config's `paths` reaches a long-running process.
+ */
+const parsedCompilerOptions = new Map<string, { mtimes: Map<string, number>; options: ts.CompilerOptions }>();
+
 /** The compiler options of the nearest tsconfig.json, read the way TypeScript reads them. Empty when the project has none. */
 const compilerOptionsFor = (fromFile: string): ts.CompilerOptions => {
     const configPath = ts.findConfigFile(dirname(fromFile), (path) => ts.sys.fileExists(path));
@@ -254,9 +263,19 @@ const compilerOptionsFor = (fromFile: string): ts.CompilerOptions => {
         return {};
     }
 
-    const read = ts.readConfigFile(configPath, (path) => ts.sys.readFile(path));
+    const cached = parsedCompilerOptions.get(configPath);
 
-    return ts.parseJsonConfigFileContent(read.config, ts.sys, dirname(configPath)).options;
+    if (cached !== undefined && [...cached.mtimes].every(([file, mtimeMs]) => mtimeOf(file) === mtimeMs)) {
+        return cached.options;
+    }
+
+    const sourceFile = ts.readJsonConfigFile(configPath, (path) => ts.sys.readFile(path));
+    const { options } = ts.parseJsonSourceFileConfigFileContent(sourceFile, ts.sys, dirname(configPath));
+    const mtimes = new Map([configPath, ...(sourceFile.extendedSourceFiles ?? [])].map((file) => [file, mtimeOf(file)]));
+
+    parsedCompilerOptions.set(configPath, { mtimes, options });
+
+    return options;
 };
 
 /**

@@ -5,7 +5,7 @@ import { join, relative } from "node:path";
 import type { CapabilityProbe } from "@lunora/codegen";
 import { CAPABILITY_PROBES, discoverSandboxUsage } from "@lunora/codegen";
 import { parse as parseJsonc } from "jsonc-parser";
-import { Project } from "ts-morph";
+import { Project, ts } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Not part of codegen's public API: only this drift guard needs the whole-project probe.
@@ -2063,6 +2063,27 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
             );
 
             expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+        });
+
+        it("reads the tsconfig once for two path-aliased imports from the root-level entry", async () => {
+            expect.assertions(1);
+
+            write("wrangler.jsonc", ROOT_WRANGLER);
+            write("tsconfig.json", `{ "compilerOptions": { "baseUrl": ".", "paths": { "@app/*": ["./lib/*"] } } }\n`);
+            write("lib/a.ts", "export const a = 1;\n");
+            write("lib/b.ts", "export const b = 2;\n");
+            write("worker.ts", `import { a } from "@app/a";\nimport { b } from "@app/b";\n\nexport const total = a + b;\n\n${ROOT_FETCH_ENTRY}`);
+
+            // Every parse of the nearest tsconfig reads its file once, so the reads count the parses.
+            const read = vi.spyOn(ts.sys, "readFile");
+
+            try {
+                await inferLunoraBindings({ projectRoot: root });
+
+                expect(read.mock.calls.filter(([file]) => file.endsWith("/tsconfig.json"))).toHaveLength(1);
+            } finally {
+                read.mockRestore();
+            }
         });
 
         it("does not key the client's relay secret for a type-only import of a module that constructs the client", async () => {
