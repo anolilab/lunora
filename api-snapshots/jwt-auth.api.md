@@ -15,6 +15,7 @@ SemVer promise until the package graduates.
 
 ```ts
 interface Auth0Options extends PresetOverrides {
+    allowClientCredentials?: boolean;
     audience: string;
     domain: string;
 }
@@ -66,6 +67,7 @@ interface JwtIdentityResolverOptions {
 
 ```ts
 interface SupabaseOptions extends PresetOverrides {
+    allowAnonymousUsers?: boolean;
     projectUrl: string;
 }
 ```

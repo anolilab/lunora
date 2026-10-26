@@ -31,23 +31,54 @@ describe(clerk, () => {
         expect(() => clerk({ publishableKey: "sk_test_nope" })).toThrow(/publishable key/);
     });
 
-    it("maps v2 org claims to orgId / orgRole / orgPermissions / roles", async () => {
+    it("maps v2 org claims and decodes permissions from the fea / per / fpm bitmasks", async () => {
         expect.assertions(1);
 
+        // Clerk's documented example: dashboard gets manage+read (3 = 0b11), teams only read (2 = 0b10).
         const token = await sign(
-            { azp: "https://app.example.test", o: { id: "org_1", per: "read,manage", rol: "admin", slg: "acme" }, sid: "sess_1", sub: "user_1", v: 2 },
+            {
+                azp: "https://app.example.test",
+                fea: "o:dashboard,o:teams",
+                o: { fpm: "3,2", id: "org_1", per: "manage,read", rol: "admin", slg: "acme" },
+                sid: "sess_1",
+                sub: "user_1",
+                v: 2,
+            },
             issuer,
         );
 
-        await expect(clerk({ issuer, keySet: publicKey })(bearer(token))).resolves.toMatchObject({
+        await expect(clerk({ issuer, keySet: publicKey })(bearer(token))).resolves.toStrictEqual({
+            exp: expect.any(Number),
             orgId: "org_1",
-            orgPermissions: ["read", "manage"],
+            orgPermissions: ["org:dashboard:manage", "org:dashboard:read", "org:teams:read"],
             orgRole: "admin",
             orgSlug: "acme",
             roles: ["admin"],
             sessionId: "sess_1",
             userId: "user_1",
         });
+    });
+
+    it.each([
+        ["no fpm", { fea: "o:dashboard", o: { id: "org_1", per: "manage,read", rol: "admin" } }],
+        ["a mask count that does not match fea", { fea: "o:dashboard,o:teams", o: { fpm: "3", id: "org_1", per: "manage,read", rol: "admin" } }],
+        ["a non-integer mask", { fea: "o:dashboard", o: { fpm: "x", id: "org_1", per: "manage,read", rol: "admin" } }],
+        ["a v1 list next to a v2 org", { fea: "o:dashboard", o: { id: "org_1", per: "manage", rol: "admin" }, org_permissions: ["org:dashboard:manage"] }],
+    ])("forwards no v2 org permissions for %s (fail closed)", async (_label, claims) => {
+        expect.assertions(2);
+
+        const identity = await clerk({ issuer, keySet: publicKey })(bearer(await sign({ ...claims, sub: "user_1" }, issuer)));
+
+        expect(identity?.orgId).toBe("org_1");
+        expect(identity).not.toHaveProperty("orgPermissions");
+    });
+
+    it("skips user-scoped features when decoding v2 org permissions", async () => {
+        expect.assertions(1);
+
+        const token = await sign({ fea: "u:beta,o:teams", o: { fpm: "1,1", id: "org_1", per: "read", rol: "member" }, sub: "user_1" }, issuer);
+
+        await expect(clerk({ issuer, keySet: publicKey })(bearer(token))).resolves.toMatchObject({ orgPermissions: ["org:teams:read"] });
     });
 
     it("maps v1 org claims and strips the org: role prefix", async () => {
@@ -127,6 +158,18 @@ describe(auth0, () => {
     });
 });
 
+describe("auth0 machine tokens", () => {
+    it("resolves a client-credentials token to anonymous unless allowClientCredentials is set", async () => {
+        expect.assertions(2);
+
+        const token = await sign({ gty: "client-credentials", sub: "abc@clients" }, "https://acme.auth0.com/", "https://api.example.test");
+        const options = { audience: "https://api.example.test", domain: "acme.auth0.com", keySet: publicKey };
+
+        await expect(auth0(options)(bearer(token))).resolves.toBeNull();
+        await expect(auth0({ ...options, allowClientCredentials: true })(bearer(token))).resolves.toMatchObject({ userId: "abc@clients" });
+    });
+});
+
 describe(supabase, () => {
     it("verifies an ES256 user token and refuses an anon-audience one", async () => {
         expect.assertions(2);
@@ -142,5 +185,19 @@ describe(supabase, () => {
             userId: "uuid-1",
         });
         await expect(resolve(bearer(await sign({ sub: "uuid-1" }, issuer, "anon", "ES256")))).resolves.toBeNull();
+    });
+
+    it("resolves an anonymous sign-in to anonymous unless allowAnonymousUsers is set", async () => {
+        expect.assertions(2);
+
+        const token = await sign({ is_anonymous: true, role: "authenticated", sub: "uuid-guest" }, "https://ref.supabase.co/auth/v1", "authenticated", "ES256");
+
+        await expect(supabase({ keySet: ec.publicKey, projectUrl: "https://ref.supabase.co" })(bearer(token))).resolves.toBeNull();
+        await expect(
+            supabase({ allowAnonymousUsers: true, keySet: ec.publicKey, projectUrl: "https://ref.supabase.co" })(bearer(token)),
+        ).resolves.toMatchObject({
+            isAnonymous: true,
+            userId: "uuid-guest",
+        });
     });
 });

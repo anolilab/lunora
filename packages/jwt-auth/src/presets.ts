@@ -95,13 +95,65 @@ const clerkFrontendApi = (publishableKey: string): string => {
     return `https://${decoded.slice(0, -1)}`;
 };
 
+const CLERK_MASK = /^\d+$/u;
+
+/**
+ * Decode Clerk v2's compact organization permissions into full permission keys
+ * (`org:<feature>:<permission>`, the same format as v1's `org_permissions`).
+ *
+ * `fea` lists features with their scope (`o:dashboard,u:x`); `o.per` lists
+ * permission names (`manage,read`); `o.fpm` holds one integer per `fea`
+ * position, a bitmask over `o.per` whose least significant bit is the FIRST
+ * `per` entry. Clerk's example: `fea: "o:dashboard,o:teams"`, `per:
+ * "manage,read"`, `fpm: "3,2"` grants `dashboard:manage`, `dashboard:read` and
+ * `teams:read` — not `teams:manage`. A flat split of `per` would grant every
+ * permission on every feature, so this decodes the masks and fails closed:
+ * anything malformed (missing claim, length mismatch, non-integer mask)
+ * yields `undefined` and no permission is forwarded.
+ * @see https://clerk.com/docs/guides/sessions/session-tokens (o.fpm decoding)
+ * @see https://clerk.com/docs/guides/organizations/control-access/roles-and-permissions (key format)
+ */
+const clerkV2Permissions = (fea: unknown, org: Record<string, unknown>): string[] | undefined => {
+    if (typeof fea !== "string" || typeof org.per !== "string" || typeof org.fpm !== "string") {
+        return undefined;
+    }
+
+    const features = fea.split(",");
+    const permissionNames = org.per.split(",");
+    const masks = org.fpm.split(",");
+
+    if (features.length !== masks.length || masks.some((mask) => !CLERK_MASK.test(mask))) {
+        return undefined;
+    }
+
+    const granted: string[] = [];
+
+    for (const [index, scoped] of features.entries()) {
+        // Only organization-scoped features (`o:`) carry org permissions; `u:` ones are user-level.
+        if (!scoped.startsWith("o:")) {
+            continue;
+        }
+
+        // Read right to left: the last binary digit is the bit for the first `per` entry.
+        const binary = BigInt(masks[index] as string).toString(2);
+
+        for (const [bit, name] of permissionNames.entries()) {
+            if (name.length > 0 && binary.at(-1 - bit) === "1") {
+                granted.push(`org:${scoped.slice(2)}:${name}`);
+            }
+        }
+    }
+
+    return granted;
+};
+
 /**
  * Map Clerk session-token claims (v2 with a v1 fallback) to identity claims.
  *
  * v2 nests the active organization under `o`: `o.id`, `o.slg`, `o.rol` (role
- * WITHOUT the `org:` prefix) and `o.per` (comma-separated permission names);
- * v1 used top-level `org_id` / `org_slug` / `org_role` (`org:admin`) /
- * `org_permissions`. `sts: "pending"` marks a session that has not finished a
+ * WITHOUT the `org:` prefix); its permissions are encoded compactly and decoded
+ * by {@link clerkV2Permissions}. v1 used top-level `org_id` / `org_slug` /
+ * `org_role` (`org:admin`) / `org_permissions` (full `org:<feature>:<perm>` keys). `sts: "pending"` marks a session that has not finished a
  * required step (e.g. choosing an organization) and is treated as anonymous.
  * @see https://clerk.com/docs/guides/sessions/session-tokens
  */
@@ -119,7 +171,8 @@ const clerkClaims =
         const org = (typeof payload.o === "object" && payload.o !== null ? payload.o : {}) as Record<string, unknown>;
         const v1Role = typeof payload.org_role === "string" ? payload.org_role.replace(ORG_PREFIX, "") : undefined;
         const orgRole = nonEmptyString(org.rol) ?? v1Role;
-        const permissions = typeof org.per === "string" ? org.per.split(",").filter(Boolean) : stringList(payload.org_permissions);
+        // A v2 token (it has `o`) never falls back to v1's list: an undecodable v2 encoding forwards nothing.
+        const permissions = typeof payload.o === "object" && payload.o !== null ? clerkV2Permissions(payload.fea, org) : stringList(payload.org_permissions);
 
         return defined({
             orgId: nonEmptyString(org.id) ?? nonEmptyString(payload.org_id),
@@ -229,6 +282,14 @@ const workos = (options: WorkOsOptions): JwtIdentityResolver => {
 // ---------------------------------------------------------------------------
 
 interface Auth0Options extends PresetOverrides {
+    /**
+     * Accept machine-to-machine (`client-credentials`) access tokens as
+     * identities. Off by default: their `sub` is `<client_id>@clients`, an app
+     * rather than a user, and treating it as `ctx.auth.userId` would let any M2M
+     * client for your API act as a signed-in user.
+     */
+    allowClientCredentials?: boolean;
+
     /** Your API's identifier — the access token's `aud`. Required: it is what scopes a token to your API. */
     audience: string;
 
@@ -240,7 +301,10 @@ interface Auth0Options extends PresetOverrides {
  * Auth0 access tokens. JWKS at `https://<domain>/.well-known/jwks.json`, `iss`
  * is `https://<domain>/` (trailing slash), `aud` is your API identifier, RS256.
  * Forwards `permissions` (RBAC "Add Permissions in the Access Token") and
- * `orgId` (`org_id`, Organizations).
+ * `orgId` (`org_id`, Organizations). Machine-to-machine tokens (`gty:
+ * "client-credentials"`, `sub` `<client_id>@clients`) resolve anonymous unless
+ * `allowClientCredentials` is set.
+ * @see https://auth0.com/docs/secure/tokens/access-tokens/access-token-profiles
  * @see https://auth0.com/docs/secure/tokens/access-tokens/validate-access-tokens
  * @see https://auth0.com/docs/get-started/apis/enable-role-based-access-control-for-apis
  * @see https://auth0.com/docs/manage-users/organizations/using-tokens
@@ -256,7 +320,13 @@ const auth0 = (options: Auth0Options): JwtIdentityResolver => {
         ...options,
         algorithms: ["RS256"],
         audience: options.audience,
-        claims: withExtraClaims((payload) => defined({ orgId: nonEmptyString(payload.org_id), permissions: stringList(payload.permissions) }), options.claims),
+        claims: withExtraClaims(
+            (payload) =>
+                payload.gty === "client-credentials" && options.allowClientCredentials !== true
+                    ? ANONYMOUS
+                    : defined({ orgId: nonEmptyString(payload.org_id), permissions: stringList(payload.permissions) }),
+            options.claims,
+        ),
         issuer: `${origin}/`,
         jwksUrl: `${origin}/.well-known/jwks.json`,
     });
@@ -267,6 +337,15 @@ const auth0 = (options: Auth0Options): JwtIdentityResolver => {
 // ---------------------------------------------------------------------------
 
 interface SupabaseOptions extends PresetOverrides {
+    /**
+     * Accept Supabase anonymous sign-ins as identities. Off by default: an
+     * anonymous user's token verifies like a permanent user's (it assumes the
+     * `authenticated` role), so without this check `ctx.auth.userId` would be set
+     * and RLS would treat a guest as signed in. When enabled, the identity
+     * carries `isAnonymous: true` so policies can tell them apart.
+     */
+    allowAnonymousUsers?: boolean;
+
     /** Your project URL, e.g. `https://<project-ref>.supabase.co`. */
     projectUrl: string;
 }
@@ -275,9 +354,11 @@ interface SupabaseOptions extends PresetOverrides {
  * Supabase Auth user tokens signed with asymmetric keys (ES256 / RS256; the
  * legacy HS256 secret has no public key and cannot be verified this way). JWKS
  * at `<project>/auth/v1/.well-known/jwks.json`, `iss` is `<project>/auth/v1`,
- * `aud` is `authenticated` (anonymous-user tokens are `anon` and so stay
- * anonymous here). Forwards `email`, `role` (the Postgres role), `aal`,
- * `isAnonymous` and `sessionId`.
+ * `aud` is `authenticated`. Anonymous sign-ins (`is_anonymous: true`) also
+ * carry the `authenticated` role, so they resolve anonymous unless
+ * `allowAnonymousUsers` is set. Forwards `email`, `role` (the Postgres role),
+ * `aal`, `isAnonymous` and `sessionId`.
+ * @see https://supabase.com/docs/guides/auth/auth-anonymous
  * @see https://supabase.com/docs/guides/auth/signing-keys
  * @see https://supabase.com/docs/guides/auth/jwt-fields
  */
@@ -290,13 +371,15 @@ const supabase = (options: SupabaseOptions): JwtIdentityResolver => {
         audience: "authenticated",
         claims: withExtraClaims(
             (payload) =>
-                defined({
-                    aal: nonEmptyString(payload.aal),
-                    email: nonEmptyString(payload.email),
-                    isAnonymous: typeof payload.is_anonymous === "boolean" ? payload.is_anonymous : undefined,
-                    role: nonEmptyString(payload.role),
-                    sessionId: nonEmptyString(payload.session_id),
-                }),
+                payload.is_anonymous === true && options.allowAnonymousUsers !== true
+                    ? ANONYMOUS
+                    : defined({
+                          aal: nonEmptyString(payload.aal),
+                          email: nonEmptyString(payload.email),
+                          isAnonymous: typeof payload.is_anonymous === "boolean" ? payload.is_anonymous : undefined,
+                          role: nonEmptyString(payload.role),
+                          sessionId: nonEmptyString(payload.session_id),
+                      }),
             options.claims,
         ),
         issuer: `${origin}/auth/v1`,
