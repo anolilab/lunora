@@ -112,7 +112,7 @@ describe("lunora seed", () => {
     });
 
     it("deals a table-level unique index read from the schema, so a through table repeats no pair", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         mkdirSync(join(workDir, "lunora"), { recursive: true });
         writeFileSync(
@@ -131,17 +131,21 @@ export default defineSchema({
         vi.spyOn(process.stdout, "write").mockReturnValue(true);
 
         const result = await runSeedCommand({ count: 4, cwd: workDir, dryRun: true, logger: silentLogger(), table: "authorBooks" });
-        const links = result.ndjson
+        const rows = result.ndjson
             .split("\n")
             .filter((line) => line.trim().length > 0)
-            .map((line) => JSON.parse(line) as { doc: Record<string, unknown>; table: string })
-            .filter((row) => row.table === "authorBooks");
+            .map((line) => JSON.parse(line) as { doc: Record<string, unknown>; table: string });
+        const links = rows.filter((row) => row.table === "authorBooks");
+        const sorted = (values: string[]): string[] => values.toSorted((left, right) => left.localeCompare(right));
+        const linked = (column: string): string[] => sorted(links.map((row) => String(row.doc[column])));
+        const parents = (table: string): string[] => sorted(rows.filter((row) => row.table === table).map((row) => String(row.doc._id)));
 
         expect(links).toHaveLength(4);
-        expect(new Set(links.map((row) => `${row.doc.authorId as string}|${row.doc.bookId as string}`)).size).toBe(4);
-        // The deal walks the first member's digit fastest, so four rows take four different authors.
-        // Random draws would rarely do that, so this fails if the index never reaches the planner.
-        expect(new Set(links.map((row) => row.doc.authorId)).size).toBe(4);
+        expect(new Set(links.map((row) => `${String(row.doc.authorId)}|${String(row.doc.bookId)}`)).size).toBe(4);
+        // Four authors and four books are seeded alongside, and four links take each parent once. A random
+        // draw repeats a parent in most runs, and a repeat fails both checks whichever pair the planner picks.
+        expect(linked("authorId")).toStrictEqual(parents("authors"));
+        expect(linked("bookId")).toStrictEqual(parents("books"));
     });
 
     it("rejects an unknown --table", async () => {
