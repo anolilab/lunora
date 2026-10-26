@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.354](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.353...@lunora/codegen@1.0.0-alpha.354) (2026-10-26)
+
+### Bug Fixes
+
+* **seed:** validator bounds, unique indexes and dangling FKs ([#1284](https://github.com/anolilab/lunora/issues/1284)) ([8ede8ab](https://github.com/anolilab/lunora/commit/8ede8abc2e7434bc71443ad95388315ff4ec7dee))
+
 ## @lunora/codegen [1.0.0-alpha.353](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.352...@lunora/codegen@1.0.0-alpha.353) (2026-10-26)
 
 ### Features
