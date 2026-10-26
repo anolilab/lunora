@@ -73,7 +73,7 @@ export const heartbeat = mutation
         const existing = await ownPresence(ctx, channelId, sessionId, ctx.auth.userId);
 
         if (existing) {
-            await ctx.db.patch(existing._id, { lastSeen: Date.now(), name });
+            await ctx.db.patch("presence", existing._id, { lastSeen: Date.now(), name });
 
             return;
         }
@@ -94,6 +94,6 @@ export const leave = mutation
         const existing = await ownPresence(ctx, channelId, sessionId, ctx.auth.userId);
 
         if (existing) {
-            await ctx.db.delete(existing._id);
+            await ctx.db.delete("presence", existing._id);
         }
     });

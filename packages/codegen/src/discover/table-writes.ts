@@ -1,16 +1,25 @@
-import type { CallExpression, Node as TsNode, Project, Type } from "ts-morph";
-import { Node } from "ts-morph";
+import type { CallExpression, Identifier, Node as TsNode, Project } from "ts-morph";
+import { Node, VariableDeclarationKind } from "ts-morph";
 
 import type { TableWriteIR } from "../ir";
 import { collectCallRows } from "./ast";
 import { callSiteScopeOf } from "./attribution";
 import { isDatabaseAccessor } from "./database-calls";
 
-/** `ctx.db.<method>(id, …)` writes whose first argument is an `Id<"table">`. */
-const BY_ID = new Set(["delete", "hardDelete", "patch", "replace", "restore"]);
-
 /** `ctx.db.<method>("table", …)` writes that name the table first. `insert` is `discoverInserts`'. */
-const BY_NAME = new Set(["insertMany", "insertManyUnsafe", "patchIf", "patchWhere"]);
+const BY_NAME = new Set([
+    "delete",
+    "deleteMany",
+    "hardDelete",
+    "insertMany",
+    "insertManyUnsafe",
+    "patch",
+    "patchIf",
+    "patchMany",
+    "patchWhere",
+    "replace",
+    "restore",
+]);
 
 /** `ctx.db.<table>.<method>(…)` facade writes — the table is the receiver's property name. */
 const FACADE_WRITES = new Set([
@@ -27,45 +36,6 @@ const FACADE_WRITES = new Set([
     "upsertMany",
 ]);
 
-/**
- * The tables an `Id<"table">` type brands (`string & { readonly __table: "table" }`),
- * or `[]` when it is not one. Nullish members are dropped first (`Id<"a"> |
- * undefined`), and a union of ids (`Id<"a"> | Id<"b">`) yields every member's
- * table — its `__table` is the union `"a" | "b"`.
- */
-const tablesOfIdType = (type: Type, at: TsNode): string[] => {
-    const brand = type.getNonNullableType().getProperty("__table")?.getTypeAtLocation(at);
-
-    if (brand === undefined) {
-        return [];
-    }
-
-    const members = brand.isUnion() ? brand.getUnionTypes() : [brand];
-    const tables = members.map((member) => member.getLiteralValue()).filter((value): value is string => typeof value === "string");
-
-    // A member that is not a string literal (`Id<string>`) makes the set unreadable.
-    return tables.length === members.length ? tables : [];
-};
-
-/** The tables a by-id argument addresses: the id itself, an array of ids, or an array of `{ id }` (`patchMany`). */
-const tablesOfIdArgument = (argument: TsNode, method: string): string[] => {
-    const type = argument.getType();
-
-    if (method === "deleteMany" || method === "patchMany") {
-        const element = type.getArrayElementType();
-
-        if (element === undefined) {
-            return [];
-        }
-
-        const idType = method === "patchMany" ? element.getProperty("id")?.getTypeAtLocation(argument) : element;
-
-        return idType === undefined ? [] : tablesOfIdType(idType, argument);
-    }
-
-    return tablesOfIdType(type, argument);
-};
-
 /** The {@link TableWriteIR.table} an unreadable target (an untyped id, a non-literal name) is recorded under. */
 const UNREADABLE_TABLE = "";
 
@@ -78,16 +48,16 @@ interface Write {
 }
 
 /**
- * The fields a `patch` / `patchMany` writes: the keys of its object-literal
- * argument (the second). `undefined` for any other method, and when the argument
+ * The fields a `patch` writes: the keys of its object-literal argument (the third,
+ * after the table and id). `undefined` for any other method, and when the argument
  * is not an object literal or spreads one, since then the keys cannot be read.
  */
-const patchedFieldsOf = (call: CallExpression, method: string): string[] | undefined => {
-    if (method !== "patch" && method !== "patchMany") {
+const patchedFieldsOf = (call: CallExpression, method: string, bodyIndex: number): string[] | undefined => {
+    if (method !== "patch") {
         return undefined;
     }
 
-    const patch = call.getArguments()[1];
+    const patch = call.getArguments()[bodyIndex];
 
     if (patch === undefined || !Node.isObjectLiteralExpression(patch)) {
         return undefined;
@@ -106,24 +76,100 @@ const patchedFieldsOf = (call: CallExpression, method: string): string[] | undef
     return keys;
 };
 
-/** The tables a `ctx.db.<method>(first, …)` write names, or `undefined` when `method` is not a write. */
-const databaseWrite = (method: string, first: TsNode | undefined): Write | undefined => {
-    if (BY_NAME.has(method)) {
-        return { method, tables: [first !== undefined && Node.isStringLiteral(first) ? first.getLiteralText() : UNREADABLE_TABLE] };
+/** The initializer of the `const` an identifier names, or `undefined` when it names anything else. */
+const constantInitializerOf = (identifier: Identifier): TsNode | undefined => {
+    const declaration = identifier.getSymbol()?.getDeclarations()[0];
+
+    if (declaration === undefined || !Node.isVariableDeclaration(declaration)) {
+        return undefined;
     }
 
-    if (BY_ID.has(method) || method === "deleteMany" || method === "patchMany") {
-        const tables = first === undefined ? [] : tablesOfIdArgument(first, method);
+    return declaration.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const ? declaration.getInitializer() : undefined;
+};
 
-        return { method, tables: tables.length === 0 ? [UNREADABLE_TABLE] : tables };
+/**
+ * The tables a first argument may name: a string literal, a `const` bound to one, or an expression whose type is a
+ * literal or a union of literals (a `"notes" | "todos"` parameter may write either). An assertion (`x as "posts"`)
+ * is a claim about the value, not proof of it, so it is unreadable. `undefined` when no table can be read.
+ */
+const tablesOfFirst = (first: TsNode | undefined): string[] | undefined => {
+    if (first === undefined) {
+        return undefined;
+    }
+
+    // `as const` and `satisfies` claim nothing about the value, so the expression they wrap decides.
+    if (Node.isAsExpression(first) && first.getTypeNode()?.getText() === "const") {
+        return tablesOfFirst(first.getExpression());
+    }
+
+    if (Node.isSatisfiesExpression(first)) {
+        return tablesOfFirst(first.getExpression());
+    }
+
+    if (Node.isAsExpression(first) || Node.isTypeAssertion(first)) {
+        return undefined;
+    }
+
+    if (Node.isStringLiteral(first)) {
+        return [first.getLiteralText()];
+    }
+
+    if (Node.isIdentifier(first)) {
+        const initializer = constantInitializerOf(first);
+
+        if (initializer !== undefined) {
+            return tablesOfFirst(initializer);
+        }
+    }
+
+    if (!Node.isExpression(first)) {
+        return undefined;
+    }
+
+    const type = first.getType();
+    const literals = (type.isUnion() ? type.getUnionTypes() : [type]).map((member) => member.getLiteralValue());
+
+    return literals.every((literal): literal is string => typeof literal === "string") ? literals : undefined;
+};
+
+/** The tables a `ctx.db.<method>("table", …)` write names, or `undefined` when `method` is not a write. */
+const databaseWrite = (method: string, first: TsNode | undefined): Write | undefined => {
+    if (BY_NAME.has(method)) {
+        return { method, tables: tablesOfFirst(first) ?? [UNREADABLE_TABLE] };
     }
 
     return undefined;
 };
 
 /** `write` with the fields its call writes, or `undefined` when the call is not a table write. */
-const withFields = (write: Write | undefined, call: CallExpression): Write | undefined =>
-    write === undefined ? undefined : { ...write, fields: patchedFieldsOf(call, write.method) };
+const withFields = (write: Write | undefined, call: CallExpression, bodyIndex: number): Write | undefined =>
+    write === undefined ? undefined : { ...write, fields: patchedFieldsOf(call, write.method, bodyIndex) };
+
+/**
+ * The table an alias names when it is declared as a facade, `const db = ctx.db.posts`. An alias called `db` reads as
+ * the generic writer by name, so without this its `db.patch(id, fields)` would take the id for the table. Only a
+ * `const` qualifies: a `let` can be reassigned to another table before the write.
+ */
+const facadeAliasTable = (receiver: TsNode): string | undefined => {
+    if (!Node.isIdentifier(receiver)) {
+        return undefined;
+    }
+
+    const declaration = receiver.getSymbol()?.getDeclarations()[0];
+
+    if (declaration === undefined || !Node.isVariableDeclaration(declaration)) {
+        return undefined;
+    }
+
+    const initializer = declaration.getInitializer();
+    const isConst = declaration.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const;
+
+    if (!isConst || initializer === undefined || !Node.isPropertyAccessExpression(initializer) || !isDatabaseAccessor(initializer.getExpression())) {
+        return undefined;
+    }
+
+    return initializer.getName();
+};
 
 /** The {@link Write} one call makes, or `undefined` when it is not a table write. */
 const writeOf = (call: CallExpression): Write | undefined => {
@@ -135,14 +181,19 @@ const writeOf = (call: CallExpression): Write | undefined => {
 
     const method = callee.getName();
     const receiver = callee.getExpression();
+    const aliasedTable = facadeAliasTable(receiver);
+
+    if (aliasedTable !== undefined) {
+        return FACADE_WRITES.has(method) ? withFields({ method, tables: [aliasedTable] }, call, 1) : undefined;
+    }
 
     if (isDatabaseAccessor(receiver)) {
-        return withFields(databaseWrite(method, call.getArguments()[0]), call);
+        return withFields(databaseWrite(method, call.getArguments()[0]), call, 2);
     }
 
     // `ctx.db.<table>.<method>(…)` — the facade puts the table in the receiver.
     if (FACADE_WRITES.has(method) && Node.isPropertyAccessExpression(receiver) && isDatabaseAccessor(receiver.getExpression())) {
-        return withFields({ method, tables: [receiver.getName()] }, call);
+        return withFields({ method, tables: [receiver.getName()] }, call, 1);
     }
 
     return undefined;
@@ -151,10 +202,12 @@ const writeOf = (call: CallExpression): Write | undefined => {
 /**
  * Discover every table write besides a plain `ctx.db.insert("table", …)` (that is
  * `discoverInserts`): by-id writes (`patch`/`replace`/`delete`/…), batch writes,
- * and the `ctx.db.<table>.*` facade, each with its `CallSiteScope`. A by-id
- * write reads its table off the id's `Id<"table">` type through the type checker:
- * a union id (`Id<"a"> | Id<"b">`) gives one record per table, and an untyped id
- * (a plain `string`) one record with `table: ""`.
+ * and the `ctx.db.<table>.*` facade, each with its `CallSiteScope`. A
+ * `ctx.db.<method>(table, …)` write takes its tables from the first argument: a
+ * string literal, a `const` bound to one, or an expression typed as a literal or a
+ * union of literals (one record per member). An `as const` or `satisfies` wrapper is
+ * looked through; any other assertion, and any expression with no literal type, is
+ * recorded with `table: ""`.
  */
 const discoverTableWrites = (project: Project, lunoraDirectory: string): TableWriteIR[] =>
     collectCallRows(project, lunoraDirectory, (call, file): TableWriteIR[] | undefined => {

@@ -648,7 +648,7 @@ type DataMigrationTransform = (document: DataMigrationDocument, context: DataMig
 interface DatabaseWriterLike {
     aggregate: (tableName: string, options: AggregateOptions) => Promise<AggregateResult>;
     asId?: (tableName: string, id: string) => string;
-    assertPatchAllowed?: (id: string, expectedTable?: string) => Promise<void>;
+    assertPatchAllowed?: (table: string, id: string) => Promise<void>;
     cdcChangedTables?: (sinceSeq: number, options?: {
         cursorOnly?: boolean;
     }) => Promise<{
@@ -657,7 +657,7 @@ interface DatabaseWriterLike {
         tables: string[];
     } | undefined>;
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
-    delete: (id: string, expectedTable?: string, options?: {
+    delete: (table: string, id: string, options?: {
         hard?: boolean;
     }) => Promise<void>;
     deleteAll?: (tableName: string, options?: {
@@ -666,9 +666,9 @@ interface DatabaseWriterLike {
     }) => Promise<{
         deleted: number;
     }>;
-    deleteMany?: (ids: ReadonlyArray<string>, options?: {
+    deleteMany?: (table: string, ids: ReadonlyArray<string>, options?: {
         limit?: number;
-    }, expectedTable?: string) => Promise<{
+    }) => Promise<{
         deleted: number;
     }>;
     deleteRereadTables?: ReadonlySet<string>;
@@ -701,7 +701,7 @@ interface DatabaseWriterLike {
         tableName: string;
     }>;
     normalizeId: (tableName: string, id: string) => null | string;
-    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: PatchWriteOptions) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>, options?: PatchWriteOptions) => Promise<void>;
     patchIf?: (tableName: string, id: string, args: {
         patch: Record<string, unknown>;
         verify?: PatchVerifier;
@@ -710,12 +710,12 @@ interface DatabaseWriterLike {
         applied: boolean;
         doc: Record<string, unknown> | null;
     }>;
-    patchMany?: (patches: ReadonlyArray<{
+    patchMany?: (table: string, patches: ReadonlyArray<{
         id: string;
         patch: Record<string, unknown>;
     }>, options?: {
         limit?: number;
-    }, expectedTable?: string) => Promise<{
+    }) => Promise<{
         patched: number;
     }>;
     patchWhere?: (tableName: string, args: {
@@ -734,10 +734,10 @@ interface DatabaseWriterLike {
     related?: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
     relationEdges?: ReadonlyArray<RelationEdge>;
     relationWrites?: RelationWriteMap;
-    replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: {
+    replace: (table: string, id: string, document: Record<string, unknown>, options?: {
         allowExplicitId?: boolean;
     }) => Promise<void>;
-    restore?: (id: string, expectedTable?: string) => Promise<void>;
+    restore?: (table: string, id: string) => Promise<void>;
     softDeleteFields?: ReadonlyMap<string, string>;
     system?: SystemDatabaseReader;
     wipeShard?: (options?: {
@@ -4377,7 +4377,7 @@ const groupUnmappedRows: (rows: ReadonlyArray<Record<string, unknown>>) => Map<s
 ### `guardWriter` (const)
 
 ```ts
-const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, tablesOfIds?: TablesOfIds, relationEdges?: ReadonlyArray<RelationEdge>) => W;
+const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, relationEdges?: ReadonlyArray<RelationEdge>) => W;
 ```
 
 ### `handleReplicaControl` (const)
@@ -5980,12 +5980,6 @@ interface SystemDocMap {
 
 ```ts
 type TableOfId = (id: string, expectedTable?: string) => Promise<string | undefined> | string | undefined;
-```
-
-### `TablesOfIds` (type)
-
-```ts
-type TablesOfIds = (ids: ReadonlyArray<string>, expectedTable?: string) => Promise<ReadonlyMap<string, string>> | ReadonlyMap<string, string>;
 ```
 
 ### `ThroughRelationDefinitionLike` (interface)

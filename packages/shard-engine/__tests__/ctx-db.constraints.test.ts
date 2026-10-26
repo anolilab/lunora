@@ -132,7 +132,7 @@ describe("ctx-db constraints", () => {
 
             await writer.insert("counters", { _id: "c1", n: 10 }, { allowExplicitId: true });
 
-            await writer.patch("c1", { flag: { toggle: true }, n: { increment: 5 } });
+            await writer.patch("counters", "c1", { flag: { toggle: true }, n: { increment: 5 } });
 
             const afterPatch = await writer.get("counters", "c1");
 
@@ -144,13 +144,13 @@ describe("ctx-db constraints", () => {
 
             expect(afterPatchIf?.["n"]).toBe(30);
 
-            await writer.patchMany?.([{ id: "c1", patch: { n: { decrement: 10 } } }]);
+            await writer.patchMany?.("counters", [{ id: "c1", patch: { n: { decrement: 10 } } }]);
 
             const afterPatchMany = await writer.get("counters", "c1");
 
             expect(afterPatchMany?.["n"]).toBe(20);
 
-            await writer.patch("c1", { n: { divide: 4 } });
+            await writer.patch("counters", "c1", { n: { divide: 4 } });
 
             const afterDivide = await writer.get("counters", "c1");
 
@@ -163,7 +163,7 @@ describe("ctx-db constraints", () => {
             const writer = operatorSetup();
 
             await writer.insert("counters", { _id: "c1" }, { allowExplicitId: true });
-            await writer.patch("c1", { meta: { increment: 1 } });
+            await writer.patch("counters", "c1", { meta: { increment: 1 } });
 
             const row = await writer.get("counters", "c1");
 
@@ -183,9 +183,9 @@ describe("ctx-db constraints", () => {
 
             await writer.insert("counters", { _id: "c1", n: 3 }, { allowExplicitId: true });
 
-            await writer.patch("c1", { n: { decrement: 1 } }, undefined, { verify: nonNegative });
+            await writer.patch("counters", "c1", { n: { decrement: 1 } }, { verify: nonNegative });
 
-            await expect(writer.patch("c1", { n: { decrement: 5 } }, undefined, { verify: nonNegative })).rejects.toMatchObject({ code: "FORBIDDEN" });
+            await expect(writer.patch("counters", "c1", { n: { decrement: 5 } }, { verify: nonNegative })).rejects.toMatchObject({ code: "FORBIDDEN" });
 
             const row = await writer.get("counters", "c1");
 
@@ -217,7 +217,7 @@ describe("ctx-db constraints", () => {
             });
             const options = { verify: () => true };
 
-            await writer.patch("g1", { n: { increment: 1 } }, "counters", options);
+            await writer.patch("counters", "g1", { n: { increment: 1 } }, options);
 
             expect(globalPatch).toHaveBeenCalledTimes(1);
             expect(globalPatch.mock.calls[0]?.[3]).toBe(options);
@@ -230,7 +230,7 @@ describe("ctx-db constraints", () => {
 
             await writer.insert("counters", { _id: "c1", n: 1 }, { allowExplicitId: true });
 
-            await expect(writer.patch("c1", { n: { divide: 0 } })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+            await expect(writer.patch("counters", "c1", { n: { divide: 0 } })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
 
             const row = await writer.get("counters", "c1");
 
@@ -268,7 +268,7 @@ describe("ctx-db constraints", () => {
             const writer = createShardContextDatabase({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
 
             await writer.insert("items", { _id: "i1", title: "first" }, { allowExplicitId: true });
-            await writer.delete("i1");
+            await writer.delete("items", "i1");
 
             const doc = await writer.get("items", "i1");
 
@@ -283,13 +283,13 @@ describe("ctx-db constraints", () => {
 
             await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
 
-            await writer.patch("i1", { title: "second" });
+            await writer.patch("items", "i1", { title: "second" });
 
             const afterFirstPatch = await writer.get("items", "i1");
 
             expect(afterFirstPatch?.["rev"]).toBe(1);
 
-            await writer.patch("i1", { title: "third" });
+            await writer.patch("items", "i1", { title: "third" });
 
             const afterSecondPatch = await writer.get("items", "i1");
 
@@ -325,7 +325,7 @@ describe("ctx-db constraints", () => {
 
             await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
 
-            await writer.patch("i1", { rev: 99 });
+            await writer.patch("items", "i1", { rev: 99 });
 
             const afterExplicitPatch = await writer.get("items", "i1");
 
@@ -340,13 +340,13 @@ describe("ctx-db constraints", () => {
 
             await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
 
-            await writer.replace("i1", { slug: "a", title: "auto" });
+            await writer.replace("items", "i1", { slug: "a", title: "auto" });
 
             const afterAutoReplace = await writer.get("items", "i1");
 
             expect(afterAutoReplace?.["rev"]).toBe(1);
 
-            await writer.replace("i1", { rev: 42, slug: "a", title: "manual" });
+            await writer.replace("items", "i1", { rev: 42, slug: "a", title: "manual" });
 
             const afterManualReplace = await writer.get("items", "i1");
 
@@ -376,7 +376,7 @@ describe("ctx-db constraints", () => {
             await writer.insert("items", { _id: "i1", slug: "one", title: "first" }, { allowExplicitId: true });
             await writer.insert("items", { _id: "i2", slug: "two", title: "second" }, { allowExplicitId: true });
 
-            await expect(writer.patch("i2", { slug: "one" })).rejects.toBeInstanceOf(ConflictError);
+            await expect(writer.patch("items", "i2", { slug: "one" })).rejects.toBeInstanceOf(ConflictError);
         });
 
         it("distinct unique values insert cleanly", async () => {
@@ -444,7 +444,7 @@ describe("ctx-db constraints", () => {
             await writer.insert("pages", { _id: "p1", slug: "a", tenantId: "t1", title: "A" }, { allowExplicitId: true });
             await writer.insert("pages", { _id: "p2", slug: "b", tenantId: "t1", title: "B" }, { allowExplicitId: true });
 
-            await expect(writer.patch("p2", { slug: "a" })).rejects.toBeInstanceOf(ConflictError);
+            await expect(writer.patch("pages", "p2", { slug: "a" })).rejects.toBeInstanceOf(ConflictError);
         });
     });
 
@@ -518,7 +518,7 @@ describe("ctx-db constraints", () => {
 
             await writer.insert("orders", { _id: "o1", amount: 10, sku: "X" }, { allowExplicitId: true });
 
-            await expect(writer.patch("o1", { amount: -5 })).rejects.toThrow(/non-negative/u);
+            await expect(writer.patch("orders", "o1", { amount: -5 })).rejects.toThrow(/non-negative/u);
             // Prior row must remain unchanged after the rejection.
             await expect(writer.get("orders", "o1")).resolves.toMatchObject({ amount: 10 });
         });
@@ -530,7 +530,7 @@ describe("ctx-db constraints", () => {
 
             await writer.insert("orders", { _id: "o1", amount: 10, sku: "X" }, { allowExplicitId: true });
 
-            await expect(writer.replace("o1", { amount: -1, sku: "X" })).rejects.toThrow(/non-negative/u);
+            await expect(writer.replace("orders", "o1", { amount: -1, sku: "X" })).rejects.toThrow(/non-negative/u);
         });
 
         /**
@@ -578,11 +578,11 @@ describe("ctx-db constraints", () => {
 
             await writer.insert("notes", { _id: "n1", title: "first" }, { allowExplicitId: true });
             // Put the column into the state `onDelete: "set null"` and a D1 read produce.
-            await writer.patch("n1", { note: null });
+            await writer.patch("notes", "n1", { note: null });
 
             // The patch below touches only `title`; before the fix the untouched `note`
             // rode along in the merged document and failed validation.
-            await writer.patch("n1", { title: "second" });
+            await writer.patch("notes", "n1", { title: "second" });
 
             await expect(writer.get("notes", "n1")).resolves.toMatchObject({ title: "second" });
             await expect(writer.count("notes")).resolves.toBe(1);
@@ -610,7 +610,7 @@ describe("ctx-db constraints", () => {
 
             // `title` is required, so a null there is a genuine violation and must throw
             // — the skip above is scoped to optional columns only.
-            await expect(writer.patch("n2", { title: null })).rejects.toThrow(/title must be a string/u);
+            await expect(writer.patch("notes", "n2", { title: null })).rejects.toThrow(/title must be a string/u);
         });
     });
 });

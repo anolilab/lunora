@@ -73,7 +73,7 @@ export const create = mutation
                 throw new LunoraError("CONFLICT", "you already have a lobby open");
             }
 
-            await ctx.db.delete(existing._id);
+            await ctx.db.delete("lobbies", existing._id);
         }
 
         ctx.log.info("lobby opened", { isPrivate, userId });
@@ -115,7 +115,7 @@ export const join = mutation
         }
 
         ctx.log.info("lobby joined", { lobbyId, userId: ctx.auth.userId });
-        await ctx.db.patch(lobbyId, { guestId: ctx.auth.userId, isOpen: false });
+        await ctx.db.patch("lobbies", lobbyId, { guestId: ctx.auth.userId, isOpen: false });
     });
 
 export const joinByCode = mutation
@@ -141,7 +141,7 @@ export const joinByCode = mutation
             }
 
             ctx.log.info("lobby joined by code", { lobbyId: lobby._id });
-            await ctx.db.patch(lobby._id, { guestId: ctx.auth.userId, isOpen: false });
+            await ctx.db.patch("lobbies", lobby._id, { guestId: ctx.auth.userId, isOpen: false });
         }
 
         return lobby._id;
@@ -164,7 +164,7 @@ export const quickMatch = mutation.use(rateLimit(mutationLimiter, "write", byPla
     }
 
     if (hosted) {
-        await ctx.db.delete(hosted._id);
+        await ctx.db.delete("lobbies", hosted._id);
     }
 
     const joined = await ctx.db
@@ -184,7 +184,7 @@ export const quickMatch = mutation.use(rateLimit(mutationLimiter, "write", byPla
 
     if (open && open.hostId !== userId) {
         ctx.log.info("quick match paired", { lobbyId: open._id });
-        await ctx.db.patch(open._id, { guestId: userId, isOpen: false });
+        await ctx.db.patch("lobbies", open._id, { guestId: userId, isOpen: false });
 
         return open._id;
     }
@@ -207,7 +207,7 @@ export const leave = mutation
 
         if (lobby.hostId === ctx.auth.userId) {
             ctx.log.info("lobby closed by host", { lobbyId });
-            await ctx.db.delete(lobbyId);
+            await ctx.db.delete("lobbies", lobbyId);
 
             return;
         }
@@ -215,6 +215,6 @@ export const leave = mutation
         if (lobby.guestId === ctx.auth.userId) {
             ctx.log.info("guest left the lobby", { lobbyId });
             // `null`, not `undefined`: `patch` refuses an explicit undefined.
-            await ctx.db.patch(lobbyId, { guestId: null, isOpen: true });
+            await ctx.db.patch("lobbies", lobbyId, { guestId: null, isOpen: true });
         }
     });

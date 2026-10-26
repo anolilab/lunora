@@ -51,7 +51,7 @@ class TtlShard extends ShardDO {
             sql: this.sql as never,
         });
 
-        await writer.delete(args.id ?? "", args.table);
+        await writer.delete(args.table, args.id ?? "");
 
         return { id: args.id ?? null, op: args.op };
     }
@@ -122,7 +122,7 @@ describe("ttl sweep", () => {
             await writer.insert("otps", { _id: "o1", code: "a", expiresAt: NOW - 1000 }, { allowExplicitId: true });
             await writer.insert("otps", { _id: "o2", code: "b", expiresAt: NOW - 1000 }, { allowExplicitId: true });
             // Soft-delete o1: it must NOT be re-selected by the sweep.
-            await writer.delete("o1", "otps");
+            await writer.delete("otps", "o1");
 
             const { ids } = selectExpiredIds(harness.sql, { field: "expiresAt", softDeleteField: "deletedAt", table: "otps" }, NOW, 100);
 
@@ -216,14 +216,14 @@ describe("ttl sweep", () => {
             await writer.insert("otps", { _id: "o1", code: "a", expiresAt: soon }, { allowExplicitId: true });
             // A tombstone's earlier expiry is not live, so it must not pull the alarm in.
             await writer.insert("otps", { _id: "o2", code: "b", expiresAt: soon - 1000 }, { allowExplicitId: true });
-            await writer.delete("o2", "otps");
+            await writer.delete("otps", "o2");
 
             const shard = makeShard([]);
 
             await expect(shard.runPollTtlSweeps()).resolves.toBe(soon + 1);
 
-            await writer.delete("s1", "sessions");
-            await writer.delete("o1", "otps");
+            await writer.delete("sessions", "s1");
+            await writer.delete("otps", "o1");
 
             await expect(shard.runPollTtlSweeps()).resolves.toBeUndefined();
         });
@@ -309,7 +309,7 @@ describe("ttl sweep", () => {
                     sql: this.sql as never,
                 });
 
-                await writer.delete(args.id ?? "", args.table);
+                await writer.delete(args.table, args.id ?? "");
 
                 return { id: args.id ?? null, op: args.op };
             }

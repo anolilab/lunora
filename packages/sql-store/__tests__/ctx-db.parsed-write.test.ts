@@ -197,7 +197,7 @@ describe("createSqlCtxDb writes store the parsed output of v.from columns", () =
 
         const id = await writer.insert("items", input());
 
-        await writer.patch(id, { score: "9" });
+        await writer.patch("items", id, { score: "9" });
 
         await expect(stored("items", id, "score")).resolves.toBe(9);
     });
@@ -207,7 +207,7 @@ describe("createSqlCtxDb writes store the parsed output of v.from columns", () =
 
         const id = await writer.insert("items", input());
 
-        await expect(writer.patch(id, { label: "b" })).resolves.toBeUndefined();
+        await expect(writer.patch("items", id, { label: "b" })).resolves.toBeUndefined();
         await expect(stored("items", id, "score")).resolves.toBe(42);
     });
 
@@ -216,7 +216,7 @@ describe("createSqlCtxDb writes store the parsed output of v.from columns", () =
 
         const id = await writer.insert("items", input());
 
-        await writer.replace(id, input({ score: "11" }));
+        await writer.replace("items", id, input({ score: "11" }));
 
         await expect(stored("items", id, "score")).resolves.toBe(11);
     });
@@ -228,7 +228,7 @@ describe("createSqlCtxDb writes store the parsed output of v.from columns", () =
 
         await expect(stored("items", id, "score")).resolves.toBe(5);
 
-        await writer.replace(id, input({ score: 6 }), undefined, { allowExplicitId: true });
+        await writer.replace("items", id, input({ score: 6 }), { allowExplicitId: true });
 
         await expect(stored("items", id, "score")).resolves.toBe(6);
 
@@ -244,14 +244,14 @@ describe("createSqlCtxDb writes store the parsed output of v.from columns", () =
         expect(inserted["balance"]).toBe(9_007_199_254_740_993n);
         expect(new Uint8Array(inserted["blob"] as ArrayBuffer)).toEqual(new Uint8Array([1, 2, 3]));
 
-        await writer.patch(id, { balance: -5n, blob: bytesOf(9) });
+        await writer.patch("items", id, { balance: -5n, blob: bytesOf(9) });
 
         const patched = await read("items", id);
 
         expect(patched["balance"]).toBe(-5n);
         expect(new Uint8Array(patched["blob"] as ArrayBuffer)).toEqual(new Uint8Array([9]));
 
-        await writer.replace(id, input({ balance: 12n, blob: bytesOf(7, 7) }));
+        await writer.replace("items", id, input({ balance: 12n, blob: bytesOf(7, 7) }));
 
         const replaced = await read("items", id);
 
@@ -266,7 +266,7 @@ describe("createSqlCtxDb writes store the parsed output of v.from columns", () =
 
         await expect(read("items", id)).resolves.toMatchObject({ note: "hello", optionalLabel: "x" });
 
-        await writer.patch(id, { note: null });
+        await writer.patch("items", id, { note: null });
 
         await expect(stored("items", id, "note")).resolves.toBeNull();
 
@@ -307,11 +307,11 @@ describe("createSqlCtxDb stores the parsed output of a v.from nested inside anot
 
         const id = await writer.insert("nested", nestedInput());
 
-        await writer.patch(id, { scores: ["8", "9"] });
+        await writer.patch("nested", id, { scores: ["8", "9"] });
 
         await expect(stored("nested", id, "scores")).resolves.toEqual([8, 9]);
 
-        await writer.replace(id, nestedInput({ box: { n: "6", tag: "u" }, deep: "7" }));
+        await writer.replace("nested", id, nestedInput({ box: { n: "6", tag: "u" }, deep: "7" }));
 
         await expect(stored("nested", id, "box")).resolves.toEqual({ n: 6, tag: "u" });
         await expect(stored("nested", id, "deep")).resolves.toBe(7);
@@ -344,14 +344,14 @@ describe("createSqlCtxDb read-modify-write of a row holding parsed columns", () 
         const id = await writer.insert("items", input({ maybeScore: "7" }));
         const current = await read("items", id);
 
-        await writer.replace(id, { ...current, label: "b" });
+        await writer.replace("items", id, { ...current, label: "b" });
 
         await expect(read("items", id)).resolves.toMatchObject({ label: "b", maybeScore: 7, score: 42 });
 
-        await writer.replace(id, { ...(await read("items", id)), score: "50" });
+        await writer.replace("items", id, { ...(await read("items", id)), score: "50" });
 
         await expect(stored("items", id, "score")).resolves.toBe(50);
-        await expect(writer.replace(id, { ...(await read("items", id)), score: "nope" })).rejects.toThrow(/numeric string/iu);
+        await expect(writer.replace("items", id, { ...(await read("items", id)), score: "nope" })).rejects.toThrow(/numeric string/iu);
         await expect(stored("items", id, "score")).resolves.toBe(50);
     });
 
@@ -360,14 +360,14 @@ describe("createSqlCtxDb read-modify-write of a row holding parsed columns", () 
 
         const id = await writer.insert("items", input());
 
-        await writer.patch(id, { ...(await read("items", id)), label: "b" });
+        await writer.patch("items", id, { ...(await read("items", id)), label: "b" });
 
         await expect(read("items", id)).resolves.toMatchObject({ label: "b", score: 42 });
 
-        await writer.patch(id, { ...(await read("items", id)), score: "60" });
+        await writer.patch("items", id, { ...(await read("items", id)), score: "60" });
 
         await expect(stored("items", id, "score")).resolves.toBe(60);
-        await expect(writer.patch(id, { ...(await read("items", id)), score: "nope" })).rejects.toThrow(/numeric string/iu);
+        await expect(writer.patch("items", id, { ...(await read("items", id)), score: "nope" })).rejects.toThrow(/numeric string/iu);
     });
 
     it("replace of the spread row keeps nested output too", async () => {
@@ -375,11 +375,11 @@ describe("createSqlCtxDb read-modify-write of a row holding parsed columns", () 
 
         const id = await writer.insert("nested", nestedInput());
 
-        await writer.replace(id, { ...(await read("nested", id)), label: "b" });
+        await writer.replace("nested", id, { ...(await read("nested", id)), label: "b" });
 
         await expect(read("nested", id)).resolves.toMatchObject({ box: { n: 3, tag: "t" }, deep: 4, label: "b", scores: [1, 2] });
 
-        await writer.replace(id, { ...(await read("nested", id)), scores: ["5"] });
+        await writer.replace("nested", id, { ...(await read("nested", id)), scores: ["5"] });
 
         await expect(stored("nested", id, "scores")).resolves.toEqual([5]);
     });
@@ -402,7 +402,7 @@ describe("createSqlCtxDb stores a default and an update hook's value as declared
 
         await expect(stored("nested", id, "stamp")).resolves.toBe(1);
 
-        await writer.patch(id, { label: "b" });
+        await writer.patch("nested", id, { label: "b" });
 
         await expect(stored("nested", id, "stamp")).resolves.toBe(5);
     });
@@ -426,15 +426,15 @@ describe("createSqlCtxDb stores a default and an update hook's value as declared
 
         const id = await writer.insert("priced", { label: "a" });
 
-        await writer.patch(id, { label: "b" });
+        await writer.patch("priced", id, { label: "b" });
 
         await expect(stored("priced", id, "bumped")).resolves.toBe(7);
 
-        await writer.patch(id, { bumped: 3, label: "c" });
+        await writer.patch("priced", id, { bumped: 3, label: "c" });
 
         await expect(stored("priced", id, "bumped")).resolves.toBe(300);
 
-        await writer.patch(id, { label: "d" });
+        await writer.patch("priced", id, { label: "d" });
 
         await expect(stored("priced", id, "bumped")).resolves.toBe(7);
     });
@@ -444,7 +444,7 @@ describe("createSqlCtxDb stores a default and an update hook's value as declared
 
         const id = await writer.insert("priced", { label: "a" });
 
-        await writer.replace(id, { label: "b", price: 2, tagged: 9 });
+        await writer.replace("priced", id, { label: "b", price: 2, tagged: 9 });
 
         await expect(stored("priced", id, "bumped")).resolves.toBe(7);
         await expect(stored("priced", id, "price")).resolves.toBe(200);
@@ -469,7 +469,7 @@ describe("createSqlCtxDb stores the parsed output of a v.from record key", () =>
 
         await expect(stored("labelled", id, "labels")).resolves.toStrictEqual({ alpha: "x" });
 
-        await writer.patch(id, { labels: { Beta: "y" } });
+        await writer.patch("labelled", id, { labels: { Beta: "y" } });
 
         await expect(stored("labelled", id, "labels")).resolves.toStrictEqual({ beta: "y" });
     });
@@ -490,7 +490,7 @@ describe("createSqlCtxDb: a patch verifier sees the row that will be stored", ()
 
         const id = await writer.insert("items", input());
 
-        await writer.patch(id, { score: "9" }, undefined, { verify: (_previous, next) => typeof next["score"] === "number" });
+        await writer.patch("items", id, { score: "9" }, { verify: (_previous, next) => typeof next["score"] === "number" });
 
         await expect(stored("items", id, "score")).resolves.toBe(9);
     });
@@ -500,7 +500,7 @@ describe("createSqlCtxDb: a patch verifier sees the row that will be stored", ()
 
         const id = await writer.insert("items", input());
 
-        await expect(writer.patch(id, { score: "500" }, undefined, { verify: (_previous, next) => next["score"] !== 500 })).rejects.toMatchObject({
+        await expect(writer.patch("items", id, { score: "500" }, { verify: (_previous, next) => next["score"] !== 500 })).rejects.toMatchObject({
             code: "FORBIDDEN",
         });
         await expect(stored("items", id, "score")).resolves.toBe(42);

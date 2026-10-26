@@ -32,7 +32,7 @@ import { internal } from "@/lunora/_generated/internal";
 import { mutation, v } from "@/lunora/_generated/server";
 
 export const publishPost = mutation.input({ postId: v.id("posts") }).mutation(async ({ ctx, args: { postId } }) => {
-    await ctx.db.patch(postId, { status: "published" });
+    await ctx.db.patch("posts", postId, { status: "published" });
 
     // Fire-and-forget follow-up: notify subscribers 30s later.
     await ctx.scheduler.runAfter(30_000, internal.notifications.notifySubscribers, { postId });
@@ -60,7 +60,7 @@ import { mutation, v } from "@/lunora/_generated/server";
 import { agents } from "@/lunora/_generated/api";
 
 export const ticketOpened = mutation.input({ ticketId: v.id("tickets") }).mutation(async ({ ctx, args: { ticketId } }) => {
-    await ctx.db.patch(ticketId, { state: "open" });
+    await ctx.db.patch("tickets", ticketId, { state: "open" });
 
     // Kick off a durable support-agent run five minutes from now.
     await ctx.scheduler.runAfter(5 * 60_000, agents.support, { prompt: "Draft a first reply", ticketId });
@@ -91,7 +91,7 @@ The two contexts schedule identically, but the intent differs:
 import { mutation, v } from "@/lunora/_generated/server";
 
 export const orderPlaced = mutation.input({ orderId: v.id("orders") }).mutation(async ({ ctx, args: { orderId } }) => {
-    await ctx.db.patch(orderId, { state: "placed" });
+    await ctx.db.patch("orders", orderId, { state: "placed" });
     // The action does the external work the mutation isn't allowed to.
     await ctx.scheduler.runAfter(0, "payments:charge", { orderId });
 });

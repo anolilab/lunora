@@ -114,7 +114,7 @@ export const purgeStaleDrafts = internalMutation.mutation(async ({ ctx }) => {
         .withIndex("by_updated", (range) => range.lt("updatedAt", cutoff))
         .collect();
 
-    for (const draft of stale) await ctx.db.delete(draft._id);
+    for (const draft of stale) await ctx.db.delete("drafts", draft._id);
 
     return { deleted: stale.length };
 });

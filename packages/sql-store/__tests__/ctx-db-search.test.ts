@@ -514,8 +514,8 @@ describe("global search provisioning", () => {
             const rechecks = (): number => statements.filter((text) => text.startsWith(`SELECT * FROM "notes" WHERE "id" >=`)).length;
 
             await writer.insert("notes", { _id: "a", body: "hello world", channel: "general" }, { allowExplicitId: true });
-            await writer.patch("a", { body: "goodbye world" });
-            await writer.patch("a", { body: "farewell world" });
+            await writer.patch("notes", "a", { body: "goodbye world" });
+            await writer.patch("notes", "a", { body: "farewell world" });
 
             // One re-check per write: had the guard's version drifted from the one
             // the row write set, each write would miss once and need a second.

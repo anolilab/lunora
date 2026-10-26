@@ -61,7 +61,7 @@ describe("ctx-db soft delete", () => {
         const writer = setup();
 
         await seedTodos(writer);
-        await writer.delete("t2", "todos");
+        await writer.delete("todos", "t2");
 
         // The row is gone from findMany, the fluent reader, and count…
         expect(ids(await writer.findMany("todos", {}))).toStrictEqual(["t1", "t3"]);
@@ -81,7 +81,7 @@ describe("ctx-db soft delete", () => {
         const writer = setup();
 
         await seedTodos(writer);
-        await writer.delete("t2", "todos");
+        await writer.delete("todos", "t2");
 
         expect(ids(await writer.findMany("todos", { includeDeleted: true }))).toStrictEqual(["t1", "t2", "t3"]);
     });
@@ -92,9 +92,9 @@ describe("ctx-db soft delete", () => {
         const writer = setup();
 
         await seedTodos(writer);
-        await writer.delete("t2", "todos");
+        await writer.delete("todos", "t2");
 
-        await writer.patch("t2", { deletedAt: null }, "todos");
+        await writer.patch("todos", "t2", { deletedAt: null });
 
         expect(ids(await writer.findMany("todos", {}))).toStrictEqual(["t1", "t2", "t3"]);
         await expect(writer.count("todos")).resolves.toBe(3);
@@ -106,7 +106,7 @@ describe("ctx-db soft delete", () => {
         const writer = setup();
 
         await seedTodos(writer);
-        await writer.delete("t3", "todos", { hard: true });
+        await writer.delete("todos", "t3", { hard: true });
 
         await expect(writer.get("todos", "t3")).resolves.toBeNull();
         // Even includeDeleted can't see a hard-deleted row.
@@ -121,7 +121,7 @@ describe("ctx-db soft delete", () => {
         await writer.insert("projects", { _id: "p1", name: "Project" }, { allowExplicitId: true });
         await seedTodos(writer);
 
-        await writer.delete("p1", "projects");
+        await writer.delete("projects", "p1");
 
         // The project and all its todos are hidden from list reads…
         await expect(writer.count("projects")).resolves.toBe(0);
@@ -136,7 +136,7 @@ describe("ctx-db soft delete", () => {
         const writer = setup();
 
         await seedTodos(writer);
-        await writer.delete("t2", "todos");
+        await writer.delete("todos", "t2");
 
         // `baseWhere` is how RLS injects a read policy. Both filters AND together:
         // only LIVE rows in project p1.
@@ -156,8 +156,8 @@ describe("ctx-db soft delete", () => {
         const writer = setup();
 
         await seedTodos(writer);
-        await writer.delete("t2", "todos");
-        await writer.delete("t2", "todos");
+        await writer.delete("todos", "t2");
+        await writer.delete("todos", "t2");
 
         // Still exactly one soft-deleted row, marker unchanged.
         expect(ids(await writer.findMany("todos", { includeDeleted: true }))).toStrictEqual(["t1", "t2", "t3"]);

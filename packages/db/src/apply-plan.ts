@@ -79,7 +79,7 @@ export interface ChangePlan {
  * satisfies it.
  *
  * The `never` parameter positions are deliberate, not laziness. `ctx.db.delete` is
- * `<T extends string>(id: Id<T>) => …` over the **branded** `Id<T>`, and under
+ * `<T extends string>(table: T, id: Id<T>) => …` over the **branded** `Id<T>`, and under
  * `strictFunctionTypes` a parameter is contravariant — so declaring `id: string` here
  * would make the real `ctx.db` un-assignable to `PlanWriter` (`string` is not
  * assignable to `string & { __table }`), and every caller would need a cast at the
@@ -91,9 +91,9 @@ export interface ChangePlan {
  * id)` when building the plan to catch a malformed id at the boundary.
  */
 export interface PlanWriter {
-    delete: (id: never) => Promise<void>;
+    delete: (table: never, id: never) => Promise<void>;
     insert: (tableName: never, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<unknown>;
-    patch: (id: never, patch: Record<string, unknown>) => Promise<void>;
+    patch: (table: never, id: never, patch: Record<string, unknown>) => Promise<void>;
 }
 
 /**
@@ -163,12 +163,12 @@ export const applyPlanToCollections = (collections: Record<string, Collection<Ro
 export const applyPlanToDb = async (db: PlanWriter, plan: ChangePlan): Promise<void> => {
     for (const entry of plan.deletes ?? []) {
         // eslint-disable-next-line no-await-in-loop -- ordered, single-threaded shard writes; a mid-plan throw rolls the mutation back
-        await db.delete(entry.id as never);
+        await db.delete(entry.table as never, entry.id as never);
     }
 
     for (const entry of plan.patches ?? []) {
         // eslint-disable-next-line no-await-in-loop -- see above
-        await db.patch(entry.id as never, entry.fields);
+        await db.patch(entry.table as never, entry.id as never, entry.fields);
     }
 
     for (const entry of plan.inserts ?? []) {

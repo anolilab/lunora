@@ -48,8 +48,8 @@ const settle = async (ctx: MutationCtx, game: Document_<"games">, result: "black
 
     const updates = ratingUpdates(white, black, result);
 
-    await ctx.db.patch(white._id, updates.white);
-    await ctx.db.patch(black._id, updates.black);
+    await ctx.db.patch("profiles", white._id, updates.white);
+    await ctx.db.patch("profiles", black._id, updates.black);
 };
 
 /** Signed-in app, so limits key on the player rather than the IP. */
@@ -138,7 +138,7 @@ export const start = mutation
 
         // The guest is subscribed to the lobby, so writing the id here is how they
         // learn the game exists — no polling, no second channel.
-        await ctx.db.patch(lobbyId, { gameId, isOpen: false });
+        await ctx.db.patch("lobbies", lobbyId, { gameId, isOpen: false });
 
         return gameId;
     });
@@ -236,7 +236,7 @@ export const makeMove = mutation
         // rather than leave it alone — so the end-of-game fields are spread in
         // only when the game actually ended. `drawOfferedBy` is set to `null`
         // because a move always withdraws a pending offer.
-        await ctx.db.patch(gameId, {
+        await ctx.db.patch("games", gameId, {
             drawOfferedBy: null,
             moveCount: game.moveCount + 1,
             position: serializeState(next),
@@ -284,7 +284,7 @@ export const resign = mutation
 
         const result = ctx.auth.userId === game.whiteId ? "black_wins" : "white_wins";
 
-        await ctx.db.patch(gameId, {
+        await ctx.db.patch("games", gameId, {
             drawOfferedBy: null,
             endedAt: Date.now(),
             result,
@@ -303,7 +303,7 @@ export const offerDraw = mutation
         await requirePlayer(ctx, gameId);
 
         ctx.log.info("draw offered", { by: ctx.auth.userId, gameId });
-        await ctx.db.patch(gameId, { drawOfferedBy: ctx.auth.userId });
+        await ctx.db.patch("games", gameId, { drawOfferedBy: ctx.auth.userId });
     });
 
 export const respondToDraw = mutation
@@ -318,12 +318,12 @@ export const respondToDraw = mutation
 
         if (!accept) {
             ctx.log.info("draw declined", { gameId });
-            await ctx.db.patch(gameId, { drawOfferedBy: null });
+            await ctx.db.patch("games", gameId, { drawOfferedBy: null });
 
             return;
         }
 
         ctx.log.info("draw accepted", { gameId });
-        await ctx.db.patch(gameId, { drawOfferedBy: null, endedAt: Date.now(), result: "draw", status: "completed" });
+        await ctx.db.patch("games", gameId, { drawOfferedBy: null, endedAt: Date.now(), result: "draw", status: "completed" });
         await settle(ctx, game, "draw");
     });

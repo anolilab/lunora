@@ -31,7 +31,7 @@ const createFakeDatabase = (): RateLimitDb => {
         );
 
     return {
-        delete: async <T extends string>(id: Id<T>): Promise<void> => {
+        delete: async <T extends string>(_table: T, id: Id<T>): Promise<void> => {
             rows.delete(id);
         },
         // Linear scan — stands in for the cost of walking the index range.
@@ -74,7 +74,7 @@ const createLegacyDatabaseStore = (db: RateLimitDb): RateLimitStore => {
             const row = await find(storageKey);
 
             if (row) {
-                await db.delete(row._id as Id<string>);
+                await db.delete("rateLimits", row._id as Id<string>);
             }
         },
         get: async (storageKey) => {

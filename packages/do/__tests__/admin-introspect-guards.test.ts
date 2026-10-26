@@ -76,7 +76,7 @@ describe("replica bootstrap row count", () => {
             const id = await writer.insert("notes", { n: index });
 
             // eslint-disable-next-line no-await-in-loop -- sequential fixture writes
-            await writer.patch(id, { n: -index }, "notes");
+            await writer.patch("notes", id, { n: -index });
         }
 
         // A non-schema table the shard also holds (a component's own storage, say):

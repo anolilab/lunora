@@ -521,7 +521,7 @@ const rewriteRow = async (options: {
         // Trusted rewrite: replay the row's original `_creationTime` via the
         // `allowExplicitId` opt-in, so the rewrite is explicit about the
         // timestamp it means rather than leaning on `replace`'s default.
-        await writer.replace(id, document, undefined, { allowExplicitId: true });
+        await writer.replace(table, id, document, { allowExplicitId: true });
     } catch (error) {
         const after = await writer.get(table, id);
 

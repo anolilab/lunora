@@ -109,7 +109,7 @@ describe("privacy housekeeping", () => {
         // The download window passed: move the stored expiry into the past, as time would.
         const ready = await rowOf();
 
-        await t.run(async (ctx) => appCtx(ctx).db.patch(ready!._id, { expiresAt: Date.now() - 1000 }));
+        await t.run(async (ctx) => appCtx(ctx).db.patch("privacy_requests", ready!._id, { expiresAt: Date.now() - 1000 }));
 
         await expect(t.run(async (ctx) => appCtx(ctx).runMutation(privacySweep, {}))).resolves.toStrictEqual({ expired: [request.id], purged: 0 });
         await expect(rowOf()).resolves.toMatchObject({ status: "expired" });

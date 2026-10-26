@@ -62,7 +62,7 @@ interface GuardableSchema {
 }
 
 /**
- * Resolve the owning table of a row id (so a generic `ctx.db.patch(id)` with no
+ * Resolve the owning table of a row id (so a generic `lookupById(id)` with no
  * pinned table can still be gated). May be sync (DO `locateRowById`) or async (D1
  * `resolveTableName`). `undefined` ⇒ the id resolves to no table this writer can
  * see (absent row, or another backend) — nothing to leak, so the op passes
@@ -80,7 +80,6 @@ type TableOfId = (id: string, expectedTable?: string) => Promise<string | undefi
  * {@link TableOfId} `undefined` — unresolved, so it leaks nothing and passes
  * through.
  */
-type TablesOfIds = (ids: ReadonlyArray<string>, expectedTable?: string) => Promise<ReadonlyMap<string, string>> | ReadonlyMap<string, string>;
 
 /**
  * Structural surface the guard wraps — method syntax (bivariant params) so the
@@ -89,11 +88,11 @@ type TablesOfIds = (ids: ReadonlyArray<string>, expectedTable?: string) => Promi
  */
 interface GuardableWriter {
     aggregate: (tableName: string, options: unknown) => unknown;
-    assertPatchAllowed?: (id: string, expectedTable?: string) => unknown;
+    assertPatchAllowed?: (table: string, id: string) => unknown;
     count: (tableName: string, whereOrArgs?: unknown) => unknown;
-    delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => unknown;
+    delete: (table: string, id: string, options?: { hard?: boolean }) => unknown;
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => unknown;
-    deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => unknown;
+    deleteMany: (table: string, ids: ReadonlyArray<string>, options?: { limit?: number }) => unknown;
     deleteWhere?: (tableName: string, where: Record<string, unknown>, options?: { limit?: number }) => unknown;
     findFirst: (tableName: string, args?: unknown) => unknown;
     findFirstOrThrow: (tableName: string, args?: unknown) => unknown;
@@ -108,16 +107,16 @@ interface GuardableWriter {
         options?: { allowExplicitId?: boolean; limit?: number },
     ) => unknown;
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
-    patch: (id: string, patch: unknown, expectedTable?: string, options?: unknown) => unknown;
-    patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }, expectedTable?: string) => unknown;
+    patch: (table: string, id: string, patch: unknown, options?: unknown) => unknown;
+    patchMany: (table: string, patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }) => unknown;
     patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: Record<string, unknown> }, options?: { limit?: number }) => unknown;
     query: (tableName: string) => unknown;
     rank: (tableName: string, indexName: string, options: unknown) => unknown;
     rankBefore?: (tableName: string, indexName: string, options: unknown) => unknown;
     rankPage: (tableName: string, indexName: string, options?: unknown) => unknown;
     rankPageRows?: (tableName: string, indexName: string, options?: unknown) => unknown;
-    replace: (id: string, document: unknown, expectedTable?: string, options?: { allowExplicitId?: boolean }) => unknown;
-    restore?: (id: string, expectedTable?: string) => unknown;
+    replace: (table: string, id: string, document: unknown, options?: { allowExplicitId?: boolean }) => unknown;
+    restore?: (table: string, id: string) => unknown;
     wipeShard?: (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => unknown;
 }
 
@@ -154,7 +153,7 @@ const guardShardSweep = (
 
 /** How {@link guardWriter} gates one method of the real writer. */
 type WriterGating =
-    /** By-id write/read: the owning table is resolved from the id, then gated (`guardById`). */
+    /** By-id lookup with no table argument: the owning table is resolved from the id, then gated (`guardById`). */
     | "id-gated"
     /** Table-name-first too, but overridden inline rather than by the uniform loop — its key must exist (as `undefined`) even when the base has no implementation. */
     | "inline-table-gated"
@@ -186,13 +185,13 @@ const WRITER_METHOD_GATING = {
     /** Pure id formatter — composes a string from `(tableName, id)`, reads and writes nothing. */
     asId: "ungated",
     /** By-id, and the update gate a relation-only patch runs on its parent row. It writes nothing, so the guard only resolves the table. */
-    assertPatchAllowed: "id-gated",
+    assertPatchAllowed: "inline-table-gated",
     /** Metadata-only changelog probe: returns table NAMES and a cursor, never a document. */
     cdcChangedTables: "ungated",
     count: "loop-gated",
-    delete: "id-gated",
+    delete: "inline-table-gated",
     deleteAll: "loop-gated",
-    deleteMany: "id-gated",
+    deleteMany: "inline-table-gated",
     deleteWhere: "inline-table-gated",
     /** Table-name-first, and it compiles a read of that table, so the loop's table gate covers it. */
     explain: "loop-gated",
@@ -210,10 +209,10 @@ const WRITER_METHOD_GATING = {
     lookupById: "id-gated",
     /** Pure id validator/parser — returns the id or `null`, reads no row. */
     normalizeId: "ungated",
-    patch: "id-gated",
+    patch: "inline-table-gated",
     /** Table-name-first (`patchIf(table, id, …)`), so the loop's table gate covers it; the writer scopes the id to that table. */
     patchIf: "loop-gated",
-    patchMany: "id-gated",
+    patchMany: "inline-table-gated",
     patchWhere: "inline-table-gated",
     query: "loop-gated",
     rank: "loop-gated",
@@ -244,8 +243,8 @@ const WRITER_METHOD_GATING = {
 
     /** Schema-derived metadata: names marker columns, reaches no row. */
     softDeleteFields: "ungated",
-    replace: "id-gated",
-    restore: "id-gated",
+    replace: "inline-table-gated",
+    restore: "inline-table-gated",
     /** The system-table reader: reserved tables, not user tables, so the per-table policy model does not apply. */
     system: "ungated",
     wipeShard: "sweep-gated",
@@ -341,13 +340,7 @@ const installReboundMethods = (guarded: Record<string, unknown>, base: Guardable
 // would reject the real writer and erase its extra members (`normalizeId`, …)
 // from the return type. Instead we keep `W` opaque — preserving the caller's
 // concrete type through the return — and reach the guardable surface via a cast.
-const guardWriter = <W>(
-    raw: W,
-    schema: GuardableSchema,
-    tableOfId: TableOfId,
-    tablesOfIds?: TablesOfIds,
-    relationEdges: ReadonlyArray<RelationEdge> = [],
-): W => {
+const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, relationEdges: ReadonlyArray<RelationEdge> = []): W => {
     if (schema.rlsMode !== "required") {
         return raw;
     }
@@ -380,7 +373,7 @@ const guardWriter = <W>(
             return;
         }
 
-        // Generic `ctx.db.patch(id)` / `delete` / … : resolve the owning table so a
+        // Generic `lookupById(id)`: resolve the owning table so a
         // protected row can't be addressed by a bare id. An unresolved id leaks
         // nothing, so it passes through.
         const tableName = await tableOfId(id);
@@ -390,63 +383,20 @@ const guardWriter = <W>(
         }
     };
 
-    /**
-     * The `deleteMany`/`patchMany` gate: same decision as {@link guardById}
-     * applied to every id in the batch, but fetching table ownership in as
-     * few round-trips as possible instead of one probe per id.
-     *
-     * - `expectedTable` pinned (the by-id facade's bound table) → one
-     * `guardTable` call, no probe at all — identical to the single-id path.
-     * - No {@link tablesOfIds} resolver supplied (the D1/`.global()` twin
-     * hasn't implemented the batch form) → fall back to the per-id loop,
-     * verbatim.
-     * - Otherwise: dedupe, resolve the owning table of every id in ONE call,
-     * then judge each id (in its original, possibly-duplicated input order)
-     * through the same {@link guardTable} — an unresolved id passes through
-     * exactly like {@link guardById}'s bare-id case.
-     */
-    const guardByIds = async (ids: ReadonlyArray<string>, expectedTable?: string): Promise<void> => {
-        if (expectedTable !== undefined) {
-            guardTable(expectedTable);
-
-            return;
-        }
-
-        if (!tablesOfIds) {
-            for (const id of ids) {
-                // eslint-disable-next-line no-await-in-loop -- no batch resolver supplied (D1-twin fallback): mirrors the pre-batch per-id loop verbatim
-                await guardById(id, expectedTable);
-            }
-
-            return;
-        }
-
-        const resolved = await tablesOfIds([...new Set(ids)], expectedTable);
-
-        for (const id of ids) {
-            const tableName = resolved.get(id);
-
-            if (tableName !== undefined) {
-                guardTable(tableName);
-            }
-        }
-    };
-
     const guarded: Record<PropertyKey, unknown> = {
         ...(raw as Record<string, unknown>),
-        delete: async (id: string, expectedTable?: string, options?: { hard?: boolean }) => {
-            await guardById(id, expectedTable);
+        delete: async (table: string, id: string, options?: { hard?: boolean }) => {
+            // The table is named by the caller, so it gates directly — no owner probe.
+            guardTable(table);
 
-            return base.delete(id, expectedTable, options);
+            return await base.delete(table, id, options);
         },
-        deleteMany: async (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => {
-            // Gate every id like a single delete (a protected, policy-less row
-            // can't be reached by bare id), then delegate the batch — which
-            // enforces the payload cap downstream. `expectedTable` (the facade's
-            // bound table) scopes each id, mirroring the single delete gate.
-            await guardByIds(ids, expectedTable);
+        deleteMany: async (table: string, ids: ReadonlyArray<string>, options?: { limit?: number }) => {
+            // The batch names its table, so it gates on that table like a single
+            // delete; the payload cap is enforced by the delegated writer.
+            guardTable(table);
 
-            return base.deleteMany(ids, options, expectedTable);
+            return await base.deleteMany(table, ids, options);
         },
         deleteWhere: base.deleteWhere
             ? async (tableName: string, where: Record<string, unknown>, options?: { limit?: number }) => {
@@ -471,24 +421,20 @@ const guardWriter = <W>(
             // eslint-disable-next-line unicorn/no-null -- mirrors the seam's own `null`-for-absent contract
             return base.lookupById?.(id, expectedTable) ?? null;
         },
-        patch: async (id: string, patch: unknown, expectedTable?: string, options?: unknown) => {
-            await guardById(id, expectedTable);
+        patch: async (table: string, id: string, patch: unknown, options?: unknown) => {
+            guardTable(table);
 
-            return base.patch(id, patch, expectedTable, options);
+            return await base.patch(table, id, patch, options);
         },
-        patchMany: async (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }, expectedTable?: string) => {
-            // `expectedTable` (the facade's bound table) scopes each id, mirroring the single patch gate.
-            await guardByIds(
-                patches.map((entry) => entry.id),
-                expectedTable,
-            );
+        patchMany: async (table: string, patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }) => {
+            guardTable(table);
 
-            return base.patchMany(patches, options, expectedTable);
+            return await base.patchMany(table, patches, options);
         },
-        assertPatchAllowed: async (id: string, expectedTable?: string) => {
-            await guardById(id, expectedTable);
+        assertPatchAllowed: async (table: string, id: string) => {
+            guardTable(table);
 
-            return base.assertPatchAllowed?.(id, expectedTable);
+            return await base.assertPatchAllowed?.(table, id);
         },
         patchWhere: base.patchWhere
             ? async (tableName: string, args: { patch: Record<string, unknown>; where: Record<string, unknown> }, options?: { limit?: number }) => {
@@ -499,18 +445,18 @@ const guardWriter = <W>(
                   return await base.patchWhere?.(tableName, args, options);
               }
             : undefined,
-        replace: async (id: string, document: unknown, expectedTable?: string, options?: { allowExplicitId?: boolean }) => {
-            await guardById(id, expectedTable);
+        replace: async (table: string, id: string, document: unknown, options?: { allowExplicitId?: boolean }) => {
+            guardTable(table);
 
-            return base.replace(id, document, expectedTable, options);
+            return await base.replace(table, id, document, options);
         },
-        restore: async (id: string, expectedTable?: string) => {
+        restore: async (table: string, id: string) => {
             // Restore is a by-id write (clears the soft-delete marker); gate it
             // like patch so a protected, policy-less row can't be un-deleted
             // through the raw method the `...raw` spread would otherwise expose.
-            await guardById(id, expectedTable);
+            guardTable(table);
 
-            return base.restore?.(id, expectedTable);
+            return await base.restore?.(table, id);
         },
     };
 

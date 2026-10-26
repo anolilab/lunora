@@ -125,7 +125,7 @@ const canDelete = definePolicy({
     when: ({ auth }) => auth.can(deletePosts),
 });
 
-export const removePost = mutation.use(rls(definePolicies([canDelete]), { roles: [admin] })).mutation(async ({ ctx, args }) => ctx.db.delete(args.id));
+export const removePost = mutation.use(rls(definePolicies([canDelete]), { roles: [admin] })).mutation(async ({ ctx, args }) => ctx.db.delete("posts", args.id));
 ```
 
 The middleware unions the permissions of every role in `auth.roles` at request

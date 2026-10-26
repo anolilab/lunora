@@ -122,7 +122,7 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
         expect.assertions(2);
 
         const found = discover(
-            `export const rename = mutation(async ({ ctx, args }) => { await ctx.db.patch(args.id, { ownerId: args.ownerId }); });`,
+            `export const rename = mutation(async ({ ctx, args }) => { await ctx.db.patch("posts", args.id, { ownerId: args.ownerId }); });`,
             "rename.ts",
         );
 

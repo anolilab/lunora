@@ -13,10 +13,11 @@ import { procedureHandler } from "./functions/handler";
 
 /**
  * `ctx.db` row operations that resolve a whole row by its primitive id:
- * `get(table, id)`, `patch(id, …)`, `delete(id)`. The id is argument 0 for every
- * sink except the generic `get`, where the table comes first and the id is argument
- * 1. A `normalizeId` result flowing into that argument reaches the row directly,
- * with no ownership predicate in the read itself.
+ * `get(table, id)`, `patch(table, id, …)`, `delete(table, id)`. On the generic
+ * writer the table comes first, so the id is argument 1; on a table facade
+ * (`ctx.db.posts.patch(id, …)`) the id is argument 0. A `normalizeId` result flowing
+ * into that argument reaches the row directly, with no ownership predicate in the
+ * read itself.
  */
 const SINK_METHODS = new Set<NormalizeIdAuthorizationIR["sinkMethod"]>(["delete", "get", "patch"]);
 
@@ -151,10 +152,10 @@ const idSinkMethod = (handler: InspectableHandler, name: string): NormalizeIdAut
             continue;
         }
 
-        // The generic `get` takes the table first, but a receiver named `db` can be a
-        // table facade (`const db = ctx.db.posts`) whose `get` takes the id first. Check
-        // both positions, so neither spelling hides the id from the sink.
-        const idPositions = genericDatabase && method === "get" ? 2 : 1;
+        // The generic writer takes the table first, so the id is its second argument; a
+        // receiver named `db` can also be a table facade (`const db = ctx.db.posts`), whose
+        // by-id sinks take the id first. Check both positions, so neither spelling hides it.
+        const idPositions = genericDatabase ? 2 : 1;
 
         const idArguments = call.getArguments().slice(0, idPositions);
 

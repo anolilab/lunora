@@ -51,7 +51,7 @@ describe("dotted paths on D1", () => {
         await expect(ids({ "profile.age": 30 })).resolves.toStrictEqual(["a"]);
         await expect(ids({ "profile.age": null })).resolves.toStrictEqual(["b", "d"]);
 
-        await writer.patch("b", { "profile.plan": "team" });
+        await writer.patch("json_path_users", "b", { "profile.plan": "team" });
 
         const patched = await writer.get(table, "b");
 
