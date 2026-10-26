@@ -40,11 +40,13 @@ import type { SqlExec } from "@lunora/shard-engine";
 import { createRedactor, standardRules } from "@visulima/redact";
 
 import { maskCredentials } from "../../../shared/credential-redaction";
+import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { LogEvent } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields, stringifyFieldValue } from "../../../shared/log-fields";
 import type { IssueSeverity, IssueStatus } from "./issue-state";
 import { readIssueStates } from "./issue-state";
+import { isSmallJsonData } from "./json-data";
 import { pruneOncePerWindow } from "./prune-marker";
 import { runSql } from "./run-sql";
 
@@ -961,100 +963,7 @@ const REDACTED_JSON_MEMO_ENTRIES = 256;
 /** The longest input (as JSON) {@link redactedJson} remembers; a larger one is redacted every time. */
 const REDACTED_JSON_MEMO_MAX_CHARS = 4096;
 
-/** Deeper than this, {@link isSmallJsonData} gives up and the value is simply not memoised. */
-const JSON_DATA_MAX_DEPTH = 32;
-
 const redactedJsonMemo = new Map<string, string>();
-
-/**
- * True when `value` is small and nothing but JSON data — `null`, booleans,
- * strings, finite numbers, and arrays / plain objects of them — so its
- * `JSON.stringify` names it exactly. Anything else (an `undefined` property, a
- * `Date`, a `Map`, a class instance, a hole) is either dropped or flattened by
- * `JSON.stringify` while the redactor sees it, so two different values could
- * share one text.
- *
- * "Small" is a running budget of {@link REDACTED_JSON_MEMO_MAX_CHARS}, charged
- * one per value plus the length of every string and key, so the walk stops early
- * on a large payload and the caller never stringifies one just to key the memo.
- */
-const isSmallJsonData = (value: unknown): boolean => {
-    let budget = REDACTED_JSON_MEMO_MAX_CHARS;
-
-    // Assigned below: `visitField` and `visitContainer` recurse into it.
-    let visit: (node: unknown, depth: number) => boolean;
-
-    // Read through the descriptor: a getter would run again in the redactor and in
-    // `JSON.stringify`, free to answer differently each time.
-    const visitField = (node: object, key: number | string, depth: number): boolean => {
-        const descriptor = Object.getOwnPropertyDescriptor(node, key);
-
-        return descriptor !== undefined && "value" in descriptor && visit(descriptor.value, depth + 1);
-    };
-
-    const visitContainer = (node: object, depth: number): boolean => {
-        if (Array.isArray(node)) {
-            for (let index = 0; index < node.length; index += 1) {
-                if (!visitField(node, index, depth)) {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        const proto = Object.getPrototypeOf(node) as object | null;
-
-        if (proto !== null && proto !== Object.prototype) {
-            return false;
-        }
-
-        // `Object.keys`, not `Object.entries`: no field is read before the walk reaches
-        // it, so a large object stops at the budget without running later getters.
-        for (const key of Object.keys(node)) {
-            budget -= key.length;
-
-            if (budget < 0 || !visitField(node, key, depth)) {
-                return false;
-            }
-        }
-
-        return true;
-    };
-
-    visit = (node: unknown, depth: number): boolean => {
-        budget -= 1;
-
-        if (budget < 0) {
-            return false;
-        }
-
-        if (node === null || typeof node === "boolean") {
-            return true;
-        }
-
-        if (typeof node === "string") {
-            budget -= node.length;
-
-            return budget >= 0;
-        }
-
-        if (typeof node === "number") {
-            return Number.isFinite(node);
-        }
-
-        // `JSON.stringify` calls a `toJSON` (own, non-enumerable or inherited) that the
-        // redactor never sees, so the text would not name what gets redacted. `in`, not
-        // a read, so a `toJSON` getter does not run.
-        if (typeof node !== "object" || depth >= JSON_DATA_MAX_DEPTH || "toJSON" in node) {
-            return false;
-        }
-
-        return visitContainer(node, depth);
-    };
-
-    return visit(value, 0);
-};
 
 /**
  * `JSON.stringify(redactArgs(value, captureRaw))`, remembered per input.
@@ -1070,7 +979,7 @@ const isSmallJsonData = (value: unknown): boolean => {
  * a key, and the memo cannot hold one. Oldest entry out.
  */
 const redactedJson = (value: unknown, captureRaw: boolean): string => {
-    if (captureRaw || !isSmallJsonData(value)) {
+    if (captureRaw || !isSmallJsonData(value, REDACTED_JSON_MEMO_MAX_CHARS)) {
         return JSON.stringify(redactArgs(value, captureRaw));
     }
 
@@ -1084,10 +993,7 @@ const redactedJson = (value: unknown, captureRaw: boolean): string => {
     const redacted = JSON.stringify(redactArgs(value));
 
     if (key.length <= REDACTED_JSON_MEMO_MAX_CHARS) {
-        if (redactedJsonMemo.size >= REDACTED_JSON_MEMO_ENTRIES) {
-            redactedJsonMemo.delete(redactedJsonMemo.keys().next().value as string);
-        }
-
+        evictOldestEntry(redactedJsonMemo, REDACTED_JSON_MEMO_ENTRIES);
         redactedJsonMemo.set(key, redacted);
     }
 
