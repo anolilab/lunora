@@ -766,6 +766,7 @@ interface InferredBindings {
     containers: InferredContainer[];
     durableObjects: DurableObjectSpec[];
     flagshipBinding?: string;
+    hostsEventLog: boolean;
     hostsShardRegistry: boolean;
     jurisdiction?: SchemaInfo["jurisdiction"];
     needsD1: boolean;
