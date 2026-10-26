@@ -460,12 +460,16 @@ const adminResponse = (result: unknown): Response => jsonResponse({ result: enco
  * and answered 500. `RPC_FAILED` is not a transient code, so the client dropped
  * the write as failed while the effect stood, and a retry re-applied it.
  */
-const encodeDispatchResult = (result: unknown): unknown => {
+const encodeDispatchResult = (result: unknown, snapshot: boolean): unknown => {
     try {
         // Every consumer stringifies the encoded value straight away, and for a value
-        // `needsWireEncoding` clears that string is the same either way — so skip
-        // the deep copy `encodeWire` would build only to be serialized.
-        return needsWireEncoding(result) ? encodeWire(result) : result;
+        // `needsWireEncoding` clears that string is the same either way — so a query
+        // or action skips the deep copy `encodeWire` would build only to be
+        // serialized. A mutation (`snapshot`) always copies: its response is
+        // serialized AFTER the commit, and the live object would read its getters a
+        // second time there, where a value that has since turned unencodable (a
+        // bigint) fails the reply of a write that already stands.
+        return snapshot || needsWireEncoding(result) ? encodeWire(result) : result;
     } catch (error: unknown) {
         throw new LunoraError("WIRE_ENCODE_FAILED", error instanceof Error ? error.message : String(error), { cause: error });
     }
@@ -5856,7 +5860,7 @@ abstract class ShardDO {
             this.restoreRequestScope(this.transactionRequestScope);
         }
 
-        this.persistIdempotentResult(encodeDispatchResult(result));
+        this.persistIdempotentResult(encodeDispatchResult(result, true));
 
         // Strict: a watermark write that throws here rolls the whole mutation back
         // rather than committing writes whose watermark was never advanced.
@@ -5895,7 +5899,7 @@ abstract class ShardDO {
             return;
         }
 
-        this.persistIdempotentResult(encodeDispatchResult(result));
+        this.persistIdempotentResult(encodeDispatchResult(result, true));
 
         if (mutatorClass?.kind === "next") {
             this.advanceClientMutationWatermark();
@@ -8906,7 +8910,7 @@ abstract class ShardDO {
             // and never reached here. An action/query encodes for the first time
             // here, which is fine — it committed nothing transactionally, and the
             // coded error names the value either way.
-            const response = this.buildDispatchResponse(mutatorClass, encodeDispatchResult(result));
+            const response = this.buildDispatchResponse(mutatorClass, encodeDispatchResult(result, this.isMutationFunction(payload.functionPath)));
 
             await this.flushChangedTables();
 
