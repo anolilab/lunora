@@ -314,6 +314,57 @@ const collectFramedDeltas = (previousJson: string, nextResult: unknown, table: s
 };
 
 /**
+ * {@link collectFramedDeltas} results, per result object, then per table, then
+ * per baseline.
+ *
+ * One write-flush renders frames for every socket watching a query. Sockets that
+ * shared one run hand in the SAME result object (the DO dedupes the run and
+ * memoises its encode per outcome) and, having been sent the same value last
+ * time, the same baseline string. The diff is a pure function of those three
+ * inputs, so it is computed once per distinct triple instead of once per socket:
+ * the baseline `JSON.parse`, both `_id` indexes and every row fingerprint were
+ * repeated N times for N sockets. Only the diff is shared — the frame envelopes,
+ * and with them the delta-vs-snapshot size decision, stay per socket.
+ *
+ * Weak on the result, so an entry lives exactly as long as the flush's outcome.
+ * It relies on what the outcome encode memo already relies on: a delivered result
+ * is not mutated afterwards. The inner map is keyed by the baseline string;
+ * sockets on one value hold the same string instance, so its hash is computed
+ * once and a hit compares by reference.
+ */
+const framedDeltaMemo = new WeakMap<object, Map<string, Map<string, FramedDelta[] | undefined>>>();
+
+const sharedFramedDeltas = (previousJson: string, nextResult: unknown, table: string): FramedDelta[] | undefined => {
+    if (typeof nextResult !== "object" || nextResult === null) {
+        return collectFramedDeltas(previousJson, nextResult, table);
+    }
+
+    let byTable = framedDeltaMemo.get(nextResult);
+
+    if (byTable === undefined) {
+        byTable = new Map();
+        framedDeltaMemo.set(nextResult, byTable);
+    }
+
+    let byBaseline = byTable.get(table);
+
+    if (byBaseline === undefined) {
+        byBaseline = new Map();
+        byTable.set(table, byBaseline);
+    }
+
+    if (byBaseline.has(previousJson)) {
+        return byBaseline.get(previousJson);
+    }
+
+    const framed = collectFramedDeltas(previousJson, nextResult, table);
+
+    byBaseline.set(previousJson, framed);
+
+    return framed;
+};
+
+/**
  * The per-row {@link MutationDelta}s a change decomposes into, or `undefined`
  * when it is not expressible as row deltas — see {@link collectFramedDeltas}
  * for the four conditions.
@@ -458,7 +509,7 @@ const subscriptionFrames = (input: SubscriptionFrameInput): string[] => {
     // result is additionally gated on the socket having announced that it can
     // merge into `page`; without that the diff is never even attempted.
     const diffable = previousJson !== undefined && (pageDeltas === true || Array.isArray(nextResult));
-    const framed = diffable ? collectFramedDeltas(previousJson, nextResult, table) : undefined;
+    const framed = diffable ? sharedFramedDeltas(previousJson, nextResult, table) : undefined;
 
     // An EMPTY diff must still put a frame on the wire, so the two are handled
     // together. The caller only suppresses a push when the new snapshot is

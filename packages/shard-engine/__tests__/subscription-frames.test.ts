@@ -274,3 +274,36 @@ describe("subscriptionFrames — paginated results", () => {
         expect(typesOf(paginatedFrames(paginated(page(20)), paginated(changedPage), true))).toStrictEqual(["delta"]);
     });
 });
+
+describe("subscriptionFrames — sockets sharing one result", () => {
+    it("renders each socket's own envelope around the shared diff", () => {
+        expect.assertions(2);
+
+        // One flush hands every socket on a deduped run the SAME result object;
+        // the diff is shared between them, the per-socket envelope is not.
+        const previous = Array.from({ length: 20 }, (_, index) => row(`r${String(index)}`));
+        const next = [...previous, row("new")];
+        const shared = { nextResult: next, previousJson: JSON.stringify(previous), snapshotJson: JSON.stringify(next), table: "messages" };
+        const delta = `"delta":{"key":"new","op":"insert","row":{"_creationTime":1,"_id":"new"},"table":"messages"}`;
+
+        expect(subscriptionFrames({ ...shared, cursorSuffix: "", subId: "a" })).toStrictEqual([`{"type":"delta","id":"a",${delta}}`]);
+        expect(subscriptionFrames({ ...shared, cursorSuffix: `,"cursor":9,"epoch":"e"`, lastMutationId: 3, subId: "b" })).toStrictEqual([
+            `{"type":"delta","id":"b",${delta},"lastMutationId":3,"cursor":9,"epoch":"e"}`,
+        ]);
+    });
+
+    it("diffs the same result separately against each distinct baseline and table", () => {
+        expect.assertions(3);
+
+        const previous = Array.from({ length: 20 }, (_, index) => row(`r${String(index)}`));
+        const next = [...previous, row("new")];
+        const shared = { cursorSuffix: "", nextResult: next, snapshotJson: JSON.stringify(next), subId: "s" };
+
+        // The baseline already holds every row: nothing to diff, so the snapshot goes out.
+        expect(typesOf(subscriptionFrames({ ...shared, previousJson: JSON.stringify(next), table: "messages" }))).toStrictEqual(["data"]);
+        // An older baseline on the same result gets its own delta.
+        expect(typesOf(subscriptionFrames({ ...shared, previousJson: JSON.stringify(previous), table: "messages" }))).toStrictEqual(["delta"]);
+        // Same baseline, other table: the table is part of the delta body.
+        expect(subscriptionFrames({ ...shared, previousJson: JSON.stringify(previous), table: "notes" })[0]).toContain(`"table":"notes"`);
+    });
+});
