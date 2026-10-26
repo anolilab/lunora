@@ -296,7 +296,7 @@ describe("privacy example lifecycle (workerd)", () => {
             await privacyWorkflows.exportHandler(contextFor(db, request.id));
 
             const files = await db.query("exportFiles").collect();
-            const part = files.find((row) => row.requestId === request.id && row.name === "parts/auth.json");
+            const part = files.find((row) => row.requestId === request.id && (row.name as string).endsWith("/parts/auth.json"));
             const stored = JSON.parse((part?.body as string | undefined) ?? "{}") as { tables: Record<string, Record<string, unknown>[]> };
 
             expect(stored.tables.user?.map((row) => row.id)).toStrictEqual([SUBJECT]);
