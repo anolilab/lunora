@@ -1,3 +1,27 @@
+## @lunora/codegen [1.0.0-alpha.353](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.352...@lunora/codegen@1.0.0-alpha.353) (2026-10-26)
+
+### Features
+
+* **studio:** import a CSV file into a table ([#1321](https://github.com/anolilab/lunora/issues/1321)) ([360930a](https://github.com/anolilab/lunora/commit/360930a9edc00a56f90c5cdf6a9d3218e428aeea))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.257
+* **@lunora/agent:** upgraded to 1.0.0-alpha.247
+* **@lunora/container:** upgraded to 1.0.0-alpha.92
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/queue:** upgraded to 1.0.0-alpha.128
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.151
+* **@lunora/values:** upgraded to 1.0.0-alpha.81
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.95
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.135
+* **@lunora/client:** upgraded to 1.0.0-alpha.250
+* **@lunora/do:** upgraded to 1.0.0-alpha.247
+* **@lunora/payment:** upgraded to 1.0.0-alpha.240
+* **@lunora/server:** upgraded to 1.0.0-alpha.238
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.159
+
 ## @lunora/codegen [1.0.0-alpha.352](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.351...@lunora/codegen@1.0.0-alpha.352) (2026-10-25)
 
 ### Bug Fixes
