@@ -1,11 +1,12 @@
 import type { Finding } from "@lunora/advisor";
+import { LunoraError } from "@lunora/errors";
 import type { QueuesResult, WorkflowsResult } from "@lunora/shard-engine";
 
-import type { AgentIR, ContainerIR, JurisdictionIR, QueueIR, ServiceBindingIR, TopicIR, WorkflowIR, WranglerQueueProducerIR } from "../ir";
+import type { AgentIR, ContainerIR, JurisdictionIR, QueueIR, ServiceBindingIR, TopicIR, WorkflowEventIR, WorkflowIR, WranglerQueueProducerIR } from "../ir";
 import { subscriptionsOf } from "../ir";
 import renderJsonData from "../json-data";
 import { renderThrowingStub } from "./shard-bindings";
-import { assertIdentifier, GENERATED_HEADER } from "./shared";
+import { assertIdentifier, GENERATED_HEADER, IMPORT_PATH_RE } from "./shared";
 
 /**
  * Emit `_generated/containers.ts` — one container-enabled Durable Object class
@@ -624,12 +625,17 @@ const ${name} = ${renderJsonData(metadata, type)};
  * workflows — when it has none the base-class hook (an empty list) stands, so the
  * generated shard stays byte-identical to a workflow-free app.
  */
-const emitWorkflowsMetadataFragments = (workflows: ReadonlyArray<WorkflowIR>): { constant: string; override: string } => {
+const emitWorkflowsMetadataFragments = (
+    workflows: ReadonlyArray<WorkflowIR>,
+    events: ReadonlyArray<WorkflowEventIR>,
+): { constant: string; override: string } => {
     if (workflows.length === 0) {
         return { constant: "", override: "" };
     }
 
     const metadata: WorkflowsResult = {
+        // Omitted rather than `[]` when none are declared, so an event-free app's shard is unchanged.
+        ...(events.length === 0 ? {} : { eventTypes: events.map((event) => event.type) }),
         workflows: workflows.map((workflow) => {
             return {
                 className: workflow.className,
@@ -646,6 +652,44 @@ const emitWorkflowsMetadataFragments = (workflows: ReadonlyArray<WorkflowIR>): {
         metadata,
         `/** Read-only declared-workflow metadata (discovered from \`lunora/workflows.ts\`) served via \`__lunora_admin__:listWorkflows\` for the studio's workflows view. */`,
     );
+};
+
+/**
+ * The registry the admin `sendWorkflowEvent` RPC parses a payload against: each declared event
+ * type mapped to a loader for its `defineWorkflowEvent` export, and the `workflowEvent(type)`
+ * override reading it. A dynamic import in both function-loading modes keeps the definitions'
+ * modules out of a lazy shard's startup. Empty without workflows (nothing could receive the
+ * event) or without events (the base hook refuses every type).
+ */
+const emitWorkflowEventFragments = (workflows: ReadonlyArray<WorkflowIR>, events: ReadonlyArray<WorkflowEventIR>): { constant: string; override: string } => {
+    if (workflows.length === 0 || events.length === 0) {
+        return { constant: "", override: "" };
+    }
+
+    for (const event of events) {
+        assertIdentifier(event.exportName, "workflow event export name");
+
+        if (!IMPORT_PATH_RE.test(event.filePath)) {
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/codegen: refusing to emit import for unsafe workflow event file path: ${JSON.stringify(event.filePath)}`,
+            );
+        }
+    }
+
+    return {
+        constant: `
+/** Declared workflow events (\`defineWorkflowEvent\` exports), loaded by type when an admin \`sendWorkflowEvent\` parses its payload. */
+const LUNORA_WORKFLOW_EVENTS: ReadonlyMap<string, () => Promise<{ payload: { parse: (value: unknown) => unknown } }>> = new Map([
+${events.map((event) => `    [${JSON.stringify(event.type)}, () => import("../${event.filePath}.js").then((module) => module.${event.exportName})],`).join("\n")}
+]);
+`,
+        override: `
+        protected override async workflowEvent(type: string): Promise<{ payload: { parse: (value: unknown) => unknown } } | undefined> {
+            return LUNORA_WORKFLOW_EVENTS.get(type)?.();
+        }
+`,
+    };
 };
 
 /**
@@ -811,6 +855,7 @@ export {
     emitQueuesMetadataFragments,
     emitServiceFragments,
     emitTopicFragments,
+    emitWorkflowEventFragments,
     emitWorkflowFragments,
     emitWorkflows,
     emitWorkflowsMetadataFragments,

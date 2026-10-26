@@ -4952,6 +4952,18 @@ abstract class ShardDO {
     }
 
     /**
+     * The `defineWorkflowEvent` definition declared for `type`, which the admin
+     * `sendWorkflowEvent` RPC parses a payload with before sending — the
+     * receiving `ctx.waitForEvent` fails its instance for good on a payload that
+     * does not parse. The codegen subclass overrides this with the app's
+     * discovered events; the base declares none, so it refuses every type.
+     */
+    // eslint-disable-next-line class-methods-use-this, @typescript-eslint/require-await -- base-class override hook: the codegen subclass loads the discovered event definitions
+    protected async workflowEvent(_type: string): Promise<{ payload: { parse: (value: unknown) => unknown } } | undefined> {
+        return undefined;
+    }
+
+    /**
      * Runtime advisories derived from observed signal — currently `unused_index`:
      * a declared index a query has never exercised since this instance woke. To
      * keep noise down it only inspects tables that have used *some* index (so a
@@ -11389,20 +11401,44 @@ abstract class ShardDO {
     /**
      * Serve `__lunora_admin__:sendWorkflowEvent` — the studio's "Send event"
      * form: deliver `{ type, payload }` to a waiting instance through the
-     * binding's `instance.sendEvent`, the same call `ctx.workflows.sendEvent`
-     * makes. Audited, since it moves a running workflow forward. Admin-gated by
-     * `handleAdminRpc`'s caller.
+     * binding's `instance.sendEvent`, parsing the payload with the declared
+     * definition first, as `ctx.workflows.sendEvent` does: the receiver has
+     * already consumed the event when its parse fails, so an unparsed payload
+     * would fail the instance permanently. Audited, since it moves a running
+     * workflow forward. Admin-gated by `handleAdminRpc`'s caller.
      */
     private async handleSendWorkflowEvent(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseSendWorkflowEventArgs(args);
         const binding = this.declaredWorkflowHandle(parsed.exportName);
+        const definition = await this.workflowEvent(parsed.type);
+
+        if (definition === undefined) {
+            const known = this.workflowsMetadata().eventTypes ?? [];
+            const suffix = known.length === 0 ? "no events are declared" : `known types: ${known.map((type) => JSON.stringify(type)).join(", ")}`;
+
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `sendWorkflowEvent: no \`defineWorkflowEvent\` export declares type ${JSON.stringify(parsed.type)} (${suffix})`,
+            );
+        }
+
+        let payload: unknown;
+
+        try {
+            payload = definition.payload.parse(parsed.payload);
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+
+            throw new LunoraError("BAD_REQUEST", `sendWorkflowEvent: event ${JSON.stringify(parsed.type)} payload validation failed: ${message}`);
+        }
+
         const instance = await binding.get(parsed.id);
 
         if (typeof instance.sendEvent !== "function") {
             throw new LunoraError("BAD_REQUEST", `workflow "${parsed.exportName}" instances do not accept events on this deployment`);
         }
 
-        await instance.sendEvent({ payload: parsed.payload, type: parsed.type });
+        await instance.sendEvent({ payload, type: parsed.type });
 
         this.recordAudit("sendWorkflowEvent", { id: parsed.id, detail: { exportName: parsed.exportName, type: parsed.type } });
 

@@ -148,7 +148,9 @@ Everything that reads or shapes stored state.
   Lists every [durable workflow](/docs/packages/workflow) with its export name,
   generated class, binding, and deployed name; starts an instance from a
   JSON-params form; sends an event (type plus JSON payload) to a waiting
-  instance; and tracks instances with their live status (queued /
+  instance, validated against the app's `defineWorkflowEvent` declaration of that
+  type, so an undeclared type or a payload that does not parse is refused before
+  anything is sent; and tracks instances with their live status (queued /
   running / complete / errored) and output.
 - **Queues**: _Inspect declared Cloudflare Queues: their producer bindings,
   consumer mode, and dead-letter queue_ ([`@lunora/queue`](/docs/packages/queue)).

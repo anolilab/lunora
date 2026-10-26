@@ -500,6 +500,11 @@ abstract class ShardDO {
     protected runFlagSubscriptionRead(_functionPath: string, _arguments: Record<string, unknown>, _identity?: SubscriptionIdentity): Promise<unknown>;
     protected queuesMetadata(): QueuesResult;
     protected workflowsMetadata(): WorkflowsResult;
+    protected workflowEvent(_type: string): Promise<{
+        payload: {
+            parse: (value: unknown) => unknown;
+        };
+    } | undefined>;
     protected runtimeAdvisories(): AdvisoryFinding[];
     protected runShardExport(_args: RunShardExportArgs): Promise<ExportRow[]>;
     protected runShardImport(_args: RunShardImportArgs): Promise<ImportShardResult>;

@@ -561,6 +561,8 @@ export const ERROR_CATALOG = {
     LIVE_STREAM_NOT_LITERAL: { status: 500, title: "Live stream declaration is not a literal" },
     LIVE_TOPIC_INVALID: { status: 500, title: "Live topic name or key field is not allowed" },
     DUPLICATE_WORKFLOW_CLASS: { status: 500, title: "Duplicate workflow generated class name" },
+    WORKFLOW_EVENT_DUPLICATE: { status: 500, title: "Duplicate workflow event type" },
+    WORKFLOW_EVENT_NOT_LITERAL: { status: 500, title: "Workflow event type is not a string literal" },
     MIGRATION_ID_NOT_STATIC: { status: 500, title: "Migration id is not statically analyzable" },
     NAMESPACE_COLLISION: { status: 500, title: "Function namespace collision" },
 

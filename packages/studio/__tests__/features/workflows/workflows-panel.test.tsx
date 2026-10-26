@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
@@ -226,6 +226,20 @@ describe("workflowsPanel", () => {
         });
 
         expect(screen.queryByTestId("workflows-start-error")).toBeNull();
+    });
+
+    it("offers the declared event types on the event type input", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(createWorkflowsClient({ ...METADATA, eventTypes: [" padded ", "order-approved"] })));
+
+        const input = await screen.findByTestId("workflows-event-type");
+        const options = within(screen.getByTestId("workflows-event-types"))
+            .getAllByRole("option", { hidden: true })
+            .map((option) => (option as HTMLOptionElement).value);
+
+        expect(input.getAttribute("list")).toBe("workflows-event-types");
+        expect(options).toStrictEqual([" padded ", "order-approved"]);
     });
 
     it("rejects an invalid JSON event payload before sending", async () => {

@@ -42,6 +42,7 @@ import discoverTableWrites from "./discover/table-writes";
 import discoverUnreadableArguments from "./discover/unreadable-arguments";
 import discoverUnregisteredProcedures from "./discover/unregistered-procedures";
 import discoverWorkflowCalls from "./discover/workflow-calls";
+import discoverWorkflowEvents from "./discover/workflow-events";
 import {
     buildStorageColumns,
     emitAgents,
@@ -736,6 +737,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         studioFeatures,
         topics,
         useUmbrella,
+        workflowEvents: discoverWorkflowEvents(project, lunoraDirectory),
         workflows,
     });
     // `_generated/collections.ts` — one TanStack DB collection factory per shape.

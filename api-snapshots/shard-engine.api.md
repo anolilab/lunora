@@ -3627,6 +3627,7 @@ interface WorkflowMetadata {
 
 ```ts
 interface WorkflowsResult {
+    eventTypes?: string[];
     workflows: WorkflowMetadata[];
 }
 ```

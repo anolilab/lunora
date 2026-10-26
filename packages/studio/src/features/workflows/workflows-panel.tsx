@@ -70,6 +70,8 @@ const effectiveExportName = (workflows: ReadonlyArray<WorkflowMetadata>, selecte
 };
 
 interface SendEventFormProps {
+    /** The app's declared `defineWorkflowEvent` types — the only ones the server accepts — offered as suggestions. */
+    readonly eventTypes: ReadonlyArray<string>;
     /** The selected workflow export the event is addressed to. */
     readonly exportName: string;
     /** Called after a successful send, so the panel can refresh that instance's row; a rejection is shown in this form. */
@@ -77,7 +79,7 @@ interface SendEventFormProps {
 }
 
 /** Deliver `{ type, payload }` to a waiting instance of the selected workflow over the `sendWorkflowEvent` admin RPC. */
-const SendEventForm = ({ exportName, onSent }: SendEventFormProps): ReactElement => {
+const SendEventForm = ({ eventTypes, exportName, onSent }: SendEventFormProps): ReactElement => {
     const client = useLunora();
     const t = useT();
 
@@ -136,12 +138,20 @@ const SendEventForm = ({ exportName, onSent }: SendEventFormProps): ReactElement
                     aria-label={t("Event type")}
                     className="max-w-48"
                     data-testid="workflows-event-type"
+                    list="workflows-event-types"
                     onChange={(event) => {
                         setTypeInput(event.target.value);
                     }}
                     placeholder={t("Event type")}
                     value={typeInput}
                 />
+                <datalist data-testid="workflows-event-types" id="workflows-event-types">
+                    {eventTypes.map((type) => (
+                        <option key={type} value={type}>
+                            {type}
+                        </option>
+                    ))}
+                </datalist>
 
                 <Button
                     data-testid="workflows-event-button"
@@ -398,7 +408,7 @@ const WorkflowsPanel = (): ReactElement => {
                 </div>
             )}
 
-            {workflows.length > 0 && <SendEventForm exportName={selectedExportName} onSent={readInstance} />}
+            {workflows.length > 0 && <SendEventForm eventTypes={data?.eventTypes ?? []} exportName={selectedExportName} onSent={readInstance} />}
 
             {instances.length > 0 && (
                 <div className="flex flex-col gap-3" data-testid="workflows-instances">

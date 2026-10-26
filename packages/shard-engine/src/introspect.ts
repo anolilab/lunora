@@ -683,6 +683,8 @@ interface WorkflowMetadata {
 
 /** Payload of a `__lunora_admin__:listWorkflows` call: every declared workflow, sorted by export name. */
 interface WorkflowsResult {
+    /** The literal types of the app's exported `defineWorkflowEvent`s — the only ones `sendWorkflowEvent` accepts. Absent when none are declared. */
+    eventTypes?: string[];
     workflows: WorkflowMetadata[];
 }
 

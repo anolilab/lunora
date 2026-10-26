@@ -676,6 +676,8 @@ export interface WorkflowMetadata {
 
 /** Payload of a `__lunora_admin__:listWorkflows` call, hand-mirroring `@lunora/do`'s `WorkflowsResult`. */
 export interface WorkflowsResult {
+    /** The declared `defineWorkflowEvent` types `sendWorkflowEvent` accepts; absent when the app declares none. */
+    eventTypes?: string[];
     workflows: WorkflowMetadata[];
 }
 

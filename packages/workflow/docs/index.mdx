@@ -211,6 +211,10 @@ import { v } from "@lunora/values";
 export const orderApproved = defineWorkflowEvent("order-approved", v.object({ approvedBy: v.string() }));
 ```
 
+Export every definition, and write its `type` as a string literal: codegen reads
+the exported definitions in `lunora/` into the registry the Studio's event form
+validates against, and fails on a computed type or on two exports sharing one.
+
 Wait on it inside the workflow — the payload is typed **and** parsed:
 
 ```ts
@@ -616,11 +620,18 @@ Two static [advisors](/docs/concepts/advisors) keep workflow wiring honest:
 The Studio's **Workflows** panel (under the Functions domain) lists every
 declared workflow with its export name, generated class, binding, and deployed
 name; lets you **start an instance** from a JSON-params form; **sends an event**
-(type plus optional JSON payload) to an instance waiting in `ctx.waitForEvent`,
-the same `instance.sendEvent` call `ctx.workflows.sendEvent` makes, minus the
-payload validation (the admin op has no event definition to parse against, and
-the reserved `lunora:` types are refused); and shows a table of instances with
-their live status (queued / running / complete / errored) and output. See [the Studio guide](/docs/packages/studio#functions).
+(type plus optional JSON payload) to an instance waiting in `ctx.waitForEvent`;
+and shows a table of instances with their live status (queued / running /
+complete / errored) and output. See [the Studio guide](/docs/packages/studio#functions).
+
+The event form gives an admin send the guarantee `ctx.workflows.sendEvent` has.
+Codegen registers every exported `defineWorkflowEvent` in `lunora/` (its `type`
+must be a string literal, and unique across the app), and the send looks the
+type up there: an undeclared type is refused with the list of declared ones, a
+payload that fails the definition's validator is refused with the validation
+message, and only the parsed payload reaches the instance. Nothing is sent on a
+refusal, so a mistyped payload cannot fail a waiting instance for good. The
+reserved `lunora:` types are refused too. The form suggests the declared types.
 
 <Callout type="warn">
     Cloudflare bills for workflow instance-state storage. Keep step payloads small and set a `retention` policy when you don't need long-lived instance history.
