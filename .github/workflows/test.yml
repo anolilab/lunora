@@ -28,6 +28,7 @@
             "templates": "${{ steps.changes.outputs.templates }}"
             "templates_expo": "${{ steps.changes.outputs.templates_expo }}"
             "worker_size": "${{ steps.changes.outputs.worker_size }}"
+            "studio_size": "${{ steps.changes.outputs.studio_size }}"
             "worker_startup": "${{ steps.changes.outputs.worker_startup }}"
             "sdks": "${{ steps.changes.outputs.sdks }}"
             "celld": "${{ steps.changes.outputs.celld }}"
@@ -704,6 +705,43 @@
             - "name": "Weigh the reference Worker"
               "run": "pnpm run worker-size:check"
 
+    # Weighs Lunora Studio's first load (`/__lunora`): the standalone `studio.js` plus every
+    # chunk it imports statically, against the ceiling in `studio-size.json`. Catches a heavy
+    # dependency (charts, motion, the diagram) slipping out from behind a lazy boundary.
+    "studio-size":
+        "name": "Studio size budget"
+        "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.studio_size == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "studio-size"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # `build:prod` for studio AND its dependencies (vis walks `^build:prod`): a
+            # development `@lunora/react` makes the standalone bundle ship React's dev build.
+            - "name": "Build @lunora/studio (production artifacts)"
+              "run": 'pnpm exec vis run build:prod --query "project=studio"'
+
+            - "name": "Weigh the studio first load"
+              "run": "pnpm run studio-size:check"
+
     # Guards Cloudflare's 1 s startup-CPU limit (error 10021, not raisable) for a large
     # app: counts the modules a synthetic 300-procedure app evaluates at startup (static
     # imports only) against the ceiling in `worker-startup.json`. Deterministic, so it
@@ -1010,6 +1048,7 @@
                 "templates",
                 "templates-expo",
                 "worker-size",
+                "studio-size",
                 "worker-startup",
                 "sdk-conformance",
             ]

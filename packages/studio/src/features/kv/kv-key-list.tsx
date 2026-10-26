@@ -5,14 +5,12 @@ import { useEffect, useReducer, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
-import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../../components/ui/sheet";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget } from "../../lib/internal";
 import KvCreateForm from "./kv-create-form";
-import { formatExpiration } from "./kv-fields";
+import KvKeyTable from "./kv-key-table";
 import KvValueEditor from "./kv-value-editor";
 
 /** Default page size for the key list. */
@@ -283,7 +281,7 @@ const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactElement 
     };
 
     const allSelected = keys !== null && keys.length > 0 && bulk.length === keys.length;
-    // A Set, not `bulk.includes` per row: the checkbox below asks once per rendered
+    // A Set, not `bulk.includes` per row: each row checkbox in `KvKeyTable` asks once per rendered
     // key, so the array scan made selection quadratic in the page size.
     const bulkSelected = new Set(bulk);
 
@@ -339,50 +337,15 @@ const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactElement 
                 {keys !== null && keys.length > 0 && (
                     <Card className="overflow-hidden py-0">
                         <CardContent className="px-0">
-                            <Table data-testid="kv-key-table">
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead className="w-10">
-                                            <Checkbox
-                                                aria-label={t("Select all")}
-                                                checked={allSelected}
-                                                data-testid="kv-select-all"
-                                                onCheckedChange={onToggleAll}
-                                            />
-                                        </TableHead>
-                                        <TableHead>{t("Key")}</TableHead>
-                                        <TableHead>{t("Expiration")}</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {keys.map((entry) => (
-                                        <TableRow
-                                            className={entry.name === selectedKey ? "border-l-2 border-l-royal-amethyst bg-muted/50" : "cursor-pointer"}
-                                            data-key={entry.name}
-                                            data-testid={`kv-key-row-${entry.name}`}
-                                            key={entry.name}
-                                            onClick={onSelectKey}
-                                        >
-                                            <TableCell
-                                                onClick={(event) => {
-                                                    event.stopPropagation();
-                                                }}
-                                            >
-                                                <Checkbox
-                                                    aria-label={t("Select {name}", { name: entry.name })}
-                                                    checked={bulkSelected.has(entry.name)}
-                                                    data-testid={`kv-select-${entry.name}`}
-                                                    onCheckedChange={() => {
-                                                        onToggleBulk(entry.name);
-                                                    }}
-                                                />
-                                            </TableCell>
-                                            <TableCell className="font-mono text-xs">{entry.name}</TableCell>
-                                            <TableCell className="tabular-nums text-xs">{formatExpiration(entry.expiration)}</TableCell>
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
+                            <KvKeyTable
+                                allSelected={allSelected}
+                                bulkSelected={bulkSelected}
+                                keys={keys}
+                                onSelectKey={onSelectKey}
+                                onToggleAll={onToggleAll}
+                                onToggleBulk={onToggleBulk}
+                                selectedKey={selectedKey}
+                            />
                         </CardContent>
                     </Card>
                 )}

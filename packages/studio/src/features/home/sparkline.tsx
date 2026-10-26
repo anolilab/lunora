@@ -14,16 +14,9 @@ const SPARKLINE_CONFIG = { value: { colors: { dark: ["var(--foreground)"], light
  * chart engine off the studio's entry bundle — Home's structure paints first and
  * each sparkline streams in on its own chunk.
  */
-const Sparkline = ({ data }: { readonly data: ReadonlyArray<number> }): ReactElement | null => {
-    const bars = data.slice(-16);
-
-    // A single point can't read as a trend (and renders as one fat block), so a
-    // sparkline only shows once there are at least a few buckets.
-    if (bars.length < 3) {
-        return null;
-    }
-
-    const rows = bars.map((value, index) => {
+const Sparkline = ({ data }: { readonly data: ReadonlyArray<number> }): ReactElement => {
+    // The caller (Home) only mounts this with enough points to read as a trend.
+    const rows = data.slice(-16).map((value, index) => {
         return { index, value };
     });
 

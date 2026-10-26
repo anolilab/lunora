@@ -264,4 +264,25 @@ describe("kvBrowser", () => {
 
         await expect(screen.findByTestId("kv-empty")).resolves.toBeDefined();
     });
+
+    it("mounts only a window of a long key list, while select-all still covers every key", async () => {
+        expect.assertions(3);
+
+        const seed: Record<string, { value: string }> = {};
+
+        for (let index = 0; index < 2000; index += 1) {
+            seed[`key:${String(index).padStart(4, "0")}`] = { value: "v" };
+        }
+
+        render(renderBrowser(createMockClient({ kvNamespaces: [{ binding: "CACHE" }], kvSeed: { CACHE: seed } })));
+
+        await screen.findByTestId("kv-key-row-key:0000");
+
+        expect(screen.getAllByTestId(/^kv-key-row-/u).length).toBeLessThan(100);
+        expect(screen.queryByTestId("kv-key-row-key:1999")).toBeNull();
+
+        fireEvent.click(screen.getByTestId("kv-select-all"));
+
+        expect(screen.getByTestId("kv-bulk-delete-btn").textContent).toBe("Delete 2000");
+    });
 });

@@ -262,6 +262,13 @@ worker_size:
     # This file too, or the hole reopens one level up.
     - ".github/file-filters.yml"
 
+# Studio first-load budget. Self-lists like `worker_size`.
+studio_size:
+    - "scripts/check-studio-size.js"
+    - "studio-size.json"
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+
 # Worker startup budget (Cloudflare's 1 s startup-CPU limit). Self-lists like `worker_size`.
 worker_startup:
     - "scripts/check-worker-startup.js"
