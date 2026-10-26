@@ -1,7 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 import { decodeWire, encodeWire, stableWireKey } from "@lunora/wire";
 
-import { toBase64Url } from "../../../shared/base64";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { encodeExpectedSubjectHeader, EXPECT_SUBJECT_HEADER } from "../../../shared/identity-header";
@@ -4568,21 +4567,6 @@ class LunoraClient {
         return previousToken === null ? "none" : "warm";
     }
 
-    /**
-     * The subprotocols a socket offers on its upgrade. With
-     * {@link LunoraClientOptions.authTokenOnUpgrade} and a bearer set, the bearer
-     * rides `Sec-WebSocket-Protocol` as `lunora.bearer.<base64url>` — the one
-     * handshake header a browser can set, and never the URL. The worker lifts it
-     * into `Authorization` for `resolveIdentity` and selects `lunora`.
-     */
-    private upgradeProtocols(): string[] | undefined {
-        if (!this.authTokenOnUpgrade || !this.authToken) {
-            return undefined;
-        }
-
-        return ["lunora", `lunora.bearer.${toBase64Url(new TextEncoder().encode(this.authToken))}`];
-    }
-
     private applyUpgradeBearer(reconnect: "cold" | "none" | "warm"): void {
         if (reconnect === "cold") {
             this.resetRoomSends();
@@ -6476,20 +6460,14 @@ class LunoraClient {
                 return;
             }
 
-            openManagedSocket(
-                conn,
-                this.wsUrlFor(handlers.shardKey, token, base),
-                this.managedSocketOptions,
-                {
-                    onClose: () => {
-                        scheduleReconnect();
-                        handlers.onClose?.();
-                    },
-                    onMessage: handlers.onMessage,
-                    ...(handlers.onOpen === undefined ? {} : { onOpen: handlers.onOpen }),
+            openManagedSocket(conn, this.wsUrlFor(handlers.shardKey, token, base), this.managedSocketOptions, {
+                onClose: () => {
+                    scheduleReconnect();
+                    handlers.onClose?.();
                 },
-                this.upgradeProtocols(),
-            );
+                onMessage: handlers.onMessage,
+                ...(handlers.onOpen === undefined ? {} : { onOpen: handlers.onOpen }),
+            });
         };
 
         // The newest mint, and the generation it started under while still unresolved. A bounce that finds
@@ -7220,157 +7198,151 @@ class LunoraClient {
         // superseded reports on a credential that is no longer the one in force, so it notifies nothing.
         const openedUnder = this.wsCredentialGeneration;
 
-        openManagedSocket(
-            conn,
-            this.wsUrlFor(shardKey, credentials.ticket),
-            this.managedSocketOptions,
-            {
-                onClose: (event) => {
-                    // Close code 4001 is the server's `token_expired` signal: notify
-                    // listeners so the app can refresh its credential before the
-                    // (always-armed) reconnect re-resolves identity. The event is
-                    // optional — some WS doubles fire `close` without one, and a
-                    // synthesized disconnect (connect-timeout, watchdog, bare error)
-                    // never carries one either.
-                    // A socket refused at its connect frame opened and then closed without being admitted: count it as a failed open.
-                    if (event?.code === 4003) {
-                        conn.polling.noteFailedOpen();
-                    }
+        openManagedSocket(conn, this.wsUrlFor(shardKey, credentials.ticket), this.managedSocketOptions, {
+            onClose: (event) => {
+                // Close code 4001 is the server's `token_expired` signal: notify
+                // listeners so the app can refresh its credential before the
+                // (always-armed) reconnect re-resolves identity. The event is
+                // optional — some WS doubles fire `close` without one, and a
+                // synthesized disconnect (connect-timeout, watchdog, bare error)
+                // never carries one either.
+                // A socket refused at its connect frame opened and then closed without being admitted: count it as a failed open.
+                if (event?.code === 4003) {
+                    conn.polling.noteFailedOpen();
+                }
 
-                    if (event?.code === 4001) {
-                        this.notifyTokenExpired();
-                    } else if (
-                        event?.code === 4003 &&
-                        event.reason !== "connect deadline" &&
-                        openedUnder === this.wsCredentialGeneration &&
-                        this.refusedCredentialGeneration !== openedUnder
-                    ) {
-                        // 4003 is the session the server refused (see protocol §6). It repeats on every
-                        // backoff retry, so the listener is told once per credential, not once per retry.
-                        // The connect deadline also closes with 4003, but it refuses no credential.
-                        this.refusedCredentialGeneration = openedUnder;
-                        this.notifyTokenExpired();
-                    }
+                if (event?.code === 4001) {
+                    this.notifyTokenExpired();
+                } else if (
+                    event?.code === 4003 &&
+                    event.reason !== "connect deadline" &&
+                    openedUnder === this.wsCredentialGeneration &&
+                    this.refusedCredentialGeneration !== openedUnder
+                ) {
+                    // 4003 is the session the server refused (see protocol §6). It repeats on every
+                    // backoff retry, so the listener is told once per credential, not once per retry.
+                    // The connect deadline also closes with 4003, but it refuses no credential.
+                    this.refusedCredentialGeneration = openedUnder;
+                    this.notifyTokenExpired();
+                }
 
-                    this.handleDisconnect(conn);
-                },
-                onMessage: (event) => {
-                    // A frame from a socket an identity change already retired —
-                    // see `ShardConnection.retired`. Delivering it would put the
-                    // previous identity's rows back into the subscriptions the
-                    // eviction just cleared, under the new identity's subscribers.
-                    if (conn.retired === true) {
-                        return;
-                    }
-
-                    this.handleServerMessage(event.data, shardKey);
-                },
-                onOpen: () => {
-                    // Intentional mutation of the shared, long-lived connection
-                    // record so the rest of the client observes the same state
-                    // machine (mirrors `handleDisconnect`).
-                    /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
-                    conn.wsState = "open";
-                    conn.wasEverConnected = true;
-                    // A new socket has confirmed no identity and rejoined no room yet.
-                    conn.identityConfirmed = false;
-                    conn.connectionId = undefined;
-                    conn.roomsRejoined = false;
-
-                    // See `ShardConnection.stableTimer` for why `open` is not proof.
-                    clearTimeout(conn.stableTimer);
-                    conn.stableTimer = setTimeout(() => {
-                        // Belt-and-braces: every transition out of `"open"` clears
-                        // this timer first, so this cannot currently be false.
-                        if (conn.wsState === "open") {
-                            conn.reconnect.reset();
-                        }
-                    }, SOCKET_STABLE_MS);
-                    /* eslint-enable no-param-reassign */
-                    // NOT `conn.reconnect.reset()` — an upgrade is not proof of a
-                    // usable connection. The server accepts the upgrade before it
-                    // ever looks at the credential and only drops an expired one on
-                    // the first frame that follows, so resetting here turns a lapsed
-                    // token into a fixed-interval reconnect storm at the INITIAL
-                    // delay that never backs off: open, `connect`, `TOKEN_EXPIRED`,
-                    // close 4001, repeat. The reset now happens in
-                    // `handleServerMessage` when a non-`error` frame proves the
-                    // socket is live (see there).
-                    //
-                    // Announce the connection (and its app context) before anything else on
-                    // this socket: the server refuses any frame that precedes `connect` on a
-                    // socket that has not proved its credential, and `emitConnectionStatus`
-                    // below lets listeners send frames of their own.
-                    this.sendConnectEnvelope(conn);
-
-                    // Un-answer the shard's subscriptions FIRST: a listener told `"connected"` must not
-                    // also be told the previous socket's answers still stand.
-                    this.markShardPendingAck(shardKey, true);
-                    this.emitConnectionStatus();
-
-                    // Resubscribe everyone bound to this shard, a bounded few frames
-                    // at a time (see `queueResubscribe`) — every one of them runs its
-                    // query server-side to build a snapshot, and on the default shard
-                    // they all land on one Durable Object.
-                    this.clearResubscribeQueue(conn);
-
-                    for (const state of this.subscriptions.all()) {
-                        if (connectionKey(state.shardKey) === connectionKey(shardKey)) {
-                            this.queueResubscribe(state);
-                        }
-                    }
-
-                    // Re-send shape subscriptions bound to this shard. Each carries its
-                    // last applied checkpoint, so the server resumes (or re-seeds when the
-                    // cursor fell below retention / the epoch forked).
-                    this.resendShapeSubscriptions(shardKey);
-
-                    // Flush any unsubscribes that piled up while the socket was down.
-                    if (conn.pendingUnsubscribes.length > 0) {
-                        const pending = conn.pendingUnsubscribes;
-
-                        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
-                        conn.pendingUnsubscribes = [];
-
-                        for (const { id, type } of pending) {
-                            sendOn(conn, { id, type });
-                        }
-
-                        // Delivering them may leave nothing holding the shard open.
-                        this.releaseIdleShard(shardKey);
-                    }
-
-                    // Flush stream-start frames queued while we were (re)connecting.
-                    // Reconnect-after-close: in-flight streams have already torn down
-                    // on the server, so the only entries here are brand-new ones that
-                    // raced the connect.
-                    flushPendingStreams(conn);
-
-                    // Rejoin every whisper topic registered for this shard so ephemeral
-                    // channels survive a socket bounce.
-                    // A new socket has joined nothing yet, so every join state starts over.
-                    const key = connectionKey(shardKey);
-                    const byTopic = this.whisperHandlers.get(key);
-
-                    this.dropWhisperJoinWaiters(key);
-                    this.whisperJoins.set(key, new Map());
-
-                    if (byTopic) {
-                        for (const topic of byTopic.keys()) {
-                            this.sendWhisperJoin(conn, key, topic);
-                        }
-                    }
-
-                    // The rejoins are on the wire: room sends on this socket may now go out, behind them.
-                    // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
-                    conn.roomsRejoined = true;
-                    this.releaseRoomSends(shardKey);
-
-                    this.flushOfflineQueue(shardKey).catch(() => undefined);
-                },
+                this.handleDisconnect(conn);
             },
-            this.upgradeProtocols(),
-        );
+            onMessage: (event) => {
+                // A frame from a socket an identity change already retired —
+                // see `ShardConnection.retired`. Delivering it would put the
+                // previous identity's rows back into the subscriptions the
+                // eviction just cleared, under the new identity's subscribers.
+                if (conn.retired === true) {
+                    return;
+                }
+
+                this.handleServerMessage(event.data, shardKey);
+            },
+            onOpen: () => {
+                // Intentional mutation of the shared, long-lived connection
+                // record so the rest of the client observes the same state
+                // machine (mirrors `handleDisconnect`).
+                /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
+                conn.wsState = "open";
+                conn.wasEverConnected = true;
+                // A new socket has confirmed no identity and rejoined no room yet.
+                conn.identityConfirmed = false;
+                conn.connectionId = undefined;
+                conn.roomsRejoined = false;
+
+                // See `ShardConnection.stableTimer` for why `open` is not proof.
+                clearTimeout(conn.stableTimer);
+                conn.stableTimer = setTimeout(() => {
+                    // Belt-and-braces: every transition out of `"open"` clears
+                    // this timer first, so this cannot currently be false.
+                    if (conn.wsState === "open") {
+                        conn.reconnect.reset();
+                    }
+                }, SOCKET_STABLE_MS);
+                /* eslint-enable no-param-reassign */
+                // NOT `conn.reconnect.reset()` — an upgrade is not proof of a
+                // usable connection. The server accepts the upgrade before it
+                // ever looks at the credential and only drops an expired one on
+                // the first frame that follows, so resetting here turns a lapsed
+                // token into a fixed-interval reconnect storm at the INITIAL
+                // delay that never backs off: open, `connect`, `TOKEN_EXPIRED`,
+                // close 4001, repeat. The reset now happens in
+                // `handleServerMessage` when a non-`error` frame proves the
+                // socket is live (see there).
+                //
+                // Announce the connection (and its app context) before anything else on
+                // this socket: the server refuses any frame that precedes `connect` on a
+                // socket that has not proved its credential, and `emitConnectionStatus`
+                // below lets listeners send frames of their own.
+                this.sendConnectEnvelope(conn);
+
+                // Un-answer the shard's subscriptions FIRST: a listener told `"connected"` must not
+                // also be told the previous socket's answers still stand.
+                this.markShardPendingAck(shardKey, true);
+                this.emitConnectionStatus();
+
+                // Resubscribe everyone bound to this shard, a bounded few frames
+                // at a time (see `queueResubscribe`) — every one of them runs its
+                // query server-side to build a snapshot, and on the default shard
+                // they all land on one Durable Object.
+                this.clearResubscribeQueue(conn);
+
+                for (const state of this.subscriptions.all()) {
+                    if (connectionKey(state.shardKey) === connectionKey(shardKey)) {
+                        this.queueResubscribe(state);
+                    }
+                }
+
+                // Re-send shape subscriptions bound to this shard. Each carries its
+                // last applied checkpoint, so the server resumes (or re-seeds when the
+                // cursor fell below retention / the epoch forked).
+                this.resendShapeSubscriptions(shardKey);
+
+                // Flush any unsubscribes that piled up while the socket was down.
+                if (conn.pendingUnsubscribes.length > 0) {
+                    const pending = conn.pendingUnsubscribes;
+
+                    // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+                    conn.pendingUnsubscribes = [];
+
+                    for (const { id, type } of pending) {
+                        sendOn(conn, { id, type });
+                    }
+
+                    // Delivering them may leave nothing holding the shard open.
+                    this.releaseIdleShard(shardKey);
+                }
+
+                // Flush stream-start frames queued while we were (re)connecting.
+                // Reconnect-after-close: in-flight streams have already torn down
+                // on the server, so the only entries here are brand-new ones that
+                // raced the connect.
+                flushPendingStreams(conn);
+
+                // Rejoin every whisper topic registered for this shard so ephemeral
+                // channels survive a socket bounce.
+                // A new socket has joined nothing yet, so every join state starts over.
+                const key = connectionKey(shardKey);
+                const byTopic = this.whisperHandlers.get(key);
+
+                this.dropWhisperJoinWaiters(key);
+                this.whisperJoins.set(key, new Map());
+
+                if (byTopic) {
+                    for (const topic of byTopic.keys()) {
+                        this.sendWhisperJoin(conn, key, topic);
+                    }
+                }
+
+                // The rejoins are on the wire: room sends on this socket may now go out, behind them.
+                // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+                conn.roomsRejoined = true;
+                this.releaseRoomSends(shardKey);
+
+                this.flushOfflineQueue(shardKey).catch(() => undefined);
+            },
+        });
     }
 
     /**

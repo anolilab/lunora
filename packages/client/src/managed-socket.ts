@@ -105,8 +105,6 @@ const openManagedSocket = (
         /** Optional: the scheduled-jobs socket has nothing to do on `open` (its backoff resets on the first payload frame, not here). */
         onOpen?: () => void;
     },
-    /** Subprotocols to offer on the handshake (the bearer-on-upgrade path). Omitted, the socket is built with the URL alone. */
-    protocols?: string[],
 ): void => {
     const { WebSocketImpl, connectTimeoutMs, heartbeatIntervalMs } = options;
 
@@ -120,7 +118,7 @@ const openManagedSocket = (
     // so the handlers below and the caller's own bookkeeping observe the
     // same state machine (mirrors `handleDisconnect`).
     /* eslint-disable no-param-reassign -- mutate the shared connection state machine in place */
-    const socket = protocols === undefined ? new WebSocketImpl(url) : new WebSocketImpl(url, protocols);
+    const socket = new WebSocketImpl(url);
 
     conn.socket = socket;
 

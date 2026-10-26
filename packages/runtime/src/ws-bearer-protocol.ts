@@ -1,92 +1,64 @@
 /**
- * A browser cannot set `Authorization` on a WebSocket upgrade, and a session
- * credential must never ride the URL (every proxy logs it). The one header a
- * browser *can* set on the handshake is `Sec-WebSocket-Protocol`, so a client
- * holding a bearer (an external IdP's JWT — Clerk, WorkOS, …) offers it as a
- * subprotocol:
- *
- * ```
- * Sec-WebSocket-Protocol: lunora, lunora.bearer.<base64url(token)>
- * ```
- *
- * The worker lifts it into `Authorization` for `resolveIdentity` only, so every
- * resolver (and `memoizeIdentity`'s Cookie/Authorization cache key) sees it
- * exactly like a header bearer; strips it before forwarding to the shard; and
- * answers the handshake selecting `lunora`, which the browser requires once it
- * offered any subprotocol. The bearer authenticates the USER only — it never
- * reaches the shard's `LUNORA_WS_BEARER` / admin checks, which read the
+ * The worker side of the bearer-on-upgrade contract in
+ * `shared/ws-bearer-protocol.ts`. The worker lifts the offered bearer into
+ * `Authorization` for `resolveIdentity` only, so every resolver (and
+ * `memoizeIdentity`'s Cookie/Authorization cache key) sees it exactly like a
+ * header bearer; strips it before forwarding to the shard; and answers the
+ * handshake selecting `lunora`. The bearer authenticates the USER only — it
+ * never reaches the shard's `LUNORA_WS_BEARER` / admin checks, which read the
  * forwarded request's own `Authorization` and `connect` frame.
  */
 
-import { fromBase64Url } from "../../../shared/base64";
+import { decodeBearerProtocol, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
 
-/** The subprotocol a Lunora client offers and the worker selects. */
-const LUNORA_WS_PROTOCOL = "lunora";
+/** What an upgrade offered in `Sec-WebSocket-Protocol`, parsed once per upgrade. */
+interface BearerUpgrade {
+    /** Whether the `lunora` subprotocol was offered, which the handshake must then select. */
+    offersLunora: boolean;
 
-/** Prefix of the subprotocol entry carrying the base64url-encoded bearer. */
-const BEARER_PROTOCOL_PREFIX = "lunora.bearer.";
+    /** The decoded `lunora.bearer.*` token, or `undefined`. */
+    token: string | undefined;
+}
 
-const offeredProtocols = (request: Request): string[] =>
-    (request.headers.get("sec-websocket-protocol") ?? "")
-        .split(",")
-        .map((entry) => entry.trim())
-        .filter((entry) => entry.length > 0);
+const bearerUpgrade = (request: Request): BearerUpgrade => {
+    const offered = (request.headers.get("sec-websocket-protocol") ?? "").split(",").map((entry) => entry.trim());
+    let token: string | undefined;
 
-/** The bearer offered as a `lunora.bearer.*` subprotocol, decoded, or `undefined`. */
-const subprotocolBearer = (request: Request): string | undefined => {
-    const entry = offeredProtocols(request).find((protocol) => protocol.startsWith(BEARER_PROTOCOL_PREFIX));
-
-    if (entry === undefined) {
-        return undefined;
+    for (const entry of offered) {
+        token ??= decodeBearerProtocol(entry);
     }
 
-    try {
-        const token = new TextDecoder("utf-8", { fatal: true }).decode(fromBase64Url(entry.slice(BEARER_PROTOCOL_PREFIX.length)));
-
-        return token.length > 0 ? token : undefined;
-    } catch {
-        return undefined;
-    }
+    return { offersLunora: offered.includes(LUNORA_WS_PROTOCOL), token };
 };
 
 /**
  * The request `resolveIdentity` should see for an upgrade: the original when it
  * already carries `Authorization` (a native client's header wins) or offers no
- * bearer subprotocol, else a clone with the subprotocol bearer as
- * `Authorization: Bearer`.
+ * bearer, else a clone with the bearer as `Authorization: Bearer`.
  */
-const identityRequestForUpgrade = (request: Request): Request => {
-    if (request.headers.has("authorization")) {
-        return request;
-    }
-
-    const token = subprotocolBearer(request);
-
-    if (token === undefined) {
+const identityRequestForUpgrade = (request: Request, upgrade: BearerUpgrade): Request => {
+    if (upgrade.token === undefined || request.headers.has("authorization")) {
         return request;
     }
 
     const headers = new Headers(request.headers);
 
-    headers.set("authorization", `Bearer ${token}`);
+    headers.set("authorization", `Bearer ${upgrade.token}`);
 
     return new Request(request, { headers });
 };
 
-/** Whether the client offered the `lunora` subprotocol, which the handshake must then select. */
-const offersLunoraProtocol = (request: Request): boolean => offeredProtocols(request).includes(LUNORA_WS_PROTOCOL);
+/** `headers` without the bearer offer: only `lunora` stays when it was offered. */
+const withoutBearerProtocol = (headers: Headers, upgrade: BearerUpgrade): Headers => {
+    const stripped = new Headers(headers);
 
-/** Drop the bearer from the headers forwarded to the shard, keeping only the `lunora` offer. */
-const stripBearerProtocol = (request: Request, headers: Headers): void => {
-    if (!request.headers.has("sec-websocket-protocol")) {
-        return;
-    }
-
-    if (offersLunoraProtocol(request)) {
-        headers.set("sec-websocket-protocol", LUNORA_WS_PROTOCOL);
+    if (upgrade.offersLunora) {
+        stripped.set("sec-websocket-protocol", LUNORA_WS_PROTOCOL);
     } else {
-        headers.delete("sec-websocket-protocol");
+        stripped.delete("sec-websocket-protocol");
     }
+
+    return stripped;
 };
 
 /**
@@ -96,10 +68,10 @@ const stripBearerProtocol = (request: Request, headers: Headers): void => {
  * the Node host completes its handshake with `ws`, which selects the first
  * offered protocol (`lunora`) itself.
  */
-const selectLunoraProtocol = (request: Request, response: Response): Response => {
+const selectLunoraProtocol = (upgrade: BearerUpgrade, response: Response): Response => {
     const { webSocket } = response as Response & { webSocket?: unknown };
 
-    if (response.status !== 101 || !webSocket || !offersLunoraProtocol(request)) {
+    if (response.status !== 101 || !webSocket || !upgrade.offersLunora) {
         return response;
     }
 
@@ -111,4 +83,5 @@ const selectLunoraProtocol = (request: Request, response: Response): Response =>
     return new Response(null, { headers, status: 101, webSocket });
 };
 
-export { identityRequestForUpgrade, selectLunoraProtocol, stripBearerProtocol, subprotocolBearer };
+export type { BearerUpgrade };
+export { bearerUpgrade, identityRequestForUpgrade, selectLunoraProtocol, withoutBearerProtocol };
