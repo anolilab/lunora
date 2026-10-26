@@ -252,7 +252,7 @@ describe("privacy example lifecycle (workerd)", () => {
     });
 
     it("expires a finished export past its download window and deletes its files", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         await withShard(async (db) => {
             await seed(db);
@@ -260,6 +260,9 @@ describe("privacy example lifecycle (workerd)", () => {
             const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestExport();
 
             await privacyWorkflows.exportHandler(contextFor(db, request.id));
+
+            // The sweep only expires a ready export, so a failed run here is the reason the sweep below finds nothing.
+            await expect(requestRow(db, request.id)).resolves.toMatchObject({ status: "ready" });
 
             // The typed mutation context, so the row id keeps its table type for `patch`.
             const ctx = appCtx(db);
@@ -285,7 +288,7 @@ describe("privacy example lifecycle (workerd)", () => {
     });
 
     it("exports the subject's sign-in rows without the password hash", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         await withShard(async (db) => {
             await seed(db);
@@ -294,6 +297,8 @@ describe("privacy example lifecycle (workerd)", () => {
             const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestExport();
 
             await privacyWorkflows.exportHandler(contextFor(db, request.id));
+
+            await expect(requestRow(db, request.id)).resolves.toMatchObject({ status: "ready" });
 
             const files = await db.query("exportFiles").collect();
             const part = files.find((row) => row.requestId === request.id && (row.name as string).endsWith("/parts/auth.json"));
