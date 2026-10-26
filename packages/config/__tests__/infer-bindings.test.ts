@@ -2052,6 +2052,19 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
             expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
         });
 
+        it("keys the client's relay secret for a root-level entry that loads the module with a no-substitution template import()", async () => {
+            expect.assertions(1);
+
+            write("wrangler.jsonc", ROOT_WRANGLER);
+            write("lib/log.ts", CLIENT_LOG);
+            write(
+                "worker.ts",
+                'export default { async fetch(_request: Request, env: Env) { const { log } = await import(`./lib/log`); log(env); return new Response("ok"); } };\n',
+            );
+
+            expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+        });
+
         it("does not key the client's relay secret for a type-only import of a module that constructs the client", async () => {
             expect.assertions(1);
 

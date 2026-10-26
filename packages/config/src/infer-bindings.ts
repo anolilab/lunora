@@ -1260,7 +1260,7 @@ const runtimeSpecifiersOf = (source: ts.SourceFile): string[] => {
         } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
             const [argument] = node.arguments;
 
-            if (argument !== undefined && ts.isStringLiteral(argument)) {
+            if (argument !== undefined && (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument))) {
                 specifiers.push(argument.text);
             }
         }
