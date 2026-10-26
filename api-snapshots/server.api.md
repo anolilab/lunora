@@ -3557,6 +3557,12 @@ const defineIdentity: <A extends ValidatorMap>(claims: InferValidatorMap<A> exte
 const defineIdentityGuard: <Guard extends (...args: never[]) => void>(guard: Guard) => Guard;
 ```
 
+### `defineLazyFacade` (const)
+
+```ts
+const defineLazyFacade: (target: FacadeWriterLike, tableName: string) => void;
+```
+
 ### `defineListArgs` (const)
 
 ```ts

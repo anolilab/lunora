@@ -1381,6 +1381,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `defineLazyFacade` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `defineListArgs` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6728,6 +6732,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `defineIdentityGuard` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `defineLazyFacade` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

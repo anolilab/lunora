@@ -432,9 +432,13 @@ export const defineLazyFacade = (target: FacadeWriterLike, tableName: string): v
         get() {
             const bound = bindTableFacade(target, tableName);
 
-            Object.defineProperty(target, tableName, { configurable: true, enumerable: true, value: bound, writable: false });
+            Object.defineProperty(target, tableName, { configurable: true, enumerable: true, value: bound, writable: true });
 
             return bound;
+        },
+        // Assignment must keep working as it did for an eager data property, before and after the first read.
+        set(value) {
+            Object.defineProperty(target, tableName, { configurable: true, enumerable: true, value, writable: true });
         },
     });
 };
