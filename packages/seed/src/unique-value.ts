@@ -47,8 +47,32 @@ interface UniqueDealOptions {
     table: string;
 }
 
-/** Slots a float column's range is divided into. Fixed (not derived from the row count) so two batches of the same table never land on the same value. */
+/** Most values a float column's range deals. Fixed (not derived from the row count) so two batches of the same table never land on the same value. */
 const FLOAT_SLOTS = 1_000_000;
+
+/** The width, in ulps, a float slot needs to stay distinct from its neighbour after rounding. */
+const FLOAT_SLOT_ULPS = 4;
+
+const FLOAT_VIEW = new DataView(new ArrayBuffer(8));
+const SIGN_BIT = 2n ** 63n;
+
+/**
+ * A double's place among all doubles in value order: its bit pattern, negated below zero. Consecutive keys
+ * are consecutive doubles, so a count of keys is a count of distinct values.
+ */
+const doubleKey = (value: number): bigint => {
+    FLOAT_VIEW.setFloat64(0, value);
+    const bits = FLOAT_VIEW.getBigUint64(0);
+
+    return bits >= SIGN_BIT ? -(bits - SIGN_BIT) : bits;
+};
+
+/** The double at a key {@link doubleKey} produced. */
+const doubleOfKey = (key: bigint): number => {
+    FLOAT_VIEW.setBigUint64(0, key < 0n ? SIGN_BIT - key : key);
+
+    return FLOAT_VIEW.getFloat64(0);
+};
 
 /** Spacing between two unique temporal values. A minute keeps a seeded month readable while still fitting 259,200 distinct rows in the generator's window. */
 const TIMESTAMP_STEP_MS = 60_000;
@@ -135,7 +159,7 @@ const domainDeal = (domain: ReadonlyArray<unknown>, table: string, column: strin
 /**
  * A deal over a numeric range. Integer bounds are walked one exact step at a time
  * (one, inside the safe-integer span); fractional bounds (a float column) are divided into {@link FLOAT_SLOTS}
- * evenly-spaced values, since a real interval cannot be enumerated.
+ * evenly-spaced values, unless the range is too narrow for that, when they are walked double by double.
  */
 const rangeDeal = (min: number, max: number): UniqueDeal => {
     if (Number.isInteger(min) && Number.isInteger(max)) {
@@ -164,7 +188,17 @@ const rangeDeal = (min: number, max: number): UniqueDeal => {
         return { capacity: 1, valueAt: () => min };
     }
 
-    return { capacity: FLOAT_SLOTS, valueAt: (index) => min + ((index % FLOAT_SLOTS) * (max - min)) / FLOAT_SLOTS };
+    // A slot thinner than a few ulps of the range rounds two rows onto one number, so such a range is walked double by double.
+    const ulp = Math.max(Math.max(Math.abs(min), Math.abs(max)) * Number.EPSILON, Number.MIN_VALUE);
+
+    if ((max - min) / FLOAT_SLOTS >= FLOAT_SLOT_ULPS * ulp) {
+        return { capacity: FLOAT_SLOTS, valueAt: (index) => min + ((index % FLOAT_SLOTS) * (max - min)) / FLOAT_SLOTS };
+    }
+
+    const low = doubleKey(min);
+    const capacity = Number(doubleKey(max) - low) + 1;
+
+    return { capacity, valueAt: (index) => doubleOfKey(low + BigInt(index % capacity)) };
 };
 
 /**
@@ -471,9 +505,9 @@ const arrayAt = (domain: ReadonlyArray<unknown>, shortest: number, index: number
     return Array.from({ length }, (_, position) => domain[Math.floor(rest / base ** position) % base]);
 };
 
-/** A deal over an explicit list of values, dealt in order. */
+/** A deal over an explicit list of values, dealt in order and wrapping past its end like the other finite deals. */
 const listDeal = (values: ReadonlyArray<unknown>): UniqueDeal => {
-    return { capacity: values.length, valueAt: (index) => values[index] };
+    return { capacity: values.length, valueAt: (index) => (values.length === 0 ? undefined : values[index % values.length]) };
 };
 
 /**
@@ -516,7 +550,7 @@ const arrayValuesDeal = (field: FieldSpec, constraints: Constraints, table: stri
     return {
         capacity: count,
         valueAt: (index) => {
-            const value = arrayAt(domain, shortest, index);
+            const value = arrayAt(domain, shortest, index % count);
 
             if (!field.validator.safeParse(value).ok) {
                 refuse(
@@ -545,8 +579,12 @@ const arrayDeal = (field: FieldSpec, constraints: Constraints, table: string): U
 
     return {
         capacity: deal.capacity + 1,
-        // eslint-disable-next-line unicorn/no-null -- NULL is the one value a nullable array column takes past its arrays
-        valueAt: (index, generate) => (index === deal.capacity ? null : deal.valueAt(index, generate)),
+        valueAt: (index, generate) => {
+            const slot = index % (deal.capacity + 1);
+
+            // eslint-disable-next-line unicorn/no-null -- NULL is the one value a nullable array column takes past its arrays
+            return slot === deal.capacity ? null : deal.valueAt(slot, generate);
+        },
     };
 };
 
@@ -712,13 +750,13 @@ const hasHashedValue = (field: FieldSpec, options: UniqueDealOptions): boolean =
 };
 
 /**
- * Whether a member's closed domain holds `null`. A unique index never compares a NULL, so a row that
- * takes one can never collide with another; a composite index uses that to take rows past its counted
- * combinations.
+ * Whether a member's closed domain holds `null` after its refinements. A unique index never compares a NULL,
+ * so a row that takes one can never collide with another; a composite index uses that to take rows past its
+ * counted combinations. A `.check()` that rejects NULL leaves it out, so the index must refuse instead.
  */
 const admitsNull = (field: FieldSpec): boolean =>
     // eslint-disable-next-line unicorn/no-null -- NULL is the value a unique index never compares
-    finiteDomain(field.validator)?.includes(null) === true;
+    acceptedDomain(field.validator)?.includes(null) === true;
 
 export { admitsNull, hasHashedValue, planCompositeMemberDeal, planUniqueDeal, planUniqueFkDeal };
 export type { CompositeMemberDeal, UniqueDeal };

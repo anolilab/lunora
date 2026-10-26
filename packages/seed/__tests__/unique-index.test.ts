@@ -338,6 +338,60 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(() => seedPlan(schema, { counts: { boxes: 1 } })).toThrow(/cannot generate unique values for "boxes"\."bits"/u);
     });
 
+    it("refuses past the counted rows when a nullable member's refinement rejects NULL", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            slots: defineTable({
+                flag: v.boolean(),
+                kind: v
+                    .union(v.literal("x"), v.literal("y"))
+                    .nullable()
+                    .check((kind) => kind !== null),
+            }).index("by_kind_flag", ["kind", "flag"], { unique: true }),
+        });
+
+        expect(rowsOf(seedPlan(schema, { counts: { slots: 4 } }), "slots")).toHaveLength(4);
+        expect(() => seedPlan(schema, { counts: { slots: 5 } })).toThrow(/by_kind_flag/u);
+    });
+
+    it("never leaves an overridden unique array row without a value", () => {
+        expect.hasAssertions();
+
+        const element = v.union(v.literal("a"), v.literal("b"));
+        const overrides = { boxes: { tags: () => undefined } };
+        const plain = defineSchema({ boxes: defineTable({ tags: v.array(element).max(1).unique() }) });
+        const nullable = defineSchema({ boxes: defineTable({ tags: v.array(element).max(1).nullable().unique() }) });
+
+        expect(rowsOf(seedPlan(plain, { counts: { boxes: 6 }, overrides }), "boxes").every((row) => Array.isArray(row.tags))).toBe(true);
+
+        // Three arrays and one NULL: row 7 wraps onto the NULL slot.
+        const rows = rowsOf(seedPlan(nullable, { counts: { boxes: 8 }, overrides }), "boxes");
+
+        expect(rows.every((row) => Array.isArray(row.tags) || row.tags === null)).toBe(true);
+        expect(rows[7]).toMatchObject({ tags: null });
+    });
+
+    it("wraps an overridden unique array past a count too large to list, rather than refusing its row", () => {
+        expect.hasAssertions();
+
+        // Four elements over at most eight items: 87,381 arrays, past the listing limit.
+        const schema = defineSchema({
+            boxes: defineTable({
+                tags: v
+                    .array(v.union(v.literal("a"), v.literal("b"), v.literal("c"), v.literal("d")))
+                    .max(8)
+                    .unique(),
+            }),
+        });
+        const rows = rowsOf(
+            seedPlan(schema, { counts: { boxes: 1 }, indexOffset: { boxes: 87_381 }, overrides: { boxes: { tags: () => undefined } } }),
+            "boxes",
+        );
+
+        expect(rows[0]).toMatchObject({ tags: [] });
+    });
+
     it("takes NULL for the rows past a nullable member's finite ceiling, which a unique index never compares", () => {
         expect.hasAssertions();
 
@@ -552,5 +606,25 @@ describe("seedPlan — multi-column unique indexes", () => {
         const handles = new Set(rowsOf(plan, "users").map((row) => row.handle));
 
         expect(handles.size).toBe(25);
+    });
+
+    it("deals distinct floats for a unique range too narrow for its slots to tell apart", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({ dust: defineTable({ size: v.number().positive().max(1e-320).unique() }) });
+        const sizes = rowsOf(seedPlan(schema, { counts: { dust: 50 } }), "dust").map((row) => row.size);
+
+        expect(new Set(sizes).size).toBe(50);
+        expect(() => seedPlan(schema, { counts: { dust: 5000 } })).toThrow(/unique column "size" has only/u);
+    });
+
+    it("keeps a wide unique float range evenly spaced across its slots", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({ gauges: defineTable({ ratio: v.number().min(0.5).max(1.5).unique() }) });
+        const ratios = rowsOf(seedPlan(schema, { counts: { gauges: 3 } }), "gauges").map((row) => row.ratio as number);
+
+        expect(ratios[1]).toBeCloseTo(0.500_001, 12);
+        expect(ratios[2]).toBeCloseTo(0.500_002, 12);
     });
 });
