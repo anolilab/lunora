@@ -1223,6 +1223,9 @@ describe("runDoctor", () => {
     });
 
     describe("cloudflare api token", () => {
+        /** The URL a fetch call was made to, whichever form the caller passed it in. */
+        const urlOf = (input: RequestInfo | URL): string => (input instanceof Request ? input.url : input.toString());
+
         const tokenFinding = async (fetchImpl: typeof globalThis.fetch, environment: Record<string, string>) => {
             const cwd = mkdtempSync(join(tmpdir(), "lunora-doctor-token-"));
 
@@ -1237,22 +1240,42 @@ describe("runDoctor", () => {
 
         const credentials = { CLOUDFLARE_ACCOUNT_ID: "acc", CLOUDFLARE_API_TOKEN: "token" };
 
-        it("passes a token the account reports as active, verified against the configured account", async () => {
+        it("passes a user-owned token that the user endpoint reports as active", async () => {
             expect.assertions(3);
 
             const fetchImpl = vi.fn<typeof globalThis.fetch>(async () => Response.json({ result: { status: "active" }, success: true }));
 
             await expect(tokenFinding(fetchImpl, credentials)).resolves.toMatchObject({ code: "cloudflare-token-ok", level: "pass" });
 
-            const verify = vi.mocked(fetchImpl).mock.calls.find(([url]) => String(url instanceof Request ? url.url : url).endsWith("/tokens/verify"));
+            const [url, init] = vi.mocked(fetchImpl).mock.calls.find(([called]) => urlOf(called).endsWith("/tokens/verify")) ?? [];
 
-            expect(String(verify?.[0] instanceof Request ? verify[0].url : verify?.[0])).toBe(
-                "https://api.cloudflare.com/client/v4/accounts/acc/tokens/verify",
-            );
-            expect(verify?.[1]).toMatchObject({ headers: { Authorization: "Bearer token" } });
+            expect(urlOf(url ?? "")).toBe("https://api.cloudflare.com/client/v4/user/tokens/verify");
+            expect(init).toMatchObject({ headers: { Authorization: "Bearer token" } });
         });
 
-        it("fails a token the API rejects", async () => {
+        it("passes an account-owned token once its account endpoint reports it active, after the user endpoint refuses it", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = vi.fn<typeof globalThis.fetch>(async (url) =>
+                urlOf(url).endsWith("/user/tokens/verify")
+                    ? Response.json({ errors: [{ code: 1000, message: "Invalid API Token" }], success: false }, { status: 401 })
+                    : Response.json({ result: { status: "active" }, success: true }),
+            );
+
+            await expect(tokenFinding(fetchImpl, credentials)).resolves.toMatchObject({ code: "cloudflare-token-ok", level: "pass" });
+
+            const verifyUrls = vi
+                .mocked(fetchImpl)
+                .mock.calls.map(([called]) => urlOf(called))
+                .filter((called) => called.endsWith("/tokens/verify"));
+
+            expect(verifyUrls).toStrictEqual([
+                "https://api.cloudflare.com/client/v4/user/tokens/verify",
+                "https://api.cloudflare.com/client/v4/accounts/acc/tokens/verify",
+            ]);
+        });
+
+        it("fails a token that both endpoints refuse with 401, as a rejection", async () => {
             expect.assertions(1);
 
             const fetchImpl = vi.fn<typeof globalThis.fetch>(async () =>
@@ -1260,6 +1283,17 @@ describe("runDoctor", () => {
             );
 
             await expect(tokenFinding(fetchImpl, credentials)).resolves.toMatchObject({ code: "cloudflare-token-rejected", level: "fail" });
+        });
+
+        it("leaves a token unchecked, not rejected, when the user endpoint refuses it and no account id is set", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = vi.fn<typeof globalThis.fetch>(async () =>
+                Response.json({ errors: [{ code: 1000, message: "Invalid API Token" }], success: false }, { status: 401 }),
+            );
+
+            await expect(tokenFinding(fetchImpl, { CLOUDFLARE_API_TOKEN: "token" })).resolves.toMatchObject({ code: "cloudflare-token-unchecked" });
+            expect(fetchImpl).toHaveBeenCalledTimes(1);
         });
 
         it("fails a token the account reports as disabled", async () => {
