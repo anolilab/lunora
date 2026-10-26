@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
@@ -712,6 +713,39 @@ describe("rspack watch (real compiler)", () => {
                     writeFileSync(join(root, "web", "lunora.config.ts"), 'export default { codegen: { exclude: ["seed/**"] } };\n', "utf8");
                 },
                 { expectedBuilds: 2, schemaDir: "web/lunora", settleMs: 2500 },
+            );
+
+            expect(existsSync(join(root, ".hook-runs"))).toBe(true);
+        },
+        TEST_TIMEOUT_MS,
+    );
+
+    it(
+        "re-runs the pass when the target of a source symlinked from outside lunora/ changes",
+        async () => {
+            expect.assertions(1);
+
+            const root = fixture({ scripts: { postcodegen: `node -e "require('fs').appendFileSync('.hook-runs', 'x')"` } });
+            const outside = mkdtempSync(join(tmpdir(), "lunora-linked-"));
+            const target = join(outside, "linked.ts");
+
+            onTestFinished(() => {
+                rmSync(outside, { force: true, recursive: true });
+            });
+
+            writeFileSync(target, "export const linked = 1;\n", "utf8");
+            symlinkSync(target, join(root, "lunora", "linked.ts"));
+
+            await runOnce(productionCompiler(root));
+
+            await watchRun(
+                root,
+                () => {
+                    // The edit lands under the target's path only, which the watch on `lunora/` does not cover.
+                    rmSync(join(root, ".hook-runs"), { force: true });
+                    writeFileSync(target, "export const linked = 2;\n", "utf8");
+                },
+                { expectedBuilds: 2, settleMs: 2500 },
             );
 
             expect(existsSync(join(root, ".hook-runs"))).toBe(true);

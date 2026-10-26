@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 
-import { findTsconfig, fingerprintSchemaSources, PROJECT_CONFIG_FILENAMES, projectConfigCandidatePaths } from "@lunora/codegen";
+import { findTsconfig, fingerprintSchemaSources, listLunoraSourceFiles, PROJECT_CONFIG_FILENAMES, projectConfigCandidatePaths } from "@lunora/codegen";
 import {
     AGENT_RULES_HINT,
     claimAgentRulesHint,
@@ -83,17 +83,14 @@ const realPathOf = (path: string): string => {
 };
 
 /**
- * The `tsconfig.json` paths `findTsconfig` tries before reaching `found`, from the
- * schema directory up to the project root. Creating one switches the tsconfig codegen
+ * The `tsconfig.json` paths `findTsconfig` tries before reaching `found`, or up to the
+ * filesystem root when it found none. Creating one switches the tsconfig codegen
  * resolves, so each is watched as a missing file.
- *
- * ponytail: stops at the project root, so a tsconfig created above it goes unseen
- * until the next `lunora/` edit; walk on to `found` if a monorepo needs that.
  */
-const nearerTsconfigPaths = (schemaDirectory: string, projectRoot: string, found: string | undefined): string[] => {
+const nearerTsconfigPaths = (schemaDirectory: string, found: string | undefined): string[] => {
     const paths: string[] = [];
 
-    for (let directory = schemaDirectory; ; directory = dirname(directory)) {
+    for (let directory = schemaDirectory; directory !== dirname(directory); directory = dirname(directory)) {
         const candidate = join(directory, "tsconfig.json");
 
         if (candidate === found) {
@@ -101,13 +98,26 @@ const nearerTsconfigPaths = (schemaDirectory: string, projectRoot: string, found
         }
 
         paths.push(candidate);
-
-        if (directory === projectRoot || directory === dirname(directory)) {
-            break;
-        }
     }
 
     return paths;
+};
+
+/**
+ * The real paths of schema sources that are symlinks to files outside the schema
+ * directory. Codegen reads them through the link, but the watcher reports their edits
+ * under the target, which the directory watch does not cover.
+ */
+const linkedSourceTargets = (schemaDirectory: string): string[] => {
+    if (!existsSync(schemaDirectory)) {
+        return [];
+    }
+
+    const realDirectory = realPathOf(schemaDirectory);
+
+    return [...listLunoraSourceFiles(schemaDirectory, { includeSkipped: true }), join(schemaDirectory, "schema.ts")]
+        .map((path) => realPathOf(path))
+        .filter((path) => !path.startsWith(`${realDirectory}${sep}`));
 };
 
 /** Whether `changed` is `input`, lies under it, or is a directory holding it — all three mean the input may have moved. */
@@ -223,6 +233,9 @@ class LunoraRspackPlugin {
      */
     #inputs: string[] = [];
 
+    /** {@link linkedSourceTargets} as of the last pass that ran; only a pass can change which sources are linked. */
+    #linkedSources: string[] = [];
+
     public constructor(options: ResolvedLunoraRspackOptions) {
         this.#options = options;
         this.#schemaDirectory = resolve(options.projectRoot, options.schemaDir);
@@ -326,7 +339,8 @@ class LunoraRspackPlugin {
                 ...WRANGLER_FILES.map((name) => resolve(this.#options.projectRoot, name)),
                 ...PROJECT_CONFIG_FILENAMES.map((name) => resolve(this.#options.projectRoot, name)),
                 ...projectConfigCandidatePaths(this.#schemaDirectory),
-                ...nearerTsconfigPaths(this.#schemaDirectory, resolve(this.#options.projectRoot), tsconfigPath),
+                ...nearerTsconfigPaths(this.#schemaDirectory, tsconfigPath),
+                ...this.#linkedSources,
             ];
 
             for (const path of new Set(watched)) {
@@ -376,11 +390,6 @@ class LunoraRspackPlugin {
      * another compiler's pass is in flight, which this one must wait for; and when any
      * changed or removed path touches an input. Rspack reports an edit under a context
      * dependency as the DIRECTORY, so the schema directory itself is an input.
-     *
-     * ponytail: a `lunora/` source symlinked to a file OUTSIDE the directory changes
-     * under its target's path, which is not matched here, so its edit waits for the
-     * next `lunora/` change to regenerate. Record the sources' real paths if anyone
-     * keeps sources that way.
      */
     #untouched(modified: ReadonlySet<string> | undefined, removed: ReadonlySet<string> | undefined): boolean {
         if (
@@ -479,6 +488,7 @@ class LunoraRspackPlugin {
             return;
         }
 
+        this.#linkedSources = linkedSourceTargets(this.#schemaDirectory);
         this.#findings = [];
 
         try {
