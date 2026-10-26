@@ -6,8 +6,9 @@ import { createSqlCtxDb } from "../src/ctx-db";
 import { createSqliteBatchHarness, makeSqliteDialect } from "./_helpers/sqlite";
 
 /**
- * Pins the statements a `.global()` read or write sends, where a regression is a round trip rather than a wrong
- * answer. On D1 every statement here is a network call from the Worker, so the count is the latency.
+ * Pins the statements a `.global()` read or write sends, and the plan of the one polled every tick, where a
+ * regression is a round trip or a full scan rather than a wrong answer. On D1 every statement here is a network
+ * call from the Worker, so the count is the latency.
  */
 
 const col = (kind: string): ValidatorLike => {
@@ -191,5 +192,67 @@ describe("createSqlCtxDb — by-id writes pinned to a table", () => {
         const id = await writer.insert("notes", { body: "a" });
 
         await expect(writer.patch(id, { body: "b" }, "constructor")).rejects.toThrow(`document not found: ${id}`);
+    });
+});
+
+describe("createSqlCtxDb — the changed-tables poll", () => {
+    const LOG_ROWS = 2000;
+    const LOG_TABLES = ["alpha", "beta", "gamma"];
+
+    let harness: ReturnType<typeof createSqliteBatchHarness>;
+
+    const schema: SchemaLike = {
+        tables: Object.fromEntries(LOG_TABLES.map((table) => [table, { indexes: [], shape: { body: col("string") }, shardMode: { kind: "global" } }])),
+    } as never;
+
+    beforeEach(async () => {
+        harness = createSqliteBatchHarness();
+
+        // Provision the log through the store, then fill it directly: the rows are setup.
+        await createSqlCtxDb({ cdc: true, clock: () => 1, dialect, exec: harness.exec, schema }).count("alpha");
+
+        const append = harness.database.prepare(`INSERT INTO "__cdc_log" ("ts", "table", "id", "op", "doc") VALUES (?, ?, ?, 'insert', '{}')`);
+
+        for (let index = 0; index < LOG_ROWS; index += 1) {
+            append.run(index, LOG_TABLES[index % LOG_TABLES.length] as string, `x${String(index)}`);
+        }
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("seeks each table in the log index rather than walking all of it", async () => {
+        // The `GROUP BY "table"` form this replaced was planned as `SCAN __cdc_log USING COVERING INDEX`
+        // without statistics (D1 keeps none): every poll read every row of the log for a delta of a few rows.
+        expect.assertions(2);
+
+        const { exec, statements } = recording(harness.exec);
+
+        await createSqlCtxDb({ cdc: true, clock: () => 1, dialect, exec, schema }).cdcChangedTables?.(LOG_ROWS - 5);
+
+        const poll = statements.find((statement) => statement.includes("WITH RECURSIVE")) as string;
+        const plan = harness.database
+            .prepare(`EXPLAIN QUERY PLAN ${poll}`)
+            .all(LOG_ROWS - 5)
+            .map((step) => String(step["detail"]));
+
+        expect(plan.some((step) => step.includes("__cdc_log_table_seq (table=? AND seq>?)"))).toBe(true);
+        expect(plan.filter((step) => step.startsWith("SCAN __cdc_log"))).toStrictEqual([]);
+    });
+
+    it("reports the same tables and cursor as grouping the log", async () => {
+        expect.assertions(4);
+
+        const writer = createSqlCtxDb({ cdc: true, clock: () => 1, dialect, exec: harness.exec, schema });
+        const grouped = harness.database.prepare(`SELECT "table", MAX(seq) AS seq FROM "__cdc_log" WHERE seq > ? GROUP BY "table"`);
+
+        for (const since of [0, LOG_ROWS - 2, LOG_ROWS - 1, LOG_ROWS]) {
+            const expected = grouped.all(since);
+            const cursor = Math.max(since, ...expected.map((row) => Number(row["seq"])));
+
+            // eslint-disable-next-line no-await-in-loop -- one poll per cursor, compared in turn
+            await expect(writer.cdcChangedTables?.(since)).resolves.toMatchObject({ cursor, tables: expected.map((row) => row["table"]) });
+        }
     });
 });

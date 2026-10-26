@@ -1,12 +1,15 @@
 /**
- * The aggregate/rank companion rebuild and the pinned by-id write path, against a **real** D1 binding in workerd.
+ * The aggregate/rank companion rebuild, the pinned by-id write path and the changed-tables poll, against a
+ * **real** D1 binding in workerd.
  *
  * What is under test is which statements reach D1, where each is a network round trip from the Worker: a
  * rebuild (a scan of the table plus a rewrite of the companion) runs once per `provisionScope`, not once per
- * writer, and a pinned write reads the row without a `SELECT 1` probe ahead of it. Each test owns its table
- * names: D1 storage is shared across the tests in this file.
+ * writer, and a pinned write reads the row without a `SELECT 1` probe ahead of it. The poll's plan is asked of
+ * D1 itself, which plans without statistics like `node:sqlite` but is the engine that bills the rows read.
+ * Each test owns its table names: D1 storage is shared across the tests in this file.
  */
 import type { SchemaLike } from "@lunora/shard-engine";
+import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import type { SqlCtxExec } from "../../src/ctx-db";
@@ -102,5 +105,34 @@ describe("companion rebuilds and pinned writes on D1", () => {
 
         expect(statements.filter((statement) => statement.startsWith("SELECT 1 FROM"))).toStrictEqual([]);
         await expect(writer.get(table, id)).resolves.toBeNull();
+    });
+
+    it("polls changed tables with one index seek per table, not a walk of the whole log", async () => {
+        expect.assertions(3);
+
+        const tables = ["poll_alpha", "poll_beta"];
+        const schema = {
+            tables: Object.fromEntries(tables.map((table) => [table, { indexes: [], shape: { body: col("string") }, shardMode: { kind: "global" } }])),
+        } as never;
+
+        await createSqlCtxDb({ cdc: true, clock: () => 1, dialect: d1Dialect, exec: d1Exec, schema }).count("poll_alpha");
+
+        const append = env.DB.prepare(`INSERT INTO "__cdc_log" ("ts", "table", "id", "op", "doc") VALUES (?, ?, ?, 'insert', '{}')`);
+
+        await env.DB.batch(Array.from({ length: 400 }, (_, index) => append.bind(index, tables[index % tables.length] as string, `x${String(index)}`)));
+
+        const head = await env.DB.prepare(`SELECT MAX(seq) AS seq FROM "__cdc_log"`).first<{ seq: number }>();
+        const since = (head?.seq ?? 0) - 3;
+        const { exec, statements } = recording();
+        const changed = await createSqlCtxDb({ cdc: true, clock: () => 1, dialect: d1Dialect, exec, schema }).cdcChangedTables?.(since);
+        const poll = statements.find((statement) => statement.includes("WITH RECURSIVE")) as string;
+        const plan = await env.DB.prepare(`EXPLAIN QUERY PLAN ${poll}`).bind(since).all<{ detail: string }>();
+        const grouped = await env.DB.prepare(`SELECT "table", MAX(seq) AS seq FROM "__cdc_log" WHERE seq > ? GROUP BY "table"`)
+            .bind(since)
+            .all<{ table: string }>();
+
+        expect(changed?.tables).toStrictEqual(grouped.results.map((row) => row.table));
+        expect(plan.results.some((step) => step.detail.includes("(table=? AND seq>?)"))).toBe(true);
+        expect(plan.results.filter((step) => step.detail.startsWith("SCAN __cdc_log"))).toStrictEqual([]);
     });
 });

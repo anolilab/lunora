@@ -1337,9 +1337,30 @@ const capAtLateCommit = (cursor: number, row: Record<string, unknown> | undefine
 };
 
 /**
+ * SQLite's changed-tables read: a skip-scan over `("table", seq)`, one index
+ * seek per distinct table for its highest `seq` above `sinceSeq`.
+ *
+ * The plain `… WHERE seq > ? GROUP BY "table"` is planned without statistics
+ * (D1 keeps none unless something runs `ANALYZE`), and SQLite then satisfies
+ * the grouping by walking the whole covering index: every poll read every row
+ * of the log. On `node:sqlite` with 100k entries in 20 tables that is ~2.2ms
+ * for a 50-row delta, and D1 bills it as 100k rows read. Ranging on `seq`
+ * instead reads only the delta, but sorts whole rows (`doc` included), so a
+ * poll from far back costs ~10x the index walk. This form is O(tables · log n)
+ * at any distance, and yields the same rows in the same (name) order.
+ */
+const sqliteChangedTablesSql = (sinceSeq: number): SQL => {
+    const log = sql.identifier(CDC_LOG_TABLE);
+    const table = sql.identifier("table");
+
+    return sql`SELECT ${table}, seq FROM (WITH RECURSIVE "t"("name") AS (SELECT MIN(${table}) FROM ${log} UNION ALL SELECT (SELECT MIN(${table}) FROM ${log} WHERE ${table} > "t"."name") FROM "t" WHERE "t"."name" IS NOT NULL) SELECT "t"."name" AS ${table}, (SELECT MAX(seq) FROM ${log} WHERE ${table} = "t"."name" AND seq > ${sinceSeq}) AS seq FROM "t" WHERE "t"."name" IS NOT NULL) WHERE seq IS NOT NULL`;
+};
+
+/**
  * Which tables the changelog recorded a write to after `sinceSeq`, plus the
- * cursor to resume from. Metadata only — it reads no `doc`, so its cost is a
- * grouped scan over an index range rather than the size of the documents in it.
+ * cursor to resume from. Metadata only — it reads no `doc`, so its cost is
+ * index seeks (on SQLite, see {@link sqliteChangedTablesSql}) rather than the
+ * size of the documents in it.
  *
  * The `.global()` shape poll asks this once per tick for the whole shard, and a
  * shape whose table is absent from the answer skips its membership read
@@ -1402,7 +1423,9 @@ const readSqlCdcChangedTables = async (
     const rows = await queryAll(
         exec,
         dialect,
-        sql`SELECT ${sql.identifier("table")} AS ${sql.identifier("table")}, MAX(seq) AS seq${guarded ? sql`, ${lateCommitCap(sql`${sinceSeq}`, cutoff)}` : sql``} FROM ${log} WHERE seq > ${sinceSeq} GROUP BY ${sql.identifier("table")}`,
+        guarded
+            ? sql`SELECT ${sql.identifier("table")} AS ${sql.identifier("table")}, MAX(seq) AS seq, ${lateCommitCap(sql`${sinceSeq}`, cutoff)} FROM ${log} WHERE seq > ${sinceSeq} GROUP BY ${sql.identifier("table")}`
+            : sqliteChangedTablesSql(sinceSeq),
     );
 
     let cursor = sinceSeq;

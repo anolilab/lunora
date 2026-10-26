@@ -1,5 +1,5 @@
 import type { DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
 import { createD1Exec } from "../__tests__/_helpers/node-sqlite-d1";
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
@@ -55,8 +55,12 @@ let seeded: Promise<void> | undefined;
 
 /**
  * Provision through the store, then seed with plain inserts: the seed is setup, and routing it through the
- * store would only time the rebuild. Awaited from each bench body rather than a `beforeAll`, which the bench
- * runner here did not run ahead of the bodies (they read an empty database).
+ * store would only time the rebuild. Then one count and one patch through the scope, so a build that
+ * rebuilds once per scope is measured in its steady state, and one that rebuilds per writer still pays
+ * for it in every iteration.
+ *
+ * Wired as a `beforeAll` (CodSpeed's runner honours it) and awaited from each bench body too: the plain
+ * `vitest bench` runner here did not run the hook ahead of the bodies, which then read an empty database.
  */
 const seed = async (): Promise<void> => {
     await requestWriter().count("notes");
@@ -68,6 +72,9 @@ const seed = async (): Promise<void> => {
     }
 
     harness.ddl(`INSERT INTO "notes" ("id", "_creationTime", "body") VALUES ('n1', 1, 'a')`);
+
+    await requestWriter().count("todos", { where: { projectId: "p5" } });
+    await requestWriter().patch("t42", { score: 1 }, "todos");
 };
 
 const ready = (): Promise<void> => {
@@ -77,6 +84,8 @@ const ready = (): Promise<void> => {
 };
 
 describe("d1 — a fresh writer per request over 10k rows", () => {
+    beforeAll(ready);
+
     bench("indexed count by projectId", async () => {
         await ready();
         await requestWriter().count("todos", { where: { projectId: "p5" } });
