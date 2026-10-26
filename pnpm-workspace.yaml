@@ -282,7 +282,7 @@ catalogs:
     # peers and speaks their plugin APIs structurally — nothing here is bundled.
     "@rsbuild/core": ^2.2.11
     "@rspack/core": ^2.2.8
-    "@visulima/packem": 4.0.1
+    "@visulima/packem": 4.0.2
     "babel-plugin-react-compiler": 1.0.0
     "babel-preset-solid": ^1.9.15
     esbuild: ^0.28.2
@@ -499,9 +499,6 @@ catalogs:
     # there now. tui-kit peers `@visulima/tui` EXACTLY, so bump the two together.
     "@visulima/tui": 5.0.0
     "@visulima/tui-kit": 1.0.34
-    # `@visulima/fs@7`'s optional peer, exact. Declared as a devDependency next to fs so
-    # pnpm resolves that peer to 2.0.0 instead of the yaml@1.0.0 packem's fs@6 brings.
-    "@visulima/yaml": 2.0.0
     giget: 3.3.1
     magic-string: ^1.4.2
     react-reconciler: ^0.33.0
@@ -1030,9 +1027,6 @@ peerDependencyRules:
     "rollup": ">=4.60.1"
     "@csstools/postcss-slow-plugins": ">=2"
     "@bomb.sh/tab": ">=0.0.15"
-    # packem 4.0.1 depends on pail 4.1.1 while its own cerebro 3.1.3 peers pail
-    # 5.0.1 exactly — an upstream skew inside packem's build CLI, not our code.
-    "@visulima/pail": "4.1.1"
 
 # pnpm v11 refuses to install when transitive deps want to run post-install
 # scripts unless the workspace explicitly approves them. Re-run
@@ -1126,6 +1120,11 @@ minimumReleaseAgeExclude:
   # Published 2026-10-26 03:22 UTC (pulls disposable-email-domains 2.0.10 above),
   # inside the 24h window; drop after 2026-10-27.
   - '@visulima/email-verifier@1.0.54'
+  - '@visulima/packem-rollup@1.2.3'
+  - '@visulima/packem-share@1.1.2'
+  - '@visulima/packem@4.0.2'
+  - '@visulima/rollup-plugin-css@3.0.2'
+  - '@visulima/rollup-plugin-dts@2.1.0'
   - 'astro@6.4.6'
   - 'brace-expansion@1.1.17 || 1.1.18 || 2.1.3 || 2.1.4 || 5.0.8 || 5.0.9'
   - 'deslop-js@0.0.21'
@@ -1146,6 +1145,7 @@ minimumReleaseAgeExclude:
   - 'fumadocs-mdx@15.0.11'
   # Renovate security update: hono@4.12.34
   - 'hono@4.12.34'
+  - 'html-minifier-next@9.1.0'
   - 'image-size@2.0.3'
   - 'ip-address@10.2.1 || 10.2.2 || 10.3.1'
   # Renovate security update: js-yaml@4.3.1
@@ -1185,9 +1185,9 @@ packageExtensions:
   # `@visulima/fs@6` swapped its YAML backend from `yaml` to `@visulima/yaml` and
   # declares it as an OPTIONAL peer, which pnpm does not auto-install. `readYaml`
   # imports it unconditionally, so any consumer that reads a YAML file throws
-  # ERR_MODULE_NOT_FOUND — and one of those consumers is `@visulima/tsconfig`,
-  # reached from `@anolilab/eslint-config`, which takes down ESLint config load for
-  # every package in the repo. Promote it to a real dependency. Scoped to `@6`:
+  # ERR_MODULE_NOT_FOUND. The one fs@6 left is `@visulima/package@5`, which reads
+  # `pnpm-workspace.yaml` for `@anolilab/semantic-release-pnpm` in the release job.
+  # Promote it to a real dependency. Scoped to `@6`:
   # fs@7 (our own pin) moved the YAML readers to the `@visulima/fs/yaml` subpath,
   # so its root entry no longer imports `@visulima/yaml`; it also peers yaml@2
   # exactly, which an unscoped 1.0.0 extension would contradict.
