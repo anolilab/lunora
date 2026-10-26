@@ -997,7 +997,7 @@ interface DatabaseReader {
      *
      * ```ts
      * for (const patch of plan.patches) {
-     *     await ctx.db.patch(ctx.db.asId("nodes", patch.id), patch.fields);
+     *     await ctx.db.patch("nodes", ctx.db.asId("nodes", patch.id), patch.fields);
      * }
      * ```
      *

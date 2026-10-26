@@ -79,7 +79,7 @@ export interface ChangePlan {
  * satisfies it.
  *
  * The `never` parameter positions are deliberate, not laziness. `ctx.db.delete` is
- * `<T extends string>(id: Id<T>) => …` over the **branded** `Id<T>`, and under
+ * `<T extends string>(table: T, id: Id<T>) => …` over the **branded** `Id<T>`, and under
  * `strictFunctionTypes` a parameter is contravariant — so declaring `id: string` here
  * would make the real `ctx.db` un-assignable to `PlanWriter` (`string` is not
  * assignable to `string & { __table }`), and every caller would need a cast at the
