@@ -672,6 +672,29 @@ describe("readTablePage — nested paths and array membership", () => {
             expect(topSelected("escaped", "arr")).toStrictEqual(["t7"]);
         });
 
+        it("matches a user string inside an escaped array nested in another escaped array, on a field and in a table-wide search", () => {
+            expect.assertions(2);
+
+            // "amber" sits under three arr frames, so it is the user's payload and not a codec frame.
+            database.sql.exec(`INSERT INTO "topc" VALUES (?, ?, ?)`, "t9", 1, encodeDocJson({ nested: ["$lunora.wire$", "arr", ["$lunora.wire$", "amber"]] }));
+
+            expect(topSelected("nested", "amber")).toStrictEqual(["t9"]);
+            expect(readTablePage(database.sql, { search: "amber", table: "topc" }).rows.map((row) => (row as { id: string }).id)).toStrictEqual(["t9"]);
+        });
+
+        it("matches a user string nested three escaped arrays deep, so the count is exact past two levels", () => {
+            expect.assertions(1);
+
+            database.sql.exec(
+                `INSERT INTO "topc" VALUES (?, ?, ?)`,
+                "t10",
+                1,
+                encodeDocJson({ deep: ["$lunora.wire$", "arr", ["$lunora.wire$", "arr", ["$lunora.wire$", "amber"]]] }),
+            );
+
+            expect(topSelected("deep", "amber")).toStrictEqual(["t10"]);
+        });
+
         it("does not match the codec tag of a bigint at a later element of an escaped user array", () => {
             expect.assertions(1);
 

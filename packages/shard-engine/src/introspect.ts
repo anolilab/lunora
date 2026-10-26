@@ -1504,22 +1504,21 @@ const buildNestedLeafClause = (clause: FilterClause, expression: string, pathPar
  * sibling lookup by `parent` id rather than by `path`, so no stored key is ever parsed as a
  * JSON path.
  *
- * An escaped user array is stored as `["$lunora.wire$","arr",[…]]`, and its payload at element
- * 2 is user data. A leaf is exempt only when its container sits at element 2 of an arr-shaped
- * parent, and that parent is not itself at element 2 of an arr-shaped grandparent. This is a
- * two-level bound on "is this container a payload". A payload nested under a second payload is
- * read as a frame, which over-excludes the user's own sentinel or `arr` strings. A search can
- * narrow that way but never match codec metadata, so a bulk action can narrow and never widen.
+ * A user array that starts with the sentinel is stored as an `arr` escape frame,
+ * `["$lunora.wire$","arr",payload]`, and its payload is a plain list of user data. Whether a
+ * container is a frame or a payload depends on how many arr frames it is nested under at
+ * element 2: an odd count is a payload, an even count a frame. The count walks up the parent
+ * chain with a recursive CTE, so it is exact at any nesting depth.
  *
- * `documentExpression` is walked five times, so a caller that binds a path there binds it five
- * times.
+ * `documentExpression` is walked three times, so a caller that binds a path there binds it
+ * three times.
  */
 const wireFrameTagExclusion = (documentExpression: string): string => {
     const walk = `json_tree(${documentExpression})`;
     const arrayShaped = (alias: string, parent: string): string =>
         `(SELECT count(*) FROM ${walk} AS ${alias} WHERE ${alias}.parent = ${parent} AND typeof(${alias}.key) = 'integer' AND ((${alias}.key = 0 AND ${alias}.atom = '${WIRE_TAG}') OR (${alias}.key = 1 AND ${alias}.atom = 'arr'))) = 2`;
 
-    return `NOT (typeof(j.key) = 'integer' AND j.key IN (0, 1) AND EXISTS (SELECT 1 FROM ${walk} AS f WHERE f.parent = j.parent AND f.key = 0 AND f.type = 'text' AND f.atom = '${WIRE_TAG}') AND NOT EXISTS (SELECT 1 FROM ${walk} AS g WHERE g.id = j.parent AND typeof(g.key) = 'integer' AND g.key = 2 AND ${arrayShaped("h", "g.parent")} AND NOT EXISTS (SELECT 1 FROM ${walk} AS y WHERE y.id = g.parent AND typeof(y.key) = 'integer' AND y.key = 2 AND ${arrayShaped("z", "y.parent")})))`;
+    return `NOT (typeof(j.key) = 'integer' AND j.key IN (0, 1) AND EXISTS (SELECT 1 FROM ${walk} AS f WHERE f.parent = j.parent AND f.key = 0 AND f.type = 'text' AND f.atom = '${WIRE_TAG}') AND (WITH RECURSIVE links(node, k) AS (SELECT j.parent, 0 UNION ALL SELECT c.parent, links.k + 1 FROM links JOIN ${walk} AS c ON c.id = links.node WHERE typeof(c.key) = 'integer' AND c.key = 2 AND ${arrayShaped("h", "c.parent")}) SELECT max(k) FROM links) % 2 = 0)`;
 };
 
 /**
@@ -1535,7 +1534,7 @@ const wireFrameTagExclusion = (documentExpression: string): string => {
  */
 const buildTopLevelContains = (document: string, path: unknown, term: string): { params: unknown[]; sql: string } => {
     return {
-        params: [path, path, term, path, path, term, path, path, path, path, path],
+        params: [path, path, term, path, path, term, path, path, path],
         sql: `CASE WHEN json_type(${document}, ?) IN ('text', 'integer', 'real') THEN ${containsSql(`json_extract(${document}, ?)`)} WHEN json_type(${document}, ?) IN ('array', 'object') THEN EXISTS (SELECT 1 FROM json_tree(${document}, ?) AS j WHERE j.type IN ('text', 'integer', 'real') AND ${containsSql("j.value")} AND ${wireFrameTagExclusion(`${document}, ?`)}) ELSE 0 END`,
     };
 };
