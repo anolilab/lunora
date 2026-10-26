@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
+import { copycat } from "../src/copycat";
 import { introspectSchema, orderTables } from "../src/introspect";
 import type { OverrideContext } from "../src/plan";
 import { seedPlan } from "../src/plan";
@@ -519,6 +520,65 @@ describe("seedPlan — unique columns beyond enums and strings", () => {
         expect(() => rowsOf(shape, 3)).toThrow(/unique column "u" has only 2 possible values/);
     });
 
+    it("deals an integer range beyond the safe-integer span exactly, not as a single value", () => {
+        expect.hasAssertions();
+
+        // 10^16 and 10^16 + 2 are both exact doubles, so the range holds two distinct values.
+        const shape = { n: v.number().int().min(10_000_000_000_000_000).max(10_000_000_000_000_002).unique() };
+        const rows = rowsOf(shape, 2);
+
+        expect(new Set(rows.map((row) => row.n))).toStrictEqual(new Set([10_000_000_000_000_000, 10_000_000_000_000_002]));
+        expect(rows.every((row) => shape.n.safeParse(row.n).ok)).toBe(true);
+    });
+
+    it("counts only the exact integers of a range straddling 2^53, and refuses past them", () => {
+        expect.hasAssertions();
+
+        // Above 2^53 a double holds only the even integers, so 2^53 .. 2^53 + 1000 has 501 of them.
+        const shape = {
+            n: v
+                .number()
+                .int()
+                .min(2 ** 53)
+                .max(2 ** 53 + 1000)
+                .unique(),
+        };
+        const rows = rowsOf(shape, 501);
+
+        expect(distinct(rows, "n")).toBe(501);
+        expect(rows.every((row) => shape.n.safeParse(row.n).ok)).toBe(true);
+        expect(() => rowsOf(shape, 502)).toThrow(/unique column "n" has only 501 possible values/u);
+    });
+
+    it("deals a refined boolean only the value its check admits", () => {
+        expect.hasAssertions();
+
+        const shape = {
+            b: v
+                .boolean()
+                .check((value) => !value)
+                .unique(),
+        };
+
+        expect(rowsOf(shape, 1).every((row) => shape.b.safeParse(row.b).ok)).toBe(true);
+        expect(() => rowsOf(shape, 2)).toThrow(/unique column "b" has only 1 possible values/u);
+    });
+
+    it("deals a refined array of booleans only the elements its check admits", () => {
+        expect.hasAssertions();
+
+        const shape = {
+            a: v
+                .array(v.boolean().check((value) => !value))
+                .min(1)
+                .max(1)
+                .unique(),
+        };
+
+        expect(rowsOf(shape, 1).every((row) => shape.a.safeParse(row.a).ok)).toBe(true);
+        expect(() => rowsOf(shape, 2)).toThrow(/unique column "a" has only 1 possible values/u);
+    });
+
     it("honours declared bigint bounds on the plain path, not just the unique one", () => {
         expect.hasAssertions();
 
@@ -705,5 +765,24 @@ describe("seedPlan — unique foreign keys", () => {
         const plan = seedPlan(schema, { counts: { posts: 40, users: 3 }, now: 1_700_000_000_000, seed: 1 });
 
         expect(new Set(plan.find((entry) => entry.table === "posts")!.rows.map((row) => row.authorId)).size).toBeLessThanOrEqual(3);
+    });
+});
+
+describe("seedPlan — self-referencing foreign key pools", () => {
+    it("draws a self-reference from the earlier rows of the batch, then the pre-existing ids", () => {
+        expect.hasAssertions();
+
+        // Pins the draw order the pool has always produced: each row samples
+        // `[...earlierRowIds, ...existingIds]` by its own cell hash. The pool is built
+        // in constant time per row now, so this guards the order it must keep.
+        const existing = ["old-a", "old-b", "old-c"];
+        const selfRef = defineSchema({ nodes: defineTable({ name: v.string(), parentId: v.id("nodes").nullable() }) });
+        const { rows } = seedPlan(selfRef, { counts: { nodes: 12 }, existingIds: { nodes: existing } }).find((entry) => entry.table === "nodes")!;
+
+        rows.forEach((row, index) => {
+            const candidates = [...rows.slice(0, index).map((earlier) => earlier._id as string), ...existing];
+
+            expect(row.parentId).toBe(copycat.oneOf([0, "nodes", index, "parentId"], candidates));
+        });
     });
 });

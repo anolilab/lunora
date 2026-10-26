@@ -163,9 +163,10 @@ describe("generateValue — validator constraints the generator must honour", ()
         });
     });
 
-    it("refuses a second row for a unique integer range past the safe integers", () => {
+    it("deals a unique integer range past the safe integers in exact steps, and refuses past them", () => {
         expect.hasAssertions();
 
+        // 2^53, 2^53 + 2 and 2^53 + 4 are the exact integers in range: above 2^53 a double skips the odd ones.
         const schema = defineSchema({
             ids: defineTable({
                 big: v
@@ -176,8 +177,10 @@ describe("generateValue — validator constraints the generator must honour", ()
                     .unique(),
             }),
         });
+        const { rows } = seedPlan(schema, { counts: { ids: 3 } }).find((entry) => entry.table === "ids")!;
 
-        expect(() => seedPlan(schema, { counts: { ids: 2 } })).toThrow(/unique column "big" has only 1 possible values/u);
+        expect(new Set(rows.map((row) => row.big))).toStrictEqual(new Set([2 ** 53, 2 ** 53 + 2, 2 ** 53 + 4]));
+        expect(() => seedPlan(schema, { counts: { ids: 4 } })).toThrow(/unique column "big" has only 3 possible values/u);
     });
 
     it("keeps epoch-ms for a time-named .positive() column", () => {

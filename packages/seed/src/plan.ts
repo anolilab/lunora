@@ -136,44 +136,64 @@ const fkFallback = (field: FieldSpec, table: string, input: unknown, allowOrphan
 };
 
 /**
- * The foreign-key pool a column may resolve against — freshly-seeded ids plus
+ * The ids a foreign-key column may resolve to in one row: `length` of them, read by position.
+ * Positions rather than an array, because a self-reference's candidates change row by row.
+ */
+interface FkCandidates {
+    get: (position: number) => string;
+    length: number;
+}
+
+/** A candidate list an array already holds, as {@link FkCandidates}. */
+const candidatesOf = (ids: ReadonlyArray<string>): FkCandidates => {
+    return { get: (position) => ids[position] as string, length: ids.length };
+};
+
+/** The candidates as a plain array, for the planner's one-off uses that need one. */
+const toArray = (candidates: FkCandidates): ReadonlyArray<string> => Array.from({ length: candidates.length }, (_, position) => candidates.get(position));
+
+/**
+ * One foreign-key draw, uniform over the candidates. Equal to `copycat.oneOf` over the same list in
+ * that order: `faker.helpers.arrayElement` takes the same seeded index this does.
+ */
+const pickCandidate = (input: unknown, candidates: FkCandidates): string => candidates.get(copycat.int(input, { max: candidates.length - 1, min: 0 }));
+
+/**
+ * The foreign-key candidates a column may resolve against — freshly-seeded ids plus
  * pre-existing ones — as a function of the row's position in this call.
  *
  * Built ONCE per (table, column) before the row loop. A non-self FK's parent has
  * all its ids by then — generated, or on a cycle edge assigned ahead of its rows
- * (see `seedPlan`) — so its pool is one fixed array. A self-reference
+ * (see `seedPlan`) — so its candidates are one fixed list. A self-reference
  * draws only from rows generated earlier in this table (`localIndex` is the
- * position within this call, independent of any offset): its array grows by one
- * seeded id per row, inserted ahead of the pre-existing ids, so the order — and
- * therefore every `copycat.oneOf` draw — matches `[...earlierRows, ...existing]`.
+ * position within this call, independent of any offset): row `localIndex` sees
+ * `[...earlierRows, ...existing]`, read by position so each row costs O(1) rather
+ * than shifting every pre-existing id.
  */
 const fkPoolFor = (
     field: FieldSpec,
     table: string,
     idsByTable: ReadonlyMap<string, ReadonlyArray<string>>,
     existingIds: Readonly<Record<string, ReadonlyArray<string>>>,
-): ((localIndex: number) => ReadonlyArray<string>) => {
+): ((localIndex: number) => FkCandidates) => {
     const fkTable = field.fkTable as string;
     const existing = existingIds[fkTable] ?? [];
 
     if (fkTable !== table) {
         // Deduplicated, first seen first: a pool's size is the number of distinct parents a unique deal can spend, and a
         // same-seed rerun regenerates ids that `existingIds` already lists.
-        const pool = [...new Set([...(idsByTable.get(fkTable) ?? []), ...existing])];
+        const candidates = candidatesOf([...new Set([...(idsByTable.get(fkTable) ?? []), ...existing])]);
 
-        return () => pool;
+        return () => candidates;
     }
 
     const own = idsByTable.get(table) ?? [];
-    const pool = [...existing];
-    let included = 0;
 
     return (localIndex) => {
-        for (; included < localIndex; included += 1) {
-            pool.splice(included, 0, own[included] as string);
-        }
-
-        return pool;
+        return {
+            get: (position) => (position < localIndex ? own[position] : existing[position - localIndex]) as string,
+            length: localIndex + existing.length,
+        };
     };
 };
 
@@ -245,7 +265,7 @@ interface RowContext {
     /** Wall-clock reference for time-valued columns. */
     now: number;
     /** Each foreign-key column's pool, built once per table (see {@link fkPoolFor}). */
-    pools: ReadonlyMap<string, (localIndex: number) => ReadonlyArray<string>>;
+    pools: ReadonlyMap<string, (localIndex: number) => FkCandidates>;
     table: string;
     /** How each `.unique()` column deals its values, keyed by column name (see {@link planUniqueDeals}). */
     uniqueDeals: ReadonlyMap<string, UniqueDeal>;
@@ -256,7 +276,7 @@ const generateField = (field: FieldSpec, context: RowContext): unknown => {
     const { existingIds, idsByTable, index, input, localIndex, now, pools, table, uniqueDeals } = context;
 
     if (field.fkTable !== undefined) {
-        const pool = (pools.get(field.name) as (localIndex: number) => ReadonlyArray<string>)(localIndex);
+        const pool = (pools.get(field.name) as (localIndex: number) => FkCandidates)(localIndex);
 
         if (pool.length === 0) {
             return fkFallback(field, table, input, context.allowOrphans);
@@ -265,13 +285,13 @@ const generateField = (field: FieldSpec, context: RowContext): unknown => {
         const fkDeal = uniqueDeals.get(field.name);
 
         if (!field.unique && fkDeal === undefined) {
-            return copycat.oneOf(input, pool);
+            return pickCandidate(input, pool);
         }
 
         // A self-reference's pool is not known at plan time, so it carries no
         // deal (see `planUniqueDeals`) and `selfReferenceParent` picks the one
         // candidate that is distinct for every row.
-        return fkDeal === undefined ? selfReferenceParent(table, localIndex, idsByTable, existingIds) : fkDeal.valueAt(index, () => copycat.oneOf(input, pool));
+        return fkDeal === undefined ? selfReferenceParent(table, localIndex, idsByTable, existingIds) : fkDeal.valueAt(index, () => pickCandidate(input, pool));
     }
 
     // Columns the server fills (.default()/.$defaultFn()) are left out so the
@@ -744,7 +764,7 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
             spec.fields.filter((field) => field.fkTable !== undefined).map((field) => [field.name, fkPoolFor(field, table, idsByTable, existingIds)]),
         );
         const uniqueDeals = planUniqueDeals(spec.fields, spec.uniqueIndexes, table, count, offset, now, tableOverrides, (field) =>
-            (pools.get(field.name) as (localIndex: number) => ReadonlyArray<string>)(0),
+            toArray((pools.get(field.name) as (localIndex: number) => FkCandidates)(0)),
         );
 
         for (let localIndex = 0; localIndex < count; localIndex += 1) {

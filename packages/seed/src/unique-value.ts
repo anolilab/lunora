@@ -130,23 +130,31 @@ const domainDeal = (domain: ReadonlyArray<unknown>, table: string, column: strin
 };
 
 /**
- * A deal over a numeric range. Integer bounds are walked one step at a time;
- * fractional bounds (a float column) are divided into {@link FLOAT_SLOTS}
+ * A deal over a numeric range. Integer bounds are walked one exact step at a time
+ * (one, inside the safe-integer span); fractional bounds (a float column) are divided into {@link FLOAT_SLOTS}
  * evenly-spaced values, since a real interval cannot be enumerated.
  */
 const rangeDeal = (min: number, max: number): UniqueDeal => {
     if (Number.isInteger(min) && Number.isInteger(max)) {
-        // Past ±2^53 `min + index` stops being injective, so only the safe span of the range is dealt.
-        const low = Math.max(min, -Number.MAX_SAFE_INTEGER);
-        const high = Math.min(max, Number.MAX_SAFE_INTEGER);
+        // Past 2^53 a double holds only multiples of a power-of-two spacing that doubles at each power of two. Dealing
+        // multiples of `step` keeps every value exact, and their count is the capacity.
+        let step = 1;
 
+        while (Math.max(Math.abs(min), Math.abs(max)) / step >= 2 ** 53) {
+            step *= 2;
+        }
+
+        const low = Math.ceil(min / step) * step;
+        const high = Math.floor(max / step) * step;
+
+        // No multiple of `step` lies inside the range. `min` is itself an exact integer in range, so dealing it alone is valid.
         if (low > high) {
             return { capacity: 1, valueAt: () => min };
         }
 
-        const capacity = high - low + 1;
+        const capacity = (high - low) / step + 1;
 
-        return { capacity, valueAt: (index) => low + (index % capacity) };
+        return { capacity, valueAt: (index) => low + (index % capacity) * step };
     }
 
     if (min === max) {
@@ -306,6 +314,9 @@ const stringDeal = (constraints: Constraints, table: string, column: string): Un
  */
 const planUniqueFkDeal = (pool: ReadonlyArray<string>, table: string, column: string): UniqueDeal => domainDeal(pool, table, column);
 
+/** The members of a finite domain that the validator accepts; a `.check()` refinement can rule some out. */
+const acceptedBy = (validator: Validator, domain: ReadonlyArray<unknown>): ReadonlyArray<unknown> => domain.filter((value) => validator.safeParse(value).ok);
+
 /**
  * Every value a validator can produce when that set is finite and known: an enum, a boolean, a
  * literal, `null`, or a union of those. `undefined` when it is open (a string, a number, an id, …).
@@ -345,6 +356,16 @@ const finiteDomain = (validator: Validator): ReadonlyArray<unknown> | undefined 
 };
 
 /**
+ * The values of {@link finiteDomain} that the validator accepts, so a `.check()` refinement is honoured.
+ * Applied where a column or element is dealt: that validator is the one that refines its members.
+ */
+const acceptedDomain = (validator: Validator): ReadonlyArray<unknown> | undefined => {
+    const domain = finiteDomain(validator);
+
+    return domain === undefined ? undefined : acceptedBy(validator, domain);
+};
+
+/**
  * The deal for an array column.
  *
  * An array of an open element type (strings, numbers, ids) is built from the per-cell hash and so is
@@ -362,7 +383,7 @@ const arrayDeal = (field: FieldSpec, constraints: Constraints): UniqueDeal => {
         return { capacity: 1, valueAt: () => [] };
     }
 
-    const domain = finiteDomain(element);
+    const domain = acceptedDomain(element);
 
     if (domain === undefined) {
         return anonymousDeal;
@@ -418,7 +439,7 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
     const enumValues = constraints.enum;
 
     if (Array.isArray(enumValues) && enumValues.length > 0) {
-        return domainDeal(enumValues, table, field.name);
+        return domainDeal(acceptedBy(field.validator, enumValues), table, field.name);
     }
 
     switch (field.kind) {
@@ -438,7 +459,7 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
         }
 
         case "boolean": {
-            return domainDeal([false, true], table, field.name);
+            return domainDeal(acceptedBy(field.validator, [false, true]), table, field.name);
         }
 
         case "bytes": {
@@ -487,7 +508,7 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
             // over a two-literal union simply repeat and nothing refuses. Any union
             // whose every member has a finite domain (booleans, enums, `null`, and
             // nested unions of those) is closed the same way.
-            const domain = finiteDomain(field.validator);
+            const domain = acceptedDomain(field.validator);
 
             return domain === undefined ? anonymousDeal : domainDeal(domain, table, field.name);
         }

@@ -99,9 +99,10 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(() => seedPlan(schema, { counts: { readings: 2 } })).toThrow(/by_amount_tags/u);
     });
 
-    it("never counts an integer range past the safe integers towards a composite's capacity", () => {
+    it("counts the exact integers past the safe range towards a composite's capacity", () => {
         expect.hasAssertions();
 
+        // Three exact integers (2^53, 2^53 + 2, 2^53 + 4) times two flags: six distinct pairs.
         const schema = defineSchema({
             ids: defineTable({
                 big: v
@@ -112,10 +113,10 @@ describe("seedPlan — multi-column unique indexes", () => {
                 flag: v.boolean(),
             }).index("by_big_flag", ["big", "flag"], { unique: true }),
         });
-        const rows = rowsOf(seedPlan(schema, { counts: { ids: 2 } }), "ids");
+        const rows = rowsOf(seedPlan(schema, { counts: { ids: 6 } }), "ids");
 
-        expect(new Set(rows.map((row) => `${String(row.big)}|${String(row.flag)}`)).size).toBe(2);
-        expect(() => seedPlan(schema, { counts: { ids: 3 } })).toThrow(/by_big_flag/u);
+        expect(new Set(rows.map((row) => `${String(row.big)}|${String(row.flag)}`)).size).toBe(6);
+        expect(() => seedPlan(schema, { counts: { ids: 7 } })).toThrow(/by_big_flag/u);
     });
 
     it("counts a parent id once however often existingIds lists it", () => {

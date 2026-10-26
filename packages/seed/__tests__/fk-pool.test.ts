@@ -2,7 +2,6 @@ import { defineSchema, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { copycat } from "../src/copycat";
 import { seedPlan } from "../src/plan";
 
 const schema = defineSchema({
@@ -18,22 +17,19 @@ describe("seedPlan — foreign-key pools", () => {
         vi.restoreAllMocks();
     });
 
-    it("builds each column's pool once, not once per row", () => {
+    it("resolves every author to one of the seeded users", () => {
         expect.hasAssertions();
 
-        const spy = vi.spyOn(copycat, "oneOf");
+        // Each column's candidates are built once and read by position, so every draw must land on a real parent.
+        const counts = { comments: 20, users: 5 };
+        const userIds = new Set(
+            seedPlan(schema, { counts, now: 0 })
+                .find((entry) => entry.table === "users")!
+                .rows.map((row) => row._id),
+        );
+        const comments = seedPlan(schema, { counts, now: 0 }).find((entry) => entry.table === "comments")!.rows;
 
-        seedPlan(schema, { counts: { comments: 20, users: 5 }, now: 0 });
-
-        const authorPools = new Set(spy.mock.calls.map(([, pool]) => pool).filter((pool) => pool.length === 5));
-
-        // Every `authorId` draw reads the same array instance.
-        expect(authorPools.size).toBe(1);
-
-        // The self-reference grows one array in place (so it is also one instance across rows).
-        const selfPools = new Set(spy.mock.calls.map(([, pool]) => pool).filter((pool) => pool !== [...authorPools][0]));
-
-        expect(selfPools.size).toBe(1);
+        expect(comments.every((row) => userIds.has(row.authorId))).toBe(true);
     });
 
     it("points a self-reference only at earlier rows or pre-existing ids", () => {
