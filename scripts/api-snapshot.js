@@ -218,7 +218,20 @@ const TIER_2 = [
  * `@lunora/react`, and a re-export is pinned by name + kind + source package
  * with its signature tracked in the owning snapshot.
  */
-const TIER_3 = ["agent", "ai", "angular", "browser", "container", "platform-celld", "platform-node", "privacy", "react-native", "replica", "rspack"];
+const TIER_3 = [
+    "agent",
+    "ai",
+    "angular",
+    "browser",
+    "container",
+    "jwt-auth",
+    "platform-celld",
+    "platform-node",
+    "privacy",
+    "react-native",
+    "replica",
+    "rspack",
+];
 
 /**
  * The tiers, each carrying the stability sentence its snapshot header ends with.

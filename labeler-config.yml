@@ -67,6 +67,9 @@
 "package: hyperdrive":
     - changed-files:
           - any-glob-to-any-file: "packages/hyperdrive/**/*"
+"package: jwt-auth":
+    - changed-files:
+          - any-glob-to-any-file: "packages/jwt-auth/**/*"
 "package: lunora":
     - changed-files:
           - any-glob-to-any-file: "packages/lunora/**/*"
