@@ -658,6 +658,28 @@ describe("readTablePage — nested paths and array membership", () => {
             // The escape frame's own `arr` tag is still the codec's, not a value the user stored.
             expect(topSelected("escaped", "arr")).toStrictEqual([]);
         });
+
+        it("does not match the codec tag of a bigint nested in an escaped user array, on a field and in a table-wide search", () => {
+            expect.assertions(3);
+
+            // The bigint is a codec frame inside the array's payload, so its `bigint` tag is not a value the user stored.
+            database.sql.exec(`INSERT INTO "topc" VALUES (?, ?, ?)`, "t7", 1, encodeDocJson({ escaped: ["$lunora.wire$", "arr", 1n] }));
+
+            expect(topSelected("escaped", "bigint")).toStrictEqual([]);
+            // t4 holds the user string "bigint", so it is the only row a table-wide search for the word may select.
+            expect(readTablePage(database.sql, { search: "bigint", table: "topc" }).rows.map((row) => (row as { id: string }).id)).toStrictEqual(["t4"]);
+            // The array's own second element is the user's "arr", which is data, so the row stays selectable by it.
+            expect(topSelected("escaped", "arr")).toStrictEqual(["t7"]);
+        });
+
+        it("does not match the codec tag of a bigint at a later element of an escaped user array", () => {
+            expect.assertions(1);
+
+            // The second bigint sits at element 3 of the payload, not at element 2, so it is a codec frame too.
+            database.sql.exec(`INSERT INTO "topc" VALUES (?, ?, ?)`, "t8", 1, encodeDocJson({ escaped: ["$lunora.wire$", "arr", 1n, 2n] }));
+
+            expect(topSelected("escaped", "bigint")).toStrictEqual([]);
+        });
     });
 
     describe("parameter budget", () => {
