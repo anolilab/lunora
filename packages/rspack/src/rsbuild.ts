@@ -130,8 +130,8 @@ const withLunoraProxy = (existing: ProxyConfigLike | undefined, port: number): P
  * `--host`.
  *
  * `@lunora/config/studio-host` is imported inside the hooks, not at module scope:
- * only a dev server ever needs it, and it pulls in `@lunora/seed` and faker —
- * about 40 ms that every `rsbuild build` paid while loading its config.
+ * only a dev server ever needs it, and it pulls in `@lunora/seed` and faker, which
+ * every `rsbuild build` would otherwise load with its config.
  */
 const mountStudio = (api: RsbuildApiLike, options: ResolvedLunoraRspackOptions): void => {
     api.onBeforeStartDevServer(async ({ server }) => {

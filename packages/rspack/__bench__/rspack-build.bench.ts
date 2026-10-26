@@ -91,7 +91,7 @@ const createCompiler = (mode: "development" | "production", withPlugin = true): 
  */
 const createWatchSession = (): { close: () => Promise<void>; extraBuilds: () => number; next: (path: string) => Promise<void>; ready: Promise<void> } => {
     const compiler = createCompiler("development");
-    let pending: { path: string; resolve: () => void; timer: NodeJS.Timeout } | undefined;
+    let pending: { path: string; reject: (error: Error) => void; resolve: () => void; timer: NodeJS.Timeout } | undefined;
     let extra = 0;
     let resolveReady: () => void = () => {};
     const ready = new Promise<void>((resolve) => {
@@ -100,7 +100,20 @@ const createWatchSession = (): { close: () => Promise<void>; extraBuilds: () => 
 
     let first = true;
 
-    const watching: Watching = compiler.watch({ aggregateTimeout: 5 }, () => {
+    const watching: Watching = compiler.watch({ aggregateTimeout: 5 }, (error, stats) => {
+        // A failed build is not a rebuild to time: fail the measurement waiting on it.
+        const failure = error ?? (stats?.hasErrors() ? new Error(stats.toString({ all: false, errors: true })) : undefined);
+
+        if (failure !== undefined && pending !== undefined) {
+            const { reject, timer } = pending;
+
+            clearTimeout(timer);
+            pending = undefined;
+            reject(failure);
+
+            return;
+        }
+
         if (first) {
             first = false;
             resolveReady();
@@ -138,7 +151,7 @@ const createWatchSession = (): { close: () => Promise<void>; extraBuilds: () => 
                     reject(new Error(`no rebuild saw ${path} within ${String(REBUILD_TIMEOUT_MS)}ms`));
                 };
 
-                pending = { path, resolve, timer: setTimeout(fail, REBUILD_TIMEOUT_MS) };
+                pending = { path, reject, resolve, timer: setTimeout(fail, REBUILD_TIMEOUT_MS) };
             }),
         ready,
     };
