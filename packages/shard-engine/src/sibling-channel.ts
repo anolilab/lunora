@@ -15,8 +15,6 @@
  * sends the frame.
  */
 
-
-
 /** Minimal Durable Object stub surface an internal tier needs to POST a control frame to a sibling. */
 interface SiblingStub {
     fetch: (url: string, init?: RequestInit) => Promise<Response>;
@@ -98,6 +96,5 @@ const siblingStub = (env: unknown, binding: string | undefined, name: string, ju
     binding === undefined ? undefined : stubByName((env as Record<string, unknown> | undefined)?.[binding], name, jurisdiction);
 
 export type { SiblingStub };
-export { siblingStub, stubByName, };
-
-export {RELAY_SIGNATURE_HEADER, siblingSecretOf, signSiblingBody, verifySiblingBody} from "../../../shared/relay-signature";
+export { siblingStub, stubByName };
+export { RELAY_SIGNATURE_HEADER, siblingSecretOf, signSiblingBody, verifySiblingBody } from "../../../shared/relay-signature";

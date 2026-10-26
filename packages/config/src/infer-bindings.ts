@@ -212,7 +212,6 @@ const SOURCE_SPECIFIER_EXTENSION = /\.[cm]?[jt]sx?$/u;
 /** Barrel source extensions in probe order: TypeScript first, so a `.js` specifier resolves to its `.ts` source. */
 const BARREL_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 
-/** The compiler options of the nearest tsconfig.json, read the way TypeScript reads them. Empty when the project has none. */
 /** Barrel files parsed so far, keyed by path. An entry is reused while the file keeps its modification time. */
 const parsedModules = new Map<string, { mtimeMs: number; source: ts.SourceFile }>();
 
@@ -246,6 +245,7 @@ const identifiersOf = (sourceFile: SourceFile): Identifier[] => {
     return identifiers;
 };
 
+/** The compiler options of the nearest tsconfig.json, read the way TypeScript reads them. Empty when the project has none. */
 const compilerOptionsFor = (fromFile: string): ts.CompilerOptions => {
     const configPath = ts.findConfigFile(dirname(fromFile), (path) => ts.sys.fileExists(path));
 
