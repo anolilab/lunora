@@ -62,7 +62,7 @@ interface GuardableSchema {
 }
 
 /**
- * Resolve the owning table of a row id (so a generic `ctx.db.patch(id)` with no
+ * Resolve the owning table of a row id (so a generic `lookupById(id)` with no
  * pinned table can still be gated). May be sync (DO `locateRowById`) or async (D1
  * `resolveTableName`). `undefined` ⇒ the id resolves to no table this writer can
  * see (absent row, or another backend) — nothing to leak, so the op passes
@@ -373,7 +373,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
             return;
         }
 
-        // Generic `ctx.db.patch(id)` / `delete` / … : resolve the owning table so a
+        // Generic `lookupById(id)`: resolve the owning table so a
         // protected row can't be addressed by a bare id. An unresolved id leaks
         // nothing, so it passes through.
         const tableName = await tableOfId(id);
