@@ -69,10 +69,17 @@ const tablesIn = async (database: AuthDatabase): Promise<Set<string>> => {
     return new Set(results.map((row) => String(row.name)));
 };
 
-/** The clause that selects a subject's rows in one table. The user table is keyed by its own id. */
+/**
+ * The clause that selects a subject's rows in one table. The user table is keyed by its own id. A verification record
+ * is owned by its address (email verification), or, for a password reset, by the user id in `value` while `identifier`
+ * carries the reset token. `value` alone is never an ownership key: for an email-verification record it is a token.
+ */
 const clauseFor = (table: string, scope: Scope): Clause => {
     if (table === "verification") {
-        return { sql: '"identifier" = ? OR "value" = ?', values: [scope.email, scope.subjectId] };
+        return {
+            sql: '"identifier" = ? OR ("value" = ? AND "identifier" LIKE \'reset-password:%\')',
+            values: [scope.email, scope.subjectId],
+        };
     }
 
     return { sql: `"${table === "user" ? "id" : "userId"}" = ?`, values: [scope.subjectId] };

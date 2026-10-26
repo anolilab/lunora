@@ -167,14 +167,21 @@ describe("privacy example", () => {
         expect(absent.status).toBe(404);
     });
 
-    it("erases the subject's verification records, matched by their address, and leaves the other subject's", async () => {
+    it("erases the subject's verification records, and leaves a record whose value only matches the subject id", async () => {
         expect.assertions(2);
+
+        const verification = d1.tables.get("verification") ?? [];
+
+        verification.push(
+            { id: "u1-reset", identifier: "reset-password:token", value: SUBJECT.userId },
+            { id: "magic-link", identifier: "magic-link:token", value: SUBJECT.userId },
+        );
 
         const request = await openErasure(t, SUBJECT.userId);
 
         await privacyWorkflows.erasureHandler(contextFor(t, request.id, tombstones));
 
-        expect((d1.tables.get("verification") ?? []).map((row) => row.identifier)).toStrictEqual([`${OTHER.userId}@example.test`]);
+        expect((d1.tables.get("verification") ?? []).map((row) => row.identifier)).toStrictEqual([`${OTHER.userId}@example.test`, "magic-link:token"]);
         expect((d1.tables.get("user") ?? []).map((row) => row.id)).toStrictEqual([OTHER.userId]);
     });
 

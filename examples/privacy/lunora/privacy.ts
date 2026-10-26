@@ -51,7 +51,8 @@ export const signInTokens = defineDataset("signInTokens", {
     legalBasis: "contract",
     origin: "provided",
     purpose: "Verification codes and tokens issued to the user for sign-in and account recovery",
-    tables: { verification: {} },
+    // `identifier` and `value` hold live sign-in and reset tokens, so the export leaves them out, as authDataset does for passwords.
+    tables: { verification: { omit: ["identifier", "value"] } },
 });
 
 /** The params of the restore workflow: the subject ids the restored shard holds. */
