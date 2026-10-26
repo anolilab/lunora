@@ -1,3 +1,11 @@
+## @lunora/codegen [1.0.0-alpha.361](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.360...@lunora/codegen@1.0.0-alpha.361) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.251
+* **@visulima/fs:** 6.0.29 → 7.0.0
+
 ## @lunora/codegen [1.0.0-alpha.360](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.359...@lunora/codegen@1.0.0-alpha.360) (2026-10-26)
 
 ### Performance Improvements
