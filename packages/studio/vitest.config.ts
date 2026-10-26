@@ -20,6 +20,7 @@ const unitTestFiles = [
     "__tests__/features/api/openapi/json-highlight.test.ts",
     "__tests__/features/containers/fold-container-instances.test.ts",
     "__tests__/features/data/back-relations.test.ts",
+    "__tests__/features/data/data-filters-clauses.test.ts",
     "__tests__/features/data/column-window.test.ts",
     "__tests__/features/data/global-row-format.test.ts",
     "__tests__/features/data/sql-export-replay.test.ts",
