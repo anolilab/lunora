@@ -259,13 +259,7 @@ interface LunoraProviderProps {
 
 ### `LunoraQueryOptions` (interface)
 
-```ts
-interface LunoraQueryOptions<F extends FunctionReference> {
-    queryFn: () => Promise<ReturnOf<F>>;
-    queryKey: QueryKey;
-    staleTime: number;
-}
-```
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `MutationHook` (interface)
 
@@ -592,13 +586,7 @@ interface UseAuthSessionsOptions extends AdminAuthQueryOptions {
 ### `UseAuthUsersOptions` (interface)
 
 ```ts
-interface UseAuthUsersOptions extends AdminAuthQueryOptions {
-    filterField?: string;
-    filterValue?: string;
-    search?: string;
-    searchField?: string;
-    sortBy?: string;
-    sortDirection?: "asc" | "desc";
+interface UseAuthUsersOptions extends AdminAuthQueryOptions, AuthUsersListFilter {
 }
 ```
 
@@ -953,11 +941,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `lunoraQueryOptions` (const)
 
-```ts
-const lunoraQueryOptions: <F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F>, options?: {
-    shardKey?: string;
-}) => LunoraQueryOptions<F>;
-```
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `useAction` (const)
 
@@ -1291,7 +1275,7 @@ Re-exported from `@tanstack/react-query` — signature tracked at its source.
 
 ### `LunoraQueryOptions` (interface)
 
-Re-exported from `@lunora/react` — signature tracked in that section.
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `Preloaded` (interface)
 
@@ -1353,7 +1337,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `lunoraQueryOptions` (const)
 
-Re-exported from `@lunora/react` — signature tracked in that section.
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `prefetchQuery` (const)
 
