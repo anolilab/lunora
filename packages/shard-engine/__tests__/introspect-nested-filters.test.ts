@@ -695,6 +695,16 @@ describe("readTablePage — nested paths and array membership", () => {
             expect(topSelected("deep", "amber")).toStrictEqual(["t10"]);
         });
 
+        it("matches a boolean element of a top-level array or object, on a read page and in a bulk selection", () => {
+            expect.assertions(3);
+
+            database.sql.exec(`INSERT INTO "topc" VALUES (?, ?, ?)`, "t11", 1, encodeDocJson({ flags: [true, false], meta: { on: true } }));
+
+            expect(topIds("flags", "true")).toStrictEqual(["t11"]);
+            expect(topSelected("flags", "false")).toStrictEqual(["t11"]);
+            expect(topIds("meta", "true")).toStrictEqual(["t11"]);
+        });
+
         it("does not match the codec tag of a bigint at a later element of an escaped user array", () => {
             expect.assertions(1);
 

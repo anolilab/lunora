@@ -1531,18 +1531,20 @@ const wireFrameTagExclusion = (documentExpression: string): string => {
 /**
  * `contains` on a top-level `__doc__` field. A scalar keeps the plain substring test
  * over `json_extract` (the common case, no tree walk). An array or object is walked
- * with `json_tree` and only its text, integer and real leaves are tested, never its
- * keys or JSON punctuation. A Date, Map or Set is a wire-tagged array, so the tag and
- * type name at elements 0 and 1 are excluded ({@link wireFrameTagExclusion}) — a
- * search for `date` must not select the row, and a bulk delete must not remove it.
- * Both trees are rooted at the same bound path so their node ids line up. Anything
- * else (a boolean, a missing field) matches nothing.
+ * with `json_tree` and only its text, integer, real and boolean leaves are tested, never its
+ * keys or JSON punctuation. A boolean leaf is tested by its type name, as the table-wide
+ * search does, since `json_extract` would read it as 1 or 0. A Date, Map or Set is a
+ * wire-tagged array, so the tag and type name at elements 0 and 1 are excluded
+ * ({@link wireFrameTagExclusion}): a search for `date` must not select the row, and a bulk
+ * delete must not remove it.
+ * Both trees are rooted at the same bound path so their node ids line up. A top-level
+ * boolean or a missing field matches nothing.
  * @returns the SQL conjunct and bound params
  */
 const buildTopLevelContains = (document: string, path: unknown, term: string): { params: unknown[]; sql: string } => {
     return {
         params: [path, path, term, path, path, term, path, path, path],
-        sql: `CASE WHEN json_type(${document}, ?) IN ('text', 'integer', 'real') THEN ${containsSql(`json_extract(${document}, ?)`)} WHEN json_type(${document}, ?) IN ('array', 'object') THEN EXISTS (SELECT 1 FROM json_tree(${document}, ?) AS j WHERE j.type IN ('text', 'integer', 'real') AND ${containsSql("j.value")} AND ${wireFrameTagExclusion(`${document}, ?`)}) ELSE 0 END`,
+        sql: `CASE WHEN json_type(${document}, ?) IN ('text', 'integer', 'real') THEN ${containsSql(`json_extract(${document}, ?)`)} WHEN json_type(${document}, ?) IN ('array', 'object') THEN EXISTS (SELECT 1 FROM json_tree(${document}, ?) AS j WHERE j.type IN ('text', 'integer', 'real', 'true', 'false') AND ${containsSql("CASE WHEN j.type IN ('true', 'false') THEN j.type ELSE j.value END")} AND ${wireFrameTagExclusion(`${document}, ?`)}) ELSE 0 END`,
     };
 };
 
