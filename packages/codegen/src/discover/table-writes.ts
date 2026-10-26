@@ -76,25 +76,50 @@ const patchedFieldsOf = (call: CallExpression, method: string, bodyIndex: number
     return keys;
 };
 
-/** The table name a first argument carries: a string literal, or a constant whose type is one. */
-const literalTableOf = (first: TsNode | undefined): string | undefined => {
-    if (first === undefined) {
+/**
+ * The tables a first argument may name: a string literal, a `const` bound to one, or an expression whose type is a
+ * literal or a union of literals (a `"notes" | "todos"` parameter may write either). An assertion (`x as "posts"`)
+ * is a claim about the value, not proof of it, so it is unreadable. `undefined` when no table can be read.
+ */
+const tablesOfFirst = (first: TsNode | undefined): string[] | undefined => {
+    if (first === undefined || Node.isAsExpression(first) || Node.isTypeAssertion(first) || Node.isSatisfiesExpression(first)) {
         return undefined;
     }
 
     if (Node.isStringLiteral(first)) {
-        return first.getLiteralText();
+        return [first.getLiteralText()];
     }
 
-    const literal = Node.isExpression(first) ? first.getType().getLiteralValue() : undefined;
+    if (Node.isIdentifier(first)) {
+        const declaration = first.getSymbol()?.getDeclarations()[0];
 
-    return typeof literal === "string" ? literal : undefined;
+        if (
+            declaration !== undefined &&
+            Node.isVariableDeclaration(declaration) &&
+            declaration.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const
+        ) {
+            const initializer = declaration.getInitializer();
+
+            if (initializer !== undefined) {
+                return tablesOfFirst(initializer);
+            }
+        }
+    }
+
+    if (!Node.isExpression(first)) {
+        return undefined;
+    }
+
+    const type = first.getType();
+    const literals = (type.isUnion() ? type.getUnionTypes() : [type]).map((member) => member.getLiteralValue());
+
+    return literals.every((literal): literal is string => typeof literal === "string") ? literals : undefined;
 };
 
 /** The tables a `ctx.db.<method>("table", …)` write names, or `undefined` when `method` is not a write. */
 const databaseWrite = (method: string, first: TsNode | undefined): Write | undefined => {
     if (BY_NAME.has(method)) {
-        return { method, tables: [literalTableOf(first) ?? UNREADABLE_TABLE] };
+        return { method, tables: tablesOfFirst(first) ?? [UNREADABLE_TABLE] };
     }
 
     return undefined;

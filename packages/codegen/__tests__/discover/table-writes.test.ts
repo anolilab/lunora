@@ -137,6 +137,44 @@ export const rename = mutation({
         expect(tables).toStrictEqual(["posts"]);
     });
 
+    it("does not read a table from an assertion, and records each member of a union-typed table", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "dynamic.ts"),
+            `type Id<T extends string> = string & { readonly __table: T };
+interface Db {
+    patch: (table: string, id: Id<"posts">, patch: object) => Promise<void>;
+    delete: (table: string, id: Id<"notes">) => Promise<void>;
+}
+declare const mutation: (config: { handler: (ctx: { db: Db }, args: { table: string; id: Id<"posts"> }) => Promise<void> }) => unknown;
+
+export const asserted = mutation({
+    handler: async (ctx, args) => {
+        await ctx.db.patch(args.table as "posts", args.id, {});
+    },
+});
+
+export const union = async (ctx: { db: Db }, table: "notes" | "todos", id: Id<"notes">) => {
+    await ctx.db.delete(table, id);
+};
+`,
+            "utf8",
+        );
+
+        const project = new Project({ compilerOptions: { strict: true }, skipAddingFilesFromTsConfig: true });
+        const writes = discoverTableWrites(project, join(workdir, "lunora"))
+            .filter((write) => write.file === "dynamic")
+            .map((write) => [write.method, write.table])
+            .toSorted((left, right) => left.join(":").localeCompare(right.join(":")));
+
+        expect(writes).toStrictEqual([
+            ["delete", "notes"],
+            ["delete", "todos"],
+            ["patch", ""],
+        ]);
+    });
+
     it("reads the table of a `const db = ctx.db.<table>` alias, so its id-first patch keeps its fields", () => {
         expect.assertions(1);
 
