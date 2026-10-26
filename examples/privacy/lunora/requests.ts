@@ -4,6 +4,7 @@
  * session, so a caller cannot open a request for someone else.
  */
 import type { RequestRecord, RequestStatus, RequestType } from "@lunora/privacy";
+import { archiveBlocked, fromRequestRow } from "@lunora/privacy";
 import { dispatchPort } from "@lunora/privacy/workflow";
 import { rateLimit } from "lunorash/ratelimit";
 import { v } from "lunorash/values";
@@ -119,6 +120,16 @@ export const readExportFile = async (ctx: Pick<QueryCtx, "db">, key: string): Pr
             .first()) ?? null;
 
     if (request?.status !== "ready" || (request.expiresAt ?? Infinity) <= Date.now()) {
+        return null;
+    }
+
+    // An open erasure of the subject, or one that failed after deleting, holds the archive back, as the download link does.
+    const subjectRequests = await ctx.db
+        .query("privacy_requests")
+        .withIndex("bySubject", (q) => q.eq("subjectId", request.subjectId))
+        .collect();
+
+    if (archiveBlocked(subjectRequests.map((row) => fromRequestRow(row)))) {
         return null;
     }
 

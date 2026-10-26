@@ -17,14 +17,17 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { CoverageProblem, TableClassification } from "../../../../shared/privacy-coverage";
 import { AUTH_DEFAULT_TABLES, checkCoverage, classifyTables } from "../../../../shared/privacy-coverage";
-import type { TableIR } from "../ir";
+import type { TableIR, ValidatorIR } from "../ir";
 import { listLunoraSourceFiles } from "./ast";
 
 /** The package whose declaration turns the lint on. Read from the same manifest signal `studio-features` uses. */
 const PRIVACY_PACKAGE = "@lunora/privacy";
 
-/** The column that marks a table as holding a user's data. */
+/** The column that marks a table as holding a user's data, by name. A `v.id` of a user table marks it too. */
 const OWNER_COLUMN = "userId";
+
+/** The tables a `v.id` must name to mark its row as holding a user's data: the app's own and the better-auth one. */
+const USER_TABLES: ReadonlySet<string> = new Set(["user", "users"]);
 
 /** Same normalisation as `toPosixPath` in `run-codegen.ts`: `getFilePath()` is POSIX, OS paths may not be. */
 const toPosixPath = (path: string): string => path.replaceAll("\\", "/");
@@ -46,6 +49,8 @@ interface PrivacyCoverage {
     readonly enabled: boolean;
     /** Names of `defineDataset` constants that no `definePrivacy` passes. Empty when the `datasets` literal cannot be resolved. */
     readonly unusedDatasets: ReadonlyArray<string>;
+    /** The table names a `v.id` may name to mark its row as holding user data: the defaults and any renamed auth user table. */
+    readonly userTables: ReadonlySet<string>;
 }
 
 /** A named `defineDataset` variable found in a lunora file. */
@@ -60,6 +65,8 @@ interface CoverageState {
     readonly datasets: Map<string, string>;
     /** Table name to the exclusion reason. */
     readonly excluded: Map<string, string>;
+    /** Starts as the default user tables; `authDataset` adds the name it renamed the user table to. */
+    readonly userTables: Set<string>;
 }
 
 /** The text of a string literal, or `undefined` for anything else. */
@@ -103,32 +110,6 @@ const coverDataset = (call: CallExpression, state: CoverageState): void => {
     }
 };
 
-/** `authDataset(renames?)`: the default better-auth names, minus the renamed ones, plus the renamed values. */
-const coverAuth = (call: CallExpression, state: CoverageState): void => {
-    const argument = call.getArguments()[0];
-    const renames = argument !== undefined && Node.isObjectLiteralExpression(argument) ? assignmentsOf(argument) : [];
-    const overridden = new Set(renames.map((rename) => keyOf(rename)));
-
-    for (const table of AUTH_DEFAULT_TABLES) {
-        if (!overridden.has(table)) {
-            state.datasets.set(table, "authDataset");
-        }
-    }
-
-    for (const rename of renames) {
-        const value = Node.isPropertyAssignment(rename) ? stringValue(rename.getInitializer()) : undefined;
-
-        if (value !== undefined) {
-            state.datasets.set(value, "authDataset");
-        }
-    }
-};
-
-/** `documentHistoryDataset(table?)` and `actionCacheDataset(table?)`: the named table, or the default. */
-const coverNamedTable = (call: CallExpression, state: CoverageState, fallback: string): void => {
-    state.datasets.set(stringValue(call.getArguments()[0]) ?? fallback, fallback);
-};
-
 /** How many identifiers or spreads the config reader follows before it gives up, so a cycle cannot loop. */
 const MAX_RESOLVE_DEPTH = 8;
 
@@ -155,6 +136,37 @@ const resolveExpression = (node: Node, depth = 0): Node | undefined => {
     const initializer = Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
 
     return initializer === undefined ? undefined : resolveExpression(initializer, depth + 1);
+};
+
+/** `authDataset(renames?)`: the default better-auth names, minus the renamed ones, plus the renamed values. */
+const coverAuth = (call: CallExpression, state: CoverageState): void => {
+    const argument = call.getArguments()[0];
+    const object = argument === undefined ? undefined : resolveExpression(argument);
+    const renames = object !== undefined && Node.isObjectLiteralExpression(object) ? assignmentsOf(object) : [];
+    const overridden = new Set(renames.map((rename) => keyOf(rename)));
+
+    for (const table of AUTH_DEFAULT_TABLES) {
+        if (!overridden.has(table)) {
+            state.datasets.set(table, "authDataset");
+        }
+    }
+
+    for (const rename of renames) {
+        const value = Node.isPropertyAssignment(rename) ? stringValue(rename.getInitializer()) : undefined;
+
+        if (value !== undefined) {
+            state.datasets.set(value, "authDataset");
+
+            if (keyOf(rename) === "user") {
+                state.userTables.add(value);
+            }
+        }
+    }
+};
+
+/** `documentHistoryDataset(table?)` and `actionCacheDataset(table?)`: the named table, or the default. */
+const coverNamedTable = (call: CallExpression, state: CoverageState, fallback: string): void => {
+    state.datasets.set(stringValue(call.getArguments()[0]) ?? fallback, fallback);
 };
 
 /** The name and value expression of one plain or shorthand property, or `undefined` for any other member. */
@@ -387,10 +399,10 @@ const coverageFiles = (project: Project, lunoraDirectory: string): SourceFile[] 
  */
 const discoverPrivacyCoverage = (project: Project, lunoraDirectory: string, declaredDependencies: ReadonlySet<string> | undefined): PrivacyCoverage => {
     if (declaredDependencies?.has(PRIVACY_PACKAGE) !== true) {
-        return { classifications: {}, enabled: false, unusedDatasets: [] };
+        return { classifications: {}, enabled: false, unusedDatasets: [], userTables: USER_TABLES };
     }
 
-    const state: CoverageState = { datasets: new Map<string, string>(), excluded: new Map<string, string>() };
+    const state: CoverageState = { datasets: new Map<string, string>(), excluded: new Map<string, string>(), userTables: new Set(USER_TABLES) };
     const declared: DatasetDeclaration[] = [];
     const privacyCalls: PrivacyCall[] = [];
 
@@ -426,17 +438,36 @@ const discoverPrivacyCoverage = (project: Project, lunoraDirectory: string, decl
     // An exclusion overwrites a dataset, as it does in `definePrivacy().coverage`.
     const classifications = classifyTables(state.datasets, state.excluded);
 
-    return { classifications, enabled: privacyCalls.length > 0, unusedDatasets };
+    return { classifications, enabled: privacyCalls.length > 0, unusedDatasets, userTables: state.userTables };
 };
 
-/** A table holds a user's data when it has an owner column and is not one of the privacy package's own tables. */
-const holdsUserData = (table: TableIR): boolean => table.extensionKey !== PRIVACY_EXTENSION_KEY && OWNER_COLUMN in table.shape;
+/**
+ * A `v.id` of a user table, looking through the wrappers that nest a validator: `v.optional`, `v.array`, `v.union`
+ * (a nullable reference is a union of the id and `v.null()`), `v.record` and `v.object`.
+ */
+const referencesUser = (validator: ValidatorIR, userTables: ReadonlySet<string>): boolean => {
+    if (validator.kind === "id") {
+        return userTables.has(validator.tableName ?? "");
+    }
+
+    const nested = [validator.inner, validator.keyType, validator.valueType, ...(validator.members ?? []), ...Object.values(validator.shape ?? {})];
+
+    return nested.some((child) => child !== undefined && referencesUser(child, userTables));
+};
+
+/**
+ * A table holds a user's data when it has an owner column, or a `v.id` of a user table, and is not one of the
+ * privacy package's own tables. The `v.id` case catches a table whose owner column is named otherwise.
+ */
+const holdsUserData = (table: TableIR, userTables: ReadonlySet<string>): boolean =>
+    table.extensionKey !== PRIVACY_EXTENSION_KEY &&
+    (OWNER_COLUMN in table.shape || Object.values(table.shape).some((validator) => referencesUser(validator, userTables)));
 
 /** The message for one coverage problem. Names the table, so the reviewer knows which one to fix. */
 const messageFor = (problem: CoverageProblem): string =>
     problem.code === "excluded_without_reason"
         ? `privacy_exclusion_unexplained: "${problem.table}" is excluded without a reason. Give one in definePrivacy({ exclude }).`
-        : `privacy_table_unclassified: "${problem.table}" holds user data (it has a "${OWNER_COLUMN}" column) but no dataset exports it. Add it to a defineDataset, or exclude it in definePrivacy({ exclude }) with a reason.`;
+        : `privacy_table_unclassified: "${problem.table}" holds user data (a "${OWNER_COLUMN}" column or a v.id of a user table) but no dataset exports it. Add it to a defineDataset, or exclude it in definePrivacy({ exclude }) with a reason.`;
 
 /**
  * Fail when the app uses the package and a table with user data is neither covered by a dataset nor excluded
@@ -448,7 +479,7 @@ const assertPrivacyCoverage = (tables: ReadonlyArray<TableIR>, coverage: Privacy
         return;
     }
 
-    const owned = tables.filter((candidate) => holdsUserData(candidate)).map((table) => table.name);
+    const owned = tables.filter((candidate) => holdsUserData(candidate, coverage.userTables)).map((table) => table.name);
     const [problem] = checkCoverage(owned, coverage.classifications);
 
     if (problem !== undefined) {

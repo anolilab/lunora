@@ -31,6 +31,7 @@ type Context = WorkflowRunContext<{ requestId: string }>;
 const appCtx = (ctx: unknown): MutationCtx => ctx as MutationCtx;
 
 const DOWNLOAD_PATH = /^\/privacy\/files\?/u;
+const ZIP_NAME = /export\.zip$/u;
 const NO_WORKFLOWS = /ctx\.workflows/u;
 
 /** The D1 double each test seeds and reads. Set in `beforeEach`, and read by the context helper below. */
@@ -99,8 +100,9 @@ describe("privacy example", () => {
         const part = await t.run(async (ctx) =>
             appCtx(ctx)
                 .db.query("exportFiles")
-                .withIndex("byRequestAndName", (q) => q.eq("requestId", request.id).eq("name", "parts/tasks.json"))
-                .first(),
+                .withIndex("byRequestAndName", (q) => q.eq("requestId", request.id))
+                .collect()
+                .then((rows) => rows.find((row) => row.name.endsWith("/parts/tasks.json"))),
         );
         const stored = JSON.parse(part?.body ?? "{}") as { tables: { tasks: { title: string }[] } };
 
@@ -109,8 +111,9 @@ describe("privacy example", () => {
         const archive = await t.run(async (ctx) =>
             appCtx(ctx)
                 .db.query("exportFiles")
-                .withIndex("byRequestAndName", (q) => q.eq("requestId", request.id).eq("name", "export.zip"))
-                .first(),
+                .withIndex("byRequestAndName", (q) => q.eq("requestId", request.id))
+                .collect()
+                .then((rows) => rows.find((row) => row.name.endsWith("/export.zip"))),
         );
 
         expect(archive?.encoding).toBe("base64");
@@ -302,9 +305,21 @@ describe("privacy example", () => {
 
             await privacyWorkflows.exportHandler(contextFor(t, request.id, tombstones));
 
-            const key = `${request.id}/export.zip`;
+            // The archive is written under its run's prefix, so the key is the one the request records.
+            const key = await t.run(async (ctx) => {
+                const row = await appCtx(ctx)
+                    .db.query("privacy_requests")
+                    .withIndex("byRequestId", (q) => q.eq("requestId", request.id))
+                    .first();
 
-            await expect(t.run(async (ctx) => readExportFile(appCtx(ctx), key))).resolves.toMatchObject({ name: "export.zip" });
+                if (row?.storageKey === undefined) {
+                    throw new Error(`No archive key on privacy request ${request.id}.`);
+                }
+
+                return row.storageKey;
+            });
+
+            await expect(t.run(async (ctx) => readExportFile(appCtx(ctx), key))).resolves.toMatchObject({ name: expect.stringMatching(ZIP_NAME) });
 
             await t.run(async (ctx) => {
                 const database = appCtx(ctx).db;
@@ -323,20 +338,33 @@ describe("privacy example", () => {
             await expect(t.run(async (ctx) => readExportFile(appCtx(ctx), key))).resolves.toBeNull();
         });
 
-        it("records a retried export as failed when it needs the sign-in tables, which only the workflow reaches", async () => {
+        it("re-runs a failed export in its workflow, which alone reads the sign-in tables", async () => {
             expect.assertions(2);
 
             const request = await t.run(async (ctx) => privacyFor(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
 
             await fail(request.id);
 
-            const outcome = await retry(request.id);
+            // The retry hands the export to its workflow, as an erasure's retry does; the harness has no `ctx.workflows`.
+            await expect(retry(request.id)).rejects.toThrow(NO_WORKFLOWS);
 
-            expect(outcome).toStrictEqual({ requestId: request.id, status: "failed" });
+            // The workflow runs the export: the only place the tombstone store and the sign-in tables are reachable.
+            await privacyWorkflows.exportHandler(contextFor(t, request.id, tombstones));
 
-            const events = await t.run(async (ctx) => appCtx(ctx).db.query("privacy_events").collect());
+            await expect(t.withIdentity(SUBJECT).mutation(downloadLink, { requestId: request.id })).resolves.toMatch(DOWNLOAD_PATH);
+        });
 
-            expect(events.some((event) => event.requestId === request.id && (event.detail ?? "").includes("sign-in tables"))).toBe(true);
+        it("hands a failed export to its workflow without reading the tombstone store in the mutation", async () => {
+            expect.assertions(1);
+
+            const request = await t.run(async (ctx) => privacyFor(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
+
+            await fail(request.id);
+
+            await expect(t.run(async (ctx) => privacyFor(appCtx(ctx)).admin.retry(request.id))).resolves.toStrictEqual({
+                requestId: request.id,
+                type: "export",
+            });
         });
 
         it("restarts a failed erasure's workflow rather than erasing without a tombstone", async () => {

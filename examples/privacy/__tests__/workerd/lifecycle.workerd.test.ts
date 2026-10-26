@@ -42,6 +42,17 @@ const identity = (subjectId: string): PrivacyIdentity => {
  */
 const appCtx = (db: Database): MutationCtx => ({ db }) as unknown as MutationCtx;
 
+/** Each test names its tombstone store apart: the namespace is shared, and a tombstone left by one test would refuse another's export. */
+const tombstoneScope = { name: "" };
+
+/** The tombstone namespace, with its store named for the current test. */
+const testTombstones = (): Record<string, unknown> => {
+    return {
+        get: (id: DurableObjectId) => env.PRIVACY_TOMBSTONES.get(id),
+        idFromName: (name: string) => env.PRIVACY_TOMBSTONES.idFromName(`${name}:${tombstoneScope.name}`),
+    };
+};
+
 /**
  * A workflow context over the shard. `run` does what the internal `privacyPort` mutation does:
  * the package's dispatcher over the app's local ports.
@@ -49,7 +60,7 @@ const appCtx = (db: Database): MutationCtx => ({ db }) as unknown as MutationCtx
 const contextFor = (db: Database, requestId: string, hooks: RunHooks = {}): Context =>
     workflowContext(
         {
-            env: { DB: env.DB, PRIVACY_TOMBSTONES: env.PRIVACY_TOMBSTONES },
+            env: { DB: env.DB, PRIVACY_TOMBSTONES: testTombstones() },
             params: { requestId },
             run: async (_reference, args) => dispatchPort(privacyConfig, localPorts(appCtx(db)), args.method, args.payload),
         },
@@ -92,8 +103,22 @@ const requestRow = async (db: Database, requestId: string): Promise<undefined | 
     return rows.find((row) => row.requestId === requestId) as undefined | { status: string };
 };
 
+/** The request's status and the detail of each failure it recorded, so a run that failed names its code in the assertion. */
+const runOf = async (db: Database, requestId: string): Promise<{ failures: string[]; status?: string }> => {
+    const events = await db.query("privacy_events").collect();
+    const row = await requestRow(db, requestId);
+
+    return {
+        failures: events
+            .filter((event) => event.requestId === requestId && event.kind === "failed")
+            .map((event) => (typeof event.detail === "string" ? event.detail : "")),
+        status: row?.status,
+    };
+};
+
 describe("privacy example lifecycle (workerd)", () => {
     beforeEach(async () => {
+        tombstoneScope.name = crypto.randomUUID();
         await ensureSignIn(env.DB, env.AUTH_SECRET);
         await clearSignIn(env.DB);
     });
@@ -109,12 +134,12 @@ describe("privacy example lifecycle (workerd)", () => {
             await privacyWorkflows.exportHandler(contextFor(db, request.id));
 
             const rows = await db.query("exportFiles").collect();
-            const part = rows.find((row) => row.requestId === request.id && row.name === "parts/tasks.json");
+            const part = rows.find((row) => row.requestId === request.id && (row.name as string).endsWith("/parts/tasks.json"));
             const stored = JSON.parse((part?.body as string | undefined) ?? "{}") as { tables: { tasks: { title: string }[] } };
 
             expect(stored.tables.tasks.map((row) => row.title).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["book flights", "renew passport"]);
 
-            const archive = rows.find((row) => row.requestId === request.id && row.name === "export.zip");
+            const archive = rows.find((row) => row.requestId === request.id && (row.name as string).endsWith("/export.zip"));
 
             expect(archive?.encoding).toBe("base64");
 
@@ -207,7 +232,7 @@ describe("privacy example lifecycle (workerd)", () => {
             // The restore workflow the operator's `restorePrivacyErasures` starts, with the ids the restored shard holds.
             const reerased = await privacyWorkflows.restoreHandler(
                 workflowContext({
-                    env: { DB: env.DB, PRIVACY_TOMBSTONES: env.PRIVACY_TOMBSTONES },
+                    env: { DB: env.DB, PRIVACY_TOMBSTONES: testTombstones() },
                     params: { restoredSubjectIds: [SUBJECT, OTHER] },
                     run: async (_reference, args) => dispatchPort(privacyConfig, localPorts(appCtx(db)), args.method, args.payload),
                 }),
@@ -252,7 +277,7 @@ describe("privacy example lifecycle (workerd)", () => {
     });
 
     it("expires a finished export past its download window and deletes its files", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         await withShard(async (db) => {
             await seed(db);
@@ -260,6 +285,9 @@ describe("privacy example lifecycle (workerd)", () => {
             const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestExport();
 
             await privacyWorkflows.exportHandler(contextFor(db, request.id));
+
+            // The sweep only expires a ready export, so a failed run here is the reason the sweep below finds nothing.
+            await expect(runOf(db, request.id)).resolves.toMatchObject({ failures: [], status: "ready" });
 
             // The typed mutation context, so the row id keeps its table type for `patch`.
             const ctx = appCtx(db);
@@ -285,7 +313,7 @@ describe("privacy example lifecycle (workerd)", () => {
     });
 
     it("exports the subject's sign-in rows without the password hash", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         await withShard(async (db) => {
             await seed(db);
@@ -295,8 +323,10 @@ describe("privacy example lifecycle (workerd)", () => {
 
             await privacyWorkflows.exportHandler(contextFor(db, request.id));
 
+            await expect(runOf(db, request.id)).resolves.toMatchObject({ failures: [], status: "ready" });
+
             const files = await db.query("exportFiles").collect();
-            const part = files.find((row) => row.requestId === request.id && row.name === "parts/auth.json");
+            const part = files.find((row) => row.requestId === request.id && (row.name as string).endsWith("/parts/auth.json"));
             const stored = JSON.parse((part?.body as string | undefined) ?? "{}") as { tables: Record<string, Record<string, unknown>[]> };
 
             expect(stored.tables.user?.map((row) => row.id)).toStrictEqual([SUBJECT]);

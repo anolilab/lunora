@@ -181,7 +181,7 @@ export interface Caller {
     admin: {
         listOpenPrivacyRequests: (args?: {}) => Promise<import("../../../../shared/privacy-request-row.js").PrivacyRequestRow[]>;
         restorePrivacyErasures: (args?: {}) => Promise<{ id: string; subjects: number; }>;
-        retryPrivacyRequest: (args: { requestId: string }) => Promise<{ requestId: string; status: "restarted"; } | { requestId: string; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; }>;
+        retryPrivacyRequest: (args: { requestId: string }) => Promise<{ requestId: string; status: "restarted"; }>;
     };
     requests: {
         cancelRequest: (args: { requestId: string }) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;

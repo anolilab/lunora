@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { storageObjectsDataset } from "../src/builtins";
 import type { MemoryFiles } from "./harness";
-import { memoryFiles, setup, tasksDataset } from "./harness";
+import { exportFileOf, memoryFiles, setup, tasksDataset } from "./harness";
 
 const uploads = storageObjectsDataset((subjectId) => `uploads/${subjectId}/`);
 
@@ -32,7 +32,11 @@ describe("erasure of stored files", () => {
         expect(store.rows.get(erasure.id)?.status).toBe("completed");
         expect(keys(files.files).filter((key) => key.startsWith(`${oldExport.id}/`) || key.startsWith("uploads/u1/"))).toStrictEqual([]);
         expect(keys(files.files)).toStrictEqual(
-            expect.arrayContaining([`${otherExport.id}/export.zip`, `${otherExport.id}/parts/tasks.json`, "uploads/u2/avatar.png"]),
+            expect.arrayContaining([
+                exportFileOf(files, otherExport.id, "export.zip"),
+                exportFileOf(files, otherExport.id, "tasks.json"),
+                "uploads/u2/avatar.png",
+            ]),
         );
     });
 

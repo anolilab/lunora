@@ -12,7 +12,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import type { Dataset } from "./dataset";
-import { erasureOrder, retainedTables } from "./dataset";
+import { erasureOrder, PortTableMissingError, requireTables, retainedTables } from "./dataset";
 import { DAY_MS } from "./deadlines";
 import type { RowDisposition, VerifyResult } from "./erasure";
 import { drainUntilEmpty, verifyErasure } from "./erasure";
@@ -20,8 +20,9 @@ import { assembleExport, collectPart } from "./export";
 import type { RequestStatus } from "./lifecycle";
 import { canTransition, transition } from "./lifecycle";
 import type { PrivacyPorts, StorePort } from "./ports";
-import type { RequestRecord } from "./requests";
-import { fromStepRecord, requireRequest, toStepRecord } from "./requests";
+import { isUnboundPort } from "./ports";
+import type { RequestRecord, RequestStore } from "./requests";
+import { requireRequest } from "./requests";
 import type { TombstonePort } from "./tombstones";
 import { tombstoneKeyOf } from "./tombstones";
 
@@ -70,6 +71,30 @@ const deleteRequestFiles = async (files: StorePort, request: RequestRecord): Pro
     await Promise.all([...keys].map(async (key) => files.delete(key)));
 };
 
+/**
+ * The key prefix of one export run's files. A run id is a single path segment (see the `run` step), so the prefix
+ * names that run and no other: `foo` does not match the files of a run whose id is `other/foo/bar`.
+ */
+const runPrefixOf = (requestId: string, runId: string): string => `${requestId}/${runId}/`;
+
+/** The id an export run names its files with. An app's `newId` that returns a path would break the prefix rule above. */
+const runIdOf = (id: string): string => {
+    if (id === "" || id.includes("/")) {
+        throw new LunoraError("INTERNAL", "newId must return a non-empty id without a `/`.");
+    }
+
+    return id;
+};
+
+/** Delete the files one export run wrote under the request. Returns how many. */
+const deleteRunFiles = async (files: StorePort, requestId: string, runId: string): Promise<number> => {
+    const keys = await files.list(runPrefixOf(requestId, runId));
+
+    await Promise.all(keys.map(async (key) => files.delete(key)));
+
+    return keys.length;
+};
+
 /** The subject's key prefix for a dataset's files. An empty prefix would match every subject's files, so it is refused. */
 const filesPrefixOf = (dataset: Dataset, subjectId: string): string | undefined => {
     if (dataset.files === undefined) {
@@ -93,8 +118,8 @@ const filesPrefixOf = (dataset: Dataset, subjectId: string): string | undefined 
 const expireRequestFiles = async (ports: PrivacyPorts, request: RequestRecord): Promise<void> => {
     await deleteRequestFiles(ports.files, request);
 
-    if (request.status === "ready") {
-        await ports.store.update(request.id, { status: transition("ready", "expired") });
+    // A claim, so when a sweep and an erasure both expire the same export only the one that moves it writes the event.
+    if (request.status === "ready" && (await ports.store.claim(request.id, "ready", { status: transition("ready", "expired") }))) {
         await ports.store.addEvent(request.id, ports.now(), "expired");
     }
 };
@@ -146,6 +171,8 @@ const allowedRows = async (
     const rows = await scope.ports.data.collect(dataset, subjectId);
     const now = scope.ports.now();
 
+    requireTables(rows, dataset, "collect");
+
     for (const table of retained) {
         allowed[table] = (rows[table] ?? []).filter((row) => scope.disposition(dataset, table, row, now).kind === "keep").length;
     }
@@ -169,6 +196,7 @@ const verifySubjectErased = async (
         // eslint-disable-next-line no-await-in-loop -- one read per dataset, in order
         const counts = await scope.ports.data.remaining(dataset, subjectId);
 
+        requireTables(counts, dataset, "remaining");
         Object.assign(remaining, counts);
 
         // eslint-disable-next-line no-await-in-loop -- one read per dataset, in order
@@ -190,8 +218,18 @@ const verifySubjectErased = async (
 /** How long a finished export stays downloadable: seven days (decided, the plan's D5). */
 const EXPORT_EXPIRY_MS: number = 7 * DAY_MS;
 
-/** The text a failed run records: the error message, or the value thrown when it is not an `Error`. */
-const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+/**
+ * The detail a failed run records. Only the error's code: a message can carry a subject's values (an id, a
+ * column value), and the event log is read by people who should not see them. The one exception is a missing
+ * dataset table, whose message holds schema names only, so the event can say which table the port left out.
+ */
+const failureDetail = (error: unknown): string => {
+    if (error instanceof PortTableMissingError) {
+        return `INTERNAL: the data port returned no entry for table "${error.table}" of dataset "${error.dataset}"`;
+    }
+
+    return `${error instanceof LunoraError ? error.code : "INTERNAL"}: the run stopped before it finished`;
+};
 
 /**
  * Record a status change and its event. Every phase writes one event, named after the status it
@@ -213,9 +251,28 @@ const setStatus = async (
     await ports.store.addEvent(requestId, ports.now(), status, change.detail);
 };
 
+/**
+ * What the run reads before its first step. The subject is not here: every step reads the request again and takes
+ * the subject from that read, so the step log never holds a raw subject id.
+ */
+type LoadedRequest = Pick<RequestRecord, "erasureGraceUntil" | "id" | "status" | "type">;
+
 /** The request as the run starts, through a step, so a replay sees the record the first run saw. */
-const loadStep = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<RequestRecord> =>
-    fromStepRecord(await steps.do("load", async () => toStepRecord(await requireRequest(scope.ports.store, requestId))));
+const loadStep = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<LoadedRequest> => {
+    const loaded = await steps.do("load", async () => {
+        const record = await requireRequest(scope.ports.store, requestId);
+
+        return {
+            id: record.id,
+            status: record.status,
+            type: record.type,
+            ...(record.erasureGraceUntil === undefined ? {} : { erasureGraceUntil: record.erasureGraceUntil.toISOString() }),
+        };
+    });
+    const { erasureGraceUntil, ...rest } = loaded;
+
+    return erasureGraceUntil === undefined ? rest : { ...rest, erasureGraceUntil: new Date(erasureGraceUntil) };
+};
 
 /**
  * Move the request into `processing`, from the status it holds now, so a cancel that landed during
@@ -230,9 +287,18 @@ const startStep = async (scope: RunScope, steps: StepRunner, requestId: string):
             return status;
         }
 
-        await setStatus(scope.ports, requestId, { from: status, to: "processing" });
+        // A claim, not an update: a cancel that landed after the read above keeps its status, and the run stops.
+        const next = transition(status, "processing");
 
-        return "processing" as const;
+        if (!(await scope.ports.store.claim(requestId, status, { status: next }))) {
+            const current = await requireRequest(scope.ports.store, requestId);
+
+            return current.status;
+        }
+
+        await scope.ports.store.addEvent(requestId, scope.ports.now(), next);
+
+        return next;
     });
 
 /** A step's answer: the status the request held when the step ran, and the step's value when it ran. */
@@ -242,22 +308,34 @@ interface Checked<T> {
 }
 
 /** Run one named step only while the request is still `processing`. A request that left it stops the run. */
-const whileProcessing = async <T>(scope: RunScope, steps: StepRunner, requestId: string, name: string, run: () => Promise<T>): Promise<Checked<T>> =>
+const whileProcessing = async <T>(
+    scope: RunScope,
+    steps: StepRunner,
+    requestId: string,
+    name: string,
+    run: (request: RequestRecord) => Promise<T>,
+): Promise<Checked<T>> =>
     steps.do(name, async () => {
-        const { status } = await requireRequest(scope.ports.store, requestId);
+        const request = await requireRequest(scope.ports.store, requestId);
 
-        if (status !== "processing") {
-            return { status };
+        if (request.status !== "processing") {
+            return { status: request.status };
         }
 
-        const value: T | undefined = await run();
+        const value: T | undefined = await run(request);
 
         // A step result is stored as JSON, so an absent value is left out rather than kept as `undefined`.
-        return value === undefined ? { status } : { status, value };
+        return value === undefined ? { status: request.status } : { status: request.status, value };
     });
 
 /** Mark the run failed and keep why on the event. A request already terminal, or failed, is left as it is. */
-const failStep = async (scope: RunScope, steps: StepRunner, requestId: string, detail: string): Promise<RequestStatus> =>
+const failStep = async (
+    scope: RunScope,
+    steps: StepRunner,
+    requestId: string,
+    detail: string,
+    patch?: Partial<Omit<RequestRecord, "id" | "status">>,
+): Promise<RequestStatus> =>
     steps.do("fail", async () => {
         const { status } = await requireRequest(scope.ports.store, requestId);
 
@@ -265,18 +343,101 @@ const failStep = async (scope: RunScope, steps: StepRunner, requestId: string, d
             return status;
         }
 
-        await setStatus(scope.ports, requestId, { detail, from: status, to: "failed" });
+        await setStatus(scope.ports, requestId, { detail, from: status, patch, to: "failed" });
 
         return "failed" as const;
     });
 
+/** The erasure statuses that block an export of the subject: its data may be partly gone, or the subject was erased. */
+const ERASURE_BLOCKING: ReadonlySet<RequestStatus> = new Set(["completed", "failed", "processing"]);
+
+/**
+ * Whether an erasure request blocks exports of its subject. A failure that stopped before the tombstone erased nothing, so it
+ * blocks nothing; any other erasure in a blocking status does, including one whose flag is missing.
+ */
+const blocksExports = (request: RequestRecord): boolean =>
+    request.type === "erasure" && ERASURE_BLOCKING.has(request.status) && !(request.status === "failed" && request.nothingErased === true);
+
+/**
+ * Whether the subject's erasure has begun or completed, read from the subject's request records. An erasure that is
+ * processing or failed may have deleted some of the data, and it still carries the raw id, so its own record finds it. A
+ * failed erasure can also have failed before it deleted anything (the tombstone step runs first); it blocks until an
+ * operator retries it. A completed erasure has re-keyed the subject's requests to the tombstone key, so the requests that
+ * carry that key find it.
+ */
+const subjectErasureBlocks = async (store: RequestStore, subjectId: string): Promise<boolean> => {
+    const requests = await store.listForSubject(subjectId);
+
+    return requests.some((request) => blocksExports(request));
+};
+
+/**
+ * Whether an export's archive may still be served, given its subject's requests. An erasure that is open, or that failed after
+ * deleting, holds the archive back until it finishes; a completed erasure has already expired it.
+ */
+const archiveBlocked = (requests: ReadonlyArray<RequestRecord>): boolean => requests.some((request) => blocksExports(request));
+
+/**
+ * Whether an erasure of the subject has begun or completed, found from the request store alone. A completed erasure rekeys its
+ * requests to the tombstone key, so the raw id misses it: the key is derived from the secret, so this needs no tombstone port and
+ * runs wherever the secret is set. Without a secret no erasure can have completed (`requireTombstones` refuses one), so only the raw
+ * id is read.
+ */
+const erasureBlocksSubject = async (store: RequestStore, subjectId: string, secret: string | undefined): Promise<boolean> => {
+    if (await subjectErasureBlocks(store, subjectId)) {
+        return true;
+    }
+
+    if (secret === undefined || secret === "") {
+        return false;
+    }
+
+    return subjectErasureBlocks(store, tombstoneKeyOf(subjectId, secret));
+};
+
 /**
  * Export the subject's data: collect each dataset as its own step, assemble, and mark the request
  * ready. A failure marks it `failed` for an operator to retry; the Art. 12(3) clock keeps running.
+ *
+ * Every path checks the request store for a begun or completed erasure (`erasureBlocksSubject`). `tombstones` is passed by the
+ * workflow only. Its probe answers for a request an erasure re-keyed, whose erasure may no longer be found under its key; a fresh
+ * request carries the raw id, which no tombstone matches. The one-call path cannot reach the tombstone store from a mutation, so it
+ * does not pass one; it refuses a failed export, and `admin.retry` sends those to the workflow.
  */
-const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<ExportOutcome> => {
-    const step = async <T>(name: string, run: () => Promise<T>): Promise<Checked<T>> => whileProcessing(scope, steps, requestId, name, run);
-    const record = await loadStep(scope, steps, requestId);
+const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string, tombstones?: TombstonePort): Promise<ExportOutcome> => {
+    const step = async <T>(name: string, run: (request: RequestRecord) => Promise<T>): Promise<Checked<T>> =>
+        whileProcessing(scope, steps, requestId, name, run);
+    let runId: string | undefined;
+
+    // A run that stops after writing removes what it wrote, and only that: another run of the export keeps its files.
+    // A ready request may point at this run's archive (a throw after the ready write lands here as `ready`), so the
+    // files stay only when the request's live archive is this run's own. A run that wrote nothing has nothing to remove.
+    const stop = async (status: RequestStatus): Promise<ExportOutcome> => {
+        const id = runId;
+
+        if (id === undefined) {
+            return { status };
+        }
+
+        return steps.do("discard", async (): Promise<ExportOutcome> => {
+            const current = status === "ready" ? await requireRequest(scope.ports.store, requestId) : undefined;
+            const live = current?.storageKey;
+
+            if (live?.startsWith(runPrefixOf(requestId, id)) === true) {
+                return { status };
+            }
+
+            await deleteRunFiles(scope.ports.files, requestId, id);
+
+            return live === undefined ? { status } : { archiveKey: live, status };
+        });
+    };
+
+    const loaded = await loadStep(scope, steps, requestId);
+
+    if (tombstones === undefined && loaded.status === "failed") {
+        throw new LunoraError("UNPROCESSABLE", "A failed export is retried through admin.retry, which starts its workflow.");
+    }
 
     try {
         const started = await startStep(scope, steps, requestId);
@@ -285,33 +446,119 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
             return { status: started };
         }
 
+        // Checked after the claim: a failed export that an erasure re-keyed can be claimed later, and by then its tombstone key
+        // is on record. Checking before the claim would let such a run collect under that key and publish an empty archive.
+        const erased = await steps.do("erased", async () => {
+            const { subjectId } = await requireRequest(scope.ports.store, requestId);
+
+            if (await erasureBlocksSubject(scope.ports.store, subjectId, scope.tombstoneSecret)) {
+                return true;
+            }
+
+            // The tombstone is keyed by HMAC. A request an erasure re-keyed carries that key, so the probe asks for it as stored.
+            // A request that still carries the raw id is probed under its HMAC too: a restore can roll back the erasure request
+            // the store check relies on, and the tombstone survives the restore.
+            if (tombstones === undefined || scope.tombstoneSecret === undefined || scope.tombstoneSecret === "") {
+                return false;
+            }
+
+            try {
+                if (await tombstones.has(subjectId)) {
+                    return true;
+                }
+
+                return await tombstones.has(tombstoneKeyOf(subjectId, scope.tombstoneSecret));
+            } catch (error) {
+                // An app with no tombstone store leaves the port unbound, so the answer is "not tombstoned". Only that error
+                // is absorbed: the request store check above has already run, and any other failure stops the export.
+                if (isUnboundPort(error, "tombstones")) {
+                    return false;
+                }
+
+                throw error;
+            }
+        });
+
+        if (erased) {
+            return { status: await failStep(scope, steps, requestId, "UNPROCESSABLE: the subject's erasure has begun or completed") };
+        }
+
+        // Every file this run writes is named under its own id, journaled so a replay keeps it. The id is one path segment:
+        // a `/` in it would let this run's prefix contain another run's files.
+        runId = await steps.do("run", () => Promise.resolve(runIdOf(scope.ports.newId())));
+
+        const ownId = runId;
+
         for (const dataset of scope.datasets) {
             // Each dataset is one step: its rows go to storage, so the step returns nothing large.
             // eslint-disable-next-line no-await-in-loop -- steps run in order by design
-            const collected = await step(`collect:${dataset.id}`, async () => collectPart(scope.ports, dataset, record));
+            const collected = await step(`collect:${dataset.id}`, async (request) => collectPart(scope.ports, dataset, request, ownId));
 
             if (collected.status !== "processing") {
-                return { status: collected.status };
+                // eslint-disable-next-line no-await-in-loop -- the run ends here
+                return await stop(collected.status);
             }
         }
 
-        const assembled = await step("assemble", async () => assembleExport(scope.ports, scope.datasets, record, scope.subjectKey(record.subjectId)));
+        const assemble = async (request: RequestRecord): Promise<string> =>
+            assembleExport(scope.ports, scope.datasets, request, scope.subjectKey(request.subjectId), ownId);
+        const assembled = await step("assemble", assemble);
         const archiveKey = assembled.value;
 
         if (archiveKey === undefined) {
-            return { status: assembled.status };
+            return await stop(assembled.status);
         }
 
-        const markReady = async (): Promise<void> => {
-            const patch = { expiresAt: new Date(scope.ports.now().getTime() + EXPORT_EXPIRY_MS), storageKey: archiveKey };
+        // A claim, not an update: an erasure that fails this export after the step's read must not be written
+        // over, and the archive this run wrote holds data that erasure removed, so its files go too.
+        const ready = await step("ready", async (): Promise<ExportOutcome> => {
+            const status = transition("processing", "ready");
+            const patch = { expiresAt: new Date(scope.ports.now().getTime() + EXPORT_EXPIRY_MS), status, storageKey: archiveKey };
 
-            await setStatus(scope.ports, requestId, { detail: archiveKey, from: "processing", patch, to: "ready" });
-        };
-        const ready = await step("ready", markReady);
+            if (await scope.ports.store.claim(requestId, "processing", patch)) {
+                await scope.ports.store.addEvent(requestId, scope.ports.now(), status, archiveKey);
 
-        return ready.status === "processing" ? { archiveKey, status: "ready" } : { status: ready.status };
+                return { archiveKey, status };
+            }
+
+            // The ready request answers with its archive. When that archive is this run's own (a retried step
+            // whose claim had already landed), the files stay; any other run's archive was never this run's to keep.
+            const current = await requireRequest(scope.ports.store, requestId);
+            const live = current.status === "ready" ? current.storageKey : undefined;
+
+            if (live?.startsWith(runPrefixOf(requestId, ownId)) !== true) {
+                await deleteRunFiles(scope.ports.files, requestId, ownId);
+            }
+
+            return live === undefined ? { status: current.status } : { archiveKey: live, status: current.status };
+        });
+
+        // No value means the step's callback never ran: the request had already left `processing`.
+        if (ready.value === undefined) {
+            return await stop(ready.status);
+        }
+
+        if (ready.value.status !== "ready") {
+            return ready.value;
+        }
+
+        // An erasure that began after the `erased` check above is already in the store: it claims processing before anything else.
+        // Read again after this claim, so an archive that went ready during that erasure expires here.
+        const expired = await steps.do("recheck", async () => {
+            const { subjectId } = await requireRequest(scope.ports.store, requestId);
+
+            if (!(await erasureBlocksSubject(scope.ports.store, subjectId, scope.tombstoneSecret))) {
+                return false;
+            }
+
+            await expireRequestFiles(scope.ports, await requireRequest(scope.ports.store, requestId));
+
+            return true;
+        });
+
+        return expired ? { status: "expired" } : ready.value;
     } catch (error) {
-        return { status: await failStep(scope, steps, requestId, messageOf(error)) };
+        return await stop(await failStep(scope, steps, requestId, failureDetail(error)));
     }
 };
 
@@ -344,17 +591,120 @@ const eraseDataset = async (scope: Pick<RunScope, "disposition" | "ports">, data
 };
 
 /**
+ * Fail a request that has not finished, from whatever status it holds when the claim lands. A run may move it
+ * between the caller's read and the claim (`received` to `processing`); each lost claim re-reads the status,
+ * and statuses only move forward, so this ends.
+ */
+const failOpenRequest = async (ports: PrivacyPorts, request: RequestRecord, detail: string): Promise<void> => {
+    let { status } = request;
+
+    while (canTransition(status, "failed")) {
+        // eslint-disable-next-line no-await-in-loop -- each claim depends on the status the last one lost to
+        if (await ports.store.claim(request.id, status, { status: transition(status, "failed") })) {
+            // eslint-disable-next-line no-await-in-loop -- the event follows the claim that won
+            await ports.store.addEvent(request.id, ports.now(), "failed", detail);
+
+            return;
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- the next claim needs the fresh status
+        const current = await ports.store.get(request.id);
+
+        if (current === undefined || current.status === status) {
+            return;
+        }
+
+        status = current.status;
+    }
+};
+
+/**
  * Complete an erasure and drop the raw subject id from the request log: every request of the subject,
  * this one last, takes the tombstone key as its `subjectId`, so the log keeps the link the tombstone
  * keeps and nothing more. A retry finds the requests already rewritten and only completes this one.
  * The subject's own lookups by their id stop finding these requests, which is the point.
+ *
+ * An export not yet finished, queued or processing, is failed in the same write: its later steps would read
+ * the tombstone key as the subject and assemble an archive missing the data not yet collected. The claim
+ * keeps a run that moved on meanwhile from being written over. The export's start and ready steps claim
+ * too, so whichever claim lands first wins: an export failed here never turns ready, and one that turned
+ * ready first is expired here. A queued export's run then finds the erasure and stops (see `exportRun`).
  */
 const completeErasure = async (ports: PrivacyPorts, requestId: string, subjectId: string, key: string): Promise<void> => {
     const requests = await ports.store.listForSubject(subjectId);
     const others = requests.filter((request) => request.id !== requestId);
 
-    await Promise.all(others.map(async (request) => ports.store.update(request.id, { subjectId: key })));
+    // The rekey is each request's last write: until its cleanup has succeeded the request stays under the subject's
+    // id, so a retried erasure lists it again and finishes the cleanup, which is safe to repeat.
+    await Promise.all(
+        others.map(async (request) => {
+            // Only an export is failed: another erasure of the subject is a request this one does not own.
+            if (request.type === "export") {
+                await failOpenRequest(ports, request, "UNPROCESSABLE: the subject was erased before the export finished");
+            }
+
+            const current = (await ports.store.get(request.id)) ?? request;
+
+            if (current.status === "ready") {
+                // An export that went ready after the files step holds data this erasure removed, so it expires here.
+                await expireRequestFiles(ports, current);
+            } else if (current.type === "export" && current.status === "failed") {
+                // A failed export's runs are stopped, so all of its files go; a run still writing removes its own.
+                await deleteRequestFiles(ports.files, current);
+            }
+
+            await ports.store.update(request.id, { subjectId: key });
+
+            // A run that claimed after the reads above still holds the raw subject id, so its data may be gone. Recheck the rekeyed
+            // request: a processing export is failed, and one that went ready meanwhile is expired.
+            const rekeyed = (await ports.store.get(request.id)) ?? current;
+
+            if (rekeyed.type === "export" && rekeyed.status === "processing") {
+                await failOpenRequest(ports, rekeyed, "UNPROCESSABLE: the subject was erased before the export finished");
+            }
+
+            // The fail above loses to a ready claim that landed after the read, and then nothing else expires the export. Read again.
+            const latest = (await ports.store.get(request.id)) ?? rekeyed;
+
+            if (latest.status === "ready" && current.status !== "ready") {
+                await expireRequestFiles(ports, latest);
+            }
+        }),
+    );
     await setStatus(ports, requestId, { from: "processing", patch: { subjectId: key }, to: "completed" });
+};
+
+/** Expire the subject's ready exports. `completeErasure` does this for an erasure that finishes; a failed one needs it here too. */
+const expireReadyExports = async (ports: PrivacyPorts, requestId: string): Promise<void> => {
+    const { subjectId } = await requireRequest(ports.store, requestId);
+    const requests = await ports.store.listForSubject(subjectId);
+
+    await Promise.all(
+        requests.filter((request) => request.type === "export" && request.status === "ready").map(async (request) => expireRequestFiles(ports, request)),
+    );
+};
+
+/**
+ * Fail an erasure. Once rows may be gone, a ready export of the subject holds data the erasure removed, so it expires here.
+ * Completion does that for an erasure that finishes, and a failed erasure never completes.
+ */
+const failErasure = async (
+    scope: RunScope,
+    steps: StepRunner,
+    requestId: string,
+    detail: string,
+    { rowsMayBeGone, tombstoned }: { readonly rowsMayBeGone: boolean; readonly tombstoned: boolean },
+): Promise<RequestStatus> => {
+    // An earlier attempt that got past its tombstone may have deleted rows, and a later attempt that fails before its own tombstone
+    // does not undo that. The request is failed first: an expiry that throws must not leave the erasure in processing.
+    const { nothingErased } = await requireRequest(scope.ports.store, requestId);
+    const status = await failStep(scope, steps, requestId, detail, { nothingErased: !tombstoned && nothingErased !== false });
+
+    if (rowsMayBeGone) {
+        await steps.do("expire", async () => expireReadyExports(scope.ports, requestId));
+    }
+
+    return status;
 };
 
 /**
@@ -363,7 +713,8 @@ const completeErasure = async (ports: PrivacyPorts, requestId: string, subjectId
  * rule still keeps; otherwise it is `failed` and names the leftover tables.
  */
 const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<ErasureOutcome> => {
-    const step = async <T>(name: string, run: () => Promise<T>): Promise<Checked<T>> => whileProcessing(scope, steps, requestId, name, run);
+    const step = async <T>(name: string, run: (request: RequestRecord) => Promise<T>): Promise<Checked<T>> =>
+        whileProcessing(scope, steps, requestId, name, run);
     const record = await loadStep(scope, steps, requestId);
 
     if (record.status === "grace" && record.erasureGraceUntil !== undefined) {
@@ -374,6 +725,11 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
 
         await steps.sleepUntil("grace", record.erasureGraceUntil);
     }
+
+    // Set once the tombstone is written: a failed row drain may leave rows gone, so ready exports must expire.
+    // Cleared before the files step: a failed archive delete must leave ready exports in place so the retry can finish.
+    let erasing = false;
+    let wroteTombstone = false;
 
     try {
         const tombstones = requireTombstones(scope);
@@ -387,30 +743,40 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
         // (unbound behind the workflow's port, or failing) stops the erasure with nothing deleted, and
         // before the request completes, so a completed erasure always has one. A retried step writes it
         // again, which the port's upsert absorbs.
-        const key = tombstoneKeyOf(record.subjectId, tombstones.secret);
-        const tombstoned = await step("tombstone", async () => tombstones.port.add(key, scope.ports.now()));
+        const keyOf = (request: RequestRecord): string => tombstoneKeyOf(request.subjectId, tombstones.secret);
+        const tombstoned = await step("tombstone", async (request) => tombstones.port.add(keyOf(request), scope.ports.now()));
 
         if (tombstoned.status !== "processing") {
             return { leftover: [], status: tombstoned.status };
         }
 
+        wroteTombstone = true;
+
+        // After the tombstone and before any drain: a failure before it must leave the subject's exports alone. The processing
+        // status is already set, so a ready export that claims after this point meets it in its own recheck (see exportRun).
+        await steps.do("expire:before-drain", async () => expireReadyExports(scope.ports, requestId));
+
+        erasing = true;
+
         for (const dataset of erasureOrder(scope.datasets)) {
             // One drain per dataset, in erasure order. Each drain is idempotent, so a retry resumes it.
             // eslint-disable-next-line no-await-in-loop -- drains run one after another by design
-            const erased = await step(`erase:${dataset.id}`, async () => eraseDataset(scope, dataset, record.subjectId));
+            const erased = await step(`erase:${dataset.id}`, async (request) => eraseDataset(scope, dataset, request.subjectId));
 
             if (erased.status !== "processing") {
                 return { leftover: [], status: erased.status };
             }
         }
 
-        const filesErased = await step("erase:files", async () => eraseSubjectFiles(scope.ports, scope.datasets, record.subjectId));
+        erasing = false;
+
+        const filesErased = await step("erase:files", async (request) => eraseSubjectFiles(scope.ports, scope.datasets, request.subjectId));
 
         if (filesErased.status !== "processing") {
             return { leftover: [], status: filesErased.status };
         }
 
-        const verified = await step("verify", async () => verifySubjectErased(scope, scope.datasets, record.subjectId));
+        const verified = await step("verify", async (request) => verifySubjectErased(scope, scope.datasets, request.subjectId));
         const verdict = verified.value;
 
         if (verdict === undefined) {
@@ -418,19 +784,27 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
         }
 
         if (!verdict.complete) {
-            return { leftover: verdict.leftover, status: await failStep(scope, steps, requestId, verdict.leftover.join(",")) };
+            return {
+                leftover: verdict.leftover,
+                status: await failErasure(scope, steps, requestId, verdict.leftover.join(","), { rowsMayBeGone: true, tombstoned: true }),
+            };
         }
 
-        const completed = await step("complete", async () => completeErasure(scope.ports, requestId, record.subjectId, key));
+        const completed = await step("complete", async (request) => completeErasure(scope.ports, requestId, request.subjectId, keyOf(request)));
 
         return { leftover: [], status: completed.status === "processing" ? "completed" : completed.status };
     } catch (error) {
-        return { leftover: [], status: await failStep(scope, steps, requestId, messageOf(error)) };
+        return {
+            leftover: [],
+            status: await failErasure(scope, steps, requestId, failureDetail(error), { rowsMayBeGone: erasing, tombstoned: wroteTombstone }),
+        };
     }
 };
 
 export {
+    archiveBlocked,
     eraseDataset,
+    erasureBlocksSubject,
     type ErasureOutcome,
     erasureRun,
     expireRequestFiles,
@@ -441,4 +815,5 @@ export {
     type RunScope,
     setStatus,
     type StepRunner,
+    subjectErasureBlocks,
 };
