@@ -494,7 +494,7 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
             }
 
             // eslint-disable-next-line no-await-in-loop -- see above
-            await Promise.all(page.map(async (row) => context.db.delete(row["_id"] as Id<string>)));
+            await Promise.all(page.map(async (row) => context.db.delete(DOCUMENT_HISTORY_TABLE, row["_id"] as Id<typeof DOCUMENT_HISTORY_TABLE>)));
             deleted += page.length;
         }
 

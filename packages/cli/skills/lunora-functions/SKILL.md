@@ -184,9 +184,9 @@ Writes (mutations, and autocommitting in actions):
 
 ```ts
 await ctx.db.insert("t", { ...fields }); // returns the new Id
-await ctx.db.patch(id, { field: next }); // shallow-merge update
-await ctx.db.replace(id, { ...allFields }); // full overwrite
-await ctx.db.delete(id);
+await ctx.db.patch(table, id, { field: next }); // shallow-merge update
+await ctx.db.replace(table, id, { ...allFields }); // full overwrite
+await ctx.db.delete(table, id);
 ```
 
 Prefer `withIndex` over `.filter`: a `.filter(...)` without a covering index

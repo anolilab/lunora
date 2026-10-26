@@ -2641,18 +2641,18 @@ class EditableShard extends ShardDO {
         }
 
         if (args.op === "delete") {
-            await writer.delete(args.id ?? "");
+            await writer.delete(args.table, args.id ?? "");
 
             return { id: args.id ?? null, op: "delete" };
         }
 
         if (args.op === "replace") {
-            await writer.replace(args.id ?? "", args.doc ?? {});
+            await writer.replace(args.table, args.id ?? "", args.doc ?? {});
 
             return { id: args.id ?? null, op: "replace" };
         }
 
-        await writer.patch(args.id ?? "", args.doc ?? {});
+        await writer.patch(args.table, args.id ?? "", args.doc ?? {});
 
         return { id: args.id ?? null, op: "patch" };
     }
@@ -3040,7 +3040,7 @@ describe("shardDO admin cdcSync", () => {
         const writer = createShardContextDatabase({ cdc: true, schema: usersSchema, sql: database.sql });
 
         await writer.insert("users", { _id: "u_1", name: "Ada", version: 1 }, { allowExplicitId: true });
-        await writer.patch("u_1", { name: "Ada Lovelace" });
+        await writer.patch("users", "u_1", { name: "Ada Lovelace" });
 
         const shard = new AdminShard(stateFor(database.sql), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(cdcRequest({ sinceSeq: 0 }));
@@ -3162,7 +3162,7 @@ class MoneyBulkShard extends MoneyApplyShard {
     }
 
     protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
-        await createShardContextDatabase({ schema: moneySchema, sql: this.sql as SqlExec }).delete(args.id ?? "", args.table, { hard: true });
+        await createShardContextDatabase({ schema: moneySchema, sql: this.sql as SqlExec }).delete(args.table, args.id ?? "", { hard: true });
 
         return { id: args.id ?? null, op: args.op };
     }
@@ -3441,9 +3441,9 @@ class BulkOpsShard extends ShardDO {
             // Codegen's exact forwarding — the harness has to carry it or the bulk
             // arm's `hard: true` is invisible here, which is how the non-converging
             // soft-delete drain shipped.
-            await writer.delete(args.id ?? "", args.table, { hard: args.hard === true });
+            await writer.delete(args.table, args.id ?? "", { hard: args.hard === true });
         } else if (args.op === "patch") {
-            await writer.patch(args.id ?? "", args.doc ?? {}, args.table);
+            await writer.patch(args.table, args.id ?? "", args.doc ?? {});
         } else {
             throw new Error(`unexpected op in the bulk harness: ${args.op}`);
         }

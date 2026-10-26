@@ -49,7 +49,7 @@ describe("shard admin export/import — soft-deleted rows", () => {
 
         await writer.insert("notes", { _id: "n1", title: "live" }, { allowExplicitId: true });
         await writer.insert("notes", { _id: "n2", title: "gone" }, { allowExplicitId: true });
-        await writer.delete("n2", "notes");
+        await writer.delete("notes", "n2");
 
         const rows: { doc: Record<string, unknown>; table: string }[] = [];
 
@@ -68,7 +68,7 @@ describe("shard admin export/import — soft-deleted rows", () => {
 
         // The tombstone survived as a tombstone — so `restore()` still has
         // something to bring back on the restored deployment.
-        await restored.restore?.("n2", "notes");
+        await restored.restore?.("notes", "n2");
 
         const reloaded = await restored.get("notes", "n2");
 

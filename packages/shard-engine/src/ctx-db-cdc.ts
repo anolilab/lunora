@@ -765,7 +765,7 @@ const bumpCdcEpoch = (sql: SqlExec): string => {
  */
 const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Promise<void> => {
     if (change.op === "delete") {
-        await writer.delete(change.id, change.table);
+        await writer.delete(change.table, change.id);
 
         return;
     }
@@ -788,7 +788,7 @@ const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Pr
 
         delete fields["_id"];
 
-        await writer.replace(change.id, fields, change.table, { allowExplicitId: true });
+        await writer.replace(change.table, change.id, fields, { allowExplicitId: true });
     };
 
     // A row stored under a NUL-bearing id predates the guard on explicit ids, and

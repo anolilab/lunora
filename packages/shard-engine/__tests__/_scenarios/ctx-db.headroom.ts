@@ -258,7 +258,8 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
             const crossed: string[] = [];
             // A one-row ceiling: the first write spends it, the second must be refused.
             const writer = writerWithCeiling(crossed, 1);
-            const call = async (): Promise<unknown> => (operation === "delete" ? writer.delete("p_absent") : writer[operation]("p_absent", { name: "n" }));
+            const call = async (): Promise<unknown> =>
+                operation === "delete" ? writer.delete("profiles", "p_absent") : writer[operation]("profiles", "p_absent", { name: "n" });
 
             await call();
 
@@ -293,7 +294,7 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
 
             /** Three matching rows, deleted one id at a time or through the D1 writer's batch delete. */
             const matching = (crossed: string[]): DatabaseWriterLike => {
-                const deleteMany = async (ids: ReadonlyArray<string>): Promise<{ deleted: number }> => {
+                const deleteMany = async (_table: string, ids: ReadonlyArray<string>): Promise<{ deleted: number }> => {
                     crossed.push(`deleteMany:${String(ids.length)}`);
 
                     return { deleted: ids.length };

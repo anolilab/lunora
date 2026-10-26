@@ -273,7 +273,7 @@ describe("privacy example", () => {
                     .withIndex("byRequestId", (q) => q.eq("requestId", requestId))
                     .first();
 
-                await appCtx(ctx).db.patch(row!._id, { status: "failed" });
+                await appCtx(ctx).db.patch("privacy_requests", row!._id, { status: "failed" });
             });
         };
 
@@ -317,7 +317,7 @@ describe("privacy example", () => {
                     throw new Error(`No privacy request row for ${request.id}.`);
                 }
 
-                await database.patch(row._id, { expiresAt: Date.now() - 1000 });
+                await database.patch("privacy_requests", row._id, { expiresAt: Date.now() - 1000 });
             });
 
             await expect(t.run(async (ctx) => readExportFile(appCtx(ctx), key))).resolves.toBeNull();

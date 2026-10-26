@@ -105,54 +105,14 @@ describe("compound SELECT term cap", () => {
             const other = await writer.insert("t1", { title: "untouched" });
 
             // Bare-id (no `expectedTable`) — the unscoped probe the issue reports.
-            await writer.patch(id, { title: "after" });
+            await writer.patch("t6", id, { title: "after" });
 
             await expect(writer.get("t6", id)).resolves.toMatchObject({ title: "after" });
 
-            await writer.delete(id);
+            await writer.delete("t6", id);
 
             await expect(writer.get("t6", id)).resolves.toBeNull();
             await expect(writer.get("t1", other)).resolves.toMatchObject({ title: "untouched" });
-        } finally {
-            harness.close();
-        }
-    });
-
-    it("resolves every id through the reshaped guarded batch probe, on a schema wider than the cap", async () => {
-        expect.assertions(1);
-
-        const harness = createSqliteExec();
-
-        try {
-            // The batched probe is the RLS guard's `deleteMany` pre-check, so it
-            // only runs under a `.rls("required")` schema with `enforceRls`.
-            const schema = schemaWith(8, true);
-
-            runShardMigrations(harness.sql, schema);
-
-            const admin = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
-            // More ids than the 100-bound-variable budget allows in one
-            // statement at eight branches apiece, so the id list has to stop
-            // being one placeholder per id.
-            const ids: string[] = [];
-
-            for (let index = 0; index < 40; index += 1) {
-                // eslint-disable-next-line no-await-in-loop -- sequential inserts against a single-threaded SQLite harness
-                ids.push(await admin.insert(`t${String(index % 8)}`, { title: `row ${String(index)}` }));
-            }
-
-            const guarded = createShardContextDatabase({ clock: () => 1_700_000_000_000, enforceRls: true, schema, sql: harness.sql });
-
-            await guarded.deleteMany!(ids);
-
-            const survivors = [];
-
-            for (const [index, id] of ids.entries()) {
-                // eslint-disable-next-line no-await-in-loop -- sequential reads against a single-threaded SQLite harness
-                survivors.push(await admin.get(`t${String(index % 8)}`, id));
-            }
-
-            expect(survivors.filter(Boolean)).toEqual([]);
         } finally {
             harness.close();
         }
@@ -246,51 +206,6 @@ describe("bound-parameter cap", () => {
         const items = [...Array.from({ length: 400 }, (_, index) => index), Number.NaN];
 
         expect(() => compileWhereSql({ score: { in: items } }, strategy)).toThrow(/cannot be bound as one parameter/u);
-    });
-
-    it("chunks the by-id probes so a schema wider than the parameter cap stays under it", async () => {
-        expect.assertions(4);
-
-        const harness = createSqliteExec();
-
-        try {
-            // 120 tables: `unionAll` nests them past the compound-SELECT cap
-            // fine, but one placeholder per branch — the id, or the `json_each`
-            // list — still binds 120 parameters against Workerd's cap of 100.
-            const schema = schemaWith(120, true);
-
-            runShardMigrations(harness.sql, schema);
-
-            const bound: number[] = [];
-            const counting: SqlExec = {
-                exec: (query, ...params) => {
-                    bound.push(params.length);
-
-                    return harness.sql.exec(query, ...params);
-                },
-            };
-
-            const admin = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: counting });
-            // The last table, so the owning branch lands in the second chunk.
-            const id = await admin.insert("t119", { title: "before" });
-            const guarded = createShardContextDatabase({ clock: () => 1_700_000_000_000, enforceRls: true, schema, sql: counting });
-
-            bound.length = 0;
-
-            // Bare-id (no `expectedTable`) — `locateRowById`'s unscoped probe.
-            await admin.patch(id, { title: "after" });
-
-            await expect(admin.get("t119", id)).resolves.toMatchObject({ title: "after" });
-
-            // And the RLS guard's batched `locateTablesByIds` pre-check.
-            await guarded.deleteMany!([id]);
-
-            await expect(admin.get("t119", id)).resolves.toBeNull();
-            expect(bound.length).toBeGreaterThan(0);
-            expect(Math.max(...bound)).toBeLessThanOrEqual(100);
-        } finally {
-            harness.close();
-        }
     });
 
     it("keeps a bounded page over the widest orderBy under the cap, seek included", () => {

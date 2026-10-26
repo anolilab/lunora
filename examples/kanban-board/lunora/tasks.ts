@@ -53,7 +53,7 @@ export const rename = mutation
     .input({ id: v.id("tasks"), title: v.string().max(200) })
     .mutation(async ({ args: { id, title }, ctx }): Promise<void> => {
         ctx.log.info("task renamed", { id });
-        await ctx.db.patch(id, { title });
+        await ctx.db.patch("tasks", id, { title });
     });
 
 /**
@@ -87,7 +87,7 @@ export const move = mutation
         const position = Math.max(0, Math.min(Math.trunc(index), neighbours.length));
 
         ctx.log.info("task moved", { from: card.status, id, index: position, to: target });
-        await ctx.db.patch(id, { order: midpoint(neighbours[position - 1]?.order ?? null, neighbours[position]?.order ?? null), status: target });
+        await ctx.db.patch("tasks", id, { order: midpoint(neighbours[position - 1]?.order ?? null, neighbours[position]?.order ?? null), status: target });
     });
 
 export const remove = mutation
@@ -95,5 +95,5 @@ export const remove = mutation
     .input({ id: v.id("tasks") })
     .mutation(async ({ args: { id }, ctx }): Promise<void> => {
         ctx.log.info("task removed", { id });
-        await ctx.db.delete(id);
+        await ctx.db.delete("tasks", id);
     });

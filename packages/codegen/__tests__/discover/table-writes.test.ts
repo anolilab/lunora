@@ -13,11 +13,11 @@ let workdir: string;
 const SOURCE = `
 type Id<T extends string> = string & { readonly __table: T };
 interface Db {
-    delete: <T extends string>(id: Id<T>) => Promise<void>;
-    deleteMany: <T extends string>(ids: ReadonlyArray<Id<T>>) => Promise<unknown>;
-    patch: <T extends string>(id: Id<T>, patch: object) => Promise<void>;
-    patchMany: <T extends string>(patches: ReadonlyArray<{ id: Id<T>; patch: object }>) => Promise<unknown>;
-    replace: <T extends string>(id: Id<T>, document: object) => Promise<void>;
+    delete: <T extends string>(table: T, id: Id<T>) => Promise<void>;
+    deleteMany: <T extends string>(table: T, ids: ReadonlyArray<Id<T>>) => Promise<unknown>;
+    patch: <T extends string>(table: T, id: Id<T>, patch: object) => Promise<void>;
+    patchMany: <T extends string>(table: T, patches: ReadonlyArray<{ id: Id<T>; patch: object }>) => Promise<unknown>;
+    replace: <T extends string>(table: T, id: Id<T>, document: object) => Promise<void>;
     insertMany: (table: string, documents: object[]) => Promise<unknown>;
     todos: { update: () => void; upsert: (args: object) => Promise<unknown>; findMany: () => Promise<unknown> };
 }
@@ -25,35 +25,22 @@ declare const mutation: (config: { handler: (ctx: { db: Db }, args: { id: Id<"to
 
 export const write = mutation({
     handler: async (ctx, args) => {
-        await ctx.db.patch(args.id, {});
-        await ctx.db.replace(args.id, {});
-        await ctx.db.delete(args.id);
-        await ctx.db.deleteMany([args.id]);
-        await ctx.db.patchMany([{ id: args.id, patch: {} }]);
+        await ctx.db.patch("todos", args.id, {});
+        await ctx.db.replace("todos", args.id, {});
+        await ctx.db.delete("todos", args.id);
+        await ctx.db.deleteMany("todos", [args.id]);
+        await ctx.db.patchMany("todos", [{ id: args.id, patch: {} }]);
         await ctx.db.insertMany("notes", []);
         await ctx.db.todos.upsert({});
         await ctx.db.todos.findMany();
-        await ctx.db.delete(args.raw as never);
+        await ctx.db.delete(args.raw as never, args.id);
     },
 });
 
-const helper = async (ctx: { db: Db }, id: Id<"todos">) => ctx.db.patch(id, {}); // @orphan
+const helper = async (ctx: { db: Db }, id: Id<"todos">) => ctx.db.patch("todos", id, {}); // @orphan
 
-export const cleanup = async (
-    ctx: { db: Db },
-    either: Id<"notes"> | Id<"todos">,
-    maybe: Id<"notes"> | undefined,
-    nullable: Id<"notes"> | null,
-    inner: Id<"notes" | "todos">,
-    loose: Id<"notes"> | string,
-    wide: Id<string>,
-) => {
-    await ctx.db.delete(either); // @either
-    await ctx.db.delete(maybe); // @maybe
-    await ctx.db.delete(nullable); // @nullable
-    await ctx.db.delete(inner); // @inner
-    await ctx.db.delete(loose); // @loose
-    await ctx.db.delete(wide); // @wide
+export const cleanup = async (ctx: { db: Db }, table: string, id: Id<"notes">) => {
+    await ctx.db.delete(table as never, id); // @dynamic
 };
 `;
 
@@ -107,30 +94,16 @@ describe("discoverTableWrites", () => {
         ]);
     });
 
-    it("records one write per table of a union id, drops nullish members, and keeps an unreadable union unresolved", () => {
+    it("keeps a table name that is not a literal unresolved", () => {
         expect.assertions(1);
 
         const project = new Project({ compilerOptions: { strict: true }, skipAddingFilesFromTsConfig: true });
         const tablesAt = new Map<number, string[]>();
 
         for (const write of discoverTableWrites(project, join(workdir, "lunora")).filter((entry) => scopeName(entry.scope) === "cleanup")) {
-            tablesAt.set(
-                write.line,
-                [...(tablesAt.get(write.line) ?? []), write.table].toSorted((a, b) => a.localeCompare(b)),
-            );
+            tablesAt.set(write.line, [...(tablesAt.get(write.line) ?? []), write.table]);
         }
 
-        expect(
-            Object.fromEntries(["either", "maybe", "nullable", "inner", "loose", "wide"].map((marker) => [marker, tablesAt.get(markerLine(SOURCE, marker))])),
-        ).toStrictEqual({
-            either: ["notes", "todos"],
-            inner: ["notes", "todos"],
-            // `Id<"notes"> | string`: the plain `string` member has no table to read.
-            loose: [""],
-            maybe: ["notes"],
-            nullable: ["notes"],
-            // `Id<string>`: no literal table.
-            wide: [""],
-        });
+        expect(tablesAt.get(markerLine(SOURCE, "dynamic"))).toStrictEqual([""]);
     });
 });

@@ -3176,8 +3176,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return Number(rows[0]?.["count"] ?? 0);
         },
 
-        async delete(id, expectedTable, deleteOptions) {
-            const tableName = await resolveTableName(id, expectedTable);
+        async delete(table, id, deleteOptions) {
+            const tableName = await resolveTableName(id, table);
 
             if (!tableName) {
                 return;
@@ -3235,12 +3235,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
                     return holders.page;
                 },
-                onCascade: (_holderTable, holderId) => writer.delete(holderId, undefined, deleteOptions),
+                onCascade: (holderTable, holderId) => writer.delete(holderTable, holderId, deleteOptions),
                 onRestrict: (message) => {
                     throw new ConflictError(message, "restrict");
                 },
                 // eslint-disable-next-line unicorn/no-null -- onSetNull writes a SQL NULL into the holder column; that is the literal value being persisted.
-                onSetNull: (_holderTable, holderId, field) => writer.patch(holderId, { [field]: null }),
+                onSetNull: (holderTable, holderId, field) => writer.patch(holderTable, holderId, { [field]: null }),
                 schema,
                 tableName,
             });
@@ -3294,8 +3294,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // re-probes instead of resolving to the now-empty original table.
             tableNameCache.delete(unpinnedCacheKey(id));
 
-            for (const table of probedTables) {
-                tableNameCache.delete(pinnedCacheKey(table, id));
+            for (const probed of probedTables) {
+                tableNameCache.delete(pinnedCacheKey(probed, id));
             }
 
             await runCompanionStatements([
@@ -3686,7 +3686,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return normalizeIdStructurally(schema, tableName, id);
         },
 
-        async patch(id, patch, expectedTable, patchOptions) {
+        async patch(table, id, patch, patchOptions) {
             // A key present with value `undefined` is a silent-data-loss footgun:
             // `runRowValidators` skips it (`v.optional(x).parse(undefined)` is
             // fine) and `serializeColumnValue(merged[field] ?? null)` then wrote
@@ -3695,7 +3695,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // sharing its guard rather than restating it is what keeps the two
             // from drifting again.
             assertNoExplicitUndefined("patch", patch);
-            const tableName = await resolveTableName(id, expectedTable);
+            const tableName = await resolveTableName(id, table);
 
             if (!tableName) {
                 throw new LunoraError("INTERNAL", `document not found: ${id}`);
@@ -3782,8 +3782,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             );
         },
 
-        async restore(id, expectedTable) {
-            const tableName = await resolveTableName(id, expectedTable);
+        async restore(table, id) {
+            const tableName = await resolveTableName(id, table);
 
             if (!tableName) {
                 throw new LunoraError("INTERNAL", `document not found: ${id}`);
@@ -3803,7 +3803,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const wasDeleted = snapshot?.[field] !== null && snapshot?.[field] !== undefined;
 
             // eslint-disable-next-line unicorn/no-null -- clearing the soft-delete marker writes SQL NULL into the column
-            await writer.patch(id, { [field]: null }, expectedTable);
+            await writer.patch(table, id, { [field]: null });
 
             // Soft delete dropped this row's rank-companion entry; `patch`'s rank
             // sync skips re-adding it (rank fields unchanged, so its fast path
@@ -4291,9 +4291,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return { continueCursor, isDone: !hasMore, page: documents };
         },
 
-        async replace(id, document, expectedTable, replaceOptions) {
+        async replace(table, id, document, replaceOptions) {
             assertNoExplicitUndefined("replace", document);
-            const tableName = await resolveTableName(id, expectedTable);
+            const tableName = await resolveTableName(id, table);
 
             if (!tableName) {
                 throw new LunoraError("INTERNAL", `document not found: ${id}`);

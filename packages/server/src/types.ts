@@ -1359,7 +1359,7 @@ interface PatchIfResult {
 }
 
 interface DatabaseWriter extends DatabaseReader {
-    delete: <T extends string>(id: Id<T>) => Promise<void>;
+    delete: <T extends string>(table: T, id: Id<T>) => Promise<void>;
 
     /**
      * Delete EVERY row in `tableName`, chunking internally until the table is
@@ -1386,7 +1386,7 @@ interface DatabaseWriter extends DatabaseReader {
      * error) rolls back the whole mutation. (In an action there is no transaction
      * span, so the prior deletes persist; the in-memory test harness mirrors the span.)
      */
-    deleteMany: <T extends string>(ids: ReadonlyArray<Id<T>>, options?: BatchWriteOptions) => Promise<{ deleted: number }>;
+    deleteMany: <T extends string>(table: T, ids: ReadonlyArray<Id<T>>, options?: BatchWriteOptions) => Promise<{ deleted: number }>;
 
     /**
      * Delete every row matching `where` in one call. Matching rows are resolved
@@ -1451,7 +1451,7 @@ interface DatabaseWriter extends DatabaseReader {
         documents: ReadonlyArray<Record<string, unknown>>,
         options?: BatchWriteOptions & { allowExplicitId?: boolean },
     ) => Promise<Id<T>[]>;
-    patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
+    patch: <T extends string>(table: T, id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
 
     /**
      * Conditional patch: apply `args.patch` to row `id` of `tableName` only while
@@ -1493,6 +1493,7 @@ interface DatabaseWriter extends DatabaseReader {
      * the in-memory test harness mirrors the span.)
      */
     patchMany: <T extends string>(
+        table: T,
         patches: ReadonlyArray<{ id: Id<T>; patch: Record<string, unknown> }>,
         options?: BatchWriteOptions,
     ) => Promise<{ patched: number }>;
@@ -1511,7 +1512,7 @@ interface DatabaseWriter extends DatabaseReader {
         args: { patch: Record<string, unknown>; where: Record<string, unknown> },
         options?: BatchWriteOptions,
     ) => Promise<{ patched: number }>;
-    replace: <T extends string>(id: Id<T>, document: Record<string, unknown>) => Promise<void>;
+    replace: <T extends string>(table: T, id: Id<T>, document: Record<string, unknown>) => Promise<void>;
 
     /**
      * Erase every shard-local table — the account-deletion / tenant-teardown
@@ -1933,16 +1934,16 @@ interface TriggerRankPageOptions {
 interface TriggerDatabase {
     aggregate: (tableName: string, options: TriggerAggregateOptions) => Promise<null | number>;
     count: (tableName: string, where?: Record<string, unknown>) => Promise<number>;
-    delete: (id: string) => Promise<void>;
+    delete: (table: string, id: string) => Promise<void>;
     findFirst: (tableName: string, args?: TriggerQueryArgs) => Promise<Record<string, unknown> | null>;
     findMany: (tableName: string, args?: TriggerQueryArgs) => Promise<TriggerQueryPage>;
     get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
     groupBy: (tableName: string, options: TriggerGroupByOptions) => Promise<ReadonlyArray<TriggerGroupByEntry>>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
-    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<void>;
     rank: (tableName: string, indexName: string, options: TriggerRankOptions) => Promise<null | TriggerRankResult>;
     rankPage: (tableName: string, indexName: string, options?: TriggerRankPageOptions) => Promise<TriggerQueryPage>;
-    replace: (id: string, document: Record<string, unknown>) => Promise<void>;
+    replace: (table: string, id: string, document: Record<string, unknown>) => Promise<void>;
 }
 
 /**

@@ -41,8 +41,8 @@ interface FakeDatabase {
     writer: {
         aggregate: (tableName: string, options: unknown) => Promise<null | number>;
         count: (tableName: string, whereOrArgs?: unknown) => Promise<number>;
-        delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
-        deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }) => Promise<{ deleted: number }>;
+        delete: (table: string, id: string, options?: { hard?: boolean }) => Promise<void>;
+        deleteMany: (table: string, ids: ReadonlyArray<string>, options?: { limit?: number }) => Promise<{ deleted: number }>;
         deleteWhere: (tableName: string, args: { limit?: number; where: Record<string, unknown> }) => Promise<{ deleted: number }>;
         explain: (tableName: string, args?: unknown) => Promise<{ params: unknown[]; plan: string[]; sql: string }>;
         findFirst: (tableName: string, args?: unknown) => Promise<Record<string, unknown> | null>;
@@ -64,13 +64,17 @@ interface FakeDatabase {
         /** The fake writer stands in for a mutation's writer by default (inside a transaction); override per-test for an action. */
         inTransaction?: () => boolean;
         lookupById?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
-        patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: { verify?: CapturedCall["verify"] }) => Promise<void>;
+        patch: (table: string, id: string, patch: Record<string, unknown>, options?: { verify?: CapturedCall["verify"] }) => Promise<void>;
         patchIf: (
             tableName: string,
             id: string,
             args: { patch: Record<string, unknown>; where: Record<string, unknown> },
         ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
-        patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }) => Promise<{ patched: number }>;
+        patchMany: (
+            table: string,
+            patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
+            options?: { limit?: number },
+        ) => Promise<{ patched: number }>;
         patchWhere: (
             tableName: string,
             args: { limit?: number; patch: Record<string, unknown>; where: Record<string, unknown> },
@@ -93,8 +97,8 @@ interface FakeDatabase {
             hasMore: boolean;
             rows: ReadonlyArray<{ doc: Record<string, unknown>; key: { partitionKey: string; rowId: string; sortValues: ReadonlyArray<unknown> } }>;
         }>;
-        replace: (id: string, document: Record<string, unknown>) => Promise<void>;
-        restore: (id: string, expectedTable?: string) => Promise<void>;
+        replace: (table: string, id: string, document: Record<string, unknown>) => Promise<void>;
+        restore: (table: string, id: string) => Promise<void>;
         /** Enable per-test to model a `.softDelete()` table: table → marker column. */
         softDeleteFields?: ReadonlyMap<string, string>;
     };
@@ -124,10 +128,10 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 
                 return rowsOfTable(tableName).length;
             },
-            async delete(id, _expectedTable, options) {
+            async delete(_table, id, options) {
                 calls.push({ args: options, method: "delete", tableOrId: id });
             },
-            async deleteMany(ids) {
+            async deleteMany(_table, ids) {
                 calls.push({ args: ids, method: "deleteMany", tableOrId: "" });
 
                 return { deleted: ids.length };
@@ -200,7 +204,7 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 
                 return documents.map((document, index) => (document["_id"] as string | undefined) ?? `new-id-${String(index)}`);
             },
-            async patch(id, patchValue, _expectedTable, writeOptions) {
+            async patch(_table, id, patchValue, writeOptions) {
                 calls.push({ args: patchValue, method: "patch", tableOrId: id, verify: writeOptions?.verify });
             },
             async patchIf(tableName, id, args) {
@@ -208,7 +212,7 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 
                 return { applied: true, doc: { _id: id, table: tableName, ...args.patch } };
             },
-            async patchMany(patches) {
+            async patchMany(_table, patches) {
                 calls.push({ args: patches, method: "patchMany", tableOrId: "" });
 
                 return { patched: patches.length };
@@ -221,7 +225,7 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
             query() {
                 throw new Error("query() not used in these tests");
             },
-            async restore(id) {
+            async restore(_table, id) {
                 calls.push({ args: undefined, method: "restore", tableOrId: id });
             },
             async rank(tableName, _indexName, options) {
@@ -239,7 +243,7 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 
                 return { continueCursor: null, isDone: true, page: rowsOfTable(tableName) };
             },
-            async replace(id, document) {
+            async replace(_table, id, document) {
                 calls.push({ args: document, method: "replace", tableOrId: id });
             },
         },
@@ -315,7 +319,7 @@ const insertWithPolicy = (policy: Policy<TestContext>) => (document: Record<stri
 const patchAccount = (policy: ReturnType<typeof definePolicy<TestContext>>, database: FakeDatabase) => async (patch: Record<string, unknown>) =>
     lunora.mutation
         .use(rlsForTest<TestContext>([policy]))
-        .mutation(async ({ ctx }) => ctx.db.patch("a1", patch))
+        .mutation(async ({ ctx }) => ctx.db.patch("accounts", "a1", patch))
         .handler(makeContext(database, "u1"), {});
 
 describe("rls — read path", () => {
@@ -935,7 +939,7 @@ describe("rls — write path", () => {
         });
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u2", table: "documents" }]);
 
-        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.patch("d1", { title: "new" }));
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.patch("documents", "d1", { title: "new" }));
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
             code: "FORBIDDEN",
@@ -1131,7 +1135,7 @@ describe("rls — write path", () => {
         });
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
 
-        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.patch("d1", { title: "new" }));
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.patch("documents", "d1", { title: "new" }));
 
         await handler.handler(makeContext(database, "u1"), {});
 
@@ -1205,7 +1209,7 @@ describe("rls — write path", () => {
         });
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
 
-        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.patch("d1", { ownerId: "u2" }));
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.patch("documents", "d1", { ownerId: "u2" }));
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
             code: "FORBIDDEN",
@@ -1225,7 +1229,9 @@ describe("rls — write path", () => {
         });
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
 
-        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.replace("d1", { ownerId: "u2", title: "x" }));
+        const handler = lunora.mutation
+            .use(rlsForTest<TestContext>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.replace("documents", "d1", { ownerId: "u2", title: "x" }));
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
             code: "FORBIDDEN",
@@ -1249,7 +1255,7 @@ describe("rls — write path", () => {
 
         const handler = lunora.mutation
             .use(rlsForTest<TestContext>([policy]))
-            .mutation(async ({ ctx }) => ctx.db.patch("d1", { ownerId: "u1", title: "renamed" }));
+            .mutation(async ({ ctx }) => ctx.db.patch("documents", "d1", { ownerId: "u1", title: "renamed" }));
 
         await handler.handler(makeContext(database, "u1"), {});
 
@@ -1269,7 +1275,7 @@ describe("rls — write path", () => {
         });
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u2", table: "documents" }]);
 
-        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("d1"));
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("documents", "d1"));
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
             code: "FORBIDDEN",
@@ -1433,7 +1439,7 @@ describe("rls — batch write path", () => {
             { _id: "d2", ownerId: "u1", table: "documents" },
         ]);
 
-        const handler = lunora.mutation.use(rlsForTest<TestContext>([deletePolicy])).mutation(async ({ ctx }) => ctx.db.deleteMany(["d1", "d2"]));
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([deletePolicy])).mutation(async ({ ctx }) => ctx.db.deleteMany("documents", ["d1", "d2"]));
 
         await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toStrictEqual({ deleted: 2 });
         // The middleware loops per-id through the single-delete gate (mixed
@@ -1450,7 +1456,7 @@ describe("rls — batch write path", () => {
             { _id: "d2", ownerId: "u1", table: "documents" },
         ]);
 
-        const handler = lunora.mutation.use(rlsForTest<TestContext>([deletePolicy])).mutation(async ({ ctx }) => ctx.db.deleteMany(["d1", "d2"]));
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([deletePolicy])).mutation(async ({ ctx }) => ctx.db.deleteMany("documents", ["d1", "d2"]));
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
         expect(database.calls.some((call) => call.method === "delete")).toBe(false);
@@ -1465,7 +1471,7 @@ describe("rls — batch write path", () => {
         ]);
 
         const handler = lunora.mutation.use(rlsForTest<TestContext>([updatePolicy])).mutation(async ({ ctx }) =>
-            ctx.db.patchMany([
+            ctx.db.patchMany("documents", [
                 { id: "d1", patch: { title: "a" } },
                 { id: "d2", patch: { title: "b" } },
             ]),
@@ -1484,7 +1490,7 @@ describe("rls — batch write path", () => {
 
         const handler = lunora.mutation
             .use(rlsForTest<TestContext>([updatePolicy]))
-            .mutation(async ({ ctx }) => ctx.db.patchMany([{ id: "d1", patch: { title: "x" } }]));
+            .mutation(async ({ ctx }) => ctx.db.patchMany("documents", [{ id: "d1", patch: { title: "x" } }]));
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
         expect(database.calls.some((call) => call.method === "patch")).toBe(false);
@@ -1527,11 +1533,11 @@ describe("rls — batch write path", () => {
 
         const pinnedTables: (string | undefined)[] = [];
 
-        database.writer.delete = async (id, expectedTable, options) => {
+        database.writer.delete = async (table, id, options) => {
             alive.delete(id);
-            pinnedTables.push(expectedTable);
+            pinnedTables.push(table);
 
-            return recordDelete(id, expectedTable, options);
+            return recordDelete(table, id, options);
         };
         database.writer.findMany = async (tableName, args) => {
             const all = await findMany(tableName, args);
@@ -1566,7 +1572,7 @@ describe("rls — batch write path", () => {
         const alive = new Set(["C", "P"]);
 
         Object.assign(database.writer, { deleteRereadTables: new Set(rereadTables) });
-        database.writer.delete = async (id) => {
+        database.writer.delete = async (_table, id) => {
             database.calls.push({ args: undefined, method: "delete", tableOrId: id });
             alive.delete(id);
 
@@ -1757,7 +1763,7 @@ describe("rls — batch write path", () => {
             deleteRereadTables: new Set(["documents"]),
             softDeleteFields: new Map([["documents", "deletedAt"]]),
         });
-        database.writer.delete = async (id) => {
+        database.writer.delete = async (_table, id) => {
             database.calls.push({ args: undefined, method: "delete", tableOrId: id });
 
             for (const row of rows) {
@@ -1799,7 +1805,7 @@ describe("rls — batch write path", () => {
         const alive = new Set(["C", "P"]);
 
         Object.assign(database.writer, { deleteRereadTables: new Set(["plain"]) });
-        database.writer.delete = async (id) => {
+        database.writer.delete = async (_table, id) => {
             database.calls.push({ args: undefined, method: "delete", tableOrId: id });
             alive.delete(id);
 
@@ -2044,7 +2050,7 @@ describe("rls — batch write path", () => {
         const database = createFakeDatabase([]);
         const ids = Array.from({ length: 501 }, (_, index) => `d${String(index)}`);
 
-        const handler = lunora.action.use(rlsForTest<TestContext>([])).action(async ({ ctx }) => ctx.db.deleteMany(ids));
+        const handler = lunora.action.use(rlsForTest<TestContext>([])).action(async ({ ctx }) => ctx.db.deleteMany("documents", ids));
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
             code: "BATCH_LIMIT_EXCEEDED",
@@ -2168,8 +2174,12 @@ describe("rls — write policies returning a WhereInput predicate", () => {
         const allowed = createFakeDatabase([{ _id: "d1", archived: false, table: "documents" }]);
         const denied = createFakeDatabase([{ _id: "d2", archived: true, table: "documents" }]);
 
-        const allowedHandler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.patch("d1", { title: "new" }));
-        const deniedHandler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.patch("d2", { title: "new" }));
+        const allowedHandler = lunora.mutation
+            .use(rlsForTest<TestContext>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.patch("documents", "d1", { title: "new" }));
+        const deniedHandler = lunora.mutation
+            .use(rlsForTest<TestContext>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.patch("documents", "d2", { title: "new" }));
 
         await allowedHandler.handler(makeContext(allowed, "u1"), {});
 
@@ -2196,8 +2206,8 @@ describe("rls — write policies returning a WhereInput predicate", () => {
             { _id: "theirs", ownerId: "u2", table: "documents" },
         ]);
 
-        const allowedHandler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("mine"));
-        const deniedHandler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("theirs"));
+        const allowedHandler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("documents", "mine"));
+        const deniedHandler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("documents", "theirs"));
 
         await allowedHandler.handler(makeContext(database, "u1"), {});
 
@@ -2345,7 +2355,7 @@ describe("rls — opt-in scope", () => {
         });
         const database = createFakeDatabase([{ _id: "d1", table: "documents" }]);
 
-        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("d1"));
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("documents", "d1"));
 
         const error = await handler.handler(makeContext(database, "u1"), {}).then(
             () => {
@@ -2664,17 +2674,17 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
             return {
                 aggregate: (options: unknown) => writer.aggregate(tableName, options),
                 count: (where?: unknown) => writer.count(tableName, where),
-                delete: (id: string) => writer.delete(id),
+                delete: (id: string) => writer.delete(tableName, id),
                 findFirst: (args?: unknown) => writer.findFirst(tableName, args),
                 findFirstOrThrow: (args?: unknown) => writer.findFirstOrThrow(tableName, args),
                 findMany: (args?: unknown) => writer.findMany(tableName, args),
                 get: (id: string) => writer.get(tableName, id),
                 groupBy: (options: unknown) => writer.groupBy(tableName, options),
                 insert: (document: Record<string, unknown>) => writer.insert(tableName, document),
-                patch: (id: string, patch: Record<string, unknown>) => writer.patch(id, patch),
+                patch: (id: string, patch: Record<string, unknown>) => writer.patch(tableName, id, patch),
                 rank: (indexName: string, options: unknown) => writer.rank(tableName, indexName, options),
                 rankPage: (indexName: string, options?: unknown) => writer.rankPage(tableName, indexName, options),
-                replace: (id: string, document: Record<string, unknown>) => writer.replace(id, document),
+                replace: (id: string, document: Record<string, unknown>) => writer.replace(tableName, id, document),
                 // Stub so `isFacadeEntry` recognises this as a table accessor.
                 withSearchIndex: () => {
                     throw new Error("withSearchIndex not used in these tests");
@@ -2948,7 +2958,7 @@ describe("rls — soft-delete write methods (restore / hardDelete)", () => {
             },
         });
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u2", table: "documents" }]);
-        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.restore("d1"));
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.restore("documents", "d1"));
 
         // u1 is not the owner → the update policy denies the restore.
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toThrow(/denied/u);
@@ -2967,7 +2977,7 @@ describe("rls — soft-delete write methods (restore / hardDelete)", () => {
             },
         });
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
-        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.restore("d1"));
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.restore("documents", "d1"));
 
         await handler.handler(makeContext(database, "u1"), {});
 
@@ -2983,7 +2993,7 @@ describe("rls — soft-delete write methods (restore / hardDelete)", () => {
             when: () => true,
         });
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
-        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("d1", undefined, { hard: true }));
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("documents", "d1", { hard: true }));
 
         await handler.handler(makeContext(database, "u1"), {});
 
@@ -3005,7 +3015,7 @@ describe("rls — soft-delete write methods (restore / hardDelete)", () => {
             },
         });
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u2", table: "documents" }]);
-        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("d1", undefined, { hard: true }));
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("documents", "d1", { hard: true }));
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toThrow(/denied/u);
         expect(database.calls.some((call) => call.method === "delete")).toBe(false);

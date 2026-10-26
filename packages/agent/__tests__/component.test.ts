@@ -136,13 +136,11 @@ const fakeDatabase = (auth?: { userId?: string }): { ctx: { auth: { userId?: str
     };
 
     const database = {
-        delete: async (id: string) => {
-            for (const tableContent of rows.values()) {
-                const index = tableContent.findIndex((candidate) => candidate["_id"] === id);
+        delete: async (table: string, id: string) => {
+            const index = tableRows(table).findIndex((candidate) => candidate["_id"] === id);
 
-                if (index !== -1) {
-                    tableContent.splice(index, 1);
-                }
+            if (index !== -1) {
+                tableRows(table).splice(index, 1);
             }
         },
         insert: async (table: string, document: Record<string, unknown>) => {
@@ -153,15 +151,13 @@ const fakeDatabase = (auth?: { userId?: string }): { ctx: { auth: { userId?: str
 
             return id;
         },
-        patch: async (id: string, patch: Record<string, unknown>) => {
+        patch: async (table: string, id: string, patch: Record<string, unknown>) => {
             assertNoExplicitUndefined(patch);
 
-            for (const tableContent of rows.values()) {
-                const row = tableContent.find((candidate) => candidate["_id"] === id);
+            const row = tableRows(table).find((candidate) => candidate["_id"] === id);
 
-                if (row) {
-                    Object.assign(row, patch);
-                }
+            if (row) {
+                Object.assign(row, patch);
             }
         },
         query: (table: string) => {

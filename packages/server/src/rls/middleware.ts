@@ -260,13 +260,13 @@ interface DatabaseWriterLike {
      */
     aggregate: (tableName: string, options: AggregateArgs) => Promise<null | number>;
     /** Update-policy check on row `id` with no write; see `@lunora/shard-engine`'s `DatabaseWriterLike.assertPatchAllowed`. */
-    assertPatchAllowed?: (id: string, expectedTable?: string) => Promise<void>;
+    assertPatchAllowed?: (table: string, id: string) => Promise<void>;
     count: (tableName: string, whereOrArgs?: CountArgs | WhereInput) => Promise<number>;
 
-    delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
+    delete: (table: string, id: string, options?: { hard?: boolean }) => Promise<void>;
     /** Uncapped, chunked erase of a whole table. The RLS wrapper gates each row like a single delete. */
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
-    deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
+    deleteMany: (table: string, ids: ReadonlyArray<string>, options?: { limit?: number }) => Promise<{ deleted: number }>;
 
     /**
      * Tables a chunked delete cannot trust a page-wide row image for: `.global()` tables and tables whose delete can
@@ -322,7 +322,7 @@ interface DatabaseWriterLike {
      */
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
 
-    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: PatchWriteOptions) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>, options?: PatchWriteOptions) => Promise<void>;
 
     /** Conditional patch. Optional: a writer without an atomic conditional write omits it, and the wrapper refuses. */
     patchIf?: (
@@ -331,9 +331,9 @@ interface DatabaseWriterLike {
         args: { patch: Record<string, unknown>; verify?: PatchVerifier; where: WhereInput },
     ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
     patchMany: (
+        table: string,
         patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
         options?: { limit?: number },
-        expectedTable?: string,
     ) => Promise<{ patched: number }>;
     patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: WhereInput }, options?: { limit?: number }) => Promise<{ patched: number }>;
     query: (tableName: string) => TableReaderLike;
@@ -386,8 +386,8 @@ interface DatabaseWriterLike {
      */
     relationEdges?: ReadonlyArray<RelationEdgeLike>;
 
-    replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
-    restore?: (id: string, expectedTable?: string) => Promise<void>;
+    replace: (table: string, id: string, document: Record<string, unknown>) => Promise<void>;
+    restore?: (table: string, id: string) => Promise<void>;
 
     /**
      * Soft-delete marker column per table, for tables declared `.softDelete()`. Published by the writer
@@ -1010,46 +1010,29 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     const relationReadFilter = (table: string): undefined | WhereInput => readBase(table).baseWhere;
 
     /**
-     * Resolve the raw row for `id` and which policy-gated table (if any) owns
-     * it. The single source of truth shared by `get()` and the write gate.
-     *
-     * - **Pinned** (`expectedTable`): read the bound table with `get(table, id)`.
-     * The owner is that table when the row exists, so a foreign id resolves to
-     * absent. A `.global()` table is included: the writer's D1 fallback reaches it.
-     * - **Unpinned**: try the optional `lookupById` seam, which knows the owning
-     * table from its shard-local index, in one round-trip. A miss is not "absent":
-     * a `.global()` row always misses the seam. Those rows are found by probing
-     * every policy table with `findFirst`, which also returns the row. The probes
-     * run concurrently. Reporting the miss as absent would let the write gate
-     * perform update/delete with the policy never evaluated.
-     *
-     * `probeTable` scopes only the unpinned probe set. A pin does NOT block the
-     * writer's global fallback: `deleteAll`/`deleteWhere` pin `tableName` safely
-     * (their ids came from that table's own filtered read) and skip the
-     * per-policy-table probe fan-out that put a chunked erase into workerd's
-     * 1000-subrequest ceiling partway through. The unguarded `raw` writer is read
-     * so policy enforcement on writes doesn't recurse through itself.
-     *
-     * `row` is `null` when the id doesn't exist. `tableName` is `undefined` when
-     * the row exists but isn't in any policy-gated table (no policy applies →
-     * callers fall through unrestricted).
+     * Resolve the raw row for `table`'s `id` and whether that table is policy-gated. The owner is the named table,
+     * so a foreign id resolves to absent. A `.global()` table is included: the writer's D1 fallback reaches it.
+     * `row` is `null` when the id doesn't exist. `tableName` is `undefined` when the table has no policy (no policy
+     * applies → callers fall through unrestricted). The unguarded `raw` writer is read so policy enforcement on
+     * writes doesn't recurse through itself.
      */
-    const locateRow = async (
-        id: string,
-        expectedTable?: string,
-        probeTable?: string,
-    ): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
-        if (expectedTable !== undefined) {
-            const row = await raw.get(expectedTable, id);
+    const locateRow = async (table: string, id: string): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
+        const row = await raw.get(table, id);
 
-            if (!row) {
-                // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
-                return { row: null, tableName: undefined };
-            }
-
-            return { row, tableName: policyTables.has(expectedTable) ? expectedTable : undefined };
+        if (!row) {
+            // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
+            return { row: null, tableName: undefined };
         }
 
+        return { row, tableName: policyTables.has(table) ? table : undefined };
+    };
+
+    /**
+     * Resolve the row for an id with no table named, for the `lookupById` seam only: the shard-local index answers
+     * in one round-trip, and a miss (every `.global()` row) probes the policy tables with `findFirst`, which also
+     * returns the row.
+     */
+    const locateRowAnyTable = async (id: string): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
         if (raw.lookupById) {
             // Read through the UNGUARDED `raw` writer: this is a policy-evaluation
             // probe, not caller-visible data, so it must not be denied by the
@@ -1066,7 +1049,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         // globally unique, so at most one hits; settle them in parallel. The probe
         // returns the row too, which is why a `.global()` row in a policy table still
         // gets its policy checked here.
-        const probeTables = probeTable === undefined ? [...policyTables.keys()] : [probeTable].filter((table) => policyTables.has(table));
+        const probeTables = [...policyTables.keys()];
         const probes = await Promise.all(
             probeTables.map(async (tableName) => {
                 const probe = await raw.findFirst(tableName, { limit: 1, where: { _id: id } });
@@ -1089,12 +1072,8 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * wrapper over {@link locateRow} that drops the unguarded-row case — a write
      * to a row in no policy-gated table needs no policy check.
      */
-    const findRowTable = async (
-        id: string,
-        expectedTable?: string,
-        probeTable?: string,
-    ): Promise<undefined | { row: Record<string, unknown>; tableName: string }> => {
-        const located = await locateRow(id, expectedTable, probeTable);
+    const findRowTable = async (table: string, id: string): Promise<undefined | { row: Record<string, unknown>; tableName: string }> => {
+        const located = await locateRow(table, id);
 
         return located.row && located.tableName !== undefined ? { row: located.row, tableName: located.tableName } : undefined;
     };
@@ -1119,14 +1098,13 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * transaction primitive the generic writer interface does not expose.
      */
     const gateById = async <R>(
+        table: string,
         id: string,
         op: Exclude<Policy["on"], "insert" | "read">,
         perform: (writer: RlsDatabase, tableName?: string) => Promise<R>,
         computeNextRow?: (preRow: Record<string, unknown>) => Record<string, unknown>,
-        expectedTable?: string,
-        probeTable?: string,
     ): Promise<R> => {
-        const located = await findRowTable(id, expectedTable, probeTable);
+        const located = await findRowTable(table, id);
 
         if (!located) {
             // The id is in no policy-gated table (a non-policy table or absent).
@@ -1215,7 +1193,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             throw new LunoraError("FORBIDDEN", "delete denied by policy");
         }
 
-        await reader.delete(id, tableName, deleteOptions);
+        await reader.delete(tableName, id, deleteOptions);
 
         return true;
     };
@@ -1264,7 +1242,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             }
 
             // eslint-disable-next-line no-await-in-loop -- sequential, mirrors looped single deletes
-            await writer.delete(id, tableName, deleteOptions);
+            await writer.delete(tableName, id, deleteOptions);
             deleted += 1;
         }
 
@@ -1280,19 +1258,19 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * which. Without the second check a policy could approve one post-image while a different one lands.
      */
     const gatePatchById = <R>(
+        table: string,
         id: string,
         patch: Record<string, unknown>,
         write: (writer: RlsDatabase, options: PatchWriteOptions) => Promise<R>,
-        expectedTable?: string,
     ): Promise<R> =>
         gateById(
+            table,
             id,
             "update",
-            (writer, table) => write(writer, { verify: table === undefined ? undefined : (previous, next) => allowsWrite(table, "update", previous, next) }),
+            (writer, owner) => write(writer, { verify: owner === undefined ? undefined : (previous, next) => allowsWrite(owner, "update", previous, next) }),
             (preRow) => {
                 return { ...preRow, ...previewPatch(patch, preRow) };
             },
-            expectedTable,
         );
 
     /**
@@ -1351,7 +1329,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             });
         },
 
-        delete: (id, expectedTable, options) => gateById(id, "delete", (writer) => writer.delete(id, expectedTable, options), undefined, expectedTable),
+        delete: (table, id, options) => gateById(table, id, "delete", (writer) => writer.delete(table, id, options)),
 
         async deleteAll(tableName, options) {
             // Chunked erase, RLS-honest: rows are resolved through the read-filtered
@@ -1390,7 +1368,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return { deleted };
         },
 
-        async deleteMany(ids, options, expectedTable) {
+        async deleteMany(table, ids, options) {
             assertBatchLimit(ids.length, options?.limit, "deleteMany");
 
             // Per-id gate: each id is located + policy-checked and routed to the
@@ -1402,7 +1380,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // table) scopes each id.
             for (const id of ids) {
                 // eslint-disable-next-line no-await-in-loop -- sequential per-row policy gate, mirrors looped single deletes
-                await gateById(id, "delete", (writer) => writer.delete(id, expectedTable), undefined, expectedTable);
+                await gateById(table, id, "delete", (writer) => writer.delete(table, id));
             }
 
             return { deleted: ids.length };
@@ -1476,7 +1454,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // policy-gated table falls through unrestricted) plus the owning
             // policy-gated `tableName` when one exists. The bound table pins the
             // lookup so a foreign id can't read another table's row.
-            const located = await locateRow(id, table);
+            const located = await locateRow(table, id);
 
             if (!located.row) {
                 // eslint-disable-next-line unicorn/no-null -- RlsDatabase.get structurally mirrors @lunora/do's writer, which returns `null` for an absent row
@@ -1530,7 +1508,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         // back, not just pass the raw seam through (the `...base` spread would
         // otherwise expose `base.lookupById` unfiltered by any read policy).
         async lookupById(id, expectedTable) {
-            const located = await locateRow(id, expectedTable);
+            const located = expectedTable === undefined ? await locateRowAnyTable(id) : await locateRow(expectedTable, id);
 
             if (!located.row) {
                 // eslint-disable-next-line unicorn/no-null -- mirrors get()'s absent-row null
@@ -1630,12 +1608,12 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return base.insertManyUnsafe(tableName, documents, options);
         },
 
-        patch: (id, patch, expectedTable) => gatePatchById(id, patch, (writer, options) => writer.patch(id, patch, expectedTable, options), expectedTable),
+        patch: (table, id, patch, options) => gatePatchById(table, id, patch, (writer, verify) => writer.patch(table, id, patch, { ...options, ...verify })),
 
         // The update gate with no write behind it: an empty patch leaves the post-image equal to the row as it
         // stands, so only the policy is evaluated. A relation-only patch runs this on its parent row, which it never
         // writes. Overridden for the same reason as `patch`: the `...base` spread would expose the guard's table-only check.
-        assertPatchAllowed: (id, expectedTable) => gatePatchById(id, {}, () => Promise.resolve(), expectedTable),
+        assertPatchAllowed: (table, id) => gatePatchById(table, id, {}, () => Promise.resolve()),
 
         // The update gate of a single patch, against the row as it stands, with the
         // patch's post-image as WITH CHECK. Overriding is mandatory: the `...base`
@@ -1644,18 +1622,13 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         // row is a read, so it is handed back only when this caller's `get` would
         // return it: update rights do not imply read rights.
         async patchIf(tableName, id, args) {
-            const result = await gatePatchById(
-                id,
-                args.patch,
-                async (writer, options) => {
-                    if (writer.patchIf === undefined) {
-                        throw new LunoraError("INTERNAL", `ctx.db.patchIf on "${tableName}" is unsupported: this writer has no conditional write`);
-                    }
+            const result = await gatePatchById(tableName, id, args.patch, async (writer, options) => {
+                if (writer.patchIf === undefined) {
+                    throw new LunoraError("INTERNAL", `ctx.db.patchIf on "${tableName}" is unsupported: this writer has no conditional write`);
+                }
 
-                    return writer.patchIf(tableName, id, { ...args, verify: options.verify });
-                },
-                tableName,
-            );
+                return writer.patchIf(tableName, id, { ...args, verify: options.verify });
+            });
 
             if (result.doc === null) {
                 return result;
@@ -1682,7 +1655,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return { applied: result.applied, doc: null };
         },
 
-        async patchMany(patches, options, expectedTable) {
+        async patchMany(table, patches, options) {
             assertBatchLimit(patches.length, options?.limit, "patchMany");
 
             // Per-id update gate, same WITH-CHECK post-image semantics as the
@@ -1691,12 +1664,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // span) prior patches persist. `expectedTable` scopes each id.
             for (const entry of patches) {
                 // eslint-disable-next-line no-await-in-loop -- sequential per-row policy gate, mirrors looped single patches
-                await gatePatchById(
-                    entry.id,
-                    entry.patch,
-                    (writer, writeOptions) => writer.patch(entry.id, entry.patch, expectedTable, writeOptions),
-                    expectedTable,
-                );
+                await gatePatchById(table, entry.id, entry.patch, (writer, writeOptions) => writer.patch(table, entry.id, entry.patch, writeOptions));
             }
 
             return { patched: patches.length };
@@ -1721,7 +1689,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
 
             assertWithinBatchCap(patches.length, cap, "patchWhere", batchLimitError);
 
-            return wrapped.patchMany(patches, options);
+            return wrapped.patchMany(tableName, patches, options);
         },
 
         query(tableName) {
@@ -1808,28 +1776,23 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         // Restore clears the soft-delete marker — a by-id un-delete, gated as an
         // "update" (the policy that governs patch). No post-image check: the
         // writer owns the marker field, so we only enforce the pre-image USING.
-        restore: (id, expectedTable) =>
+        restore: (table, id) =>
+            gateById(table, id, "update", async (writer) => {
+                const perform = writer.restore ?? raw.restore;
+
+                if (!perform) {
+                    throw new LunoraError("BAD_REQUEST", "restore is not supported by this writer");
+                }
+
+                await perform(table, id);
+            }),
+
+        replace: (table, id, document) =>
             gateById(
+                table,
                 id,
                 "update",
-                async (writer) => {
-                    const perform = writer.restore ?? raw.restore;
-
-                    if (!perform) {
-                        throw new LunoraError("BAD_REQUEST", "restore is not supported by this writer");
-                    }
-
-                    await perform(id, expectedTable);
-                },
-                undefined,
-                expectedTable,
-            ),
-
-        replace: (id, document, expectedTable) =>
-            gateById(
-                id,
-                "update",
-                (writer) => writer.replace(id, document, expectedTable),
+                (writer) => writer.replace(table, id, document),
                 // Mirror the writer's post-image: `_id` always comes from the
                 // existing row; `_creationTime` honors a caller-supplied value
                 // (the writer keeps `document._creationTime` when present) and
@@ -1841,7 +1804,6 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
                         _id: preRow["_id"],
                     };
                 },
-                expectedTable,
             ),
 
         // Analytical reads — plain methods (the writer always implements them;

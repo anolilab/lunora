@@ -70,20 +70,20 @@ const runSoftDeleteCompanionScenarios = (factory: () => SqlHarness): void => {
 
             const writer = await setup();
 
-            await writer.delete("s2", "scores");
+            await writer.delete("scores", "s2");
 
             const afterDelete = await writer.rankPage("scores", "by_score", {});
 
             expect(afterDelete.page.map((row) => row["_id"])).toStrictEqual(["s3", "s1"]);
 
-            await writer.restore!("s2", "scores");
+            await writer.restore!("scores", "s2");
 
             const afterRestore = await writer.rankPage("scores", "by_score", {});
 
             expect(afterRestore.page.map((row) => row["_id"])).toStrictEqual(["s3", "s2", "s1"]);
 
             // hardDelete keeps it out for good.
-            await writer.delete("s2", "scores", { hard: true });
+            await writer.delete("scores", "s2", { hard: true });
 
             const afterHard = await writer.rankPage("scores", "by_score", {});
 
@@ -152,7 +152,7 @@ const runSoftDeleteCompanionScenarios = (factory: () => SqlHarness): void => {
 
             await expect(writer.aggregate("invoices", { field: "amountMinor", op: "sum", where: { currency: "usd" } })).resolves.toBe(19);
 
-            await writer.delete("i1", "invoices");
+            await writer.delete("invoices", "i1");
 
             await expect(writer.aggregate("invoices", { field: "amountMinor", op: "sum", where: { currency: "usd" } })).resolves.toBe(10);
         });
@@ -162,11 +162,11 @@ const runSoftDeleteCompanionScenarios = (factory: () => SqlHarness): void => {
 
             const writer = await setup();
 
-            await writer.delete("i2", "invoices");
+            await writer.delete("invoices", "i2");
 
             await expect(writer.aggregate("invoices", { field: "amountMinor", op: "sum", where: { currency: "usd" } })).resolves.toBe(9);
 
-            await writer.restore!("i2", "invoices");
+            await writer.restore!("invoices", "i2");
 
             await expect(writer.aggregate("invoices", { field: "amountMinor", op: "sum", where: { currency: "usd" } })).resolves.toBe(19);
         });
@@ -181,7 +181,7 @@ const runSoftDeleteCompanionScenarios = (factory: () => SqlHarness): void => {
 
             await expect(writer.aggregate("invoices", { field: "amountMinor", op: "max", where: { currency: "usd" } })).resolves.toBe(10);
 
-            await writer.delete("i2", "invoices");
+            await writer.delete("invoices", "i2");
 
             await expect(writer.aggregate("invoices", { field: "amountMinor", op: "max", where: { currency: "usd" } })).resolves.toBe(9);
         });
@@ -197,7 +197,7 @@ const runSoftDeleteCompanionScenarios = (factory: () => SqlHarness): void => {
 
             await expect(writer.groupBy("invoices", options)).resolves.toHaveLength(2);
 
-            await writer.delete("i3", "invoices");
+            await writer.delete("invoices", "i3");
 
             const groups = await writer.groupBy("invoices", options);
 
@@ -220,7 +220,7 @@ const runSoftDeleteCompanionScenarios = (factory: () => SqlHarness): void => {
             // pre-existing gap recorded in plan 312 §10. This pins the write.
             const writer = await setup();
 
-            await writer.delete("i2", "invoices");
+            await writer.delete("invoices", "i2");
 
             // Named through `aggregateTableName` rather than spelled out, so the
             // assertion cannot drift from the companion's real naming rule.
@@ -239,7 +239,7 @@ const runSoftDeleteCompanionScenarios = (factory: () => SqlHarness): void => {
             // that does not. The lazy path is covered above; this is the eager one.
             const writer = await setup();
 
-            await writer.delete("i1", "invoices");
+            await writer.delete("invoices", "i1");
 
             // Forget the rebuild markers so the eager seed rebuilds rather than
             // trusting the companions the writes above built.
@@ -273,9 +273,9 @@ const runSoftDeleteCompanionScenarios = (factory: () => SqlHarness): void => {
 
             expect((onInsert as Error).message).toContain("MAX_SAFE_INTEGER");
 
-            await writer.delete("i1", "invoices");
+            await writer.delete("invoices", "i1");
 
-            const onPatch = await writer.patch("i1", { amountMinor: huge }, "invoices").catch((error: unknown) => error);
+            const onPatch = await writer.patch("invoices", "i1", { amountMinor: huge }).catch((error: unknown) => error);
 
             expect((onPatch as Error).message).toContain("MAX_SAFE_INTEGER");
         });
@@ -288,7 +288,7 @@ const runSoftDeleteCompanionScenarios = (factory: () => SqlHarness): void => {
             // reading after a soft delete must not re-tally the deleted row.
             const writer = await setup();
 
-            await writer.delete("i1", "invoices");
+            await writer.delete("invoices", "i1");
 
             const reader = createShardContextDatabase({ clock: () => FIXED, schema, sql: harness.sql });
 
@@ -359,12 +359,12 @@ const runSoftDeleteCompanionScenarios = (factory: () => SqlHarness): void => {
             expect(vectors.upserts).toHaveLength(1);
 
             // Soft delete must REMOVE the vector (else it leaks into similarity search).
-            await writer.delete("m1", "messages");
+            await writer.delete("messages", "m1");
 
             expect(vectors.deletes).toStrictEqual([["messages-text", ["m1"]]]);
 
             // Restore re-embeds it.
-            await writer.restore!("m1", "messages");
+            await writer.restore!("messages", "m1");
 
             expect(vectors.upserts).toHaveLength(2);
         });
@@ -409,34 +409,34 @@ const runSoftDeleteCompanionScenarios = (factory: () => SqlHarness): void => {
             const writer = createShardContextDatabase({ clock: () => FIXED, idGenerator: () => "m1", onWrite, schema, sql: harness.sql });
 
             await writer.insert("messages", { text: "hello" });
-            await writer.delete("m1", "messages");
+            await writer.delete("messages", "m1");
 
             // A patch on the hidden row must not bring its vector (and metadata) back.
-            await writer.patch("m1", { text: "edited while deleted" });
+            await writer.patch("messages", "m1", { text: "edited while deleted" });
 
             expect(stored.size).toBe(0);
             await expect(writer.query("messages").collect()).resolves.toHaveLength(0);
 
             // Nor may a replace.
-            await writer.replace("m1", { deletedAt: FIXED, text: "replaced while deleted" });
+            await writer.replace("messages", "m1", { deletedAt: FIXED, text: "replaced while deleted" });
 
             expect(stored.size).toBe(0);
 
             // Restore re-embeds the row's CURRENT text.
-            await writer.restore!("m1", "messages");
+            await writer.restore!("messages", "m1");
 
             expect([...stored.entries()]).toStrictEqual([["m1", "replaced while deleted"]]);
 
             // Delete again, then patch again: still gone.
-            await writer.delete("m1", "messages");
+            await writer.delete("messages", "m1");
 
             expect(stored.size).toBe(0);
 
-            await writer.patch("m1", { text: "second edit while deleted" });
+            await writer.patch("messages", "m1", { text: "second edit while deleted" });
 
             expect(stored.size).toBe(0);
 
-            await writer.restore!("m1", "messages");
+            await writer.restore!("messages", "m1");
 
             expect([...stored.entries()]).toStrictEqual([["m1", "second edit while deleted"]]);
         });

@@ -28,16 +28,16 @@ const fakeCollection = (log: string[], name: string) =>
 /** A `ctx.db` double recording the ops applied to it, in order. */
 const fakeWriter = (log: string[]): PlanWriter => {
     return {
-        delete: async (id: string) => {
-            log.push(`delete:${id}`);
+        delete: async (table: string, id: string) => {
+            log.push(`delete:${table}:${id}`);
         },
         insert: async (table: string, document: Record<string, unknown>, options?: { clientId?: string }) => {
             log.push(`insert:${table}:${JSON.stringify(document)}:${options?.clientId ?? "-"}`);
 
             return "server-id";
         },
-        patch: async (id: string, patch: Record<string, unknown>) => {
-            log.push(`patch:${id}:${JSON.stringify(patch)}`);
+        patch: async (table: string, id: string, patch: Record<string, unknown>) => {
+            log.push(`patch:${table}:${id}:${JSON.stringify(patch)}`);
         },
     };
 };
@@ -159,7 +159,7 @@ describe(applyPlanToDb, () => {
 
         await applyPlanToDb(fakeWriter(log), plan);
 
-        expect(log).toStrictEqual(["delete:d1", 'patch:p1:{"text":"edited"}', 'insert:nodes:{"text":"new"}:i1']);
+        expect(log).toStrictEqual(["delete:nodes:d1", 'patch:nodes:p1:{"text":"edited"}', 'insert:nodes:{"text":"new"}:i1']);
     });
 
     it("forwards a client-minted _id as the clientId so the keys match", async () => {

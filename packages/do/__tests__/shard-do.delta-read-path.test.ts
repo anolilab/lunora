@@ -124,8 +124,8 @@ class ProbeCountingShard extends ShardDO {
     }
 
     /** Hard-delete through the ctx-db writer, so the changelog records a `delete` (post-image NULL by design). */
-    public async wipe(id: string): Promise<void> {
-        await this.getWriter().delete(id, undefined, { hard: true });
+    public async wipe(table: string, id: string): Promise<void> {
+        await this.getWriter().delete(table, id, { hard: true });
     }
 
     // eslint-disable-next-line class-methods-use-this -- test stub override: resolves by `name`/`args` alone, no instance state.
@@ -275,10 +275,10 @@ describe("delta-sync read path", () => {
             });
 
             await writer.insert("messages", { _id: "m1", authorId: "u1", channelId: "c1", text: "a" }, { allowExplicitId: true });
-            await writer.patch("m1", { text: "b" });
+            await writer.patch("messages", "m1", { text: "b" });
             const midpoint = readCdcCursor(harness.sql);
 
-            await writer.patch("m1", { text: "c" });
+            await writer.patch("messages", "m1", { text: "c" });
 
             // Three ops on one row collapse to one key…
             const keys = readCdcChangeKeys(harness.sql, "messages", 0, readCdcCursor(harness.sql));
@@ -367,7 +367,7 @@ describe("delta-sync read path", () => {
             const shard = buildShard();
 
             await shard.seed("m0", "c1");
-            await shard.wipe("m0");
+            await shard.wipe("messages", "m0");
 
             // Trim the insert, exactly as the retention sweep would: the log now
             // starts with a `delete`, whose NULL post-image is correct rather than

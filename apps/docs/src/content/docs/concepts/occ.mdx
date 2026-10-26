@@ -43,8 +43,8 @@ export const transfer = mutation
             throw new Error("insufficient funds");
         }
 
-        await ctx.db.patch(from, { balance: source.balance - amount });
-        await ctx.db.patch(to, { balance: target.balance + amount });
+        await ctx.db.patch("accounts", from, { balance: source.balance - amount });
+        await ctx.db.patch("accounts", to, { balance: target.balance + amount });
     });
 ```
 

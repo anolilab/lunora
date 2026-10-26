@@ -179,8 +179,8 @@ interface TableReaderLike {
 interface MaskDatabase {
     aggregate: (tableName: string, options: AggregateArgs) => Promise<null | number>;
     count: (tableName: string, whereOrArgs?: unknown) => Promise<number>;
-    delete: (id: string, expectedTable?: string) => Promise<void>;
-    deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }) => Promise<{ deleted: number }>;
+    delete: (table: string, id: string) => Promise<void>;
+    deleteMany: (table: string, ids: ReadonlyArray<string>, options?: { limit?: number }) => Promise<{ deleted: number }>;
     deleteWhere?: (tableName: string, where: Record<string, unknown>, options?: { limit?: number }) => Promise<{ deleted: number }>;
     explain: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
@@ -195,13 +195,17 @@ interface MaskDatabase {
         options?: { limit?: number; skipDuplicates?: boolean },
     ) => Promise<(string | null)[]>;
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
-    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<void>;
     patchIf?: (
         tableName: string,
         id: string,
         args: { patch: Record<string, unknown>; where: Record<string, unknown> },
     ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
-    patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }) => Promise<{ patched: number }>;
+    patchMany: (
+        table: string,
+        patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
+        options?: { limit?: number },
+    ) => Promise<{ patched: number }>;
     patchWhere?: (
         tableName: string,
         args: { patch: Record<string, unknown>; where: Record<string, unknown> },
@@ -227,7 +231,7 @@ interface MaskDatabase {
     ) => Promise<{ continueCursor: null | string; isDone: boolean; nodes: { document: Record<string, unknown> }[] }>;
 
     relationWrites?: Readonly<Record<string, RelationWriteInfosLike>>;
-    replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    replace: (table: string, id: string, document: Record<string, unknown>) => Promise<void>;
 }
 
 interface MaskContextIn {

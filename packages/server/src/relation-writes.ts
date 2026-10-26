@@ -64,12 +64,12 @@ type RelationWriteInfosLike = Readonly<Record<string, RelationWriteInfoLike>>;
 /** The writer methods a relation write composes. */
 interface RelationWriteWriterLike {
     /** Checks the update policy on a relation-only patch's parent row, which is never written. Optional: a writer with no policy layer omits it. */
-    assertPatchAllowed?: (id: string, expectedTable?: string) => Promise<void>;
-    delete: (id: string, expectedTable?: string) => Promise<void>;
+    assertPatchAllowed?: (table: string, id: string) => Promise<void>;
+    delete: (table: string, id: string) => Promise<void>;
     findMany: (tableName: string, args?: unknown) => Promise<unknown>;
     get: (table: string, id: string) => Promise<unknown>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
-    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<void>;
 }
 
 /** A to-one write: point this row's foreign key at `connect`'s target, or clear it. */
@@ -327,7 +327,7 @@ const connectChild = async (
     const child = await loadRow(writer, name, "connect", info.table, id);
 
     if (child[info.field] !== parentValue) {
-        await writer.patch(id, { [info.field]: parentValue }, info.table);
+        await writer.patch(info.table, id, { [info.field]: parentValue });
     }
 };
 
@@ -340,7 +340,7 @@ const disconnectChild = async (
     // Disconnecting a row that is not connected to this parent is a no-op, not an error and not a write.
     if (child[info.field] === parentValue) {
         // eslint-disable-next-line unicorn/no-null -- disconnecting clears the child's foreign key
-        await writer.patch(String(child["_id"]), { [info.field]: null }, info.table);
+        await writer.patch(info.table, String(child["_id"]), { [info.field]: null });
     }
 };
 
@@ -439,7 +439,7 @@ const applyThrough = async (writer: RelationWriteWriterLike, write: ManyWrite<Th
 
     for (const link of release) {
         // eslint-disable-next-line no-await-in-loop -- one gated delete per join row, in order so a denial stops the write at a known row
-        await writer.delete(String(link["_id"]), joinTable);
+        await writer.delete(joinTable, String(link["_id"]));
     }
 
     for (const id of attach) {
@@ -579,7 +579,7 @@ const patchWithRelations = async (
     const parsed = parseRelationWrites(tableName, infos, values);
 
     if (parsed.ones.length === 0 && parsed.manys.length === 0) {
-        await writer.patch(id, parsed.columns, tableName);
+        await writer.patch(tableName, id, parsed.columns);
 
         return;
     }
@@ -587,14 +587,14 @@ const patchWithRelations = async (
     const columns = await resolveOnes(writer, parsed);
 
     if (Object.keys(columns).length > 0) {
-        await writer.patch(id, columns, tableName);
+        await writer.patch(tableName, id, columns);
     } else {
         if ((await writer.get(tableName, id)) === null) {
             throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
         }
 
         // The parent is not written, but its update policy still decides whether its children may change.
-        await writer.assertPatchAllowed?.(id, tableName);
+        await writer.assertPatchAllowed?.(tableName, id);
     }
 
     await applyManys(writer, tableName, parsed, parentValueFor(writer, tableName, id, columns));

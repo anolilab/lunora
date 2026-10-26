@@ -55,7 +55,7 @@ const createSplitWriter = (seed: ReadonlyArray<SeedRow>) => {
             return rowsOfTable(tableName).length;
         },
 
-        async delete(id: string) {
+        async delete(_table: string, id: string) {
             deleted.push(id);
             rows.delete(id);
         },
@@ -64,7 +64,7 @@ const createSplitWriter = (seed: ReadonlyArray<SeedRow>) => {
             return { deleted: 0 };
         },
 
-        async deleteMany(ids: ReadonlyArray<string>) {
+        async deleteMany(_table: string, ids: ReadonlyArray<string>) {
             return { deleted: ids.length };
         },
         async findFirst(tableName: string, args?: { where?: { _id?: string } }) {
@@ -122,7 +122,7 @@ const createSplitWriter = (seed: ReadonlyArray<SeedRow>) => {
             return row && !row.global ? { row, tableName: row.table } : null;
         },
 
-        async patch(id: string, patch: Record<string, unknown>) {
+        async patch(_table: string, id: string, patch: Record<string, unknown>) {
             patched.push(id);
 
             const row = rows.get(id);
@@ -191,7 +191,7 @@ describe("rls — .global() rows addressed by id", () => {
         const database = createSplitWriter(seed);
         const handler = lunora.mutation
             .use(rlsForTest<TestContext>(readOnlyPolicies))
-            .mutation(async ({ ctx }) => (ctx as TestContext & { db: any }).db.patch("p1", { userId: "attacker" }));
+            .mutation(async ({ ctx }) => (ctx as TestContext & { db: any }).db.patch("profiles", "p1", { userId: "attacker" }));
 
         await expect(handler.handler(makeContext(database.writer, "attacker"), {})).rejects.toThrow(/denied by policy/u);
 
@@ -204,7 +204,7 @@ describe("rls — .global() rows addressed by id", () => {
         const database = createSplitWriter(seed);
         const handler = lunora.mutation
             .use(rlsForTest<TestContext>(readOnlyPolicies))
-            .mutation(async ({ ctx }) => (ctx as TestContext & { db: any }).db.delete("p1"));
+            .mutation(async ({ ctx }) => (ctx as TestContext & { db: any }).db.delete("profiles", "p1"));
 
         await expect(handler.handler(makeContext(database.writer, "attacker"), {})).rejects.toThrow(/denied by policy/u);
 

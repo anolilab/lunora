@@ -270,7 +270,7 @@ describe("privacy example lifecycle (workerd)", () => {
                 throw new Error(`No privacy request row for ${request.id}.`);
             }
 
-            await ctx.db.patch(row._id, { expiresAt: Date.now() - 1000 });
+            await ctx.db.patch("privacy_requests", row._id, { expiresAt: Date.now() - 1000 });
 
             const swept = await privacyFor(appCtx(db)).admin.sweep();
 

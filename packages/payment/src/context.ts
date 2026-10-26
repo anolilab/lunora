@@ -27,14 +27,14 @@ import type { PaymentObserver } from "./observability";
  * silently report the rest of the table as absent.
  */
 export interface LunoraDatabaseLike {
-    delete: (id: string) => Promise<void>;
+    delete: (table: string, id: string) => Promise<void>;
     findFirst: (table: string, args?: { where?: Record<string, unknown> }) => Promise<Record<string, unknown> | null>;
     findMany: (
         table: string,
         args?: { cursor?: string; limit?: number; orderBy?: Record<string, "asc" | "desc">[]; where?: Record<string, unknown> },
     ) => Promise<{ continueCursor: null | string; page: Record<string, unknown>[] }>;
     insert: (table: string, document: Record<string, unknown>) => Promise<string>;
-    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<void>;
     /** Atomic conditional patch; optional on ctx.db, and a guarded payment write fails without it. */
     patchIf?: (
         table: string,
@@ -75,7 +75,7 @@ export interface PaymentsFromContextOptions {
  */
 export const lunoraDatabaseToPaymentDatabase = (database: LunoraDatabaseLike): PaymentDatabase => {
     return {
-        delete: async (id) => database.delete(id),
+        delete: async (table, id) => database.delete(table, id),
         findFirst: async (table, where) => (await database.findFirst(table, { where })) as PaymentRow | null,
         findMany: async (table, where, page) => {
             const result = await database.findMany(table, { ...page, where });
@@ -83,7 +83,7 @@ export const lunoraDatabaseToPaymentDatabase = (database: LunoraDatabaseLike): P
             return { cursor: result.continueCursor ?? undefined, rows: result.page as PaymentRow[] };
         },
         insert: async (table, document) => database.insert(table, document),
-        patch: async (id, patch) => database.patch(id, patch),
+        patch: async (table, id, patch) => database.patch(table, id, patch),
         patchIf: async (table, id, where, patch) => {
             if (database.patchIf === undefined) {
                 throw new LunoraPaymentError("CONFIG_INVALID", "@lunora/payment: a guarded write needs ctx.db.patchIf, which this database does not provide");

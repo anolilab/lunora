@@ -84,7 +84,7 @@ describe("createShardCtxDb + createVectorSyncHook (composed write path)", () => 
         await writer.insert("messages", { authorId: "ann", channelId: "c1", text: "hello world" });
         vectors.upserts.length = 0;
 
-        await writer.patch("m_1", { text: "edited body" });
+        await writer.patch("messages", "m_1", { text: "edited body" });
 
         expect(vectors.upserts).toEqual([["messages-text", { embed, id: "m_1", input: "edited body", metadata: { authorId: "ann" } }]]);
     });
@@ -95,7 +95,7 @@ describe("createShardCtxDb + createVectorSyncHook (composed write path)", () => 
         const { vectors, writer } = setup();
 
         await writer.insert("messages", { authorId: "ann", channelId: "c1", text: "hello world" });
-        await writer.delete("m_1");
+        await writer.delete("messages", "m_1");
 
         expect(vectors.deletes).toEqual([["messages-text", ["m_1"]]]);
     });

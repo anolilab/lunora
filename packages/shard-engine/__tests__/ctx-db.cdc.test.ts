@@ -59,8 +59,8 @@ describe("ctx-db change-data-capture", () => {
         const writer = setupWriter(true);
 
         await writer.insert("messages", { _id: "m_1", authorId: "u1", channelId: "c1", text: "hi" }, { allowExplicitId: true });
-        await writer.patch("m_1", { text: "edited" });
-        await writer.delete("m_1");
+        await writer.patch("messages", "m_1", { text: "edited" });
+        await writer.delete("messages", "m_1");
 
         const { changes, cursor } = readCdcChanges(harness.sql);
 

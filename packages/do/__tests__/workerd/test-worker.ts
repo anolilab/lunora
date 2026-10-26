@@ -405,7 +405,7 @@ class ConcreteSyncShard extends ShardDO {
 
         switch (functionPath) {
             case "messages:remove": {
-                await writer.delete(args["_id"] as string);
+                await writer.delete("messages", args["_id"] as string);
 
                 break;
             }

@@ -425,17 +425,17 @@ describe("secret request component", () => {
                 patchFails = true;
             });
             const { caller, ctx, functions, rows } = await stagedThread("user-a", store);
-            const realPatch = (ctx.db as unknown as { patch: (id: string, patch: Record<string, unknown>) => Promise<void> }).patch;
+            const realPatch = (ctx.db as unknown as { patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<void> }).patch;
             const flakyCtx = {
                 ...ctx,
                 db: {
                     ...ctx.db,
-                    patch: async (id: string, patch: Record<string, unknown>) => {
+                    patch: async (table: string, id: string, patch: Record<string, unknown>) => {
                         if (patchFails) {
                             throw new Error("injected: row write failed");
                         }
 
-                        return realPatch(id, patch);
+                        return realPatch(table, id, patch);
                     },
                 },
             };

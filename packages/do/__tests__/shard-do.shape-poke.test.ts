@@ -56,12 +56,12 @@ class ShapePokeShard extends ShardDO {
 
         switch (functionPath) {
             case "messages:move": {
-                await writer.patch(args["_id"] as string, { channelId: args["channelId"] });
+                await writer.patch("messages", args["_id"] as string, { channelId: args["channelId"] });
 
                 break;
             }
             case "messages:remove": {
-                await writer.delete(args["_id"] as string);
+                await writer.delete("messages", args["_id"] as string);
 
                 break;
             }
