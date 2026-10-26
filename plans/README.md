@@ -33,6 +33,7 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 | Plan                                                   | Title                                                                  | Notes                                                                                  |
 | ------------------------------------------------------ | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| [532](./532-privacy-status-and-c15t-consent.md)        | `@lunora/privacy`: close the open status items; read consent from c15t | WS A, B, C, I done (privacy PR); c15t WS D–H TODO, needs §9 decisions                  |
 | [531](./531-typed-live-topics.md)                      | Typed live topics: declared names and payloads, generated refs         | A to D shipped; E (auto-mount the routes) open                                         |
 | [530](./530-vite-startup-ts-morph-graph.md)            | Keep ts-morph out of the Vite and cloudflare config-load graph         | BLOCKED: owner picks lazy codegen (~130 files) or async `lunora()` (public API change) |
 | [466](./466-local-replica-client-wiring.md)            | Wire `@lunora/replica` into every client                               | decisions D1–D6 open; Phase 0 first                                                    |
