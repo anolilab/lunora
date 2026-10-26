@@ -273,12 +273,47 @@ interface ModuleExport {
     name: string | undefined;
 }
 
+/** Whether a declaration carries the `export` keyword. */
+const isExported = (statement: ts.Node): boolean =>
+    ts.canHaveModifiers(statement) && (ts.getModifiers(statement) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
+
+/**
+ * The names a module exports from its own declarations: `export class`, `export function`, `export const`, and `export { a }` of a
+ * local binding. An explicit export shadows a star re-export of the same name, so these are not forwarded from the star.
+ */
+/** The names one top-level statement exports from its own declaration: a local `export`, or the local names of `export { a }`. */
+const localNamesExportedBy = (statement: ts.Statement): string[] => {
+    if (ts.isVariableStatement(statement)) {
+        return isExported(statement)
+            ? statement.declarationList.declarations.flatMap((declaration) => (ts.isIdentifier(declaration.name) ? [declaration.name.text] : []))
+            : [];
+    }
+
+    if ((ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement)) && isExported(statement)) {
+        return statement.name === undefined ? [] : [statement.name.text];
+    }
+
+    if (
+        ts.isExportDeclaration(statement) &&
+        statement.moduleSpecifier === undefined &&
+        !statement.isTypeOnly &&
+        statement.exportClause !== undefined &&
+        ts.isNamedExports(statement.exportClause)
+    ) {
+        return statement.exportClause.elements.map((element) => element.name.text);
+    }
+
+    return [];
+};
+
+const localExportNames = (source: ts.SourceFile): Set<string> => new Set(source.statements.flatMap((statement) => localNamesExportedBy(statement)));
+
 /**
  * The exports an `export const x = y` statement makes when `y` is a name the file imported: a value copy of the imported class
  * forwards it as surely as a re-export does. Any other initializer forwards nothing.
  */
 const valueExportsOf = (statement: ts.VariableStatement, imported: ReadonlyMap<string, NameSource>): ModuleExport[] => {
-    if (!statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
+    if (!isExported(statement)) {
         return [];
     }
 
@@ -298,8 +333,7 @@ const valueExportsOf = (statement: ts.VariableStatement, imported: ReadonlyMap<s
  * `export const b = a` of a name it imported, and `export * from "m"`. Read from the syntax tree, so a comment or string forwards
  * nothing. `export * as ns` binds a namespace, not the names, so it is skipped.
  */
-const forwardedExports = (modulePath: string): ModuleExport[] => {
-    const source = ts.createSourceFile(modulePath, readFileSync(modulePath, "utf8"), ts.ScriptTarget.Latest);
+const forwardedExports = (source: ts.SourceFile): ModuleExport[] => {
     const imported = namedImportSources(source);
 
     return source.statements.flatMap((statement): ModuleExport[] => {
@@ -356,8 +390,17 @@ const forwardsReplicaExport = (modulePath: string, target: string, requested: st
 
     visited.add(key);
 
-    return forwardedExports(modulePath).some((forward) => {
+    const source = ts.createSourceFile(modulePath, readFileSync(modulePath, "utf8"), ts.ScriptTarget.Latest);
+    const forwards = forwardedExports(source);
+    const shadowed = new Set([...localExportNames(source), ...forwards.flatMap((forward) => (forward.exported === undefined ? [] : [forward.exported]))]);
+
+    return forwards.some((forward) => {
         if (requested !== undefined && forward.exported !== undefined && forward.exported !== requested) {
+            return false;
+        }
+
+        // A star re-export of a name the module exports explicitly is shadowed by that export, so it forwards nothing.
+        if (forward.exported === undefined && shadowed.has(requested ?? target)) {
             return false;
         }
 
@@ -373,21 +416,6 @@ const forwardsReplicaExport = (modulePath: string, target: string, requested: st
         return barrel !== undefined && forwardsReplicaExport(barrel, target, name, visited);
     });
 };
-
-/**
- * Whether a file imports `EventLogDOClient` by name from a relative module that forwards it from the replica package, through
- * any chain of barrels. Such a file constructs the client without naming the package itself.
- */
-const importsClientFromBarrel = (sourceFile: SourceFile): boolean =>
-    sourceFile.getImportDeclarations().some((declaration) => {
-        const barrel = declaration.isTypeOnly() ? undefined : resolveBarrel(sourceFile.getFilePath(), declaration.getModuleSpecifierValue());
-
-        return (
-            barrel !== undefined &&
-            declaration.getNamedImports().some((specifier) => !specifier.isTypeOnly() && specifier.getNameNode().getText() === EVENT_LOG_CLIENT) &&
-            forwardsReplicaExport(barrel, EVENT_LOG_CLIENT, EVENT_LOG_CLIENT, new Set())
-        );
-    });
 
 /**
  * Whether a file reads `EventLogDOClient` through the namespace import bound as `localName`. A member read of another export builds
@@ -471,6 +499,27 @@ const dynamicImportReachesClient = (call: CallExpression): boolean => {
 
     return true;
 };
+
+/**
+ * Whether a file reaches `EventLogDOClient` through a relative module that forwards it from the replica package, through any chain of
+ * barrels: by a named import, or through a namespace import the file reads the client from. Such a file constructs the client without
+ * naming the package itself.
+ */
+const importsClientFromBarrel = (sourceFile: SourceFile): boolean =>
+    sourceFile.getImportDeclarations().some((declaration) => {
+        const barrel = declaration.isTypeOnly() ? undefined : resolveBarrel(sourceFile.getFilePath(), declaration.getModuleSpecifierValue());
+
+        if (barrel === undefined || !forwardsReplicaExport(barrel, EVENT_LOG_CLIENT, EVENT_LOG_CLIENT, new Set())) {
+            return false;
+        }
+
+        const namespace = declaration.getNamespaceImport();
+
+        return (
+            declaration.getNamedImports().some((specifier) => !specifier.isTypeOnly() && specifier.getNameNode().getText() === EVENT_LOG_CLIENT) ||
+            (namespace !== undefined && namespaceReachesClient(sourceFile, namespace.getText()))
+        );
+    });
 
 /**
  * Whether a file constructs `EventLogDOClient`. The client throws at construction without the relay secret, so a type-only binding,
