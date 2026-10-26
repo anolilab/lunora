@@ -51,7 +51,16 @@ describe(clerk, () => {
         expect.assertions(2);
 
         expect(() => clerk({ authorizedParties: [], issuer })).toThrow(/authorizedParties/);
-        expect(() => clerk({ authorizedParties: [" "], issuer })).toThrow(/CSRF/);
+        expect(() => clerk({ authorizedParties: " , ", issuer })).toThrow(/CSRF/);
+    });
+
+    it("reads a comma-separated authorizedParties as an env var holds it", async () => {
+        expect.assertions(2);
+
+        const resolve = clerk({ authorizedParties: "https://other.example.test, https://app.example.test", issuer, keySet: publicKey });
+
+        await expect(resolve(bearer(await sign({ azp: "https://app.example.test", sub: "user_1" }, issuer)))).resolves.toMatchObject({ userId: "user_1" });
+        await expect(resolve(bearer(await sign({ azp: "https://evil.example.test", sub: "user_1" }, issuer)))).resolves.toBeNull();
     });
 
     it("maps v2 org claims, namespaces the org role and decodes permissions from the fea / per / fpm bitmasks", async () => {

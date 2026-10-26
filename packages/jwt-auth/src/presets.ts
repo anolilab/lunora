@@ -73,13 +73,14 @@ const presetResolver = (
 interface ClerkOptions extends PresetOverrides {
     /**
      * Origins allowed in the token's `azp` claim (the `Origin` of the browser
-     * request that minted it), e.g. `["https://app.example.com"]`. Required:
+     * request that minted it), e.g. `["https://app.example.com"]`, or the same
+     * list comma-separated (as an env var holds it). Required:
      * Clerk warns that skipping this check "can open your application to CSRF
      * attacks". A token without `azp` (a native app's) passes, as Clerk's manual
      * verification guide prescribes.
      * @see https://clerk.com/docs/guides/sessions/manual-jwt-verification
      */
-    authorizedParties: string[];
+    authorizedParties: string | string[];
 
     /** Your Frontend API URL (the session token's `iss`), e.g. `https://clerk.example.com` or `https://<slug>.clerk.accounts.dev`. */
     issuer?: string;
@@ -242,7 +243,9 @@ const clerkClaims =
  * `claims`, together with the `orgId` it belongs to.
  */
 const clerk = (options: ClerkOptions): JwtIdentityResolver => {
-    const authorizedParties = options.authorizedParties.map((party) => party.trim()).filter((party) => party.length > 0);
+    const authorizedParties = (typeof options.authorizedParties === "string" ? options.authorizedParties.split(",") : options.authorizedParties)
+        .map((party) => party.trim())
+        .filter((party) => party.length > 0);
 
     if (authorizedParties.length === 0) {
         throw new LunoraError(
