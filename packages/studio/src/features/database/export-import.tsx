@@ -80,6 +80,27 @@ const parseNdjsonLine = (rawLine: string, lineNumber: number): ExportRow | undef
 const FILE_PIECE_BYTES = 1024 * 1024;
 
 /**
+ * The text of a file, decoded from UTF-8 a piece at a time, so a CSV is parsed as it is read and never held whole. Fatal on bad UTF-8: a
+ * non-UTF-8 file fails the check instead of importing U+FFFD in place of its characters.
+ */
+const fileText = async function* (file: Blob): AsyncGenerator<string> {
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+
+    for (let offset = 0; offset < file.size; offset += FILE_PIECE_BYTES) {
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- a piece can only be decoded after the one before it, so the reads are serial by design
+        const bytes = await file.slice(offset, offset + FILE_PIECE_BYTES).arrayBuffer(); // eslint-disable-line no-await-in-loop -- pieces are read in file order; each decode depends on the one before
+
+        yield decoder.decode(bytes, { stream: true });
+    }
+
+    const last = decoder.decode();
+
+    if (last !== "") {
+        yield last;
+    }
+};
+
+/**
  * Yield a file's lines one at a time, 1-based, reading it in pieces so the whole
  * file is never held as one string. A piece can end mid-line, and mid-character:
  * the decoder keeps a partial character for the next piece and the carry keeps
@@ -87,15 +108,11 @@ const FILE_PIECE_BYTES = 1024 * 1024;
  * as whitespace, so an NDJSON line parses the same with or without it.
  */
 const fileLines = async function* (file: Blob): AsyncGenerator<{ line: string; lineNumber: number }> {
-    // fatal: a non-UTF-8 file fails validation instead of importing U+FFFD in place of its characters.
-    const decoder = new TextDecoder("utf-8", { fatal: true });
     let carry = "";
     let lineNumber = 0;
 
-    for (let offset = 0; offset < file.size; offset += FILE_PIECE_BYTES) {
-        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- a piece can only be decoded after the one before it, so the reads are serial by design
-        const bytes = await file.slice(offset, offset + FILE_PIECE_BYTES).arrayBuffer(); // eslint-disable-line no-await-in-loop -- pieces are read in file order; each decode depends on the one before
-        const lines = `${carry}${decoder.decode(bytes, { stream: true })}`.split("\n");
+    for await (const text of fileText(file)) {
+        const lines = `${carry}${text}`.split("\n");
 
         carry = lines.pop() ?? "";
 
@@ -106,10 +123,8 @@ const fileLines = async function* (file: Blob): AsyncGenerator<{ line: string; l
         }
     }
 
-    const last = carry + decoder.decode();
-
-    if (last !== "") {
-        yield { line: last, lineNumber: lineNumber + 1 };
+    if (carry !== "") {
+        yield { line: carry, lineNumber: lineNumber + 1 };
     }
 };
 
@@ -133,27 +148,6 @@ const ndjsonEntries = async function* (file: Blob): AsyncGenerator<ImportEntry> 
         if (row !== undefined) {
             yield { line: lineNumber, row };
         }
-    }
-};
-
-/**
- * The text of a file, decoded from UTF-8 a piece at a time, so a CSV is parsed as it is read and never held whole. Fatal on bad UTF-8: a
- * non-UTF-8 file fails the check instead of importing U+FFFD in place of its characters.
- */
-const fileText = async function* (file: Blob): AsyncGenerator<string> {
-    const decoder = new TextDecoder("utf-8", { fatal: true });
-
-    for (let offset = 0; offset < file.size; offset += FILE_PIECE_BYTES) {
-        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- a piece can only be decoded after the one before it, so the reads are serial by design
-        const bytes = await file.slice(offset, offset + FILE_PIECE_BYTES).arrayBuffer(); // eslint-disable-line no-await-in-loop -- pieces are read in file order; each decode depends on the one before
-
-        yield decoder.decode(bytes, { stream: true });
-    }
-
-    const last = decoder.decode();
-
-    if (last !== "") {
-        yield last;
     }
 };
 
@@ -195,6 +189,9 @@ const readColumnKinds = async (
     }
 };
 
+/** Lines of an export shown inline; the full export is only ever a download. */
+const PREVIEW_LINES = 50;
+
 /** Rows sent per `importShard` call at most. The byte cap below is what keeps wide rows under the body limit. */
 const IMPORT_CHUNK_ROWS = 500;
 
@@ -206,6 +203,8 @@ const IMPORT_CHUNK_BYTES = 900_000;
 
 /** Bytes a row adds to a request: the wire-encoded JSON the client sends, which can be larger than the NDJSON line it came from. */
 const wireBytes = (row: ExportRow): number => new TextEncoder().encode(JSON.stringify(encodeWire(row))).byteLength;
+
+const NDJSON_MIME = "application/x-ndjson";
 
 /** The error for a row too wide to send alone, so nothing is written for a file that cannot be imported whole. */
 const wideRowError = (line: number): LunoraError =>
@@ -415,11 +414,6 @@ const CsvTablePicker = ({ onChange, shardKey, value }: CsvTablePickerProps): Rea
     );
 };
 
-/** Lines of an export shown inline; the full export is only ever a download. */
-const PREVIEW_LINES = 50;
-
-const NDJSON_MIME = "application/x-ndjson";
-
 /**
  * A finished export: the NDJSON as one Blob (never a string in the DOM), its row count and the first lines for display. `shardKey` is the
  * shard it was read from, captured at export time, so the download is named for that shard even if the input changes afterwards.
@@ -475,9 +469,7 @@ const sendImport = async (
 
             prepared = { rows: await countRows(source()), source };
         } else {
-            const table = csvTable;
-
-            prepared = { rows: await checkCsv(file, table, kinds, nullOnEmpty), source: () => csvEntries(file, table, kinds, nullOnEmpty) };
+            prepared = { rows: await checkCsv(file, csvTable, kinds, nullOnEmpty), source: () => csvEntries(file, csvTable, kinds, nullOnEmpty) };
         }
     } catch (error_) {
         return { failure: { message: describeInvalidFile(csvTable, error_, t), rows: 0 }, total };
@@ -708,7 +700,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         invalidateAdmin(ADMIN_FUNCTIONS.listTables);
     };
 
-    const insertedTotal = importResult === null ? 0 : Object.values(importResult.inserted).reduce((sum, count) => sum + count, 0);
+    const insertedTotal = importResult === null ? 0 : insertedRowCount(importResult.inserted);
 
     // The busy flag clears on every settle, rejection included, so a failed run never leaves the panel stuck.
     const runExport = (): void => {
