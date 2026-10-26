@@ -377,28 +377,30 @@ type RowsOf<Row extends object> = ReadonlyArray<Row> | Row | undefined;
 /** Narrows {@link RowsOf} to its several-rows case. */
 const isRowList = <Row extends object>(rows: RowsOf<Row>): rows is ReadonlyArray<Row> => Array.isArray(rows);
 
-/** Per-file {@link descendantsOfKind} results, keyed by the compiler node so a re-parse starts over. */
-const DESCENDANTS_CACHE = new WeakMap<ts.SourceFile, Map<SyntaxKind, ReadonlyArray<Node>>>();
+/** {@link descendantsOfKind} results per node, keyed by the compiler node so a re-parse starts over. */
+const DESCENDANTS_CACHE = new WeakMap<ts.Node, Map<SyntaxKind, ReadonlyArray<Node>>>();
 
 /**
- * `sourceFile.getDescendantsOfKind(kind)`, walked once per parse of the file.
- * Dozens of feeders scan every file for the same `CallExpression`s, and the
- * tree walk was the bulk of their cost. Keyed by the compiler node, as
- * `EXPORT_NAMES_CACHE` is: an edit re-parses the file into a new node, so a
- * stale list is never served, and an unchanged file keeps its list across runs.
+ * `node.getDescendantsOfKind(kind)`, walked once per parse of the node's file.
+ * Dozens of feeders scan every file, and every procedure handler in it, for the
+ * same `CallExpression`s and `Identifier`s, and the tree walk (with a ts-morph
+ * wrapper per node) was the bulk of their cost. Keyed by the compiler node, as
+ * `EXPORT_NAMES_CACHE` is: an edit re-parses the file into new nodes, so a stale
+ * list is never served, and an unchanged file keeps its lists across runs. The
+ * list is shared, so callers must not mutate it (the readonly type says so).
  */
-const descendantsOfKind = <Kind extends SyntaxKind>(sourceFile: SourceFile, kind: Kind): ReadonlyArray<KindToNodeMappings[Kind]> => {
-    let byKind = DESCENDANTS_CACHE.get(sourceFile.compilerNode);
+const descendantsOfKind = <Kind extends SyntaxKind>(node: Node, kind: Kind): ReadonlyArray<KindToNodeMappings[Kind]> => {
+    let byKind = DESCENDANTS_CACHE.get(node.compilerNode);
 
     if (byKind === undefined) {
         byKind = new Map();
-        DESCENDANTS_CACHE.set(sourceFile.compilerNode, byKind);
+        DESCENDANTS_CACHE.set(node.compilerNode, byKind);
     }
 
     let nodes = byKind.get(kind);
 
     if (nodes === undefined) {
-        nodes = sourceFile.getDescendantsOfKind(kind);
+        nodes = node.getDescendantsOfKind(kind);
         byKind.set(kind, nodes);
     }
 

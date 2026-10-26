@@ -290,15 +290,25 @@ const importedModuleKeys = (project: Project, reached: ReadonlySet<string>): Set
  * from each file's text, rather than ts-morph's reference container: that container
  * holds stale entries after a refresh, and walking it made the next program build throw.
  */
+/** Each file's import and reference list, per parse: an edit makes a new compiler node, which misses. */
+const PRE_PROCESSED = new WeakMap<ts.SourceFile, ts.PreProcessedFileInfo>();
+
 const reachedFiles = (project: Project, roots: string[]): Set<string> => {
     const options = project.getCompilerOptions();
     const resolvedImports = new Map<string, string | undefined>();
     const reached = new Set<string>();
     const pending = [...roots];
 
-    const neighbours = (filePath: string, text: string): string[] => {
+    const neighbours = (sourceFile: ts.SourceFile): string[] => {
+        const filePath = sourceFile.fileName;
         const directory = dirname(filePath);
-        const info = ts.preProcessFile(text, true, true);
+        let info = PRE_PROCESSED.get(sourceFile);
+
+        if (info === undefined) {
+            info = ts.preProcessFile(sourceFile.text, true, true);
+            PRE_PROCESSED.set(sourceFile, info);
+        }
+
         const found = info.referencedFiles.map(({ fileName }) => join(directory, fileName));
 
         for (const { fileName } of info.importedFiles) {
@@ -330,7 +340,7 @@ const reachedFiles = (project: Project, roots: string[]): Set<string> => {
         const sourceFile = project.getSourceFile(path);
 
         if (sourceFile !== undefined) {
-            pending.push(...neighbours(sourceFile.getFilePath(), sourceFile.getFullText()));
+            pending.push(...neighbours(sourceFile.compilerNode));
         }
     }
 
