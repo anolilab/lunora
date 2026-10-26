@@ -12,9 +12,11 @@ import {
     ensureDevVariables,
     ensureDevWorkerEnv,
     fillDevSecrets,
+    inferLunoraBindings,
     isCodegenDisabled,
     lunoraLine,
     runPostCodegenHook,
+    secretSourcesFromBindings,
 } from "@lunora/config";
 import {
     assertWranglerSatisfiesSchema,
@@ -100,7 +102,8 @@ const prepareDevSession = async (options: ResolvedLunoraRspackOptions): Promise<
 
     await ensureDevVariables({ confirm: createConfirm("[lunora] "), cwd: options.projectRoot, info });
 
-    fillDevSecrets({ cwd: options.projectRoot, info });
+    const secretSources = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: options.projectRoot }));
+    fillDevSecrets({ cwd: options.projectRoot, info, secretSources });
     // `wrangler dev` loads `.dev.vars` but sets no `WORKER_ENV` of its own, and
     // this plugin never runs the Worker — so without this a developer running
     // plain `wrangler dev` alongside their build spends the session with

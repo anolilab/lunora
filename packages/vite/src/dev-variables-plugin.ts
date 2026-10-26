@@ -1,4 +1,12 @@
-import { createConfirm, ensureDevVariables, ensureDevWorkerEnv, fillDevSecrets, lunoraLine } from "@lunora/config";
+import {
+    createConfirm,
+    ensureDevVariables,
+    ensureDevWorkerEnv,
+    fillDevSecrets,
+    inferLunoraBindings,
+    lunoraLine,
+    secretSourcesFromBindings,
+} from "@lunora/config";
 import type { Plugin } from "vite";
 
 import type { ResolvedLunoraPluginOptions } from "./types";
@@ -46,7 +54,8 @@ const devVariablesPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
 
             await ensureDevVariables({ confirm: createConfirm("[lunora] "), cwd: options.projectRoot, info });
 
-            fillDevSecrets({ cwd: options.projectRoot, info });
+            const secretSources = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: options.projectRoot }));
+            fillDevSecrets({ cwd: options.projectRoot, info, secretSources });
             ensureDevWorkerEnv(options.projectRoot, info);
         },
         enforce: "pre",

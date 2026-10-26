@@ -173,8 +173,10 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
     // only generates locally-derivable values and never overwrites a real one.
     // Best-effort — a write failure must not block dev startup.
     try {
+        const secretSources = secretSourcesFromBindings(await inferLunoraBindings({ cache, projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) }));
         (options.fillSecrets ?? fillDevSecrets)({
             cwd,
+            secretSources,
             info: (message) => {
                 options.logger.info(message);
             },

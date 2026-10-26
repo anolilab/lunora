@@ -834,3 +834,40 @@ describe("the secret-value key is never minted", () => {
         expect(plan.content).toContain('LUNORA_SECRET_VALUE_KEY="<your-base64-32-byte-key>"');
     });
 });
+
+describe("planDevSecretsFill — relay key follows the project's role", () => {
+    const hostPlaceholder = 'LUNORA_RELAY_SECRET="replace-with-openssl-rand-hex-32"\n';
+
+    it("mints the relay key for a project that hosts a relay-secured object", () => {
+        expect.assertions(1);
+
+        const plan = planDevSecretsFill({
+            existingContent: hostPlaceholder,
+            mintable: mintableSecretKeysFor(["@lunora/replica:eventLog"]),
+            randomHex: fixedHex,
+        });
+
+        expect(plan.content).toContain(`LUNORA_RELAY_SECRET="${"a".repeat(64)}"`);
+    });
+
+    it("leaves a host placeholder unminted for a project that only constructs the client", () => {
+        expect.assertions(2);
+
+        const plan = planDevSecretsFill({
+            existingContent: hostPlaceholder,
+            mintable: mintableSecretKeysFor(["@lunora/replica:eventLogClient"]),
+            randomHex: fixedHex,
+        });
+
+        expect(plan.content).toContain(hostPlaceholder);
+        expect(plan.filledKeys).not.toContain("LUNORA_RELAY_SECRET");
+    });
+
+    it("keeps minting the relay key when no secret sources are given", () => {
+        expect.assertions(1);
+
+        const plan = planDevSecretsFill({ existingContent: hostPlaceholder, randomHex: fixedHex });
+
+        expect(plan.content).toContain(`LUNORA_RELAY_SECRET="${"a".repeat(64)}"`);
+    });
+});

@@ -8,7 +8,14 @@ import { LunoraError } from "@lunora/errors";
 
 import { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_NEWLINE, parseDevVariableEntries, parseDevVariableLine } from "./dev-variables-format";
 import type { SecretEntry } from "./package-secrets-registry";
-import { CORE_SECRETS, MINTABLE_SECRET_KEYS, secretsForPackages, SHARD_RELAY_HOST_PLACEHOLDER, SHARD_RELAY_SECRET_KEY } from "./package-secrets-registry";
+import {
+    CORE_SECRETS,
+    MINTABLE_SECRET_KEYS,
+    mintableSecretKeysFor,
+    secretsForPackages,
+    SHARD_RELAY_HOST_PLACEHOLDER,
+    SHARD_RELAY_SECRET_KEY,
+} from "./package-secrets-registry";
 
 /** Core (always-scaffolded) secrets followed by the package-specific ones for the detected capabilities. */
 const requiredSecrets = (packageNames: ReadonlyArray<string>): SecretEntry[] => [...CORE_SECRETS, ...secretsForPackages(packageNames)];
@@ -110,6 +117,12 @@ const isPlaceholderValue = (value: string): boolean => {
 const defaultRandomHex = (bytes: number): string => randomBytes(bytes).toString("hex");
 
 /**
+ * The keys minted when the caller names no secret sources: every registry key, and the relay key on its host placeholder. A caller that
+ * names its sources narrows the set with {@link mintableSecretKeysFor}, so a project that only constructs the client is not minted a key.
+ */
+const DEFAULT_MINTABLE_KEYS: ReadonlySet<string> = new Set([...MINTABLE_SECRET_KEYS, SHARD_RELAY_SECRET_KEY]);
+
+/**
  * True for a secret key the registry says Lunora can mint locally (a random
  * 32-byte hex, like `openssl rand -hex 32`) — `AUTH_SECRET`,
  * `LUNORA_ADMIN_TOKEN`, `STORAGE_SIGNING_SECRET`, …
@@ -121,8 +134,8 @@ const defaultRandomHex = (bytes: number): string => randomBytes(bytes).toString(
  * runtime — over the developer's own half-filled `.dev.vars` — and hide the gap
  * from `lunora env doctor`, whose job is to report it as unfilled.
  */
-const isMintableSecretKey = (key: string, value: string): boolean =>
-    key === SHARD_RELAY_SECRET_KEY ? value.trim() === "" || value === SHARD_RELAY_HOST_PLACEHOLDER : MINTABLE_SECRET_KEYS.has(key);
+const isMintableSecretKey = (key: string, value: string, mintable: ReadonlySet<string> = DEFAULT_MINTABLE_KEYS): boolean =>
+    key === SHARD_RELAY_SECRET_KEY ? mintable.has(key) && (value.trim() === "" || value === SHARD_RELAY_HOST_PLACEHOLDER) : mintable.has(key);
 
 /**
  * The fresh secret to substitute for an example `key=value` entry, or `undefined`
@@ -138,8 +151,8 @@ const isMintableSecretKey = (key: string, value: string): boolean =>
  * `lunora env doctor` — minting a random value for one would be actively wrong
  * (the provider would reject it) and would hide the misconfiguration.
  */
-const generatedSecretFor = (key: string, value: string, randomHex: (bytes: number) => string): string | undefined =>
-    isMintableSecretKey(key, value) && isPlaceholderValue(value) ? randomHex(SECRET_BYTES) : undefined;
+const generatedSecretFor = (key: string, value: string, randomHex: (bytes: number) => string, mintable: ReadonlySet<string>): string | undefined =>
+    isMintableSecretKey(key, value, mintable) && isPlaceholderValue(value) ? randomHex(SECRET_BYTES) : undefined;
 
 /** Mint a fresh strong secret value — 64 hex chars (32 bytes), like `openssl rand -hex 32`. */
 const generateSecretValue = (randomHex: (bytes: number) => string = defaultRandomHex): string => randomHex(SECRET_BYTES);
@@ -150,10 +163,15 @@ const generateSecretValue = (randomHex: (bytes: number) => string = defaultRando
  * line are preserved verbatim. Shared by the full-file scaffold and the
  * in-place fill.
  */
-const fillSecretLines = (content: string, randomHex: (bytes: number) => string, filledKeys: string[]): string[] =>
+const fillSecretLines = (
+    content: string,
+    randomHex: (bytes: number) => string,
+    filledKeys: string[],
+    mintable: ReadonlySet<string> = DEFAULT_MINTABLE_KEYS,
+): string[] =>
     content.split(DEV_VARS_NEWLINE).map((line) => {
         const parsed = parseDevVariableLine(line);
-        const secret = parsed ? generatedSecretFor(parsed.key, parsed.value, randomHex) : undefined;
+        const secret = parsed ? generatedSecretFor(parsed.key, parsed.value, randomHex, mintable) : undefined;
 
         if (!parsed || secret === undefined) {
             return line;
@@ -254,7 +272,7 @@ const planDevVariablesAugment = (input: {
             continue;
         }
 
-        const secret = generatedSecretFor(parsed.key, parsed.value, randomHex);
+        const secret = generatedSecretFor(parsed.key, parsed.value, randomHex, DEFAULT_MINTABLE_KEYS);
 
         missingKeys.push(parsed.key);
 
@@ -693,12 +711,12 @@ interface DevSecretsFillPlan {
  * Pure (given `randomHex`): real (non-placeholder) values are never touched, and
  * comments + non-secret entries are preserved verbatim.
  */
-const planDevSecretsFill = (input: { existingContent: string; randomHex?: (bytes: number) => string }): DevSecretsFillPlan => {
+const planDevSecretsFill = (input: { existingContent: string; mintable?: ReadonlySet<string>; randomHex?: (bytes: number) => string }): DevSecretsFillPlan => {
     const randomHex = input.randomHex ?? defaultRandomHex;
     const filledKeys: string[] = [];
 
     // 1. Fill empty/placeholder secret-keyed values in place.
-    const lines = fillSecretLines(input.existingContent, randomHex, filledKeys);
+    const lines = fillSecretLines(input.existingContent, randomHex, filledKeys, input.mintable);
 
     // 2. Append any missing core secret (a present-but-empty one is already
     //    handled by the fill pass — every CORE_SECRETS key is secret-named).
@@ -751,12 +769,22 @@ interface FillDevSecretsResult {
  * it through {@link atomicWrite} (temp + rename, owner-only) with the keys it
  * just read and planned against.
  */
-const fillDevSecrets = (deps: { cwd: string; info?: (message: string) => void; randomHex?: (bytes: number) => string }): FillDevSecretsResult => {
+const fillDevSecrets = (deps: {
+    cwd: string;
+    info?: (message: string) => void;
+    randomHex?: (bytes: number) => string;
+    /** The project's secret sources (`secretSourcesFromBindings`); narrows what is minted to the keys its role needs. Omit for every registry key. */
+    secretSources?: ReadonlyArray<string>;
+}): FillDevSecretsResult => {
     const devVariablesPath = join(deps.cwd, DEV_VARS_FILE);
     const exists = existsSync(devVariablesPath);
     const existingContent = exists ? readFileSync(devVariablesPath, "utf8") : "";
 
-    const plan = planDevSecretsFill({ existingContent, randomHex: deps.randomHex });
+    const plan = planDevSecretsFill({
+        existingContent,
+        mintable: deps.secretSources === undefined ? undefined : mintableSecretKeysFor(deps.secretSources),
+        randomHex: deps.randomHex,
+    });
 
     if (plan.filledKeys.length === 0 && plan.addedKeys.length === 0) {
         return { addedKeys: [], filledKeys: [], status: "unchanged" };

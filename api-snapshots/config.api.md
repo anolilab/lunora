@@ -1497,6 +1497,7 @@ const fillDevSecrets: (deps: {
     cwd: string;
     info?: (message: string) => void;
     randomHex?: (bytes: number) => string;
+    secretSources?: ReadonlyArray<string>;
 }) => FillDevSecretsResult;
 ```
 
@@ -1572,7 +1573,7 @@ const isMergedRoleModule: (module: string) => boolean;
 ### `isMintableSecretKey` (const)
 
 ```ts
-const isMintableSecretKey: (key: string, value: string) => boolean;
+const isMintableSecretKey: (key: string, value: string, mintable?: ReadonlySet<string>) => boolean;
 ```
 
 ### `isPlaceholderValue` (const)
@@ -1649,6 +1650,7 @@ const parseSchema: (source: string) => ParseSchemaResult;
 ```ts
 const planDevSecretsFill: (input: {
     existingContent: string;
+    mintable?: ReadonlySet<string>;
     randomHex?: (bytes: number) => string;
 }) => DevSecretsFillPlan;
 ```
