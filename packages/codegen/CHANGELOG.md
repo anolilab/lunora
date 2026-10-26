@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.357](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.356...@lunora/codegen@1.0.0-alpha.357) (2026-10-26)
+
+### Bug Fixes
+
+* **privacy:** erasure replay, coverage, retention and persistence fixes ([#1286](https://github.com/anolilab/lunora/issues/1286)) ([1ef4e1b](https://github.com/anolilab/lunora/commit/1ef4e1be46596c97f576e125cdf6c11d2d86b324))
+
 ## @lunora/codegen [1.0.0-alpha.356](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.355...@lunora/codegen@1.0.0-alpha.356) (2026-10-26)
 
 ### Features
