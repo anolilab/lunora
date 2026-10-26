@@ -1376,8 +1376,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // guarded/public one). A denial throws; in a mutation the DO's
             // BEGIN/COMMIT span rolls the whole batch back, in an action
             // (no span) prior deletes persist. Sequential to match the per-row
-            // semantics of N `delete()` calls; `expectedTable` (the facade's bound
-            // table) scopes each id.
+            // semantics of N `delete()` calls; `table` scopes each id.
             for (const id of ids) {
                 // eslint-disable-next-line no-await-in-loop -- sequential per-row policy gate, mirrors looped single deletes
                 await gateById(table, id, "delete", (writer) => writer.delete(table, id));
@@ -1661,7 +1660,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // Per-id update gate, same WITH-CHECK post-image semantics as the
             // single patch. Sequential; in a mutation the DO's BEGIN/COMMIT span
             // rolls the whole batch back on a denial, in an action (no
-            // span) prior patches persist. `expectedTable` scopes each id.
+            // span) prior patches persist. `table` scopes each id.
             for (const entry of patches) {
                 // eslint-disable-next-line no-await-in-loop -- sequential per-row policy gate, mirrors looped single patches
                 await gatePatchById(table, entry.id, entry.patch, (writer, writeOptions) => writer.patch(table, entry.id, entry.patch, writeOptions));

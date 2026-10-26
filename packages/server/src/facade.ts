@@ -208,14 +208,11 @@ export interface UpsertManyArgs {
 /**
  * Bind a structural writer to one table, producing its `ctx.db` table accessor.
  *
- * The by-id accessors (`get`/`delete`/`patch`/`replace`) forward the bound
- * `tableName` as `expectedTable` so the underlying writer scopes its id lookup
+ * The by-id accessors (`get`/`delete`/`patch`/`replace`) pass the bound
+ * `tableName` as the writer's table argument, so the writer scopes its id lookup
  * to this table. Without it, a branded `Id<"posts">` carrying another table's
- * id would resolve cross-table (the writer probes every table by id), letting
- * `ctx.db.posts.get(foreignId)` read — or `.delete`/`.patch`/`.replace`
- * mutate — a row in an unrelated table (IDOR). Writers that ignore the second
- * argument keep their previous global behaviour; the scoping is opt-in via this
- * forwarded name.
+ * id would resolve cross-table, letting `ctx.db.posts.get(foreignId)` read — or
+ * `.delete`/`.patch`/`.replace` mutate — a row in an unrelated table (IDOR).
  *
  * Cost: on a `.global()` table, `ctx.db.<table>.get(id)` probes only `tableName`,
  * and so does the root `ctx.db.get(table, id)`; neither form probes every table.
@@ -290,10 +287,10 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         aggregate: (options) => writer.aggregate(tableName, options),
         count: (where) => writer.count(tableName, where),
         delete: (id) => writer.delete(tableName, id),
-        // `deleteMany`/`patchMany` forward the bound `tableName` as `expectedTable`
-        // for id-based calls (threaded through the writer + the RLS middleware's
-        // per-id gate) so every batched id is scoped to this table — the same IDOR
-        // guard the single-row `delete`/`patch` apply. The where-based form routes
+        // `deleteMany`/`patchMany` pass the bound `tableName` as the writer's table
+        // argument for id-based calls (the RLS middleware's per-id gate included) so
+        // every batched id is scoped to this table — the same IDOR guard the
+        // single-row `delete`/`patch` apply. The where-based form routes
         // through the structural writer's `deleteMany(tableName, { where })`.
         // `patchMany` maps the facade's `values` payload to the writer's
         // `{ id, patch }` shape.

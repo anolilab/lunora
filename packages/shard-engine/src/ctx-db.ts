@@ -2007,6 +2007,17 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const broadcast = options.broadcast ?? (() => undefined);
 
     /**
+     * Both by-id arguments are `string`, so the compiler cannot tell a swapped `(id, table)` call from a valid one.
+     * An id never names a schema table, so rejecting an unknown table here turns a swap into an error instead of a
+     * missing row.
+     */
+    const assertSchemaTable = (table: string, signature: string): void => {
+        if (!Object.hasOwn(schema.tables, table)) {
+            throw new LunoraError("BAD_REQUEST", `${signature}: "${table}" is not a table in this schema`);
+        }
+    };
+
+    /**
      * The schema's foreign-key edge set, derived once per writer rather than per
      * `related()` call: a dispatch builds a fresh writer, and the walk is
      * already the expensive part.
@@ -3230,6 +3241,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async delete(table, id, deleteOptions) {
+            assertSchemaTable(table, "ctx.db.delete(table, id)");
+
             // Single probe — get the table + row in one pass instead of
             // probing twice (`tableNameFromId` + `writer.get`).
             const located = locateRowById(id, table);
@@ -3442,6 +3455,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async deleteMany(table, ids, batchOptions) {
+            assertSchemaTable(table, "ctx.db.deleteMany(table, ids)");
             assertBatchLimit(ids.length, batchOptions?.limit, "deleteMany");
 
             // Sequential loop over the single-row delete so each id reuses the
@@ -3632,12 +3646,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async get(table, id) {
-            // Both arguments are `string`, so the compiler cannot tell a swapped
-            // `(id, table)` call from a valid one. An id never names a schema table,
-            // so rejecting an unknown table here turns a swap into an error.
-            if (!Object.hasOwn(schema.tables, table)) {
-                throw new LunoraError("BAD_REQUEST", `ctx.db.get(table, id): "${table}" is not a table in this schema`);
-            }
+            assertSchemaTable(table, "ctx.db.get(table, id)");
 
             const located = locateRowById(id, table);
 
@@ -4160,6 +4169,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async patch(table, id, patch, patchOptions) {
+            assertSchemaTable(table, "ctx.db.patch(table, id, values)");
+
             // Single probe — eliminates the redundant `tableNameFromId` +
             // `writer.get` chain that doubled the SQL round-trips per patch
             // on the prior code path.
@@ -4330,6 +4341,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async patchMany(table, patches, batchOptions) {
+            assertSchemaTable(table, "ctx.db.patchMany(table, patches)");
             assertBatchLimit(patches.length, batchOptions?.limit, "patchMany");
 
             // Sequential loop over the single-row patch so each row reuses the
@@ -4637,6 +4649,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async restore(table, id) {
+            assertSchemaTable(table, "ctx.db.restore(table, id)");
+
             // By-id, so it reaches a row that list reads hide. Clearing the marker
             // is a plain `patch` to `null` — it re-syncs companions and broadcasts
             // an update, so live list queries pick the row back up.
@@ -4682,6 +4696,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async replace(table, id, document, replaceOptions) {
+            assertSchemaTable(table, "ctx.db.replace(table, id, document)");
+
             // Single probe that also captures the read-time `__doc__` blob.
             // The before-update trigger below spans an `await`, so the write
             // must compare-and-swap on this snapshot (see `runGuardedWrite`)

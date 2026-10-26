@@ -153,7 +153,7 @@ const guardShardSweep = (
 
 /** How {@link guardWriter} gates one method of the real writer. */
 type WriterGating =
-    /** By-id write/read: the owning table is resolved from the id, then gated (`guardById`). */
+    /** By-id lookup with no table argument: the owning table is resolved from the id, then gated (`guardById`). */
     | "id-gated"
     /** Table-name-first too, but overridden inline rather than by the uniform loop — its key must exist (as `undefined`) even when the base has no implementation. */
     | "inline-table-gated"
@@ -189,9 +189,9 @@ const WRITER_METHOD_GATING = {
     /** Metadata-only changelog probe: returns table NAMES and a cursor, never a document. */
     cdcChangedTables: "ungated",
     count: "loop-gated",
-    delete: "id-gated",
+    delete: "inline-table-gated",
     deleteAll: "loop-gated",
-    deleteMany: "id-gated",
+    deleteMany: "inline-table-gated",
     deleteWhere: "inline-table-gated",
     /** Table-name-first, and it compiles a read of that table, so the loop's table gate covers it. */
     explain: "loop-gated",
@@ -209,10 +209,10 @@ const WRITER_METHOD_GATING = {
     lookupById: "id-gated",
     /** Pure id validator/parser — returns the id or `null`, reads no row. */
     normalizeId: "ungated",
-    patch: "id-gated",
+    patch: "inline-table-gated",
     /** Table-name-first (`patchIf(table, id, …)`), so the loop's table gate covers it; the writer scopes the id to that table. */
     patchIf: "loop-gated",
-    patchMany: "id-gated",
+    patchMany: "inline-table-gated",
     patchWhere: "inline-table-gated",
     query: "loop-gated",
     rank: "loop-gated",
@@ -243,8 +243,8 @@ const WRITER_METHOD_GATING = {
 
     /** Schema-derived metadata: names marker columns, reaches no row. */
     softDeleteFields: "ungated",
-    replace: "id-gated",
-    restore: "id-gated",
+    replace: "inline-table-gated",
+    restore: "inline-table-gated",
     /** The system-table reader: reserved tables, not user tables, so the per-table policy model does not apply. */
     system: "ungated",
     wipeShard: "sweep-gated",

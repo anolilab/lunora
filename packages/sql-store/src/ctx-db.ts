@@ -1840,6 +1840,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * needs no missing-table handling.
      */
     const resolveTableName = async (id: string, expectedTable?: string): Promise<string | undefined> => {
+        // A swapped `(id, table)` call would otherwise read as a missing row; no id names a schema table.
+        if (expectedTable !== undefined && !Object.hasOwn(schema.tables, expectedTable)) {
+            throw new LunoraError("BAD_REQUEST", `ctx.db by-id write (table, id): "${expectedTable}" is not a table in this schema`);
+        }
+
         await ensureMigrated();
 
         const tableName = await tableNameFromId(exec, dialect, schema, id, tableNameCache, expectedTable);

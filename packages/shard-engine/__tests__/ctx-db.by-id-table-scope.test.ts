@@ -59,6 +59,19 @@ describe("by-id table scoping (IDOR)", () => {
         await expect(db.get(userId, "users")).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
 
+    it("a swapped (id, table) write fails loudly instead of reading as a missing row", async () => {
+        expect.assertions(4);
+
+        const db = makeWriter();
+        const userId = await db.insert("users", { email: "victim@example.com" });
+
+        // Both arguments are strings, so the swap type-checks; without the table check each call resolves as a no-op.
+        await expect(db.delete(userId, "users")).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        await expect(db.patch(userId, "users", { email: "x" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        await expect(db.deleteMany!(userId, [userId])).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        await expect(db.get("users", userId)).resolves.toMatchObject({ email: "victim@example.com" });
+    });
+
     it("lookupById resolves { row, tableName }; a foreign id scopes to null (same IDOR guard as get)", async () => {
         expect.assertions(3);
 
