@@ -259,6 +259,27 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(() => seedPlan(schema, { counts: { boxes: 4 } })).toThrow(/unique column "xs" has only 3 possible values/u);
     });
 
+    it("takes NULL for the rows past a nullable member's finite ceiling, which a unique index never compares", () => {
+        expect.hasAssertions();
+
+        const unionNull = defineSchema({
+            slots: defineTable({ flag: v.boolean(), kind: v.union(v.literal("x"), v.null()) }).index("by_kind_flag", ["kind", "flag"], { unique: true }),
+        });
+        const nullable = defineSchema({
+            slots: defineTable({ flag: v.boolean(), kind: v.literal("x").nullable() }).index("by_kind_flag", ["kind", "flag"], { unique: true }),
+        });
+
+        for (const schema of [unionNull, nullable]) {
+            const rows = rowsOf(seedPlan(schema, { counts: { slots: 10 } }), "slots");
+            const live = rows.filter((row) => row.kind !== null).map((row) => `${row.kind as string}|${String(row.flag)}`);
+
+            expect(rows).toHaveLength(10);
+            expect(new Set(live).size).toBe(live.length);
+            expect(live).toContain("x|true");
+            expect(live).toContain("x|false");
+        }
+    });
+
     it("counts the arrays a finite element domain can form towards a composite's capacity", () => {
         expect.hasAssertions();
 

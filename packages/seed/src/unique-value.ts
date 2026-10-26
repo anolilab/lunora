@@ -493,9 +493,13 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
 
         case "literal": {
             // A literal column accepts exactly one value, so a second unique row
-            // is impossible by definition. Declaring the capacity lets the
-            // planner say so with the row counts attached.
-            return { capacity: 1, valueAt: () => metaOf(field.validator).value };
+            // is impossible by definition, unless the column is nullable: NULL is
+            // then a second value. Declaring the capacity lets the planner say so
+            // with the row counts attached.
+            const { value } = metaOf(field.validator);
+
+            // eslint-disable-next-line unicorn/no-null -- NULL is the second value a nullable literal column takes
+            return domainDeal(field.nullable ? [value, null] : [value], table, field.name);
         }
 
         case "number": {
@@ -582,5 +586,14 @@ const hasHashedValue = (field: FieldSpec, options: UniqueDealOptions): boolean =
     return planUniqueDeal(field, options) === anonymousDeal;
 };
 
-export { hasHashedValue, planCompositeMemberDeal, planUniqueDeal, planUniqueFkDeal };
+/**
+ * Whether a member's closed domain holds `null`. A unique index never compares a NULL, so a row that
+ * takes one can never collide with another; a composite index uses that to take rows past its counted
+ * combinations.
+ */
+const admitsNull = (field: FieldSpec): boolean =>
+    // eslint-disable-next-line unicorn/no-null -- NULL is the value a unique index never compares
+    finiteDomain(field.validator)?.includes(null) === true;
+
+export { admitsNull, hasHashedValue, planCompositeMemberDeal, planUniqueDeal, planUniqueFkDeal };
 export type { CompositeMemberDeal, UniqueDeal };

@@ -6,7 +6,7 @@ import { generateValue } from "./generate-value";
 import type { FieldSpec, TableSpec, UniqueIndexSpec } from "./introspect";
 import { fkParentClosure, introspectSchema, orderTables } from "./introspect";
 import type { UniqueDeal } from "./unique-value";
-import { hasHashedValue, planCompositeMemberDeal, planUniqueDeal, planUniqueFkDeal } from "./unique-value";
+import { admitsNull, hasHashedValue, planCompositeMemberDeal, planUniqueDeal, planUniqueFkDeal } from "./unique-value";
 
 /**
  * The pure, I/O-free core of seeding. {@link seedPlan} introspects a schema,
@@ -379,12 +379,20 @@ const assignDigits = (carriers: ReadonlyArray<Carrier>, capacity: number, deals:
     const chain = carriers.map(({ deal, field }) => {
         return { capacity: deal.capacity, name: field.name };
     });
+    // A row past the combinations the carriers count takes NULL in the first nullable carrier. A unique index
+    // never compares a NULL, so such a row cannot collide, and no batch past the count needs refusing.
+    const nullPosition = carriers.findIndex(({ field }) => admitsNull(field));
 
     for (const [position, { deal, field }] of carriers.entries()) {
         deals.set(field.name, {
             capacity,
             chain,
             valueAt: (valueIndex, generate) => {
+                if (position === nullPosition && valueIndex >= capacity) {
+                    // eslint-disable-next-line unicorn/no-null -- NULL is the value that takes a row out of every collision
+                    return null;
+                }
+
                 let shift = 0;
 
                 for (let earlier = 0; earlier < position; earlier += 1) {
@@ -491,7 +499,8 @@ const planCompositeDeal = (
         carried *= carrier.deal.capacity;
     }
 
-    const capacity = Math.max(carried, covered);
+    // A nullable carrier takes NULL past the counted combinations, so the index cannot run out of rows.
+    const capacity = carriers.some(({ field }) => admitsNull(field)) ? Number.POSITIVE_INFINITY : Math.max(carried, covered);
 
     // A hash-derived member (a `.url()`, a storage id, an array) is distinct per row but uncountable, so
     // it can cover what the counted members cannot; only an index made of counted members is refused.
