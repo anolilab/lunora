@@ -259,6 +259,50 @@ const isKeptFilterValue = (operator: string, value: unknown): boolean => {
 };
 
 /**
+ * One clause of a suggestion, or `undefined` when the suggestion must be refused.
+ */
+const validateClause = (
+    entry: unknown,
+    known: ReadonlySet<string>,
+    stored: ReadonlySet<string>,
+    kinds: Readonly<Record<string, string>>,
+): AssistantFilterClause | undefined => {
+    if (typeof entry !== "object" || entry === null) {
+        return undefined;
+    }
+
+    const { column, operator, path, value } = entry as { column?: unknown; operator?: unknown; path?: unknown; value?: unknown };
+
+    // Dropping this clause would keep its siblings, a wider set than the model described.
+    if (typeof column !== "string" || !known.has(column) || typeof operator !== "string" || !FILTER_OPERATORS.has(operator)) {
+        return undefined;
+    }
+
+    const nested = assistantPath(path);
+
+    if (nested === undefined) {
+        return undefined;
+    }
+
+    if (stored.has(column) && (operator === "has" || nested.path !== undefined)) {
+        return undefined;
+    }
+
+    if (nested.path === undefined && kinds[column] === "bigint" && (operator === "has" || operator === "contains")) {
+        return undefined;
+    }
+
+    // The browser discards a row whose value renders blank. Dropping only that clause
+    // would widen the rest of the set, which bulk actions then run against; refuse the
+    // whole suggestion instead.
+    if (!isKeptFilterValue(operator, value)) {
+        return undefined;
+    }
+
+    return { column, operator, ...nested, value };
+};
+
+/**
  * Validate a model-proposed filter set against the table's REAL columns.
  *
  * Structured output, not raw SQL — so the data browser's existing filter
@@ -269,9 +313,16 @@ const isKeptFilterValue = (operator: string, value: unknown): boolean => {
  *
  * `physical` is the table's storage-level column names, from `PRAGMA table_info`.
  * The shard compiler refuses a `has` or a nested path on one of them, so Studio
- * must not be offered a filter it would then fail to run.
+ * must not be offered a filter it would then fail to run. `kinds` maps a field to its
+ * declared type: the compiler refuses `has` and `contains` on a top-level `bigint`
+ * field, for the same reason.
  */
-const validateClauses = (parsed: unknown, columns: ReadonlyArray<string>, physical: ReadonlyArray<string>): AssistantFilterClause[] | undefined => {
+const validateClauses = (
+    parsed: unknown,
+    columns: ReadonlyArray<string>,
+    physical: ReadonlyArray<string>,
+    kinds: Readonly<Record<string, string>>,
+): AssistantFilterClause[] | undefined => {
     if (!Array.isArray(parsed)) {
         return undefined;
     }
@@ -281,35 +332,13 @@ const validateClauses = (parsed: unknown, columns: ReadonlyArray<string>, physic
     const clauses: AssistantFilterClause[] = [];
 
     for (const entry of parsed) {
-        if (typeof entry !== "object" || entry === null) {
+        const clause = validateClause(entry, known, stored, kinds);
+
+        if (clause === undefined) {
             return undefined;
         }
 
-        const { column, operator, path, value } = entry as { column?: unknown; operator?: unknown; path?: unknown; value?: unknown };
-
-        // Dropping this clause would keep its siblings, a wider set than the model described.
-        if (typeof column !== "string" || !known.has(column) || typeof operator !== "string" || !FILTER_OPERATORS.has(operator)) {
-            return undefined;
-        }
-
-        const nested = assistantPath(path);
-
-        if (nested === undefined) {
-            return undefined;
-        }
-
-        if (stored.has(column) && (operator === "has" || nested.path !== undefined)) {
-            return undefined;
-        }
-
-        // The browser discards a row whose value renders blank. Dropping only that clause
-        // would widen the rest of the set, which bulk actions then run against; refuse the
-        // whole suggestion instead.
-        if (!isKeptFilterValue(operator, value)) {
-            return undefined;
-        }
-
-        clauses.push({ column, operator, ...nested, value });
+        clauses.push(clause);
     }
 
     return clauses.length === 0 ? undefined : clauses;
@@ -595,6 +624,7 @@ const generateFilter = async (
     rawArgs: Record<string, unknown>,
     columns: ReadonlyArray<string>,
     physical: ReadonlyArray<string>,
+    kinds: Readonly<Record<string, string>> = {},
 ): Promise<GenerateFilterResult> => {
     const prompt = capped(rawArgs.prompt, PROMPT_CAP);
 
@@ -610,7 +640,7 @@ const generateFilter = async (
     const facts = `Columns available on this table: ${named.join(", ")}`;
     const outcome = await attempt(
         async () => runPrompt(binding, modelFor(rawArgs), structuredSystemPrompt("filter"), structuredUserPrompt(facts, prompt)),
-        (raw) => validateClauses(extractJson(raw), columns, physical),
+        (raw) => validateClauses(extractJson(raw), columns, physical, kinds),
     );
 
     return outcome.degraded ? outcome : { clauses: outcome.value, degraded: false };

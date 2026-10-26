@@ -301,6 +301,27 @@ describe("generateFilter", () => {
         },
     );
 
+    it.each([['{"column":"amount","operator":"has","value":1}'], ['{"column":"amount","operator":"contains","value":"1"}']])(
+        "degrades the whole suggestion when it asks a bigint field for an operator the compiler refuses (%s)",
+        async (clause) => {
+            expect.assertions(1);
+
+            const ai = binding(`[${clause},{"column":"status","operator":"eq","value":"open"}]`);
+            const result = await generateFilter(ai, { prompt: "x" }, ["id", "amount", "status"], [], { amount: "bigint" });
+
+            expect(result.degraded).toBe(true);
+        },
+    );
+
+    it("keeps a has clause on a nested field of a bigint column, which the compiler accepts", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"amount","operator":"has","path":["x"],"value":1}]');
+        const result = await generateFilter(ai, { prompt: "x" }, ["id", "amount"], [], { amount: "bigint" });
+
+        expect(result.degraded ? undefined : result.clauses).toStrictEqual([{ column: "amount", operator: "has", path: ["x"], value: 1 }]);
+    });
+
     it("reads a null path as absent, since models emit it on top-level columns", async () => {
         expect.assertions(1);
 

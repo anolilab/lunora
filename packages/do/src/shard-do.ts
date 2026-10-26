@@ -11857,8 +11857,10 @@ abstract class ShardDO {
                       .exec<{ name: string }>(`PRAGMA table_info(${quoteIdentifier(table)})`)
                       .toArray()
                       .map((column) => column.name);
+        // The declared kinds the filter compiler binds through, so a suggestion it would refuse is never offered.
+        const kinds = this.columnKinds(table) ?? {};
         const { generateFilter } = await loadSqlAssistant();
-        const result = await generateFilter((this.env as Record<string, unknown> | undefined)?.["AI"], args, columns, physical);
+        const result = await generateFilter((this.env as Record<string, unknown> | undefined)?.["AI"], args, columns, physical, kinds);
 
         if (result.degraded && result.reason !== "no-ai-binding") {
             this.recordAudit("aiTableFilter", { detail: { reason: result.reason, table } });
