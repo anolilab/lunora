@@ -1535,11 +1535,13 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             vi.mocked(runPostCodegenHook).mockClear();
 
             let finishHook: (() => void) | undefined;
+            const order: string[] = [];
 
             vi.mocked(runPostCodegenHook).mockImplementationOnce(
                 async () =>
                     new Promise((resolve) => {
                         finishHook = () => {
+                            order.push("hook");
                             resolve({ ran: false });
                         };
                     }),
@@ -1559,23 +1561,20 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
             await (plugin.configResolved as (this: unknown) => Promise<void>).call(undefined);
 
-            let settled = 0;
             const starts = [buildStart.call(contextFor("client")), buildStart.call(contextFor("worker"))].map(async (start) => {
                 await start;
-                settled += 1;
+                order.push("start");
             });
 
             await vi.waitFor(() => {
                 expect(finishHook).toBeDefined();
             });
-            await new Promise((resolve) => {
-                setTimeout(resolve, 20);
-            });
-
-            expect(settled).toBe(0);
 
             finishHook?.();
             await Promise.all(starts);
+
+            // A start that did not wait for the shared hook would have settled before it.
+            expect(order).toStrictEqual(["hook", "start", "start"]);
 
             expect(runCodegen).toHaveBeenCalledTimes(1);
             expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
