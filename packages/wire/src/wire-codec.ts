@@ -240,9 +240,7 @@ const needsWireEncoding = (value: unknown, depth = 0): boolean => {
         return true;
     }
 
-    // An accessor is not identity: reading it runs a getter, and the caller may read
-    // it again when stringifying the original. The `||` checks it first, so a getter
-    // is never read here.
+    // The `||` checks for an accessor first, so a getter is never read here.
     return Object.keys(value).some((key) => isAccessorField(value, key) || (value[key] !== undefined && needsWireEncoding(value[key], depth + 1)));
 };
 

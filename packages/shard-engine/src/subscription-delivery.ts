@@ -330,7 +330,8 @@ const collectFramedDeltas = (previousJson: string, nextResult: unknown, table: s
  * not by the result: a handler may return the same object on every run and edit
  * it in place, and a diff keyed by that object would be served again on a later
  * flush. Weak on the key, so an entry lives exactly as long as that run's outcome.
- * Without a key the diff is computed per call. The inner map is keyed by the baseline string;
+ * Without a key the diff is computed per call. The inner map is keyed by the
+ * baseline string;
  * sockets on one value hold the same string instance, so its hash is computed
  * once and a hit compares by reference.
  */
