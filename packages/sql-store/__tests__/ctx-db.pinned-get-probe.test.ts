@@ -153,3 +153,33 @@ describe("createSqlCtxDb id lookup by table", () => {
         expect(row).toBeNull();
     });
 });
+
+describe("createSqlCtxDb get on a shard-local table", () => {
+    it("returns null without reading D1, since a shard-local row never lives there", async () => {
+        expect.assertions(2);
+
+        const localHarness = createSqliteHarness();
+        const probed: string[] = [];
+        const exec: SqlCtxExec = {
+            ...localHarness.exec,
+            all: (query, parameters) => {
+                probed.push(query);
+
+                return localHarness.exec.all(query, parameters);
+            },
+        };
+        const local = createSqlCtxDb({
+            clock: () => 1_700_000_000_000,
+            dialect: makeSqliteDialect(),
+            exec,
+            schema: { tables: { local: { indexes: [], shape: {}, shardMode: { kind: "root" } } } },
+        });
+
+        try {
+            await expect(local.get("local", "x1")).resolves.toBeNull();
+            expect(probed.filter((query) => query.includes('"local"'))).toStrictEqual([]);
+        } finally {
+            localHarness.close();
+        }
+    });
+});

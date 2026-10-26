@@ -3488,6 +3488,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 throw new LunoraError("BAD_REQUEST", `ctx.db.get(table, id): "${table}" is not a table in this schema`);
             }
 
+            // Only `.global()` tables are provisioned in D1; a shard-local row never lives here.
+            if (definition.shardMode !== undefined && definition.shardMode.kind !== "global") {
+                // eslint-disable-next-line unicorn/no-null -- writer.get's public return is `doc | null`; an absent row returns null.
+                return null;
+            }
+
             await ensureMigrated();
 
             // Coalesced: every `get` issued in this tick against `table`
