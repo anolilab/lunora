@@ -375,7 +375,7 @@ describe("the import batcher", () => {
     });
 
     it("stops before the real pass when a worker writes during its check, as one that ignores the flag does", async () => {
-        expect.assertions(3);
+        expect.assertions(5);
 
         const root = writeConvexExport({}, { docs: [{ _id: "d1" }, { _id: "d2" }] });
         const writes: string[] = [];
@@ -416,7 +416,47 @@ describe("the import batcher", () => {
 
         expect(result.code).toBe(1);
         expect(result.error).toContain("wrote rows during its check");
+        // The check's two rows are in the shard, so the refusal must not say nothing was written.
+        expect(result.error).toContain("rows may already be written");
+        expect(result.inserted).toBe(2);
         expect(dryRuns).toStrictEqual([true]);
+    });
+
+    it("says rows may already be written when the check only met _ids already in use", async () => {
+        expect.assertions(3);
+
+        const root = writeConvexExport({}, { docs: [{ _id: "d1" }] });
+        const writes: string[] = [];
+        const dryRuns: boolean[] = [];
+        const { logger } = capturingLogger();
+        const conflictingWorker: StreamingFetchLike = async (input, init) => {
+            const worker = checkingWorker(writes, dryRuns);
+            const response = await worker(input, init);
+
+            if (new URL(input).searchParams.get("dryRun") === "true") {
+                return {
+                    ...response,
+                    json: async () => {
+                        return { conflicts: 1, errors: [], inserted: {}, received: 1, dryRun: true };
+                    },
+                };
+            }
+
+            return response;
+        };
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: conflictingWorker,
+            file: root,
+            logger,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(1);
+        expect(result.error).toContain("was refused, and rows may already be written");
+        expect(writes).toStrictEqual([]);
     });
 
     it("refuses before sending any row to a worker that predates the dry-run flag, so the file is never written", async () => {

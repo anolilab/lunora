@@ -764,11 +764,22 @@ const failureMessage = (failure: unknown): string => {
 };
 
 /**
+ * Whether the check met a row the shard already holds: one the worker reported as written, or an `_id` it found in use. A check writes nothing,
+ * so either means the worker ignored the dry-run flag or already has the row.
+ */
+const checkMetWrites = (check: ImportPass): boolean => {
+    const { conflicts, inserted } = check.batcher.totals;
+
+    return conflicts > 0 || Object.values(inserted).some((count) => count > 0);
+};
+
+/**
  * The result of a check that refuses the file: the check's own report, the reason it refused, and nothing written. Each shard the check
  * could not reach and a stream failure are named here, as the real pass names them.
  */
 const refuseFile = (options: ImportCommandOptions, check: ImportPass, refusal: string, storageIdMap: Map<string, string> | undefined): ImportCommandResult => {
     const body = buildImportBody(check.batcher.totals, storageIdMap, check.remapReport);
+    const checkWrote = checkMetWrites(check);
 
     // Pretty mode only: in json the same object is the document's `summary`.
     if (options.format !== "json") {
@@ -783,7 +794,11 @@ const refuseFile = (options: ImportCommandOptions, check: ImportPass, refusal: s
                 ? `import failed before any batch was acknowledged: ${message}`
                 : `import failed while checking the rows: ${message}`,
         );
-        options.logger.error("no rows were written; re-run the same command once the worker is reachable");
+        options.logger.error(
+            checkWrote
+                ? "rows may already be written by the check; check the shard before running the command again"
+                : "no rows were written; re-run the same command once the worker is reachable",
+        );
     }
 
     for (const shard of check.batcher.totals.failed) {
@@ -792,9 +807,13 @@ const refuseFile = (options: ImportCommandOptions, check: ImportPass, refusal: s
         );
     }
 
-    const error = `import: ${options.file} was not written: ${refusal}`;
+    // A worker that wrote during the check has already changed the shard, so the refusal must not say the file was not written.
+    const written = Object.values(check.batcher.totals.inserted).reduce((sum, count) => sum + count, 0);
+    const error = checkWrote
+        ? `import: ${options.file} was refused, and rows may already be written: ${refusal}`
+        : `import: ${options.file} was not written: ${refusal}`;
 
-    return { body, code: 1, data: { file: options.file, inserted: 0, summary: body }, error, inserted: 0 };
+    return { body, code: 1, data: { file: options.file, inserted: written, summary: body }, error, inserted: written };
 };
 
 /**
@@ -807,9 +826,9 @@ const checkRefusal = (check: ImportPass): string | undefined => {
         return `the check stopped early: ${failureMessage(check.streamFailure)}`;
     }
 
-    const { conflicts, errors, failed, inserted } = check.batcher.totals;
+    const { errors, failed } = check.batcher.totals;
 
-    if (conflicts > 0 || Object.values(inserted).some((count) => count > 0)) {
+    if (checkMetWrites(check)) {
         return "this worker wrote rows during its check, so it cannot check an import before writing, and some rows may already be written";
     }
 
