@@ -4,6 +4,8 @@ export type { AsyncStorageLike, AsyncStoragePersistenceOptions } from "./async-s
 export { createAsyncStoragePersistence } from "./async-storage-persistence";
 export type { AsyncStorageQueryCacheOptions } from "./async-storage-query-cache";
 export { createAsyncStorageQueryCache } from "./async-storage-query-cache";
+export type { AuthTokenFetcher, AuthTokenProviderOptions } from "./auth-token-provider";
+export { setAuthTokenProvider } from "./auth-token-provider";
 export { default as createInMemoryBookmarkStorage } from "./bookmark";
 export { createCallRunner } from "./call-runner";
 export type { BatchSlot } from "./call-wire";
