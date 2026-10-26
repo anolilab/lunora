@@ -244,8 +244,9 @@ const COERCED_SCALAR_KINDS: ReadonlySet<string> = new Set(["bigint", "boolean", 
 
 /**
  * The scalar member of `v.union(<scalar>, v.null())` (or `v.literal(null)`), or `undefined` for any other validator. That union accepts
- * exactly what `<scalar>.nullable()` does (a member wrapped in `v.optional` counts as the scalar), which is reported as the scalar's own kind plus `nullable`; left as `"union"` the importer cannot
- * tell it holds numbers and every cell stays text for the server to refuse. A wider union keeps `"union"`: its members are not all one type.
+ * exactly what `<scalar>.nullable()` does (a member wrapped in `v.optional` counts as the scalar), which is reported as the scalar's own
+ * kind plus `nullable`; left as `"union"` the importer cannot tell it holds numbers and every cell stays text for the server to refuse.
+ * A wider union keeps `"union"`: its members are not all one type.
  */
 const nullableScalarMember = (validator: ValidatorIR): ValidatorIR | undefined => {
     const [first, second] = validator.kind === "union" ? (validator.members ?? []) : [];

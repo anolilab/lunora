@@ -688,7 +688,7 @@ const scanOnly = async (source: ImportSource, cwd: string, options: ImportComman
 /** The storage phase's result: the storage mapping and the `storageId → R2 key` map the row rewrite reads. */
 type StoragePhaseResult = NonNullable<Awaited<ReturnType<typeof runStoragePhase>>>;
 
-/** Where a pass POSTs its batches, and how many rows and bytes each may carry. */
+/** Where a pass POSTs its batches, and how many rows each may carry. */
 interface ImportPassTarget {
     batchSize: number;
     fetchImpl: StreamingFetchLike;
@@ -749,6 +749,8 @@ const runImportPass = async (
         transferredPaths: storage.transferredPaths,
         unresolvedPaths,
     });
+    // Every source is a `for await`-able of text, so one drain loop drives all of
+    // them and the POST size stays bounded by `batchSize`.
     const streamFailure = await drainIntoBatcher(stream, toRow, batcher, options.logger);
 
     return { batcher, remapReport, sourceRows, streamFailure, unresolvedPaths };
@@ -952,8 +954,6 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
 
     const { batcher, remapReport, sourceRows, streamFailure, unresolvedPaths } = await runImportPass(options, source, storage, target);
 
-    // Every source is a `for await`-able of text, so one drain loop drives all of
-    // them and the POST size stays bounded by `batchSize`.
     const { conflicts, errors, failed: failedShards, inserted, received, warnings } = batcher.totals;
 
     // Parity over an aborted run only restates the abort, so skip it there and

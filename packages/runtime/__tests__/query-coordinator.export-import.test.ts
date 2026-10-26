@@ -159,7 +159,7 @@ describe("orchestrateImport", () => {
     });
 
     it("tells each shard whether to only check its rows, and writes unless asked not to", async () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
         const registry = createStaticShardRegistry({ messages: ["c1"] });
         const coordinator = createQueryCoordinator({ registry });
@@ -176,7 +176,6 @@ describe("orchestrateImport", () => {
         await coordinator.orchestrateImport(spy.namespace, { batches, dryRun: true });
 
         expect(seen).toStrictEqual([false, true]);
-        expect(seen).toHaveLength(2);
     });
 
     it("collects per-shard errors but does not throw", async () => {
