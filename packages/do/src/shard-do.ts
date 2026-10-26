@@ -3206,6 +3206,21 @@ abstract class ShardDO {
     private instrumentedSql: undefined | { proxy: unknown; samples: Map<string, StmtSample> };
 
     /**
+     * Memos for {@link ShardDO.cdcEnabled} and {@link ShardDO.cachedCdcEpoch},
+     * which every flush and resume consults.
+     *
+     * Instance fields, never module state: a native PITR restore reverts
+     * `__cdc_meta` but only takes effect when the object restarts, so a fresh
+     * instance is what guarantees the restored row is read. Presence is
+     * remembered only once TRUE — a migration creates `__cdc_log` mid-instance,
+     * and nothing outside a restore drops it, so a cached `false` is the one
+     * answer that can go stale.
+     */
+    private cdcLogPresent = false;
+
+    private cdcEpochCache: string | undefined;
+
+    /**
      * Set when `currentStmtSamples` hit {@link MAX_STMT_SAMPLES_PER_DISPATCH}
      * distinct statements and a brand-new shape was dropped this dispatch.
      * Folded onto the dispatch's wide event as `db.stmt_samples_truncated`
@@ -4392,6 +4407,8 @@ abstract class ShardDO {
             // that still held it would skip the re-check on the next write. Here rather
             // than in the RPC catch, so every caller (reactors included) is covered.
             this.invalidateCompanionMemo();
+            // Same for an epoch minted or bumped, or a `__cdc_log` migrated, inside it.
+            this.invalidateCdcMetaCache();
 
             throw error;
         }
@@ -5112,9 +5129,8 @@ abstract class ShardDO {
      */
     protected runShardCdcSync(args: RunShardCdcSyncArgs): { changes: CdcChange[]; cursor: number; epoch?: string } {
         const sql = this.sql as SqlExec;
-        const present = sql.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, CDC_LOG_TABLE).toArray().length > 0;
 
-        if (!present) {
+        if (!this.cdcEnabled()) {
             // No changelog, so no timeline to name. The field is omitted rather
             // than guessed, matching {@link ShardDO.currentCdcEpoch} — and a
             // `sinceEpoch` cannot be judged against a shard that has never had
@@ -5146,7 +5162,7 @@ abstract class ShardDO {
         const cursor = readCdcCursor(sql);
         // Read once: it gates the echo guard below AND is stamped on the page
         // this returns, so a served consumer never costs a second read.
-        const epoch = readCdcEpoch(sql);
+        const epoch = this.cachedCdcEpoch();
 
         // Echo guard, ahead of the watermark one because it answers a strictly
         // longer-lived question. The watermark proof expires — a rewound log
@@ -5264,7 +5280,7 @@ abstract class ShardDO {
      * the wire byte-identical to the pre-epoch format for non-CDC apps.
      */
     protected currentCdcEpoch(): string | undefined {
-        return this.cdcEnabled() ? readCdcEpoch(this.sql as SqlExec) : undefined;
+        return this.cdcEnabled() ? this.cachedCdcEpoch() : undefined;
     }
 
     /**
@@ -5345,12 +5361,16 @@ abstract class ShardDO {
         if (this.forkSealed) {
             // Already sealed this wake: hand back the epoch minted then, so the
             // caller still stamps the post-fork timeline on its refusal.
-            return readCdcEpoch(this.sql as SqlExec);
+            return this.cachedCdcEpoch();
         }
 
         this.forkSealed = true;
 
-        return bumpCdcEpoch(this.sql as SqlExec);
+        const epoch = bumpCdcEpoch(this.sql as SqlExec);
+
+        this.invalidateCdcMetaCache();
+
+        return epoch;
     }
 
     /**
@@ -5386,7 +5406,7 @@ abstract class ShardDO {
         const cursor = readCdcCursor(sql);
         // Read the epoch once: it gates the resume verdict AND is returned so the
         // caller (`seedSubscription`) can stamp the frame without a second read.
-        const epoch = readCdcEpoch(sql);
+        const epoch = this.cachedCdcEpoch();
 
         // Timeline fork: the client cached against a different epoch (a reset, or
         // a recycled DO id), so its `sinceSeq` indexes an unrelated changelog.
@@ -12282,6 +12302,7 @@ abstract class ShardDO {
         // pre-CDC shard, so the bump simply no-ops there.
         if (this.cdcEnabled()) {
             bumpCdcEpoch(this.sql as SqlExec);
+            this.invalidateCdcMetaCache();
         }
 
         this.recordAudit("pitrRestore", { detail: { restart, restoredTo: armed.restoredTo, undoBookmark: armed.undoBookmark } });
@@ -16656,11 +16677,38 @@ abstract class ShardDO {
      * harness double) or a pre-CDC shard, so callers degrade to the no-CDC path.
      */
     private cdcEnabled(): boolean {
+        if (this.cdcLogPresent) {
+            return true;
+        }
+
         try {
-            return (this.sql as SqlExec).exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, CDC_LOG_TABLE).toArray().length > 0;
+            this.cdcLogPresent =
+                (this.sql as SqlExec).exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, CDC_LOG_TABLE).toArray().length > 0;
         } catch {
             return false;
         }
+
+        return this.cdcLogPresent;
+    }
+
+    /**
+     * The `__cdc_meta` epoch, read from SQLite at most once until
+     * {@link invalidateCdcMetaCache} runs. Callers gate on {@link cdcEnabled}
+     * first, except {@link sealForkedTimeline}, whose callers already proved it.
+     */
+    private cachedCdcEpoch(): string {
+        this.cdcEpochCache ??= readCdcEpoch(this.sql as SqlExec);
+
+        return this.cdcEpochCache;
+    }
+
+    /**
+     * Drop both CDC memos — the single exit for every path that can change
+     * `__cdc_log`'s presence or the `__cdc_meta` row behind this instance's back.
+     */
+    private invalidateCdcMetaCache(): void {
+        this.cdcLogPresent = false;
+        this.cdcEpochCache = undefined;
     }
 
     /**
