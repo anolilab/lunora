@@ -124,6 +124,7 @@ interface CodegenResult {
         agents: string;
         api: string;
         app: string;
+        authModule: string;
         collections: string;
         containers: string;
         crons: string;

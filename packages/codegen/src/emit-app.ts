@@ -14,6 +14,81 @@ type IdentityMemoStore = WeakMap<object, ReturnType<typeof memoizeIdentity>>;
 `
         : "";
 
+/** Whether anything the worker reads only once a request arrives is loaded on demand (see {@link buildDeferredModules}). */
+const hasDeferredModules = (options: ResolvedAppOptions): boolean =>
+    options.hasAuth || options.wantsArchitecture || options.wantsOpenApi || options.wantsOpenRpc;
+
+/**
+ * The modules the worker reads only while it is built on the first request:
+ * `@lunora/auth` (better-auth, zod, jose, … — the largest closure an app pulls in)
+ * and the OpenAPI / OpenRPC / architecture documents (a `JSON.parse` of a string
+ * that grows with the app). An isolate evaluates the script's whole global scope
+ * before its first event, and Cloudflare rejects a Worker whose startup takes more
+ * than 1 s of CPU (error 10021), so these load behind `import()` rather than a
+ * static import. The Durable Object classes the same script exports never pay for
+ * them at all.
+ *
+ * Every entry that can build the worker awaits the load and only then runs the
+ * `worker ??= …`, so concurrent cold requests still build the worker once.
+ */
+const buildDeferredModules = (options: ResolvedAppOptions): string => {
+    if (!hasDeferredModules(options)) {
+        return "";
+    }
+
+    const candidates: ReadonlyArray<readonly [wanted: boolean, name: string, type: string, load: string]> = [
+        [options.wantsArchitecture, "architecture", "unknown", `(await import("./architecture.js")).architecture`],
+        [options.hasAuth, "auth", "typeof LunoraAuthModule", `await import("./authModule.js")`],
+        [options.wantsOpenApi, "openApiSpec", "unknown", `(await import("./openapi.js")).openApiSpec`],
+        [options.wantsOpenRpc, "openRpcSpec", "unknown", `(await import("./openrpc.js")).openRpcSpec`],
+    ];
+    const fields = candidates.filter(([wanted]) => wanted).map(([, name, type, load]) => [name, type, load] as const);
+
+    return `
+/** What the worker reads only once a request arrives: loaded then, not at isolate startup (Cloudflare caps startup at 1 s of CPU). */
+interface DeferredModules {
+${fields.map(([name, type]) => `    ${name}: ${type};`).join("\n")}
+}
+
+let deferredModules: Promise<DeferredModules> | undefined;
+
+/** Loads {@link DeferredModules} once per isolate; every entry that builds the worker awaits it first. */
+const loadDeferredModules = (): Promise<DeferredModules> =>
+    (deferredModules ??= (async (): Promise<DeferredModules> => {
+        return {
+${fields.map(([name, , load]) => `            ${name}: ${load},`).join("\n")}
+        };
+    })());
+`;
+};
+
+/** The fragments that thread {@link buildDeferredModules}' load through the entries and `buildWorkerOptions`; all empty when nothing is deferred. */
+const deferredWiring = (
+    options: ResolvedAppOptions,
+): { asyncIfDeferred: string; deferredArgument: string; deferredParameter: string; loadDeferredLine: string } =>
+    hasDeferredModules(options)
+        ? {
+              asyncIfDeferred: "async ",
+              deferredArgument: ", deferred",
+              deferredParameter: ", deferred: DeferredModules",
+              // Awaited BEFORE the `worker ??= …`, so concurrent cold requests still build one worker.
+              loadDeferredLine: `\n                const deferred = await loadDeferredModules();`,
+          }
+        : { asyncIfDeferred: "", deferredArgument: "", deferredParameter: "", loadDeferredLine: "" };
+
+/**
+ * Emit `_generated/authModule.ts`: the `@lunora/auth` exports `app.ts` calls,
+ * re-exported by name. `app.ts` loads this module with `import()` on the first
+ * event. Importing the package itself that way would keep the whole barrel in the
+ * bundle (about 4 MB more, the email-domain lists among it), because a bundler
+ * cannot tree-shake a namespace object it hands out. `""` (not written) without
+ * `@lunora/auth`.
+ */
+const emitAuthModule = (hasAuth: boolean): string =>
+    hasAuth
+        ? `${GENERATED_HEADER}export { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";\n`
+        : "";
+
 /** The `export type { ... }` list — only the declaration types that were emitted. */
 const buildExportedTypes = (options: ResolvedAppOptions): string =>
     [
@@ -118,6 +193,7 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
             // On a first boot against an unmigrated database this means better-auth's
             // eager schema check runs BEFORE the migration, so one
             // "the auth tables do not match…" line on a cold start is expected.
+            const { createAuth, lunoraD1Adapter } = (await loadDeferredModules()).auth;
             const requestAuth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
 
             // Loaded on first request, not at module evaluation: the migrator pulls in kysely and
@@ -142,18 +218,20 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
             }));
 `
         : "";
+    const { asyncIfDeferred, deferredArgument, deferredParameter, loadDeferredLine } = deferredWiring(options);
     const ensureAuthCall = hasAuth ? `\n                await ensureAuth(env);` : "";
-    const getAuthArgument = hasAuth ? `() => auth, identityMemos` : `() => null`;
-    const getAuthParameter = hasAuth ? `getAuth: () => LunoraAuth | null, identityMemos: IdentityMemoStore` : `_getAuth: () => null`;
+    const getAuthArgument = `${hasAuth ? `() => auth, identityMemos` : `() => null`}${deferredArgument}`;
+    const getAuthParameter = `${hasAuth ? `getAuth: () => LunoraAuth | null, identityMemos: IdentityMemoStore` : `_getAuth: () => null`}${deferredParameter}`;
+    const buildWorkerParameters = `env: Env${deferredParameter}`;
 
     // The underlying `LunoraWorker` factory. With a framework adapter present,
     // `.buildFrameworkWorker(host)` passes a host and composition routes through
     // `withFrameworkWorker` (the host serves everything but `/_lunora/*`);
     // otherwise it's a standalone `createWorker`.
     const buildWorkerLine = options.hasFramework
-        ? `        const buildWorker = (env: Env): LunoraWorker =>
+        ? `        const buildWorker = (${buildWorkerParameters}): LunoraWorker =>
             host ? withFrameworkWorker(${buildFrameworkHostLine(options)}, (hostEnv) => this.buildWorkerOptions(hostEnv as Env, ${getAuthArgument})) : createWorker(this.buildWorkerOptions(env, ${getAuthArgument}));`
-        : `        const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, ${getAuthArgument}));`;
+        : `        const buildWorker = (${buildWorkerParameters}): LunoraWorker => createWorker(this.buildWorkerOptions(env, ${getAuthArgument}));`;
     const assembleParameter = options.hasFramework ? `host?: FrameworkHostHandler` : ``;
 
     // Auto-wire the worker's `email()` handler for `defineAgent({ onEmail })`
@@ -195,7 +273,7 @@ type Selector<Env, T> = (env: Env) => T | undefined;
 
 /** The generated \`createShardDO\` config — \`.observability()\`, \`.maxRelationKeys()\` and the long-tail \`.ai()\` / \`.kv()\` / … methods pass straight through to it. */
 type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
-${identityMemoStoreType(hasAuth)}${
+${identityMemoStoreType(hasAuth)}${buildDeferredModules(options)}${
         options.jurisdiction
             ? `
 // Module scope, so every isolate loading this script (the worker and each Durable
@@ -242,18 +320,18 @@ ${buildWorkerLine}
         const composed: ComposedApp = {
             ShardDO,
             fetch: async (request: Request, rawEnv: unknown, context: ExecutionContextLike): Promise<Response> => {
-                const env = rawEnv as Env;${ensureAuthCall}
-                worker ??= buildWorker(env);
+                const env = rawEnv as Env;${loadDeferredLine}${ensureAuthCall}
+                worker ??= buildWorker(env${deferredArgument});
 
                 return worker.fetch(request, rawEnv, context);
             },
-            scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {
-                worker ??= buildWorker(rawEnv as Env);
+            scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {${loadDeferredLine}
+                worker ??= buildWorker(rawEnv as Env${deferredArgument});
 
                 return worker.scheduled(controller, rawEnv, context);
             },
-            serverQuery: (request, rawEnv, reference, args, options) => {
-                worker ??= buildWorker(rawEnv as Env);
+            serverQuery: ${asyncIfDeferred}(request, rawEnv, reference, args, options) => {${loadDeferredLine}
+                worker ??= buildWorker(rawEnv as Env${deferredArgument});
 
                 return worker.serverQuery(request, rawEnv, reference, args, options);
             },${
@@ -265,8 +343,8 @@ ${buildWorkerLine}
                 // acked and destroyed.
                 options.hasQueue || options.hasFramework
                     ? `
-            queue: async (batch: unknown, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {
-                worker ??= buildWorker(rawEnv as Env);
+            queue: async (batch: unknown, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {${loadDeferredLine}
+                worker ??= buildWorker(rawEnv as Env${deferredArgument});
 
                 return worker.queue?.(batch, rawEnv, context);
             },`
@@ -287,8 +365,8 @@ ${
         // of its own the host's is the only one there is — forward to it rather than
         // dropping the entry.
         if (!composed.email && host && typeof host === "object" && typeof host.email === "function") {
-            composed.email = (message, rawEnv, context) => {
-                worker ??= buildWorker(rawEnv as Env);
+            composed.email = ${asyncIfDeferred}(message, rawEnv, context) => {${loadDeferredLine}
+                worker ??= buildWorker(rawEnv as Env${deferredArgument});
 
                 return worker.email?.(message, rawEnv, context) ?? Promise.resolve();
             };
@@ -361,5 +439,5 @@ export type { ${buildExportedTypes(options)} };
 `;
 };
 
-export { emitApp };
+export { emitApp, emitAuthModule };
 export type { EmitAppOptions } from "./emit/app-helpers";

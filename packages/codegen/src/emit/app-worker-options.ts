@@ -244,6 +244,7 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
               `        // Captured before the branch so the narrowing survives — reading
         // \`this.authDeclaration.namespace\` again below would be optional all over again.
         const authDeclaration = this.authDeclaration;
+        const { authDiscoveryPathsFor, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest } = deferred.auth;
         const authNamespace = authDeclaration?.namespace;
         const authD1 = authDeclaration?.d1;
 
@@ -478,9 +479,9 @@ const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
     // Cloudflare data-residency region. Emitted only when declared, so apps
     // without it keep the un-pinned global namespace (and unchanged output).
     ...(options.jurisdiction ? [`            jurisdiction: ${JSON.stringify(options.jurisdiction)},`] : []),
-    ...(options.wantsArchitecture ? [`            architecture,`] : []),
-    ...(options.wantsOpenApi ? [`            openApiSpec,`] : []),
-    ...(options.wantsOpenRpc ? [`            openRpcSpec,`] : []),
+    ...(options.wantsArchitecture ? [`            architecture: deferred.architecture,`] : []),
+    ...(options.wantsOpenApi ? [`            openApiSpec: deferred.openApiSpec,`] : []),
+    ...(options.wantsOpenRpc ? [`            openRpcSpec: deferred.openRpcSpec,`] : []),
     // The push-consumer handler backing the worker's `queue(batch, …)` entry:
     // routes each delivered batch to its `defineQueue` handler. Built from
     // `@lunora/queue` here (keeping the runtime decoupled) and wired only when the
