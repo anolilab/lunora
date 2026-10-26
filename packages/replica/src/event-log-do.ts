@@ -18,8 +18,7 @@
  * |        |                         | the entry count or payload budget    |
  */
 
-import { RELAY_SIGNATURE_HEADER, siblingSecretOf, verifySiblingBody } from "@lunora/shard-engine";
-
+import { RELAY_SIGNATURE_HEADER, siblingSecretOf, verifySiblingBody } from "../../../shared/relay-signature";
 import type { EventLogEntry } from "./event-log";
 import { eventLogFrame } from "./event-log-frame";
 

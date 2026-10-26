@@ -18,8 +18,7 @@
  * await client.append([{ type: "chat.messageSent", payload: { text: "hi" } }]);
  * ```
  */
-import { RELAY_SIGNATURE_HEADER, siblingSecretOf, signSiblingBody } from "@lunora/shard-engine";
-
+import { RELAY_SIGNATURE_HEADER, siblingSecretOf, signSiblingBody } from "../../../shared/relay-signature";
 import type { EventLogEntry } from "./event-log";
 import { eventLogFrame } from "./event-log-frame";
 import type { InputEvent, Seq } from "./seq";

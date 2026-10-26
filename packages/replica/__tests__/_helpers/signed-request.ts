@@ -1,5 +1,4 @@
-import { RELAY_SIGNATURE_HEADER, signSiblingBody } from "@lunora/shard-engine";
-
+import { RELAY_SIGNATURE_HEADER, signSiblingBody } from "../../../../shared/relay-signature";
 import { eventLogFrame } from "../../src/event-log-frame";
 
 /** The Worker env every test DO and client is built with: the relay secret is provisioned. */

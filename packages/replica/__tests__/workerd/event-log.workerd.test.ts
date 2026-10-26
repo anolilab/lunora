@@ -1,4 +1,4 @@
-import { RELAY_SIGNATURE_HEADER, signSiblingBody } from "@lunora/shard-engine";
+import { RELAY_SIGNATURE_HEADER, signSiblingBody } from "../../../../shared/relay-signature";
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 

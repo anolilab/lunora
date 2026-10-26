@@ -1,6 +1,6 @@
-import { RELAY_SIGNATURE_HEADER, signSiblingBody } from "@lunora/shard-engine";
 import { describe, expect, it, vi } from "vitest";
 
+import { RELAY_SIGNATURE_HEADER, signSiblingBody } from "../../../shared/relay-signature";
 import { EventLogDO } from "../src/event-log-do";
 import { eventLogFrame } from "../src/event-log-frame";
 import { signedRequest, TEST_ENV, TEST_INSTANCE } from "./_helpers/signed-request";

@@ -74,7 +74,6 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/shard-engine": "1.0.0-alpha.159",
         "@lunora/wire": "1.0.0-alpha.2"
     },
     "devDependencies": {
