@@ -1471,6 +1471,45 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
     });
 
+    it("keys LUNORA_RELAY_SECRET to an entry that star-re-exports the replica package", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport * from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET when the entry re-exports EventLogDO through a relative barrel", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport * from "./barrel.js";\n`);
+        write("src/server/barrel.ts", `export { EventLogDO } from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET when a relative barrel star-re-exports the replica package", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport * from "./barrel";\n`);
+        write("src/server/barrel/index.ts", `export * from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for a barrel that star-re-exports other packages only", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport * from "./barrel";\n`);
+        write("src/server/barrel.ts", `export * from "@lunora/do";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
     it("lists LUNORA_RELAY_SECRET once for an app that hosts both the shard registry and the event log", async () => {
         expect.assertions(2);
 

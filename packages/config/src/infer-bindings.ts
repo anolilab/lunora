@@ -21,6 +21,7 @@
  */
 import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 
 import type { CapabilityKey, ServiceBindingIR, SourceCapabilitySignals } from "@lunora/codegen";
 import {
@@ -647,13 +648,70 @@ const hostsShardRegistry = (durableObjects: ReadonlyArray<DurableObjectSpec>, ge
     durableObjects.some((object) => object.binding === "SHARD_REGISTRY") ||
     (isMergedProject(generatedDirectory) && existsSync(join(generatedDirectory, "shardRegistry.ts")));
 
+/** The package whose barrel exports `EventLogDO`, so a star re-export of it forwards the class. */
+const EVENT_LOG_PACKAGE = "@lunora/replica";
+
+/** A value `export * from "…"`; `export type *` forwards no runtime name and is not matched. */
+const STAR_REEXPORT = /\bexport\s*\*\s*from\s*["']([^"']+)["']/gu;
+
+/** The source extension a `.js`-style relative specifier names, so it can be probed against the `.ts` file. */
+const SOURCE_SPECIFIER_EXTENSION = /\.[cm]?[jt]sx?$/u;
+
 /**
- * Whether the worker entry exports `EventLogDO` as a value. A composed entry star-re-exports
- * only the generated modules, so it never hosts the log by itself; `detectClassExports` would
- * otherwise report every class there as exported.
+ * The file a relative star re-export names: a `.js` specifier resolves to its `.ts` source and a
+ * directory to its `index`. A bare specifier is left undefined; the caller matches
+ * {@link EVENT_LOG_PACKAGE} by name before asking.
+ */
+const resolveBarrel = (fromFile: string, specifier: string): string | undefined => {
+    if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
+        return undefined;
+    }
+
+    const stem = join(dirname(fromFile), specifier.replace(SOURCE_SPECIFIER_EXTENSION, ""));
+
+    return [`${stem}.ts`, `${stem}.tsx`, `${stem}.mts`, `${stem}.js`, join(stem, "index.ts"), join(stem, "index.js")].find((candidate) =>
+        existsSync(candidate),
+    );
+};
+
+/**
+ * Whether a module forwards `EventLogDO` as a runtime value: it exports the class itself, star-re-exports
+ * the replica package, or star-re-exports a relative barrel that does. `visited` ends a barrel cycle, which
+ * forwards no name it has not already been asked about.
+ */
+const forwardsEventLogDO = (modulePath: string, visited: Set<string>): boolean => {
+    if (visited.has(modulePath)) {
+        return false;
+    }
+
+    visited.add(modulePath);
+
+    if (detectClassExports({ composed: false, path: modulePath }, [{ className: "EventLogDO" }], "eventLog").some((definition) => definition.exported)) {
+        return true;
+    }
+
+    for (const [, specifier = ""] of readFileSync(modulePath, "utf8").matchAll(STAR_REEXPORT)) {
+        if (specifier === EVENT_LOG_PACKAGE) {
+            return true;
+        }
+
+        const barrel = resolveBarrel(modulePath, specifier);
+
+        if (barrel !== undefined && forwardsEventLogDO(barrel, visited)) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+/**
+ * Whether the worker entry hosts `EventLogDO`. A composed entry star-re-exports only the generated
+ * modules, so it never hosts the log by itself. A hand-written entry can reach the class through a
+ * barrel, so star re-exports are followed rather than reading only the entry's own export list.
  */
 const hostsEventLog = (entry: ReturnType<typeof resolveWorkerEntry>): boolean =>
-    !entry.composed && detectClassExports(entry, [{ className: "EventLogDO" }], "eventLog").some((definition) => definition.exported);
+    !entry.composed && entry.path !== undefined && forwardsEventLogDO(entry.path, new Set());
 
 /**
  * Scan a Lunora project and report which Cloudflare bindings its code implies.
