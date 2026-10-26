@@ -64,8 +64,10 @@ const isFilterableCellValue = (value: unknown): boolean =>
  * The box text and pinned literal for an AI-suggested value. Membership is pinned: `has`
  * reads unquoted box text by type, so the model's `"10"` would search for the number 10. A
  * text value is shown in quotes, the form the box reads as text. A null equality is pinned as
- * null, since a blank box would test for the empty string. Other operators keep the box's own
- * coercion, since a model that writes `18` for a numeric bound means a number.
+ * null, since a blank box would test for the empty string. A boolean is pinned for every
+ * operator, since the box sends `true` as text and a stored boolean never equals text. Other
+ * operators keep the box's own coercion, since a model that writes `18` for a numeric bound
+ * means a number.
  */
 const suggestedValue = (operator: FilterClause["operator"], raw: unknown): { literal?: [unknown]; value: string } => {
     if (raw === null && (operator === "eq" || operator === "ne")) {
@@ -76,7 +78,7 @@ const suggestedValue = (operator: FilterClause["operator"], raw: unknown): { lit
         return { value: "" };
     }
 
-    if (operator !== "has") {
+    if (operator !== "has" && typeof raw !== "boolean") {
         return { value: String(raw) };
     }
 

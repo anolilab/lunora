@@ -3690,6 +3690,38 @@ describe("dataBrowser — nested paths on suggested and linked filters", () => {
         expect(readFilters(mock).at(-1)).toStrictEqual([{ column: "text", operator: "eq", path: ["a"], value: null }]);
     });
 
+    it.each([
+        { operator: "eq", value: true },
+        { operator: "ne", value: false },
+    ])("sends an AI-suggested boolean $operator $value as a boolean, not the text the box shows", async ({ operator, value }) => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
+                    return { result: { clauses: [{ column: "text", operator, value }], degraded: false } };
+                }
+
+                return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.change(await screen.findByTestId("db-ai-prompt"), { target: { value: "flagged" } });
+        fireEvent.click(screen.getByTestId("db-ai-filter"));
+
+        await screen.findByTestId("db-filter-row");
+
+        expect(readFilters(mock).at(-1)).toStrictEqual([{ column: "text", operator, value }]);
+    });
+
     it("sends an AI-suggested membership value with the type the model gave it, and leaves a bound's number a number", async () => {
         expect.assertions(2);
 
