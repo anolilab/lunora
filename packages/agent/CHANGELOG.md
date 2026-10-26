@@ -1,3 +1,21 @@
+## @lunora/agent [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.246...@lunora/agent@1.0.0-alpha.247) (2026-10-26)
+
+### Documentation
+
+* **agent:** state the oldest-first order of the history window ([#1332](https://github.com/anolilab/lunora/issues/1332)) ([ee2efcf](https://github.com/anolilab/lunora/commit/ee2efcf5ff3c33e087ed91d58b5e6ed3e488fb34))
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.146
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/mail:** upgraded to 1.0.0-alpha.123
+* **@lunora/server:** upgraded to 1.0.0-alpha.238
+* **@lunora/values:** upgraded to 1.0.0-alpha.81
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.95
+* **@lunora/container:** upgraded to 1.0.0-alpha.92
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.159
+
 ## @lunora/agent [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.245...@lunora/agent@1.0.0-alpha.246) (2026-10-25)
 
 
