@@ -110,6 +110,7 @@ describe("admin introspection on workerd", () => {
 
         await withSql("admin-search-escapes", (sql) => {
             createDocTable(sql, "frames");
+            // Stored through the real codec, the form the shard writes, so the escape frames and tags are the real ones.
             sql.exec(
                 `INSERT INTO "frames" VALUES ('a', 1, ?), ('b', 1, ?)`,
                 JSON.stringify(encodeWire({ deep: ["$lunora.wire$", "arr", ["$lunora.wire$", "arr", ["$lunora.wire$", "amber"]]] })),
