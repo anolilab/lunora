@@ -1,3 +1,16 @@
+## @lunora/client [1.0.0-alpha.254](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.253...@lunora/client@1.0.0-alpha.254) (2026-10-26)
+
+### Code Refactoring
+
+* **client:** host the framework-neutral auth and query-options cores ([#1358](https://github.com/anolilab/lunora/issues/1358)) ([861397a](https://github.com/anolilab/lunora/commit/861397afe2b363999bbcd1400d6a0190715c6fee))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.251
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.243
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.163
+
 ## @lunora/client [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.252...@lunora/client@1.0.0-alpha.253) (2026-10-26)
 
 
