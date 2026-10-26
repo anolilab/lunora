@@ -13,7 +13,7 @@ import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import {
     decodeExpectedSubjectHeader,
-    encodeIdentityHeader,
+    encodeIdentityHeaderJson,
     encodeUserIdHeader,
     EXPECT_SUBJECT_HEADER,
     isIdentityExpired,
@@ -1870,7 +1870,7 @@ const traceEventFields = (trace: DispatchTraceContext): Pick<ObservabilityEvent,
 };
 
 /** Extract HTTP semantic metadata from a request without throwing on bad URLs. */
-const requestTelemetryMeta = (request: Request): RequestTelemetryMeta => {
+const requestTelemetryMeta = (request: Request, parsedUrl?: URL): RequestTelemetryMeta => {
     const { method } = request;
     const userAgent = request.headers.get("user-agent") ?? undefined;
     // Cross-navigation key into Cloudflare Traces / Workers Logs. Every request
@@ -1882,7 +1882,7 @@ const requestTelemetryMeta = (request: Request): RequestTelemetryMeta => {
     let url: URL;
 
     try {
-        url = new URL(request.url);
+        url = parsedUrl ?? new URL(request.url);
     } catch {
         return { method, ...rayField, userAgent };
     }
@@ -2233,6 +2233,32 @@ const queueNameOf = (batch: unknown): string => {
  */
 const executionContextByRequest = new WeakMap<Request, ExecutionContextLike>();
 
+/**
+ * Encoded `x-lunora-identity` values by their claims JSON. `resolveIdentity`
+ * hands back a fresh object per request, so the serialized text is the only key
+ * that recurs; the encoding is a pure function of it. Bounded because each key
+ * holds one identity's claims, and an isolate can serve many identities.
+ */
+const identityHeaderByClaimsJson = new Map<string, string>();
+
+const IDENTITY_HEADER_MEMO_MAX_ENTRIES = 256;
+
+const memoizedIdentityHeader = (claims: Record<string, unknown>): string => {
+    const json = JSON.stringify(claims);
+    const cached = identityHeaderByClaimsJson.get(json);
+
+    if (cached !== undefined) {
+        return cached;
+    }
+
+    const encoded = encodeIdentityHeaderJson(json);
+
+    evictOldestEntry(identityHeaderByClaimsJson, IDENTITY_HEADER_MEMO_MAX_ENTRIES);
+    identityHeaderByClaimsJson.set(json, encoded);
+
+    return encoded;
+};
+
 const resolveForwardContext = async (
     request: Request,
     env: unknown,
@@ -2245,6 +2271,8 @@ const resolveForwardContext = async (
     // Defaults to the in-flight context recorded by `handle`. Passed explicitly
     // only by callers that did not reach here through the `fetch` funnel.
     context: ExecutionContextLike | undefined = executionContextByRequest.get(request),
+    // Passed by a caller that already parsed the request URL, so it is not parsed twice.
+    requestOrigin: string = new URL(request.url).origin,
 ): Promise<ForwardContext> => {
     const headers: Record<string, string> = { "content-type": "application/json" };
     const authorization = request.headers.get("authorization");
@@ -2314,7 +2342,7 @@ const resolveForwardContext = async (
     // (never a client header). A `.storage()` with no `publicBaseUrl` signs
     // object URLs against it, so an action's URLs point back at the host that
     // asked for them — in dev, in a preview and in production alike.
-    headers["x-lunora-origin"] = new URL(request.url).origin;
+    headers["x-lunora-origin"] = requestOrigin;
 
     if (!resolveIdentity) {
         // eslint-disable-next-line unicorn/no-null -- `claims`/`identity`/`userId` feed the public HttpActionContext + authorize* callback contracts, whose anonymous sentinel is `null`
@@ -2357,7 +2385,7 @@ const resolveForwardContext = async (
         // the shard side by `parseIdentityHeader` (delegates to
         // `decodeIdentityHeader`, which also still accepts a legacy raw-JSON
         // value). See shared/identity-header.ts.
-        headers["x-lunora-identity"] = encodeIdentityHeader(claims);
+        headers["x-lunora-identity"] = memoizedIdentityHeader(claims);
     }
 
     return { claims, headers, identity, userId };
@@ -2478,7 +2506,15 @@ const resolveX402Charge = (envelope: RpcEnvelope, options: WorkerOptions): Funct
     return x402Tag;
 };
 
-const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
+/** The envelope keys whose original text may be forwarded to the shard verbatim (see {@link parseEnvelope}). */
+const FORWARDABLE_ENVELOPE_KEYS = new Set(["args", "functionPath", "shardKey"]);
+
+interface ParsedRpcEnvelope extends RpcEnvelope {
+    /** The request body as received, when it is safe to forward unchanged; otherwise `undefined`. */
+    forwardBody: string | undefined;
+}
+
+const parseEnvelope = async (request: Request): Promise<ParsedRpcEnvelope> => {
     // Read with a byte budget so a chunked / Content-Length-stripped body can't
     // bypass the size cap the header fast-path only loosely enforces.
     const text = await readBodyTextWithLimit(request);
@@ -2543,6 +2579,14 @@ const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
     return {
         args,
         fanOut,
+        // Every key is one the shard either reads (`args`, `functionPath`) or
+        // ignores (`shardKey`), and it parses the text with the same `JSON.parse`,
+        // so it sees exactly the values validated above. The skipped re-stringify
+        // only normalised `-0` to `0` and an out-of-range numeral (`Infinity`) to
+        // `null` — values a socket frame already delivers to the shard unchanged.
+        // Any other key falls back to the re-stringified body, so the shard never
+        // sees a field the client typed that it did not see before.
+        forwardBody: fanOut === undefined && Object.keys(body).every((key) => FORWARDABLE_ENVELOPE_KEYS.has(key)) ? text : undefined,
         functionPath: envelope.functionPath,
         shardKey: envelope.shardKey,
     };
@@ -2626,8 +2670,12 @@ const resolveShardBindingName = (env: unknown, namespace: ShardNamespaceLike): s
 };
 
 /** Build the POST the shard's `/rpc` route expects: `{ args, functionPath }` under the caller's headers. */
-const shardRpcRequest = (functionPath: string, args: Record<string, unknown>, headers: Record<string, string>): Request =>
-    new Request("https://shard.internal/rpc", { body: JSON.stringify({ args, functionPath }), headers, method: "POST" });
+const shardRpcRequest = (
+    functionPath: string,
+    args: Record<string, unknown>,
+    headers: Record<string, string>,
+    body: string = JSON.stringify({ args, functionPath }),
+): Request => new Request("https://shard.internal/rpc", { body, headers, method: "POST" });
 
 /**
  * The server-minted `x-lunora-*` values the DOs trust verbatim on an upgrade: the
@@ -3077,8 +3125,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         env: unknown,
         resolveIdentity: WorkerOptions["resolveIdentity"],
         executionContext?: ExecutionContextLike,
+        requestOrigin?: string,
     ): Promise<ForwardContext> => {
-        const resolved = await resolveForwardContext(request, env, resolveIdentity, options.trustedClientIpHeader, executionContext);
+        const resolved = await resolveForwardContext(request, env, resolveIdentity, options.trustedClientIpHeader, executionContext, requestOrigin);
 
         if (options.functions !== undefined) {
             resolved.headers[ORIGIN_PAYWALL_HEADER] = ORIGIN_PAYWALL_APPLIED;
@@ -3103,7 +3152,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         env: unknown,
         resolveIdentity: WorkerOptions["resolveIdentity"],
         executionContext?: ExecutionContextLike,
-    ): Promise<ForwardContext> => assertLiveCredential(await forwardContext(request, env, resolveIdentity, executionContext));
+        requestOrigin?: string,
+    ): Promise<ForwardContext> => assertLiveCredential(await forwardContext(request, env, resolveIdentity, executionContext, requestOrigin));
 
     // Forward-context for the cross-shard admin orchestrators (migrate / rank /
     // pitr / export / import / …). They authorize fanned-out per-shard RPCs by
@@ -4723,8 +4773,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         args: Record<string, unknown>,
         shardKey: string,
         outgoingHeaders: Record<string, string>,
+        forwardBody: string | undefined,
     ): Promise<Response> => {
         const replica = replicaTargetFor(request, functionPath, shardKey);
+        const body = forwardBody ?? JSON.stringify({ args, functionPath });
 
         if (replica !== undefined) {
             const replicaHeaders: Record<string, string> = {
@@ -4743,14 +4795,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 replicaHeaders["x-lunora-min-seq"] = String(minSeq);
             }
 
-            const fromReplica = await forwardToShard(shardDO, replica.name, shardRpcRequest(functionPath, args, replicaHeaders), replica.region);
+            const fromReplica = await forwardToShard(shardDO, replica.name, shardRpcRequest(functionPath, args, replicaHeaders, body), replica.region);
 
             if (fromReplica.status !== 421) {
                 return fromReplica;
             }
         }
 
-        return forwardToShard(shardDO, shardKey, shardRpcRequest(functionPath, args, outgoingHeaders));
+        return forwardToShard(shardDO, shardKey, shardRpcRequest(functionPath, args, outgoingHeaders, body));
     };
 
     /**
@@ -4771,10 +4823,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         shardKey: string,
         forwardedHeaders: Record<string, string>,
         sinkContext?: ObservabilitySinkContext,
+        // Both come from `handleRpc`, which already holds them: the envelope text
+        // `parseEnvelope` cleared for verbatim forwarding, and the URL `handle` parsed.
+        forwardBody?: string,
+        requestUrl?: URL,
     ): Promise<Response> => {
         const rpcStartedAt = Date.now();
         const { observability, sampling } = options;
-        const requestMeta = requestTelemetryMeta(request);
+        const requestMeta = requestTelemetryMeta(request, requestUrl);
 
         // Open this dispatch's trace. `beginDispatchTrace` applies the inbound-trust
         // policy, mints the span, and settles the sampled verdict in one place, so
@@ -4804,7 +4860,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         try {
             // Re-emit the RPC body at the shard's `/rpc` route — on a region-local
             // replica when this read is eligible for one, else on the owner.
-            const response = await forwardRpcToShard(request, functionPath, args, shardKey, outgoingHeaders);
+            const response = await forwardRpcToShard(request, functionPath, args, shardKey, outgoingHeaders, forwardBody);
             const detail = decodeErrorDetail(response.headers.get(ERROR_DETAIL_HEADER));
 
             // A non-2xx from the shard is reported as ok=false even though no
@@ -4897,7 +4953,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
-    const handleRpc = async (request: Request, env: unknown, context?: ExecutionContextLike): Promise<Response> => {
+    const handleRpc = async (request: Request, env: unknown, context: ExecutionContextLike | undefined, url: URL): Promise<Response> => {
         assertMethod(request, "POST", "RPC");
 
         const envelope = await parseEnvelope(request);
@@ -4925,7 +4981,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // Forward selected headers from the inbound request so the DO can
         // honour auth, sessions, and D1 read-your-writes consistency.
-        const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity);
+        const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity, undefined, url.origin);
 
         assertExpectedSubject(request, identity);
 
@@ -4946,13 +5002,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // the user-observable RPC duration we report.
             const rpcStartedAt = Date.now();
             const { observability } = options;
-            const requestMeta = requestTelemetryMeta(request);
 
             // Hand the request's `ctx.waitUntil` to sinks so a network sink's
             // POST survives isolate teardown after the response returns.
             const sinkContext = buildSinkContext(env, request, context && ((promise) => context.waitUntil?.(promise)));
 
             if (envelope.fanOut) {
+                // Built here, not above: the single-shard path builds its own in `dispatchSingleShard`.
+                const requestMeta = requestTelemetryMeta(request, url);
+
                 try {
                     const result = await queryCoordinator.fanOut(shardDO, {
                         args: envelope.args ?? {},
@@ -4997,7 +5055,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             const shardKey = envelope.shardKey ?? defaultShard;
 
             const dispatch = (): Promise<Response> =>
-                dispatchSingleShard(request, envelope.functionPath, envelope.args ?? {}, shardKey, forwardedHeaders, sinkContext);
+                dispatchSingleShard(request, envelope.functionPath, envelope.args ?? {}, shardKey, forwardedHeaders, sinkContext, envelope.forwardBody, url);
 
             // Paid procedure: run the injected x402 gate around the shard
             // dispatch (challenge / verify / dispatch / settle). The gate's
@@ -5737,7 +5795,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return Response.json({ ok: true }, { headers: { "cache-control": "no-store" } });
         },
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
-        [RPC_PATH]: (request, env, _url, context) => handleRpc(request, env, context),
+        [RPC_PATH]: (request, env, url, context) => handleRpc(request, env, context, url),
         [RPC_BATCH_PATH]: (request, env, _url, context) => handleBatchRpc(request, env, context),
         [SCHEDULER_DISPATCH_PATH]: (request, env, _url, context) => handleSchedulerDispatch(request, env, context),
         [CRON_JOBS_RUN_PATH]: (request, env, _url, context) => handleRunCronJob(request, env, context),

@@ -67,11 +67,18 @@ const isByteStringSafe = (value: string): boolean => {
 };
 
 /**
+ * {@link encodeIdentityHeader} over claims the caller already serialized. A
+ * memo keyed on that text must encode the same text, not re-serialize the
+ * object — a claim with a getter or `toJSON` need not serialize the same twice.
+ */
+const encodeIdentityHeaderJson = (json: string): string => toBase64Url(textEncoder.encode(json));
+
+/**
  * Encode identity claims for the `x-lunora-identity` header: UTF-8 JSON ->
  * base64url. The result is always ASCII, so it is always a valid header value
  * regardless of what `claims` contains.
  */
-const encodeIdentityHeader = (claims: Record<string, unknown>): string => toBase64Url(textEncoder.encode(JSON.stringify(claims)));
+const encodeIdentityHeader = (claims: Record<string, unknown>): string => encodeIdentityHeaderJson(JSON.stringify(claims));
 
 /**
  * Decode an `x-lunora-identity` header value. `null`/empty -> `undefined`.
@@ -237,6 +244,7 @@ export {
     dropExpiredCredentialSocket,
     encodeExpectedSubjectHeader,
     encodeIdentityHeader,
+    encodeIdentityHeaderJson,
     encodeUserIdHeader,
     EXPECT_SUBJECT_HEADER,
     isByteStringSafe,
