@@ -14,7 +14,7 @@ import { makeCdcShardFixture } from "./shared";
  * costly part. The identity and args repeat across requests, as one signed-in
  * client re-reading one channel does.
  *
- * The mutation case writes one row with no live subscriber, so it measures the
+ * The direct insert case writes one row with no live subscriber, so it measures the
  * write and its post-commit flush, not a fan-out (see `refresh-fanout`).
  */
 
@@ -86,7 +86,7 @@ describe("ShardDO.fetch — /rpc dispatch", () => {
         await response.text();
     });
 
-    bench("mutation: one insert, no subscribers", async () => {
+    bench("direct insert: one row, no subscribers", async () => {
         sent += 1;
 
         const response = await shard.fetch(rpc("messages:send", { authorId: "user_1", channelId: "c1", text: `message ${String(sent)}` }));
