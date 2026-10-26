@@ -1,93 +1,63 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, bench, describe } from "vitest";
+import { bench, describe } from "vitest";
 
-// Cold-start cost of `lunora --help`.
-//
-// Every CLI invocation evaluates the command-module graph at process start.
-// The dominant term is ts-morph (pulled by info/migrate), with giget (init)
-// and the codegen package (info/migrate/deploy) close behind.
-//
-// Before the optimization, cli.ts imported all 17 command modules statically,
-// so even `lunora --help` / `-v` paid for the full graph — including ts-morph —
-// before runCli's fast path ran. After the change the handlers are loaded via
-// dynamic import() inside each command's execute, so the help/version/dev/env
-// paths never touch ts-morph or giget.
+// Cold-start cost of the built `lunora` bin — what users actually run.
 //
 // Cold start is only observable across a fresh process boundary (ESM caches
-// modules within a process), so each iteration spawns a fresh tsx process
-// running a real module file (TLA-capable) and times it end-to-end. Pure Node —
-// no workerd. Both arms are identical except for the import strategy, so the
-// delta is exactly the deferred heavy-graph evaluation:
+// modules within a process), so each iteration spawns plain node on
+// `dist/bin.mjs` and times it end-to-end, next to `node -e 0` as the floor.
 //
-//   - LAZY  (current): import cli.ts and run --help. With dynamic handler
-//     imports, the help path never loads ts-morph / giget.
-//   - EAGER (baseline): also evaluate the heavy deps up front (ts-morph +
-//     giget) — exactly what the static-import graph forced before.
+//   - `--version` should cost about as much as the floor: the bin answers it
+//     from package.json before loading the command framework.
+//   - `--help` pays for cerebro plus every command's metadata. Command handlers
+//     are dynamic imports inside each `execute`, and `@lunora/config/cli` must
+//     stay free of codegen/ts-morph (pinned by config's cli-entry-graph test) —
+//     either regression shows up here as a jump of 100 ms or more.
+//
+// COLUMNS/LINES stand in for a TTY: with stdout piped, cerebro otherwise spawns
+// `tput` twice to size its help tables, which a real terminal never does.
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(here, "..");
-const tsxBin = resolve(packageRoot, "..", "..", "node_modules", ".bin", "tsx");
-const cliEntry = join(packageRoot, "src", "cli.ts");
+const builtBin = join(packageRoot, "dist", "bin.mjs");
 
-// Keep the scratch dir inside the package's node_modules (already gitignored)
-// so ts-morph / giget resolve through the package's own node_modules and a
-// crashed run can never leak a tracked file.
-const cacheRoot = join(packageRoot, "node_modules", ".cache");
+if (!existsSync(builtBin)) {
+    throw new Error(`cold-start bench needs a built CLI — run \`pnpm --filter @lunora/cli run build:prod\` first (missing ${builtBin})`);
+}
 
-mkdirSync(cacheRoot, { recursive: true });
+const runNode = (arguments_: ReadonlyArray<string>): void => {
+    const result = spawnSync(process.execPath, arguments_, { cwd: packageRoot, env: { ...process.env, COLUMNS: "120", LINES: "40" }, stdio: "ignore" });
 
-const scratch = mkdtempSync(join(cacheRoot, "lunora-cli-bench-"));
-
-const lazyShim = join(scratch, "lazy.mts");
-const eagerShim = join(scratch, "eager.mts");
-
-writeFileSync(
-    lazyShim,
-    `import { runCli } from ${JSON.stringify(cliEntry)};
-await runCli(["--help"]);
-`,
-    "utf8",
-);
-
-writeFileSync(
-    eagerShim,
-    // Mirror the old static graph: evaluate the heavy deps up front, touching
-    // a binding from each so esbuild can't drop the import as dead code.
-    `import { Project } from "ts-morph";
-import { downloadTemplate } from "giget";
-import { runCli } from ${JSON.stringify(cliEntry)};
-
-void (typeof Project + typeof downloadTemplate);
-await runCli(["--help"]);
-`,
-    "utf8",
-);
-
-const runShim = (shimPath: string): void => {
-    spawnSync(tsxBin, [shimPath], { cwd: packageRoot, stdio: "ignore" });
+    if (result.status !== 0) {
+        throw new Error(`node ${arguments_.join(" ")} exited ${String(result.status)}`);
+    }
 };
 
-afterAll(() => {
-    rmSync(scratch, { force: true, recursive: true });
-});
-
-describe("lunora --help cold start", () => {
+describe("built lunora bin cold start", () => {
     bench(
-        "lazy command handlers (current — no ts-morph/giget on the help path)",
+        "node -e 0 (floor)",
         () => {
-            runShim(lazyShim);
+            runNode(["-e", "0"]);
         },
-        { iterations: 10, time: 0, warmupIterations: 2 },
+        { iterations: 20, time: 0, warmupIterations: 3 },
     );
 
     bench(
-        "eager command graph (baseline — ts-morph + giget loaded up front)",
+        "lunora --version",
         () => {
-            runShim(eagerShim);
+            runNode([builtBin, "--version"]);
         },
-        { iterations: 10, time: 0, warmupIterations: 2 },
+        { iterations: 20, time: 0, warmupIterations: 3 },
+    );
+
+    bench(
+        "lunora --help",
+        () => {
+            runNode([builtBin, "--help"]);
+        },
+        { iterations: 20, time: 0, warmupIterations: 3 },
     );
 });

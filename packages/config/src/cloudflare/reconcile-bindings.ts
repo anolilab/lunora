@@ -28,6 +28,7 @@ import { applyModify } from "../jsonc-edit";
 import type { DurableObjectSpec, GeneratedClassModule } from "../worker-entry";
 import type { Manifest } from "./lunora-manifest";
 import { readManifest } from "./lunora-manifest";
+import { D1_PLACEHOLDER_ID, HYPERDRIVE_PLACEHOLDER_ID } from "./placeholder-ids";
 import type { OwnedTuning } from "./reconcile-queues";
 import { readOwnedTuning, reconcileEnvQueues, reconcileQueues, recordOwnedTuning } from "./reconcile-queues";
 import type { OwnedServices } from "./reconcile-services";
@@ -39,21 +40,6 @@ import { settingLeaf, WORKFLOW_SETTING_KEYS, WORKFLOW_SETTINGS, workflowSettings
 import { DEFAULT_OBSERVABILITY } from "./wrangler-config";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 import type { MigrationEntry, ReconcileStep, WranglerShape } from "./wrangler-shape";
-
-/**
- * Placeholder `database_id` written for an auto-provisioned `DB` binding. It is
- * intentionally not a valid id so a deploy can't silently target the wrong
- * database; reconciliation warns the user to replace it (see the D1 warning in
- * `reconcileWranglerBindings`).
- */
-const D1_PLACEHOLDER_ID = "<replace-with-d1-create-id>";
-
-/**
- * The `id` reconcile writes on a Hyperdrive binding it adds, and the one the `hyperdrive`
- * registry item ships: wrangler requires a string, and `lunora dev` serves the binding from an
- * embedded Postgres whatever it is. `lunora deploy` swaps in a real id.
- */
-const HYPERDRIVE_PLACEHOLDER_ID = "<replace-with-hyperdrive-create-id>";
 
 /**
  * A container/workflow that is declared (so codegen emits its class) but the
@@ -1216,4 +1202,4 @@ const reconcileWranglerBindings = (
 };
 
 export type { ExportGap, ReconcileBindingsResult };
-export { collectExportGaps, D1_PLACEHOLDER_ID, HYPERDRIVE_PLACEHOLDER_ID, reconcileWranglerBindings };
+export { collectExportGaps, reconcileWranglerBindings };

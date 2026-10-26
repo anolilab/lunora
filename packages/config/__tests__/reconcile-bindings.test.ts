@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { HYPERDRIVE_PLACEHOLDER_ID, reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
+import { HYPERDRIVE_PLACEHOLDER_ID } from "../src/cloudflare/placeholder-ids";
+import { reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
 import type { InferredBindings } from "../src/infer-bindings";
 import type { DurableObjectSpec } from "../src/worker-entry";
 

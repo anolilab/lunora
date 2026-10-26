@@ -20,7 +20,7 @@ export type { CelldToolchainProbe, CelldToolchainProbeOptions } from "./celld/ce
 export { probeCelldToolchain } from "./celld/celld-toolchain";
 export type { CelldDevSession, CelldDevSessionOptions, CelldLineOrigin } from "./celld/dev-session";
 export { startCelldDevSession, writeCelldDevProjection } from "./celld/dev-session";
-export { D1_PLACEHOLDER_ID } from "./cloudflare/reconcile-bindings";
+export { D1_PLACEHOLDER_ID } from "./cloudflare/placeholder-ids";
 export {
     BUILD_ROOT_ENV,
     BUILD_TARGET_ENV,

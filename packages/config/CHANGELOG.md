@@ -1,3 +1,9 @@
+## @lunora/config [1.0.0-alpha.410](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.409...@lunora/config@1.0.0-alpha.410) (2026-10-26)
+
+### Performance Improvements
+
+* **cli:** cut codegen and ts-morph from the startup path ([#1338](https://github.com/anolilab/lunora/issues/1338)) ([c4d6061](https://github.com/anolilab/lunora/commit/c4d60616455fa86a6d668e247f6223774f352db5))
+
 ## @lunora/config [1.0.0-alpha.409](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.408...@lunora/config@1.0.0-alpha.409) (2026-10-26)
 
 

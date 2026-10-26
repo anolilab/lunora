@@ -108,7 +108,9 @@ describe("lunora bin delegation", () => {
 
         const source = readFileSync(join(packageRoot, "src/bin.ts"), "utf8");
 
-        expect(source).toContain('import { runCli } from "@lunora/cli"');
+        // `@lunora/cli/cli`, not the root entry: the root re-exports every
+        // command handler and more than doubles startup.
+        expect(source).toContain('const { runCli } = await import("@lunora/cli/cli")');
         expect(source).toContain("await runCli()");
     });
 });
