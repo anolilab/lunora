@@ -41,7 +41,7 @@ describe("discoverNormalizeIdAuthorization", () => {
             `export const getPost = query(async ({ args, ctx }) => {
                 const id = ctx.db.normalizeId("posts", args.id);
                 if (id === null) throw new Error("not found");
-                return ctx.db.get(id);
+                return ctx.db.get("posts", id);
             });`,
         );
 
@@ -108,7 +108,7 @@ describe("discoverNormalizeIdAuthorization", () => {
             `export const getMine = query(async ({ args, ctx }) => {
                 const id = ctx.db.normalizeId("posts", args.id);
                 if (!id) throw new Error("nf");
-                const post = await ctx.db.get(id);
+                const post = await ctx.db.get("posts", id);
                 if (post.author !== ctx.auth.userId) throw new Error("forbidden");
                 return post;
             });`,
@@ -126,7 +126,7 @@ describe("discoverNormalizeIdAuthorization", () => {
                 const id = ctx.db.normalizeId("posts", args.id);
                 if (!id) throw new Error("nf");
                 const ownerId = args.ownerId;
-                return ctx.db.get(id);
+                return ctx.db.get("posts", id);
             });`,
         );
 
@@ -145,7 +145,7 @@ describe("discoverNormalizeIdAuthorization", () => {
                 if (!id) throw new Error("nf");
                 const authorized = await canAccess(ctx, id);
                 if (!authorized) throw new Error("forbidden");
-                return ctx.db.get(id);
+                return ctx.db.get("invoices", id);
             });`,
         );
 
@@ -162,7 +162,7 @@ describe("discoverNormalizeIdAuthorization", () => {
             `export const getScoped = query(async ({ args, ctx }) => {
                 const id = ctx.db.normalizeId("docs", args.id);
                 if (!id) throw new Error("nf");
-                const doc = await ctx.db.get(id);
+                const doc = await ctx.db.get("docs", id);
                 if (doc.spaceRef !== args.spaceRef) throw new Error("forbidden");
                 return doc;
             });`,
@@ -180,7 +180,7 @@ describe("discoverNormalizeIdAuthorization", () => {
                 const id = ctx.db.normalizeId("invoices", args.id);
                 if (!id) throw new Error("nf");
                 const customerId = args.customerId;
-                return ctx.db.get(id);
+                return ctx.db.get("invoices", id);
             });`,
         );
 
@@ -196,7 +196,7 @@ describe("discoverNormalizeIdAuthorization", () => {
             `export const getRaw = query(async ({ args, ctx }) => {
                 const id = ctx.db.normalizeId("posts", args.id);
                 if (id === null) throw new Error("nf");
-                return ctx.db.get(id);
+                return ctx.db.get("posts", id);
             });`,
         );
 
@@ -213,7 +213,7 @@ describe("discoverNormalizeIdAuthorization", () => {
                 .query(async ({ args, ctx }) => {
                     const id = ctx.db.normalizeId("posts", args.id);
                     if (!id) throw new Error("nf");
-                    return ctx.db.get(id);
+                    return ctx.db.get("posts", id);
                 });`,
         );
 
@@ -243,7 +243,7 @@ describe("discoverNormalizeIdAuthorization", () => {
             `export const getDynamic = query(async ({ args, ctx }) => {
                 const id = ctx.db.normalizeId(args.table, args.id);
                 if (!id) throw new Error("nf");
-                return ctx.db.get(id);
+                return ctx.db.get(args.table, id);
             });`,
         );
 
@@ -257,7 +257,7 @@ describe("discoverNormalizeIdAuthorization", () => {
             "ungated.ts",
             `export const getUngated = query(async ({ args, ctx }) => {
                 const id = ctx.db.normalizeId("posts", args.id);
-                return ctx.db.get(id);
+                return ctx.db.get("posts", id);
             });`,
         );
 
@@ -285,7 +285,7 @@ describe("discoverNormalizeIdAuthorization", () => {
         write(
             "inline.ts",
             `export const getInline = query(async ({ args, ctx }) => {
-                return ctx.db.get(ctx.db.normalizeId("posts", args.id));
+                return ctx.db.get("posts", ctx.db.normalizeId("posts", args.id));
             });`,
         );
 

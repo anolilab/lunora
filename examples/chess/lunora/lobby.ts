@@ -96,7 +96,7 @@ export const join = mutation
             throw new LunoraError("UNAUTHENTICATED", "sign in to join");
         }
 
-        const lobby = await ctx.db.get(lobbyId);
+        const lobby = await ctx.db.get("lobbies", lobbyId);
 
         if (!lobby) {
             throw new LunoraError("NOT_FOUND", "lobby not found");
@@ -199,7 +199,7 @@ export const leave = mutation
     .use(rateLimit(mutationLimiter, "write", byPlayer))
     .input({ lobbyId: v.id("lobbies") })
     .mutation(async ({ args: { lobbyId }, ctx }): Promise<void> => {
-        const lobby = await ctx.db.get(lobbyId);
+        const lobby = await ctx.db.get("lobbies", lobbyId);
 
         if (!lobby || !ctx.auth.userId) {
             return;

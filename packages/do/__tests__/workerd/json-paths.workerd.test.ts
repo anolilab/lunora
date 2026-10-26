@@ -68,7 +68,7 @@ describe("dotted paths on workerd", () => {
 
             await db.patch("b", { "profile.address.city": "Paris" });
 
-            const patched = await db.get("b");
+            const patched = await db.get("users", "b");
 
             expect(patched?.["profile"]).toStrictEqual({ address: { city: "Paris" }, plan: "free" });
             await expect(ids({ "profile.address.city": "Paris" })).resolves.toStrictEqual(["b"]);

@@ -92,7 +92,7 @@ interface FakeDatabase {
         findFirst: (tableName: string, args?: unknown) => Promise<Record<string, unknown> | null>;
         findFirstOrThrow: (tableName: string, args?: unknown) => Promise<Record<string, unknown>>;
         findMany: (tableName: string, args?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
-        get: (id: string) => Promise<Record<string, unknown> | null>;
+        get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
         groupBy: (tableName: string, options: unknown) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
         insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
         lookupById?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
@@ -191,7 +191,7 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 
                 return { continueCursor: null, isDone: true, page: rowsOfTable(tableName) };
             },
-            async get(id) {
+            async get(_table, id) {
                 calls.push({ args: undefined, method: "get", tableOrId: id });
 
                 return byId.get(id) ?? null;
@@ -2186,7 +2186,9 @@ describe("mask — get() table resolution", () => {
 
         enableGetWithTable(database, rows);
 
-        const handler = lunora.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) => (ctx as unknown as TestContext).db.get("u1"));
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.get("users", "u1"));
 
         const result = await handler.handler(makeContext(database, "u1"), {});
 
@@ -2199,13 +2201,15 @@ describe("mask — get() table resolution", () => {
 
         const database = createFakeDatabase([{ _id: "u1", email: "a@x.com", table: "users" }]);
 
-        const handler = lunora.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) => (ctx as unknown as TestContext).db.get("u1"));
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.get("users", "u1"));
 
         const result = await handler.handler(makeContext(database, "u1"), {});
 
         expect(result?.["email"]).toBeNull();
-        // The fallback probed the masked table to resolve the id's owner.
-        expect(database.calls.some((call) => call.method === "findFirst" && call.tableOrId === "users")).toBe(true);
+        // The bound table is the owner, so the fallback is one table-pinned read with no probe.
+        expect(database.calls.filter((call) => call.method === "get" || call.method === "findFirst").map((call) => call.method)).toStrictEqual(["get"]);
     });
 
     it("get() on a row outside every masked table returns it unmasked", async () => {
@@ -2213,7 +2217,9 @@ describe("mask — get() table resolution", () => {
 
         const database = createFakeDatabase([{ _id: "e1", email: "raw@x.com", table: "events" }]);
 
-        const handler = lunora.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) => (ctx as unknown as TestContext).db.get("e1"));
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.get("events", "e1"));
 
         const result = await handler.handler(makeContext(database, "u1"), {});
 
@@ -2263,7 +2269,7 @@ describe("mask — get() table resolution", () => {
     /**
      * `lookupById` is SHARD-LOCAL: a `.global()` row lives in D1, so it misses
      * the seam while `get`/`findFirst` still resolve it through the writer's own
-     * global fallback. Reading that miss as "no such row" made `ctx.db.get(id)`
+     * global fallback. Reading that miss as "no such row" made `ctx.db.get("table", id)`
      * answer `null` for every global row inside a `mask()` procedure.
      */
     it("falls back to the probe path when lookupById misses (a .global() row is not absent)", async () => {
@@ -2276,7 +2282,9 @@ describe("mask — get() table resolution", () => {
 
         database.writer.lookupById = async () => null;
 
-        const handler = lunora.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) => (ctx as unknown as TestContext).db.get("u1"));
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.get("users", "u1"));
 
         const result = await handler.handler(makeContext(database, "u1"), {});
 
@@ -2313,7 +2321,7 @@ describe("mask — opt-in scope & stored data", () => {
         expect(maskedResult?.["email"]).toBeNull();
 
         // Read straight off the underlying writer — the store was never touched.
-        const stored = await database.writer.get("u1");
+        const stored = await database.writer.get("users", "u1");
 
         expect(stored?.["email"]).toBe("a@x.com");
     });
@@ -2331,7 +2339,7 @@ describe("mask — per-table facade (no mask bypass)", () => {
                 findFirst: (args?: unknown) => writer.findFirst(tableName, args),
                 findFirstOrThrow: (args?: unknown) => writer.findFirstOrThrow(tableName, args),
                 findMany: (args?: unknown) => writer.findMany(tableName, args),
-                get: (id: string) => writer.get(id),
+                get: (id: string) => writer.get(tableName, id),
                 groupBy: (options: unknown) => writer.groupBy(tableName, options),
                 insert: (document: Record<string, unknown>) => writer.insert(tableName, document),
                 patch: (id: string, patch: Record<string, unknown>) => writer.patch(id, patch),

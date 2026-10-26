@@ -105,7 +105,7 @@ export const attachmentUrl = action
         // channel here is readable by every signed-in user anyway. Give this app
         // private channels and the check that the caller may read THIS channel
         // belongs right here, before the key is resolved.
-        const message = await ctx.db.get(messageId);
+        const message = await ctx.db.get("messages", messageId);
 
         if (!message?.attachmentKey) {
             throw new LunoraError("NOT_FOUND", "no attachment on that message");

@@ -213,7 +213,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     // (`version`) and the losing one landed not at all (`title`).
                     // Checking only `title` would pass on a host that dropped
                     // both writes.
-                    const stored = (await database.get("i1")) as Record<string, unknown> | undefined;
+                    const stored = (await database.get("items", "i1")) as Record<string, unknown> | undefined;
 
                     expect(stored?.["title"]).toBe("first");
                     expect(stored?.["version"]).toBe(99);

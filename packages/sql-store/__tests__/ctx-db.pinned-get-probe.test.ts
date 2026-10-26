@@ -6,8 +6,8 @@ import { createSqlCtxDb } from "../src/ctx-db";
 import { createSqliteHarness, makeSqliteDialect } from "./_helpers/sqlite";
 
 /**
- * Three `.global()` tables, so an unpinned id lookup has more than one table to probe. The probe log records
- * the table of every `SELECT 1 FROM <table> WHERE id = …` the writer issues.
+ * Three `.global()` tables, so a lookup that wrongly probed past the named table would show up in the log. The probe log records
+ * the table of every `SELECT * FROM <table> WHERE id IN (…)` the writer issues.
  */
 const globalTable = {
     indexes: [],
@@ -21,13 +21,13 @@ const schema = {
     tables: { a: globalTable, b: globalTable, c: globalTable },
 } as never as SchemaLike;
 
-const PROBE = /SELECT 1 FROM "(\w+)" WHERE "id" = /u;
+const PROBE = /SELECT \* FROM "(\w+)" WHERE "id" IN \(/u;
 
 let harness: ReturnType<typeof createSqliteHarness>;
 let probes: string[];
 let writer: ReturnType<typeof createSqlCtxDb>;
 
-describe("createSqlCtxDb id lookup under a table pin", () => {
+describe("createSqlCtxDb id lookup by table", () => {
     beforeEach(() => {
         harness = createSqliteHarness();
         probes = [];
@@ -57,34 +57,34 @@ describe("createSqlCtxDb id lookup under a table pin", () => {
         harness.close();
     });
 
-    it("probes only the pinned table when the id is looked up through its table", async () => {
+    it("probes only the named table when the id is looked up through it", async () => {
         expect.assertions(2);
 
         const id = await writer.insert("b", { title: "in b" });
 
         probes = [];
 
-        const row = await writer.get(id, "b");
+        const row = await writer.get("b", id);
 
         expect(probes).toStrictEqual(["b"]);
         expect(row?.["title"]).toBe("in b");
     });
 
-    it("probes every table when the id is looked up without a pin", async () => {
+    it("issues one lookup, not one per table, for a `.global()` table", async () => {
         expect.assertions(2);
 
-        const id = await writer.insert("b", { title: "in b" });
+        const id = await writer.insert("c", { title: "in c" });
 
         probes = [];
 
-        const row = await writer.get(id);
+        const row = await writer.get("c", id);
 
-        expect(probes.toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["a", "b", "c"]);
-        expect(row?.["title"]).toBe("in b");
+        expect(probes).toHaveLength(1);
+        expect(row?.["title"]).toBe("in c");
     });
 
-    it("reads the id's own table under a pin even when another table's answer is cached for it", async () => {
-        expect.assertions(3);
+    it("reads the named table even when another table's answer is cached for the same id", async () => {
+        expect.assertions(2);
 
         // The same id names a row in `a` (written first) and in `b` (written through a writer with a cold cache).
         const id = await writer.insert("a", { title: "in a" });
@@ -98,58 +98,56 @@ describe("createSqlCtxDb id lookup under a table pin", () => {
         await otherWriter.insert("b", { title: "in b" }, { clientId: id });
 
         // Looked up through `b` first, on a writer that has never resolved this id.
-        const throughB = await writer.get(id, "b");
+        const throughB = await writer.get("b", id);
 
         expect(throughB?.["title"]).toBe("in b");
 
-        // A pinned read of `a` must not be answered by the cached `b`, and an unpinned read keeps the first match in schema order.
-        const throughA = await writer.get(id, "a");
-        const unpinned = await writer.get(id);
+        // A read of `a` must not be answered by the cached `b`.
+        const throughA = await writer.get("a", id);
 
         expect(throughA?.["title"]).toBe("in a");
-        expect(unpinned?.["title"]).toBe("in a");
     });
 
-    it("does not probe again for a repeated pinned read of the same table", async () => {
+    it("only ever probes the named table across repeated reads", async () => {
         expect.assertions(3);
 
         const id = await writer.insert("b", { title: "in b" });
 
         probes = [];
 
-        const first = await writer.get(id, "b");
-        const second = await writer.get(id, "b");
+        const first = await writer.get("b", id);
+        const second = await writer.get("b", id);
 
-        expect(probes).toStrictEqual(["b"]);
+        expect(probes).toStrictEqual(["b", "b"]);
         expect(first?.["title"]).toBe("in b");
         expect(second?.["title"]).toBe("in b");
     });
 
-    it("does not answer an unpinned read of a NUL-bearing id from a pinned cache entry", async () => {
+    it("does not answer a read of a NUL-bearing id from the cache entry of the id it extends", async () => {
         expect.assertions(3);
 
-        // `x` lives in `a`, so the pinned read caches it. The unpinned id `a\u0000x` is not stored anywhere: it is only
+        // `x` lives in `a`, so the first read caches it. The id `a\u0000x` is not stored anywhere: it is only
         // looked up. The NUL is bound as a parameter, never read back, so this holds on every SQLite build.
         await writer.insert("a", { _id: "x", title: "in a" }, { allowExplicitId: true });
 
-        await expect(writer.get("x", "a")).resolves.toMatchObject({ title: "in a" });
+        await expect(writer.get("a", "x")).resolves.toMatchObject({ title: "in a" });
 
         probes = [];
 
-        const unpinned = await writer.get("a\u0000x");
+        const nulBearing = await writer.get("a", "a\u0000x");
 
-        expect(probes.toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["a", "b", "c"]);
-        expect(unpinned).toBeNull();
+        expect(probes).toStrictEqual(["a"]);
+        expect(nulBearing).toBeNull();
     });
 
-    it("treats an id owned by another table as absent under a pin", async () => {
+    it("treats an id owned by another table as absent under the named table", async () => {
         expect.assertions(2);
 
         const id = await writer.insert("b", { title: "in b" });
 
         probes = [];
 
-        const row = await writer.get(id, "a");
+        const row = await writer.get("a", id);
 
         expect(probes).toStrictEqual(["a"]);
         expect(row).toBeNull();

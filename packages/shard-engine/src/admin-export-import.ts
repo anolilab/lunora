@@ -257,7 +257,7 @@ const locateExistingId = async (writer: DatabaseWriterLike, table: string, expli
             return located === null ? undefined : located.tableName;
         }
 
-        return (await writer.get(explicitId, table)) === null ? undefined : table;
+        return (await writer.get(table, explicitId)) === null ? undefined : table;
     } catch {
         // An unknown-table failure here is surfaced when the insert runs against
         // the real schema.

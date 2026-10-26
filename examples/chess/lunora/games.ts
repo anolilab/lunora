@@ -60,7 +60,7 @@ const PROMOTION_CHOICES = new Set<PieceType>(["B", "N", "Q", "R"]);
 
 export const get = query
     .input({ gameId: v.id("games") })
-    .query(async ({ args: { gameId }, ctx }): Promise<Document_<"games"> | null> => (await ctx.db.get(gameId)) ?? null);
+    .query(async ({ args: { gameId }, ctx }): Promise<Document_<"games"> | null> => (await ctx.db.get("games", gameId)) ?? null);
 
 /** The move list, oldest first — the board's history panel subscribes to this. */
 export const moves = query.input({ gameId: v.id("games") }).query(async ({ args: { gameId }, ctx }): Promise<Document_<"moves">[]> =>
@@ -102,7 +102,7 @@ export const start = mutation
     .use(rateLimit(mutationLimiter, "move", byPlayer))
     .input({ lobbyId: v.id("lobbies") })
     .mutation(async ({ args: { lobbyId }, ctx }): Promise<Id<"games">> => {
-        const lobby = await ctx.db.get(lobbyId);
+        const lobby = await ctx.db.get("lobbies", lobbyId);
 
         if (!lobby) {
             throw new LunoraError("NOT_FOUND", "lobby not found");
@@ -180,7 +180,7 @@ export const makeMove = mutation
             throw new LunoraError("UNAUTHENTICATED", "sign in to play");
         }
 
-        const game = await ctx.db.get(gameId);
+        const game = await ctx.db.get("games", gameId);
 
         if (!game) {
             throw new LunoraError("NOT_FOUND", "game not found");
@@ -261,7 +261,7 @@ export const makeMove = mutation
  * that is copied is a guard that eventually diverges.
  */
 const requirePlayer = async (ctx: MutationCtx, gameId: Id<"games">): Promise<Document_<"games">> => {
-    const game = await ctx.db.get(gameId);
+    const game = await ctx.db.get("games", gameId);
 
     if (game?.status !== "active") {
         throw new LunoraError("CONFLICT", "this game is not in progress");

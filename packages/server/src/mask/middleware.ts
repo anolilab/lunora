@@ -186,7 +186,7 @@ interface MaskDatabase {
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
-    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
+    get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
     groupBy: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
     insertMany: (
@@ -629,50 +629,31 @@ const wrapDatabase = <Context>(
     };
 
     /**
-     * Resolve the raw row for an id and which masked table (if any) owns it.
-     * `get(id)`/the id-keyed facade carry no table name, so — like RLS's
-     * `locateRow` — we use the optional `lookupById` fast path, else fetch the
-     * row and probe the masked tables concurrently. Only masked tables are
-     * probed: a row in no masked table needs no masking. The unwrapped `base.*`
-     * is used so the probe itself isn't masked.
-     *
-     * A `lookupById` MISS falls through to the probe path instead of answering
-     * "absent": the seam is shard-local, so a `.global()` row always misses it
-     * and only `get`/`findFirst` reach those rows (through the writer's global
-     * fallback). Treating the miss as absent made `ctx.db.get(id)` return `null`
-     * for every global row inside a `mask()` procedure. The fast path still
-     * settles the common case — a shard-local hit — in one round-trip.
+     * Resolve the raw row for a bound table's id and whether that table is masked.
+     * The `lookupById` fast path settles a shard-local hit in one round-trip; a
+     * miss falls through to the table-pinned `get`, which reaches a `.global()` row
+     * through the writer's D1 fallback. The unwrapped `base.*` is used so the read
+     * itself isn't masked.
      */
-    const locate = async (id: string, expectedTable?: string): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
+    const locate = async (table: string, id: string): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
         if (base.lookupById) {
-            // Pin the lookup to the bound table when the by-id facade forwards
-            // one, so a foreign id can't read another table's row around the
-            // mask (IDOR).
-            const located = await base.lookupById(id, expectedTable);
+            // Pin the lookup to the bound table so a foreign id can't read another
+            // table's row around the mask (IDOR).
+            const located = await base.lookupById(id, table);
 
             if (located) {
                 return { row: located.row, tableName: perTable.has(located.tableName) ? located.tableName : undefined };
             }
         }
 
-        const row = await base.get(id, expectedTable);
+        const row = await base.get(table, id);
 
         if (!row) {
             // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
             return { row: null, tableName: undefined };
         }
 
-        const pinnedProbe = expectedTable !== undefined && perTable.has(expectedTable) ? [expectedTable] : [];
-        const probeTables = expectedTable === undefined ? [...perTable.keys()] : pinnedProbe;
-        const probes = await Promise.all(
-            probeTables.map(async (tableName) => {
-                const probe = await base.findFirst(tableName, { limit: 1, where: { _id: id } });
-
-                return probe?.["_id"] === id ? tableName : undefined;
-            }),
-        );
-
-        return { row, tableName: probes.find((entry): entry is string => entry !== undefined) };
+        return { row, tableName: perTable.has(table) ? table : undefined };
     };
 
     /** Fail an analytical reduction closed when it touches a masked column on `tableName`. */
@@ -1061,8 +1042,8 @@ const wrapDatabase = <Context>(
             return columns ? maskPage(page, columns, context) : page;
         },
 
-        async get(id, expectedTable) {
-            const { row, tableName } = await locate(id, expectedTable);
+        async get(table, id) {
+            const { row, tableName } = await locate(table, id);
             const columns = tableName === undefined ? undefined : perTable.get(tableName);
 
             if (!row || !columns) {

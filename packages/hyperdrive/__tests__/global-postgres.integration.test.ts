@@ -115,7 +115,7 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
                 applied: true,
                 doc: expect.objectContaining({ _id: "t1", seq: 10 }),
             });
-            await expect(writer.get("t1")).resolves.toMatchObject({ seq: 10 });
+            await expect(writer.get("todos", "t1")).resolves.toMatchObject({ seq: 10 });
         });
 
         it("lets exactly one of ten concurrent compare-and-set patches win", async () => {
@@ -130,7 +130,7 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             );
 
             expect(results.filter((result) => result?.applied)).toHaveLength(1);
-            await expect(writer.get("t2")).resolves.toMatchObject({ seq: 3 });
+            await expect(writer.get("todos", "t2")).resolves.toMatchObject({ seq: 3 });
         });
     });
 
@@ -960,7 +960,7 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             ).resolves.toStrictEqual([expect.objectContaining({ _id: "n1" })]);
 
             // Plain reads and writes keep working through the switch.
-            await expect(native.get("n1")).resolves.toMatchObject({ title: "one" });
+            await expect(native.get("notes", "n1")).resolves.toMatchObject({ title: "one" });
             await expect(native.insert("notes", { body: "after the flip", channel: "general", title: "two" })).resolves.toBeDefined();
         });
 

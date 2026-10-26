@@ -3480,26 +3480,20 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return { params, plan: steps.map((step) => planStepText(step)), sql: text };
         },
 
-        async get(id, expectedTable) {
-            const tableName = await resolveTableName(id, expectedTable);
-
-            if (!tableName) {
-                // eslint-disable-next-line unicorn/no-null -- writer.get's public return is `doc | null`; an unresolved id returns null.
-                return null;
-            }
-
-            const definition = schema.tables[tableName];
+        async get(table, id) {
+            const definition = schema.tables[table];
 
             if (!definition) {
-                // eslint-disable-next-line unicorn/no-null -- writer.get's public return is `doc | null` (see above).
-                return null;
+                throw new LunoraError("BAD_REQUEST", `ctx.db.get(table, id): "${table}" is not a table in this schema`);
             }
 
-            // Coalesced: every `get` issued in this tick against `tableName`
+            await ensureMigrated();
+
+            // Coalesced: every `get` issued in this tick against `table`
             // becomes ONE `IN (…)` round-trip. `Promise.all(ids.map(ctx.db.get))`
             // is the idiomatic join, and against a remote store each of those
             // would otherwise be its own network hop.
-            return decodeRow(definition, await pointReads.load(tableName, id));
+            return decodeRow(definition, await pointReads.load(table, id));
         },
 
         async groupBy(tableName, groupOptions: GroupByOptions): Promise<ReadonlyArray<GroupByEntry>> {

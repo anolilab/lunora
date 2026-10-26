@@ -170,7 +170,7 @@ describe("discoverRawRowReturns", () => {
     it("records an empty table for a by-id get whose table isn't a string literal", () => {
         expect.assertions(1);
 
-        write("byid.ts", `export const getById = query(async ({ args, ctx }) => ctx.db.get(args.id));`);
+        write("byid.ts", `export const getById = query(async ({ args, ctx }) => ctx.db.get(args.table, args.id));`);
 
         expect(rowFor("getById")).toMatchObject({ table: "" });
     });

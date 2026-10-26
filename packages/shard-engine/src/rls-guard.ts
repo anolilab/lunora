@@ -62,7 +62,7 @@ interface GuardableSchema {
 }
 
 /**
- * Resolve the owning table of a row id (so a generic `ctx.db.get(id)` with no
+ * Resolve the owning table of a row id (so a generic `ctx.db.patch(id)` with no
  * pinned table can still be gated). May be sync (DO `locateRowById`) or async (D1
  * `resolveTableName`). `undefined` ⇒ the id resolves to no table this writer can
  * see (absent row, or another backend) — nothing to leak, so the op passes
@@ -98,7 +98,7 @@ interface GuardableWriter {
     findFirst: (tableName: string, args?: unknown) => unknown;
     findFirstOrThrow: (tableName: string, args?: unknown) => unknown;
     findMany: (tableName: string, args?: unknown) => unknown;
-    get: (id: string, expectedTable?: string) => unknown;
+    get: (table: string, id: string) => unknown;
     groupBy: (tableName: string, options: unknown) => unknown;
     insert: (tableName: string, document: unknown, options?: unknown) => unknown;
     insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => unknown;
@@ -380,7 +380,7 @@ const guardWriter = <W>(
             return;
         }
 
-        // Generic `ctx.db.get(id)` / `patch` / … : resolve the owning table so a
+        // Generic `ctx.db.patch(id)` / `delete` / … : resolve the owning table so a
         // protected row can't be addressed by a bare id. An unresolved id leaks
         // nothing, so it passes through.
         const tableName = await tableOfId(id);
@@ -457,10 +457,11 @@ const guardWriter = <W>(
                   return await base.deleteWhere?.(tableName, where, options);
               }
             : undefined,
-        get: async (id: string, expectedTable?: string) => {
-            await guardById(id, expectedTable);
+        get: async (table: string, id: string) => {
+            // The table is named by the caller, so it gates directly — no owner probe.
+            guardTable(table);
 
-            return base.get(id, expectedTable);
+            return await base.get(table, id);
         },
         lookupById: async (id: string, expectedTable?: string) => {
             // The spread would otherwise expose the raw lookup, letting a bare id

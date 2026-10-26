@@ -48,7 +48,7 @@ interface FakeDatabase {
         findFirst: (tableName: string, args?: unknown) => Promise<Record<string, unknown> | null>;
         findFirstOrThrow: (tableName: string, args?: unknown) => Promise<Record<string, unknown>>;
         findMany: (tableName: string, args?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
-        get: (id: string) => Promise<Record<string, unknown> | null>;
+        get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
         groupBy: (tableName: string, options: unknown) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
         insert: (tableName: string, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<string>;
         insertMany: (
@@ -167,7 +167,7 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 
                 return { continueCursor: null, isDone: true, page: rowsOfTable(tableName) };
             },
-            async get(id) {
+            async get(_table, id) {
                 calls.push({ args: undefined, method: "get", tableOrId: id });
 
                 return byId.get(id) ?? null;
@@ -657,7 +657,7 @@ describe("rls — read path", () => {
             return candidate["ownerId"] === baseWhere.ownerId ? candidate : null;
         };
 
-        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.get("d1"));
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.get("documents", "d1"));
 
         await expect(handler.handler(makeContext(fake, "u1"), {})).resolves.toBeNull();
     });
@@ -678,7 +678,7 @@ describe("rls — read path", () => {
 
         const fake = createFakeDatabase([{ _id: "a1", event: "login", table: "audit" }]);
 
-        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.get("a1"));
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.get("audit", "a1"));
 
         const result = await handler.handler(makeContext(fake, "u1"), {});
 
@@ -726,9 +726,9 @@ describe("rls — read path", () => {
             return candidate["ownerId"] === baseWhere.ownerId ? candidate : null;
         };
 
-        const denied = lunora.query.use(rlsForTest<TestContext>([docsPolicy, notesPolicy])).query(async ({ ctx }) => ctx.db.get("d1"));
-        const allowed = lunora.query.use(rlsForTest<TestContext>([docsPolicy, notesPolicy])).query(async ({ ctx }) => ctx.db.get("n1"));
-        const absent = lunora.query.use(rlsForTest<TestContext>([docsPolicy, notesPolicy])).query(async ({ ctx }) => ctx.db.get("missing"));
+        const denied = lunora.query.use(rlsForTest<TestContext>([docsPolicy, notesPolicy])).query(async ({ ctx }) => ctx.db.get("documents", "d1"));
+        const allowed = lunora.query.use(rlsForTest<TestContext>([docsPolicy, notesPolicy])).query(async ({ ctx }) => ctx.db.get("notes", "n1"));
+        const absent = lunora.query.use(rlsForTest<TestContext>([docsPolicy, notesPolicy])).query(async ({ ctx }) => ctx.db.get("documents", "missing"));
 
         // d1 exists in "documents" but is denied → null (NOT the leaked row).
         await expect(denied.handler(makeContext(fake, "u1"), {})).resolves.toBeNull();
@@ -758,7 +758,7 @@ describe("rls — read path", () => {
         enableGetWithTable(fake, rows);
 
         // Owned + allowed: single lookupById lookup + one policy-check findFirst.
-        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.get("d1"));
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.get("documents", "d1"));
         const result = await handler.handler(makeContext(fake, "u1"), {});
 
         expect(result?.["_id"]).toBe("d1");
@@ -2668,7 +2668,7 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
                 findFirst: (args?: unknown) => writer.findFirst(tableName, args),
                 findFirstOrThrow: (args?: unknown) => writer.findFirstOrThrow(tableName, args),
                 findMany: (args?: unknown) => writer.findMany(tableName, args),
-                get: (id: string) => writer.get(id),
+                get: (id: string) => writer.get(tableName, id),
                 groupBy: (options: unknown) => writer.groupBy(tableName, options),
                 insert: (document: Record<string, unknown>) => writer.insert(tableName, document),
                 patch: (id: string, patch: Record<string, unknown>) => writer.patch(id, patch),

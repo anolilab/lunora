@@ -107,12 +107,12 @@ describe("compound SELECT term cap", () => {
             // Bare-id (no `expectedTable`) — the unscoped probe the issue reports.
             await writer.patch(id, { title: "after" });
 
-            await expect(writer.get(id)).resolves.toMatchObject({ title: "after" });
+            await expect(writer.get("t6", id)).resolves.toMatchObject({ title: "after" });
 
             await writer.delete(id);
 
-            await expect(writer.get(id)).resolves.toBeNull();
-            await expect(writer.get(other)).resolves.toMatchObject({ title: "untouched" });
+            await expect(writer.get("t6", id)).resolves.toBeNull();
+            await expect(writer.get("t1", other)).resolves.toMatchObject({ title: "untouched" });
         } finally {
             harness.close();
         }
@@ -147,9 +147,9 @@ describe("compound SELECT term cap", () => {
 
             const survivors = [];
 
-            for (const id of ids) {
+            for (const [index, id] of ids.entries()) {
                 // eslint-disable-next-line no-await-in-loop -- sequential reads against a single-threaded SQLite harness
-                survivors.push(await admin.get(id));
+                survivors.push(await admin.get(`t${String(index % 8)}`, id));
             }
 
             expect(survivors.filter(Boolean)).toEqual([]);
@@ -280,12 +280,12 @@ describe("bound-parameter cap", () => {
             // Bare-id (no `expectedTable`) — `locateRowById`'s unscoped probe.
             await admin.patch(id, { title: "after" });
 
-            await expect(admin.get(id)).resolves.toMatchObject({ title: "after" });
+            await expect(admin.get("t119", id)).resolves.toMatchObject({ title: "after" });
 
             // And the RLS guard's batched `locateTablesByIds` pre-check.
             await guarded.deleteMany!([id]);
 
-            await expect(admin.get(id)).resolves.toBeNull();
+            await expect(admin.get("t119", id)).resolves.toBeNull();
             expect(bound.length).toBeGreaterThan(0);
             expect(Math.max(...bound)).toBeLessThanOrEqual(100);
         } finally {

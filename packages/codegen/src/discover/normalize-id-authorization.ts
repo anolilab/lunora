@@ -12,10 +12,11 @@ import type { InspectableHandler } from "./functions/handler";
 import { procedureHandler } from "./functions/handler";
 
 /**
- * `ctx.db` id-first row operations that resolve a whole row by its primitive id:
- * `get(id)`, `patch(id, …)`, `delete(id)`. Each takes the id as argument 0, so a
- * `normalizeId` result flowing into `arg[0]` reaches the row directly — with no
- * ownership predicate in the read itself.
+ * `ctx.db` row operations that resolve a whole row by its primitive id:
+ * `get(table, id)`, `patch(id, …)`, `delete(id)`. The id is argument 0 for every
+ * sink except the generic `get`, where the table comes first and the id is argument
+ * 1. A `normalizeId` result flowing into that argument reaches the row directly,
+ * with no ownership predicate in the read itself.
  */
 const SINK_METHODS = new Set<NormalizeIdAuthorizationIR["sinkMethod"]>(["delete", "get", "patch"]);
 
@@ -124,7 +125,7 @@ const hasNullGate = (handler: InspectableHandler, name: string): boolean =>
 
 /**
  * The id-first `ctx.db` sink method (`get`/`patch`/`delete`) the handler applies to
- * `name` as its first argument (`ctx.db.get(id)` / `ctx.db.<table>.patch(id, …)`), or
+ * `name` as its id argument (`ctx.db.get(table, id)` / `ctx.db.<table>.patch(id, …)`), or
  * `undefined` when the normalized id never reaches such a sink.
  */
 const idSinkMethod = (handler: InspectableHandler, name: string): NormalizeIdAuthorizationIR["sinkMethod"] | undefined => {
@@ -142,14 +143,16 @@ const idSinkMethod = (handler: InspectableHandler, name: string): NormalizeIdAut
         }
 
         const receiver = callee.getExpression();
-        // Generic form `ctx.db.get(id)` or facade form `ctx.db.<table>.get(id)`.
-        const onDatabase = isDatabaseAccessor(receiver) || (Node.isPropertyAccessExpression(receiver) && isDatabaseAccessor(receiver.getExpression()));
+        // Generic form `ctx.db.get(table, id)` or facade form `ctx.db.<table>.get(id)`.
+        const genericDatabase = isDatabaseAccessor(receiver);
+        const onDatabase = genericDatabase || (Node.isPropertyAccessExpression(receiver) && isDatabaseAccessor(receiver.getExpression()));
 
         if (!onDatabase) {
             continue;
         }
 
-        const first = call.getArguments()[0];
+        // The generic `get` takes the table first; every other sink takes the id first.
+        const first = call.getArguments()[genericDatabase && method === "get" ? 1 : 0];
 
         if (first !== undefined && Node.isIdentifier(first) && first.getText() === name) {
             return method;
@@ -163,7 +166,7 @@ const idSinkMethod = (handler: InspectableHandler, name: string): NormalizeIdAut
  * True when the handler passes `ctx` (or any `ctx.`-rooted value) into a function
  * call — `getViewer(ctx)`, `requireUser(ctx)`, `authorize(ctx, id)`. Delegating the
  * whole context to a helper is a strong tell that identity/authorization is resolved
- * out of line, so the handler is doing more than a shape check. A `ctx.db.get(id)`
+ * out of line, so the handler is doing more than a shape check. A `ctx.db.get(table, id)`
  * method call does NOT match: there `ctx` is the receiver, not an argument.
  */
 const delegatesContextToHelper = (handler: InspectableHandler): boolean =>

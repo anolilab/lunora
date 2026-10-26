@@ -36,7 +36,7 @@ export const send = mutation.input({ channelId: v.id("channels"), text: v.string
         throw new LunoraError("UNAUTHORIZED", "Sign in to post");
     }
 
-    const channel = await ctx.db.get(args.channelId);
+    const channel = await ctx.db.get("channels", args.channelId);
 
     if (!channel) {
         throw new LunoraError("NOT_FOUND", "That channel no longer exists");

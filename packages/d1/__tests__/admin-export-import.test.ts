@@ -359,7 +359,7 @@ describe("d1 admin export/import globals", () => {
             expect(result.conflicts).toBe(1);
             expect(result.inserted).toEqual({ settings: 1 });
 
-            const reloaded = await writer.get("s1");
+            const reloaded = await writer.get("settings", "s1");
 
             expect(reloaded).toMatchObject({ value: "dark" });
         });
@@ -430,7 +430,7 @@ describe("d1 admin export/import globals", () => {
 
             expect(result.errors).toEqual([]);
 
-            const reload = await freshWriter.get("l1");
+            const reload = await freshWriter.get("ledger", "l1");
 
             expect(reload?.["cents"]).toBe(9_007_199_254_740_993n);
             expect([...new Uint8Array(reload?.["blob"] as ArrayBuffer)]).toStrictEqual([7, 8, 9]);
@@ -474,7 +474,7 @@ describe("d1 admin export/import globals", () => {
             expect(result.inserted).toEqual({ settings: 2 });
             expect(result.errors).toEqual([]);
 
-            const reload = await freshWriter.get("s1");
+            const reload = await freshWriter.get("settings", "s1");
 
             expect(reload).toMatchObject({ name: "theme", value: "dark" });
 
@@ -522,7 +522,7 @@ describe("d1 admin export/import globals", () => {
 
             expect(result.errors).toEqual([]);
             expect(result.inserted).toEqual({ settings: 1 });
-            await expect(freshWriter.get("s1")).resolves.toMatchObject({ name: "theme", value: "dark" });
+            await expect(freshWriter.get("settings", "s1")).resolves.toMatchObject({ name: "theme", value: "dark" });
 
             fresh.close();
         });
@@ -539,7 +539,7 @@ describe("d1 admin export/import globals", () => {
             expect(result.errors).toEqual([]);
             expect(result.inserted).toEqual({ settings: 1 });
             // Restored as the absence it was, not as a null.
-            await expect(writer.get("s1")).resolves.not.toHaveProperty("nickname");
+            await expect(writer.get("settings", "s1")).resolves.not.toHaveProperty("nickname");
         });
 
         it("keeps a nullable column's null through the round trip", async () => {
@@ -574,7 +574,7 @@ describe("d1 admin export/import globals", () => {
 
             expect(result.errors).toEqual([]);
 
-            const restored = await freshWriter.get("s1");
+            const restored = await freshWriter.get("settings", "s1");
 
             expect(restored?.["note"]).toBeNull();
 

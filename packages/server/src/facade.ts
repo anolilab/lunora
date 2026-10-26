@@ -78,7 +78,7 @@ export interface FacadeWriterLike {
     findFirst(tableName: string, args?: unknown): Promise<unknown>;
     findFirstOrThrow(tableName: string, args?: unknown): Promise<unknown>;
     findMany(tableName: string, args?: unknown): Promise<unknown>;
-    get(id: string, expectedTable?: string): Promise<unknown>;
+    get(table: string, id: string): Promise<unknown>;
     groupBy(tableName: string, options: unknown): Promise<unknown>;
     insert(tableName: string, document: Record<string, unknown>): Promise<string>;
     // Optional: see `deleteMany` above — not every writer provides a batch insert.
@@ -217,10 +217,8 @@ export interface UpsertManyArgs {
  * argument keep their previous global behaviour; the scoping is opt-in via this
  * forwarded name.
  *
- * Cost: on a `.global()` table, `ctx.db.<table>.get(id)` probes only `tableName`.
- * The unscoped `ctx.db.get(id)` cannot name its table, so it probes every global
- * table for the id in parallel on each call. Use the table accessor for by-id
- * reads of `.global()` rows.
+ * Cost: on a `.global()` table, `ctx.db.<table>.get(id)` probes only `tableName`,
+ * and so does the root `ctx.db.get(table, id)`; neither form probes every table.
  */
 export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): FacadeEntry => {
     // Insert + skipDuplicates: on a UNIQUE breach the insert resolves to `null`
@@ -325,7 +323,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         findFirstOrThrow: (args) => writer.findFirstOrThrow(tableName, args),
         findMany: (args) => writer.findMany(tableName, args),
         findUnique,
-        get: (id) => writer.get(id, tableName),
+        get: (id) => writer.get(tableName, id),
         groupBy: (options) => writer.groupBy(tableName, options),
         // Physical removal — bypasses `.softDelete()`. RLS gates it as a delete.
         hardDelete: (id) => writer.delete(id, tableName, { hard: true }),
