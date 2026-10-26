@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.360](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.359...@lunora/codegen@1.0.0-alpha.360) (2026-10-26)
+
+### Performance Improvements
+
+* **codegen:** cheaper reused-Project passes (classification memo, cached handler walks, import scan) ([#1350](https://github.com/anolilab/lunora/issues/1350)) ([0c8713f](https://github.com/anolilab/lunora/commit/0c8713f0bc922356e82b0838dae2ba736b17d6e1))
+
 ## @lunora/codegen [1.0.0-alpha.359](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.358...@lunora/codegen@1.0.0-alpha.359) (2026-10-26)
 
 ### Performance Improvements
