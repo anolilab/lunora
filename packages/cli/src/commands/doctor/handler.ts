@@ -38,6 +38,7 @@ import isInsideDirectory from "../../util/path-containment";
 import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
 import checkAi from "./ai-checks";
 import checkCimdFetchFlag from "./cimd-checks";
+import checkCloudflareToken from "./cloudflare-token-checks";
 import { applyDoctorFixes, isD1PlaceholderId, isUnfinishedD1Id } from "./fix";
 import type { DoctorOptions } from "./index";
 import checkObservabilitySampling from "./observability-checks";
@@ -73,6 +74,9 @@ const DOCTOR_CODES = [
     "cf-config-present",
     "cimd-fetch-not-strictly-public",
     "cli-shadowed",
+    "cloudflare-token-ok",
+    "cloudflare-token-rejected",
+    "cloudflare-token-unchecked",
     "cpu-limit-missing",
     "d1-placeholder-id",
     "declared-export-missing",
@@ -961,6 +965,9 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     checkAi(parsed, cwd, inferred?.usesAi === true, findings);
     await checkCelldToolchain(cwd, options, findings);
     await checkDurableObjectClassBudget(cwd, parsed, options, findings);
+    if ((readProjectTarget(cwd) ?? DEFAULT_TARGET) === "cloudflare") {
+        await checkCloudflareToken(parsed, options, findings);
+    }
     await checkArtifactsJurisdictions(cwd, parsed, inferred?.jurisdiction, options, findings);
     checkCimdFetchFlag(parsed, inferred?.usesCimdWorkers === true, findings);
 

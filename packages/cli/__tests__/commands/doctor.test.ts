@@ -1222,6 +1222,74 @@ describe("runDoctor", () => {
         });
     });
 
+    describe("cloudflare api token", () => {
+        const tokenFinding = async (fetchImpl: typeof globalThis.fetch, environment: Record<string, string>) => {
+            const cwd = mkdtempSync(join(tmpdir(), "lunora-doctor-token-"));
+
+            try {
+                const result = await runDoctor({ cwd, environment, fetch: fetchImpl, logger: makeLogger().logger });
+
+                return result.findings.find((finding) => finding.code.startsWith("cloudflare-token"));
+            } finally {
+                rmSync(cwd, { force: true, recursive: true });
+            }
+        };
+
+        const credentials = { CLOUDFLARE_ACCOUNT_ID: "acc", CLOUDFLARE_API_TOKEN: "token" };
+
+        it("passes a token the account reports as active, verified against the configured account", async () => {
+            expect.assertions(3);
+
+            const fetchImpl = vi.fn<typeof globalThis.fetch>(async () => Response.json({ result: { status: "active" }, success: true }));
+
+            await expect(tokenFinding(fetchImpl, credentials)).resolves.toMatchObject({ code: "cloudflare-token-ok", level: "pass" });
+
+            const verify = vi.mocked(fetchImpl).mock.calls.find(([url]) => String(url instanceof Request ? url.url : url).endsWith("/tokens/verify"));
+
+            expect(String(verify?.[0] instanceof Request ? verify[0].url : verify?.[0])).toBe(
+                "https://api.cloudflare.com/client/v4/accounts/acc/tokens/verify",
+            );
+            expect(verify?.[1]).toMatchObject({ headers: { Authorization: "Bearer token" } });
+        });
+
+        it("fails a token the API rejects", async () => {
+            expect.assertions(1);
+
+            const fetchImpl = vi.fn<typeof globalThis.fetch>(async () =>
+                Response.json({ errors: [{ code: 1000, message: "Invalid API Token" }], success: false }, { status: 401 }),
+            );
+
+            await expect(tokenFinding(fetchImpl, credentials)).resolves.toMatchObject({ code: "cloudflare-token-rejected", level: "fail" });
+        });
+
+        it("fails a token the account reports as disabled", async () => {
+            expect.assertions(1);
+
+            const fetchImpl = vi.fn<typeof globalThis.fetch>(async () => Response.json({ result: { status: "disabled" }, success: true }));
+
+            await expect(tokenFinding(fetchImpl, credentials)).resolves.toMatchObject({ code: "cloudflare-token-rejected", level: "fail" });
+        });
+
+        it("does not fail a network error, which says nothing about the token", async () => {
+            expect.assertions(1);
+
+            const fetchImpl = vi.fn<typeof globalThis.fetch>(async () => {
+                throw new TypeError("fetch failed");
+            });
+
+            await expect(tokenFinding(fetchImpl, credentials)).resolves.toMatchObject({ code: "cloudflare-token-unchecked", level: "info" });
+        });
+
+        it("says it did not check when no token is set, and makes no request", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = vi.fn<typeof globalThis.fetch>(async () => Response.json({ success: true }));
+
+            await expect(tokenFinding(fetchImpl, { CLOUDFLARE_ACCOUNT_ID: "acc" })).resolves.toMatchObject({ code: "cloudflare-token-unchecked" });
+            expect(fetchImpl).not.toHaveBeenCalled();
+        });
+    });
+
     describe("durable object class budget", () => {
         /** A Cloudflare namespaces response reporting `total` classes on the account. */
         const namespacesApi = (total: number): typeof globalThis.fetch =>
@@ -1309,7 +1377,9 @@ describe("runDoctor", () => {
                 const result = await runDoctor({ cwd: workdir, environment, fetch: fetchImpl, logger: makeLogger().logger });
                 const asked = vi
                     .mocked(fetchImpl)
-                    .mock.calls.map(([url]) => /accounts\/([^/]+)\//u.exec(url instanceof Request ? url.url : url.toString())?.[1]);
+                    .mock.calls.map(([url]) => (url instanceof Request ? url.url : url.toString()))
+                    .filter((url) => url.includes("/durable_objects/namespaces"))
+                    .map((url) => /accounts\/([^/]+)\//u.exec(url)?.[1]);
 
                 return { asked, findings: result.findings.filter((finding) => finding.code.startsWith("do-class-budget")) };
             };
