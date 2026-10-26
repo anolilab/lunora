@@ -26,7 +26,7 @@ const voucherNote = (years: number): string => {
         return "Set to the statutory 8 years (HGB §257(4) S. 1, AO §147(3) S. 1). Regulated institutions keep 10 years. Confirm with a tax adviser.";
     }
 
-    return "Set to 10 years for every voucher, a maintainer decision. The statute sets 8 years for Buchungsbelege (HGB §257(4) S. 1, AO §147(3) S. 1) and 10 years for regulated institutions. Pass voucherYears: 8 for the statutory period.";
+    return "Set to 10 years for every voucher, chosen by the app with voucherYears: 10. The statute sets 8 years for Buchungsbelege (HGB §257(4) S. 1, AO §147(3) S. 1), so 10 is longer than required unless the business is regulated; regulated institutions keep 10 years. Leave voucherYears out for the statutory period.";
 };
 
 /**

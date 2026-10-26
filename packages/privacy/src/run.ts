@@ -674,8 +674,8 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
         await steps.sleepUntil("grace", record.erasureGraceUntil);
     }
 
-    // Set once the tombstone is written: from then on a row drain may leave rows gone, so a crash expires the subject's ready exports.
-    // Cleared before the files step, where a failed archive delete must keep its export ready until the retry (see the run tests).
+    // Set once the tombstone is written: a failed row drain may leave rows gone, so ready exports must expire.
+    // Cleared before the files step: a failed archive delete must leave ready exports in place so the retry can finish.
     let erasing = false;
 
     try {
