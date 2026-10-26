@@ -274,15 +274,39 @@ interface ModuleExport {
 }
 
 /**
- * Every export of a module that forwards from another module: `export { a as b } from "m"`, an export of a name it imported, and
- * `export * from "m"`. Read from the syntax tree, so a comment or string forwards nothing. `export * as ns` binds a namespace, not
- * the names, so it is skipped.
+ * The exports an `export const x = y` statement makes when `y` is a name the file imported: a value copy of the imported class
+ * forwards it as surely as a re-export does. Any other initializer forwards nothing.
+ */
+const valueExportsOf = (statement: ts.VariableStatement, imported: ReadonlyMap<string, NameSource>): ModuleExport[] => {
+    if (!statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
+        return [];
+    }
+
+    return statement.declarationList.declarations.flatMap((declaration): ModuleExport[] => {
+        if (!ts.isIdentifier(declaration.name) || declaration.initializer === undefined || !ts.isIdentifier(declaration.initializer)) {
+            return [];
+        }
+
+        const binding = imported.get(declaration.initializer.text);
+
+        return binding === undefined ? [] : [{ exported: declaration.name.text, module: binding.module, name: binding.name }];
+    });
+};
+
+/**
+ * Every export of a module that forwards from another module: `export { a as b } from "m"`, an export of a name it imported,
+ * `export const b = a` of a name it imported, and `export * from "m"`. Read from the syntax tree, so a comment or string forwards
+ * nothing. `export * as ns` binds a namespace, not the names, so it is skipped.
  */
 const forwardedExports = (modulePath: string): ModuleExport[] => {
     const source = ts.createSourceFile(modulePath, readFileSync(modulePath, "utf8"), ts.ScriptTarget.Latest);
     const imported = namedImportSources(source);
 
     return source.statements.flatMap((statement): ModuleExport[] => {
+        if (ts.isVariableStatement(statement)) {
+            return valueExportsOf(statement, imported);
+        }
+
         if (!ts.isExportDeclaration(statement) || statement.isTypeOnly) {
             return [];
         }

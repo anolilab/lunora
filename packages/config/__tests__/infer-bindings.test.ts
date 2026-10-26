@@ -1587,6 +1587,43 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
     });
 
+    it("keys LUNORA_RELAY_SECRET for an entry that exports the imported EventLogDO as a value", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nimport { EventLogDO } from "@lunora/replica";\n\nexport const Log = EventLogDO;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET for a value export of a renamed EventLogDO import", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nimport { EventLogDO as Base } from "@lunora/replica";\n\nexport const Log = Base;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for a value export of another replica import", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nimport { EventLogDOClient } from "@lunora/replica";\n\nexport const Client = EventLogDOClient;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET when the entry exports the replica EventLogDO through a relative barrel's value export", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { Log } from "./barrel";\n`);
+        write("src/server/barrel.ts", `import { EventLogDO } from "@lunora/replica";\n\nexport const Log = EventLogDO;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
     it("keys LUNORA_RELAY_SECRET when the entry exports a relative barrel's EventLogDO under its own name", async () => {
         expect.assertions(1);
 
