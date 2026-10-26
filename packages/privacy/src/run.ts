@@ -342,13 +342,15 @@ const failStep = async (scope: RunScope, steps: StepRunner, requestId: string, d
         return "failed" as const;
     });
 
-/** The erasure statuses that block an export of the subject: its data is partly or wholly gone, or the subject was erased. */
+/** The erasure statuses that block an export of the subject: its data may be partly gone, or the subject was erased. */
 const ERASURE_BLOCKING: ReadonlySet<RequestStatus> = new Set(["completed", "failed", "processing"]);
 
 /**
  * Whether the subject's erasure has begun or completed, read from the subject's request records. An erasure that is
- * processing or failed has deleted some of the data and still carries the raw id, so its own record finds it. A completed
- * erasure has re-keyed the subject's requests to the tombstone key, so the requests that carry that key find it.
+ * processing or failed may have deleted some of the data, and it still carries the raw id, so its own record finds it. A
+ * failed erasure can also have failed before it deleted anything (the tombstone step runs first); it blocks until an
+ * operator retries it. A completed erasure has re-keyed the subject's requests to the tombstone key, so the requests that
+ * carry that key find it.
  */
 const subjectErasureBlocks = async (store: RequestStore, subjectId: string): Promise<boolean> => {
     const requests = await store.listForSubject(subjectId);
