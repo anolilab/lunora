@@ -423,7 +423,7 @@ const checkD1Placeholders = (cwd: string, parsed: WranglerConfig | undefined, fi
 
             findings.push({
                 code: "d1-placeholder-id",
-                fix: "Run `wrangler d1 create <name>` and paste the returned database_id into wrangler.jsonc.",
+                fix: "Run `lunora doctor --fix` to create the database and write its id into wrangler.jsonc, or run `wrangler d1 create <name>` and paste the returned database_id in yourself.",
                 level: "fail",
                 message: `D1 binding "${label}" has a placeholder database_id ("${databaseId || "<empty>"}").`,
             });
