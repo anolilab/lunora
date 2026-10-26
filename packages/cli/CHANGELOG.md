@@ -1,3 +1,18 @@
+## @lunora/cli [1.0.0-alpha.434](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.433...@lunora/cli@1.0.0-alpha.434) (2026-10-26)
+
+### Features
+
+* **server:** require the table in ctx.db.get(table, id) ([#1342](https://github.com/anolilab/lunora/issues/1342)) ([92cca06](https://github.com/anolilab/lunora/commit/92cca0604d33fc93db2ad49530572e8b99508f3b))
+
+### Performance Improvements
+
+* **cli:** cut codegen and ts-morph from the startup path ([#1338](https://github.com/anolilab/lunora/issues/1338)) ([c4d6061](https://github.com/anolilab/lunora/commit/c4d60616455fa86a6d668e247f6223774f352db5))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.410
+
 ## @lunora/cli [1.0.0-alpha.433](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.432...@lunora/cli@1.0.0-alpha.433) (2026-10-26)
 
 
