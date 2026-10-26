@@ -151,10 +151,17 @@ const idSinkMethod = (handler: InspectableHandler, name: string): NormalizeIdAut
             continue;
         }
 
-        // The generic `get` takes the table first; every other sink takes the id first.
-        const first = call.getArguments()[genericDatabase && method === "get" ? 1 : 0];
+        // The generic `get` takes the table first, but a receiver named `db` can be a
+        // table facade (`const db = ctx.db.posts`) whose `get` takes the id first. Check
+        // both positions, so neither spelling hides the id from the sink.
+        const idPositions = genericDatabase && method === "get" ? 2 : 1;
 
-        if (first !== undefined && Node.isIdentifier(first) && first.getText() === name) {
+        if (
+            call
+                .getArguments()
+                .slice(0, idPositions)
+                .some((argument) => Node.isIdentifier(argument) && argument.getText() === name)
+        ) {
             return method;
         }
     }

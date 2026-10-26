@@ -100,6 +100,22 @@ describe("discoverNormalizeIdAuthorization", () => {
         expect(rowFor("getFacade")).toMatchObject({ sinkMethod: "get", table: "posts" });
     });
 
+    it("records a sink on a table facade aliased as `db`, whose get takes the id first", () => {
+        expect.assertions(1);
+
+        write(
+            "alias.ts",
+            `export const getAliased = query(async ({ args, ctx }) => {
+                const id = ctx.db.normalizeId("posts", args.id);
+                if (!id) throw new Error("nf");
+                const db = ctx.db.posts;
+                return db.get(id);
+            });`,
+        );
+
+        expect(rowFor("getAliased")).toMatchObject({ sinkMethod: "get", table: "posts" });
+    });
+
     it("flags mentionsOwnership when the handler reads ctx.auth", () => {
         expect.assertions(1);
 
