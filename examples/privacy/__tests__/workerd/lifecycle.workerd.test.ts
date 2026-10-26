@@ -42,6 +42,17 @@ const identity = (subjectId: string): PrivacyIdentity => {
  */
 const appCtx = (db: Database): MutationCtx => ({ db }) as unknown as MutationCtx;
 
+/** Each test names its tombstone store apart: the namespace is shared, and a tombstone left by one test would refuse another's export. */
+const tombstoneScope = { name: "" };
+
+/** The tombstone namespace, with its store named for the current test. */
+const testTombstones = (): Record<string, unknown> => {
+    return {
+        get: (id: DurableObjectId) => env.PRIVACY_TOMBSTONES.get(id),
+        idFromName: (name: string) => env.PRIVACY_TOMBSTONES.idFromName(`${name}:${tombstoneScope.name}`),
+    };
+};
+
 /**
  * A workflow context over the shard. `run` does what the internal `privacyPort` mutation does:
  * the package's dispatcher over the app's local ports.
@@ -49,7 +60,7 @@ const appCtx = (db: Database): MutationCtx => ({ db }) as unknown as MutationCtx
 const contextFor = (db: Database, requestId: string, hooks: RunHooks = {}): Context =>
     workflowContext(
         {
-            env: { DB: env.DB, PRIVACY_TOMBSTONES: env.PRIVACY_TOMBSTONES },
+            env: { DB: env.DB, PRIVACY_TOMBSTONES: testTombstones() },
             params: { requestId },
             run: async (_reference, args) => dispatchPort(privacyConfig, localPorts(appCtx(db)), args.method, args.payload),
         },
@@ -95,15 +106,19 @@ const requestRow = async (db: Database, requestId: string): Promise<undefined | 
 /** The request's status and the detail of each failure it recorded, so a run that failed names its code in the assertion. */
 const runOf = async (db: Database, requestId: string): Promise<{ failures: string[]; status?: string }> => {
     const events = await db.query("privacy_events").collect();
+    const row = await requestRow(db, requestId);
 
     return {
-        failures: events.filter((row) => row.requestId === requestId && row.kind === "failed").map((row) => String(row.detail ?? "")),
-        status: (await requestRow(db, requestId))?.status,
+        failures: events
+            .filter((event) => event.requestId === requestId && event.kind === "failed")
+            .map((event) => (typeof event.detail === "string" ? event.detail : "")),
+        status: row?.status,
     };
 };
 
 describe("privacy example lifecycle (workerd)", () => {
     beforeEach(async () => {
+        tombstoneScope.name = crypto.randomUUID();
         await ensureSignIn(env.DB, env.AUTH_SECRET);
         await clearSignIn(env.DB);
     });
@@ -217,7 +232,7 @@ describe("privacy example lifecycle (workerd)", () => {
             // The restore workflow the operator's `restorePrivacyErasures` starts, with the ids the restored shard holds.
             const reerased = await privacyWorkflows.restoreHandler(
                 workflowContext({
-                    env: { DB: env.DB, PRIVACY_TOMBSTONES: env.PRIVACY_TOMBSTONES },
+                    env: { DB: env.DB, PRIVACY_TOMBSTONES: testTombstones() },
                     params: { restoredSubjectIds: [SUBJECT, OTHER] },
                     run: async (_reference, args) => dispatchPort(privacyConfig, localPorts(appCtx(db)), args.method, args.payload),
                 }),
