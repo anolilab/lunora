@@ -5,7 +5,7 @@ import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "@lunora/advisor";
 import type { CallExpression, Expression, Identifier, Node as TsNode, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
-import { defaultExportExpression, findObjectProperty, handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { defaultExportExpression, descendantsOfKind, findObjectProperty, handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { isContextSurface } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
@@ -133,7 +133,7 @@ const discoverNotifyCalls = (project: Project, lunoraDirectory: string): Advisor
                 continue;
             }
 
-            for (const access of procedure.handler.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
+            for (const access of descendantsOfKind(procedure.handler, SyntaxKind.PropertyAccessExpression)) {
                 const callee = notifyCalleeOf(access);
 
                 if (callee !== undefined) {
@@ -152,7 +152,7 @@ const projectUsesPush = (project: Project, lunoraDirectory: string): boolean => 
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
         for (const procedure of proceduresInSourceFile(sourceFile)) {
-            for (const access of procedure.handler.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
+            for (const access of descendantsOfKind(procedure.handler, SyntaxKind.PropertyAccessExpression)) {
                 if (isPushSend(access)) {
                     return true;
                 }

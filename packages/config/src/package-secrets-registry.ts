@@ -76,7 +76,9 @@ const CORE_SECRETS: ReadonlyArray<SecretEntry> = [
 const SHARD_RELAY_SECRET_KEY = "LUNORA_RELAY_SECRET";
 /** The value a host's `.dev.vars` carries for the relay key until it is generated. A client's line carries its angle-bracket template instead, so it is never generated. */
 const SHARD_RELAY_HOST_PLACEHOLDER = "replace-with-openssl-rand-hex-32";
-const SHARD_REGISTRY_HOST_SOURCE = "@lunora/do:shardRegistry";
+/** The sources of the sources that host a relay-secured DO: the host mints the relay key, a client takes its value. */
+const RELAY_HOST_SOURCES: ReadonlySet<string> = new Set(["@lunora/do:shardRegistry", "@lunora/replica:eventLog"]);
+const RELAY_CLIENT_SOURCE = "@lunora/replica:eventLogClient";
 
 /**
  * Secret keys Lunora mints locally that no PACKAGE declares, so
@@ -177,6 +179,27 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             docsUrl: "https://lunora.sh/docs/packages/mail#secrets",
             key: "RESEND_API_KEY",
             placeholderValue: "<your-resend-api-key>",
+        },
+    ],
+    // Keyed by the event-log DO an app exports rather than a package import: `EventLogDO` refuses
+    // every request without this secret, and `EventLogDOClient` throws at construction without it.
+    "@lunora/replica:eventLog": [
+        {
+            description:
+                "Signs every request to EventLogDO, which refuses unsigned ones, and the calls from the worker that reads or appends the log. Set the same value on the worker and every Durable Object. Generate with: openssl rand -hex 32",
+            docsUrl: "https://lunora.sh/docs/packages/replica#eventlogdo",
+            key: SHARD_RELAY_SECRET_KEY,
+            placeholderValue: SHARD_RELAY_HOST_PLACEHOLDER,
+        },
+    ],
+    // A worker that only constructs `EventLogDOClient` takes the value its host minted. Not a relay host source, so it never mints one.
+    "@lunora/replica:eventLogClient": [
+        {
+            description:
+                "The LUNORA_RELAY_SECRET of the worker that hosts EventLogDO. EventLogDOClient throws at construction without it, and the log refuses every request signed with another value.",
+            docsUrl: "https://lunora.sh/docs/packages/replica#eventlogdo",
+            key: SHARD_RELAY_SECRET_KEY,
+            placeholderValue: "<your-eventlogdo-host-relay-secret>",
         },
     ],
     // `@lunora/notify` itself needs no secret: each push channel's are keyed by the
@@ -309,8 +332,8 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
  * like `openssl rand -hex 32`) — the registry entries whose placeholder is that
  * marker rather than an angle-bracket `<your-…>` one (which means the value comes
  * from a provider's dashboard), plus {@link EXTRA_MINTABLE_SECRET_KEYS}. The relay
- * key is left out: only the worker that hosts the registry mints it, see
- * {@link mintableSecretKeysFor}.
+ * key is left out: {@link mintableSecretKeysFor} adds it back for every project
+ * that does not only construct the client.
  *
  * This set, not a key's NAME, is what makes a value safe to generate. A
  * secret-LOOKING key nothing here declares (`OPENAI_API_KEY`, a project's own
@@ -326,21 +349,25 @@ const MINTABLE_SECRET_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The keys a project may mint, given its secret sources. The relay key is minted only
- * when this project hosts the registry: a worker that calls another worker's registry
- * must take the host's value, so a fresh one would only be refused.
+ * The keys a project may mint, given its secret sources. The relay key is withheld only from a project that just constructs
+ * `EventLogDOClient`: that worker must take its host's value, so a fresh one would only be refused. Every other project mints it,
+ * including one with no relay source at all, where a generated value is never read and so does no harm.
  */
-const mintableSecretKeysFor = (packageNames: ReadonlyArray<string>): ReadonlySet<string> =>
-    packageNames.includes(SHARD_REGISTRY_HOST_SOURCE) ? new Set([...MINTABLE_SECRET_KEYS, SHARD_RELAY_SECRET_KEY]) : MINTABLE_SECRET_KEYS;
+const mintableSecretKeysFor = (packageNames: ReadonlyArray<string>): ReadonlySet<string> => {
+    const clientOnly = packageNames.includes(RELAY_CLIENT_SOURCE) && !packageNames.some((name) => RELAY_HOST_SOURCES.has(name));
+
+    return clientOnly ? MINTABLE_SECRET_KEYS : new Set([...MINTABLE_SECRET_KEYS, SHARD_RELAY_SECRET_KEY]);
+};
 
 const secretsForPackages = (packageNames: ReadonlyArray<string>): SecretEntry[] => {
     const result: SecretEntry[] = [];
 
     for (const name of packageNames) {
-        const entries = PACKAGE_SECRETS_REGISTRY[name];
-
-        if (entries !== undefined) {
-            result.push(...entries);
+        for (const entry of PACKAGE_SECRETS_REGISTRY[name] ?? []) {
+            // Two sources can declare one key (a host with both the registry and the log): list it once.
+            if (!result.some((existing) => existing.key === entry.key)) {
+                result.push(entry);
+            }
         }
     }
 

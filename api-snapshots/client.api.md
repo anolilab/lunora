@@ -1934,6 +1934,12 @@ const subscribeLiveTopic: (options: SubscribeLiveTopicOptions) => (() => void);
 
 ## `@lunora/client/auth`
 
+### `ADMIN_AUTH_DEFAULT_PAGE_SIZE` (const)
+
+```ts
+const ADMIN_AUTH_DEFAULT_PAGE_SIZE = 50;
+```
+
 ### `AUTH_STATUSES` (const)
 
 ```ts
@@ -1945,10 +1951,32 @@ const AUTH_STATUSES: readonly [
 ];
 ```
 
+### `AdminAuthList` (interface)
+
+```ts
+interface AdminAuthList<T> {
+    readonly fetchPage: (limit: number) => Promise<AuthPage<T>>;
+    readonly key: ReadonlyArray<unknown>;
+}
+```
+
 ### `AuthStatus` (type)
 
 ```ts
 type AuthStatus = (typeof AUTH_STATUSES)[number];
+```
+
+### `AuthUsersListFilter` (interface)
+
+```ts
+interface AuthUsersListFilter {
+    filterField?: string;
+    filterValue?: string;
+    search?: string;
+    searchField?: string;
+    sortBy?: string;
+    sortDirection?: "asc" | "desc";
+}
 ```
 
 ### `IdentityStore` (interface)
@@ -1959,6 +1987,44 @@ interface IdentityStore {
     getUser: () => User | null;
     subscribe: (onChange: () => void) => () => void;
 }
+```
+
+### `adminAuthListHasMore` (const)
+
+```ts
+const adminAuthListHasMore: (page: AuthPage<unknown> | undefined) => boolean;
+```
+
+### `adminAuthListQueryKey` (const)
+
+```ts
+const adminAuthListQueryKey: (identity: string | null, list: AdminAuthList<unknown>, limit: number) => ReadonlyArray<unknown>;
+```
+
+### `authOrganizationsList` (const)
+
+```ts
+const authOrganizationsList: (client: LunoraClient) => AdminAuthList<Record<string, unknown>>;
+```
+
+### `authSessionsList` (const)
+
+```ts
+const authSessionsList: (client: LunoraClient, options?: {
+    userId?: string;
+}) => AdminAuthList<AuthSession>;
+```
+
+### `authSignUpInvitationsList` (const)
+
+```ts
+const authSignUpInvitationsList: (client: LunoraClient) => AdminAuthList<Record<string, unknown>>;
+```
+
+### `authUsersList` (const)
+
+```ts
+const authUsersList: (client: LunoraClient, filter?: AuthUsersListFilter) => AdminAuthList<AuthUser>;
 ```
 
 ### `getIdentityStore` (const)
@@ -1977,6 +2043,12 @@ const isAuthenticatedStatus: (status: AuthStatus) => boolean;
 
 ```ts
 const isLoadingStatus: (status: AuthStatus) => boolean;
+```
+
+### `subscribeAdminAuthIdentity` (const)
+
+```ts
+const subscribeAdminAuthIdentity: (client: LunoraClient, onChange: () => void) => (() => void);
 ```
 
 ## `@lunora/client/pagination`
@@ -2067,6 +2139,22 @@ Re-exported from `@lunora/client` — signature tracked in that section.
 
 Re-exported from `@lunora/client` — signature tracked in that section.
 
+### `LunoraQueryKey` (type)
+
+```ts
+type LunoraQueryKey = ReadonlyArray<unknown>;
+```
+
+### `LunoraQueryOptions` (interface)
+
+```ts
+interface LunoraQueryOptions<F extends FunctionReference> {
+    queryFn: () => Promise<ReturnOf<F>>;
+    queryKey: LunoraQueryKey;
+    staleTime: number;
+}
+```
+
 ### `QuerySubscriptionOptions` (interface)
 
 ```ts
@@ -2117,6 +2205,26 @@ Re-exported from `@lunora/client` — signature tracked in that section.
 
 ```ts
 const createQuerySubscription: <F extends FunctionReference, T = ReturnOf<F>>(client: LunoraClient, function_: F, args: ResolvedArgs<F>, sinks: QuerySubscriptionSinks<T>, options?: QuerySubscriptionOptions) => Unsubscribe;
+```
+
+### `lunoraQueryKey` (const)
+
+```ts
+const lunoraQueryKey: (function_: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined) => LunoraQueryKey;
+```
+
+### `lunoraQueryKeyFromArgsKey` (const)
+
+```ts
+const lunoraQueryKeyFromArgsKey: (ref: string, argsKey: string, shardKey: string | undefined) => LunoraQueryKey;
+```
+
+### `lunoraQueryOptions` (const)
+
+```ts
+const lunoraQueryOptions: <F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F>, options?: {
+    shardKey?: string;
+}) => LunoraQueryOptions<F>;
 ```
 
 ### `toSubscriptionError` (const)

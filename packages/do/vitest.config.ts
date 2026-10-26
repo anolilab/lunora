@@ -98,7 +98,10 @@ export default defineConfig({
                               // A fresh AES-256 key per run, supplied as a Worker secret binding the
                               // way a deployment would. Generated here so no key material is committed.
                               miniflare: {
-                                  bindings: { LUNORA_SECRET_VALUE_KEY: randomBytes(32).toString("base64") },
+                                  bindings: {
+                                      LUNORA_RELAY_SECRET: randomBytes(32).toString("base64"),
+                                      LUNORA_SECRET_VALUE_KEY: randomBytes(32).toString("base64"),
+                                  },
                               },
                           }),
                       ],

@@ -189,18 +189,21 @@ first statement:
 ```
 
 `EventLogDOClient` wraps the DO's `fetch()` RPC surface. `fetch` is the function that dispatches a request to the
-instance you want, which is where the namespace and instance id are chosen. When the DO has an
-`EVENT_LOG_DO_SECRET` var or secret, every route rejects requests without it (401); pass the same
-value as the client's `secret` option and it is sent on every request:
+instance you want, which is where the namespace and instance id are chosen.
+Every route of the DO requires a signed request. The client signs each request with `LUNORA_RELAY_SECRET`,
+read from the `env` you pass, and construction throws when that secret is not set. The DO must hold the same secret:
 
 ```ts
+const id = env.EVENT_LOG_DO.idFromName("my-app");
 const client = new EventLogDOClient({
-    fetch: (request) => env.EVENT_LOG_DO.get(env.EVENT_LOG_DO.idFromName("my-app")).fetch(request),
-    secret: env.EVENT_LOG_DO_SECRET, // omit when the DO has no secret
+    env,
+    fetch: (request) => env.EVENT_LOG_DO.get(id).fetch(request),
+    instance: id.toString(),
 });
 
 // `append` takes an ARRAY and returns the entries with their assigned `seq`s.
-// Pass `{ batchId }` to make a retry idempotent.
+// Pass `{ batchId }` to make a retry idempotent. Without one the client mints a
+// fresh key per call, so a captured append cannot be replayed into a duplicate.
 const [entry] = await client.append([{ type: "order.placed", payload: { orderId: "123" } }], { batchId: "order-123" });
 
 // The log is append-only and ordered, so reads are by sequence number — there
@@ -246,13 +249,16 @@ one member, `ctx.events`, which is the client itself — so `append` takes the
 same **array** of input events as `client.append`.
 
 ```ts
+import { env } from "cloudflare:workers";
 import { EventLogDOClient, eventsContext } from "@lunora/replica";
 
 import { action, v } from "@/lunora/_generated/server";
 
+const id = env.EVENT_LOG_DO.idFromName("my-app");
 const client = new EventLogDOClient({
-    fetch: (request) => env.EVENT_LOG_DO.get(env.EVENT_LOG_DO.idFromName("my-app")).fetch(request),
-    secret: env.EVENT_LOG_DO_SECRET, // omit when the DO has no secret
+    env,
+    fetch: (request) => env.EVENT_LOG_DO.get(id).fetch(request),
+    instance: id.toString(),
 });
 
 export const myAction = action
