@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { decodeBearerProtocol, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
 import { LunoraClient } from "../src/lunora-client";
 import type { FunctionReference } from "../src/types";
 
@@ -32,14 +33,7 @@ const recordingWebSocket = (opened: Opened[]): typeof WebSocket =>
     } as unknown as typeof WebSocket;
 /* eslint-enable class-methods-use-this */
 
-const decode = (protocol: string): string => {
-    const base64 = protocol.slice("lunora.bearer.".length).replaceAll("-", "+").replaceAll("_", "/");
-
-    return new TextDecoder().decode(Uint8Array.from(atob(base64), (char) => char.codePointAt(0) as number));
-};
-
-const openWith = (authTokenOnUpgrade: boolean, token: string): Opened => {
-    const opened: Opened[] = [];
+const clientWith = (authTokenOnUpgrade: boolean, token: string, opened: Opened[]): LunoraClient => {
     const client = new LunoraClient({
         authTokenOnUpgrade,
         fetch: async () => Response.json(null),
@@ -50,6 +44,14 @@ const openWith = (authTokenOnUpgrade: boolean, token: string): Opened => {
     });
 
     client.setAuthToken(token);
+
+    return client;
+};
+
+const openWith = (authTokenOnUpgrade: boolean, token: string): Opened => {
+    const opened: Opened[] = [];
+    const client = clientWith(authTokenOnUpgrade, token, opened);
+
     client.subscribe(fnRef("todos.list"), {}, () => undefined);
     client.close();
 
@@ -65,8 +67,8 @@ describe("lunoraClient — bearer on the WebSocket upgrade", () => {
         const token = "header.payload.sig-_";
         const { protocols, url } = openWith(true, token);
 
-        expect(protocols?.[0]).toBe("lunora");
-        expect(decode(protocols?.[1] ?? "")).toBe(token);
+        expect(protocols?.[0]).toBe(LUNORA_WS_PROTOCOL);
+        expect(decodeBearerProtocol(protocols?.[1] ?? "")).toBe(token);
         expect(url).not.toContain(token);
         // Every character is a valid RFC 7230 token char, as Sec-WebSocket-Protocol requires.
         expect(protocols?.[1]).toMatch(/^[\w.-]+$/u);
@@ -76,5 +78,32 @@ describe("lunoraClient — bearer on the WebSocket upgrade", () => {
         expect.assertions(2);
 
         expect(openWith(false, "tok").protocols).toBeUndefined();
+    });
+
+    it("offers the bearer on a defineWebSocket route, which the worker's upgrade handler answers", () => {
+        expect.assertions(2);
+
+        const opened: Opened[] = [];
+        const client = clientWith(true, "tok", opened);
+
+        client.connectWebSocket("/chat", { onMessage: () => undefined });
+        client.close();
+
+        expect(opened).toHaveLength(1);
+        expect(decodeBearerProtocol(opened[0]?.protocols?.[1] ?? "")).toBe("tok");
+    });
+
+    it("offers no subprotocol on the scheduled-jobs socket, whose 101 selects none", () => {
+        expect.assertions(3);
+
+        const opened: Opened[] = [];
+        const client = clientWith(true, "tok", opened);
+
+        client.subscribeScheduledJobs(() => undefined);
+        client.close();
+
+        expect(opened).toHaveLength(1);
+        expect(opened[0]?.url).toContain("/_lunora/admin/scheduled/ws");
+        expect(opened[0]?.protocols).toBeUndefined();
     });
 });

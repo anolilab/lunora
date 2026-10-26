@@ -1,5 +1,6 @@
 import { createAsyncStoragePersistence, createAsyncStorageQueryCache, LunoraClient } from "@lunora/client";
 
+import { BEARER_PROTOCOL_PREFIX, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
 import type { AuthHeadersFactory, CreateLunoraClientOptions } from "./types";
 
 // React Native's `WebSocket` constructor is `(uri, protocols?, options?)`; the
@@ -10,7 +11,7 @@ type WebSocketWithOptions = new (url: string | URL, protocols?: string | string[
 /** `protocols` without the client's `lunora` bearer offer; `undefined` when nothing else remains. */
 const withoutLunoraProtocols = (protocols: string | string[] | undefined): string[] | undefined => {
     const kept = (typeof protocols === "string" ? [protocols] : (protocols ?? [])).filter(
-        (protocol) => protocol !== "lunora" && !protocol.startsWith("lunora.bearer."),
+        (protocol) => protocol !== LUNORA_WS_PROTOCOL && !protocol.startsWith(BEARER_PROTOCOL_PREFIX),
     );
 
     return kept.length > 0 ? kept : undefined;

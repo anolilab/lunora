@@ -1,6 +1,7 @@
 import { LunoraClient } from "@lunora/client";
 import { describe, expect, it, vi } from "vitest";
 
+import { encodeBearerProtocol, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
 import { createLunoraClient, withAuthHeaders, withAuthWebSocket, withoutAmbientCookies } from "../src/create-lunora-client";
 
 const makeFetchSpy = () =>
@@ -216,16 +217,16 @@ describe("withAuthWebSocket", () => {
         const Wrapped = withAuthWebSocket(FakeWebSocket, () => headers);
 
         // The handshake stays exactly what it was before the subprotocol existed.
-        const native = new Wrapped("wss://api.example.com/_lunora/ws", ["lunora", "lunora.bearer.dG9r"]);
+        const native = new Wrapped("wss://api.example.com/_lunora/ws", [LUNORA_WS_PROTOCOL, encodeBearerProtocol("tok")]);
 
         headers = undefined;
 
-        const headerless = new Wrapped("wss://api.example.com/_lunora/ws", ["lunora", "lunora.bearer.dG9r"]);
+        const headerless = new Wrapped("wss://api.example.com/_lunora/ws", [LUNORA_WS_PROTOCOL, encodeBearerProtocol("tok")]);
 
         expect([native, headerless].every((socket) => socket instanceof Wrapped)).toBe(true);
         expect(calls[0]!.protocols).toBeUndefined();
         // Without an Authorization header the offer is the socket's only credential, so it stays.
-        expect(calls[1]!.protocols).toStrictEqual(["lunora", "lunora.bearer.dG9r"]);
+        expect(calls[1]!.protocols).toStrictEqual([LUNORA_WS_PROTOCOL, encodeBearerProtocol("tok")]);
     });
 
     it("re-reads the factory per socket so a reconnect picks up a new token", () => {
