@@ -83,6 +83,7 @@ import { trustedClientIp } from "./trusted-client-ip";
 import { buildVectorAdminRoutes } from "./vector-admin-routes";
 import type { WorkflowsRestClient } from "./workflows-admin-routes";
 import { buildWorkflowsAdminRoutes } from "./workflows-admin-routes";
+import { identityRequestForUpgrade, selectLunoraProtocol, stripBearerProtocol } from "./ws-bearer-protocol";
 
 /**
  * Wire-format RPC envelope. Posted to `POST /_lunora/rpc`.
@@ -4425,7 +4426,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // forwarded to the DO so the socket carries a verified userId (the basis
         // for trusted `onConnect`/`onDisconnect` lifecycle hooks). Mirrors the
         // RPC path's `resolveForwardContext` → `authorize*` ordering.
-        const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
+        // A browser offers its bearer as a `lunora.bearer.*` subprotocol (it cannot set
+        // `Authorization` on an upgrade); only the identity lookup sees it as a header.
+        const { headers: forwardedHeaders, identity } = await forwardContext(identityRequestForUpgrade(request), env, publicResolveIdentity);
 
         // The same admin exemption the RPC path applies to `__lunora_admin__:*`
         // (see `authorizeRpcEnvelope`), and the one
@@ -4455,6 +4458,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // resolved-anonymous path never overwrites it, spoof a verified identity on
         // the socket. Only an authenticated `resolveForwardContext` result may set them.
         const upgradeHeaders = buildUpgradeHeaders(request, forwardedHeaders);
+
+        stripBearerProtocol(request, upgradeHeaders);
 
         // Relay tier (plan 075 Phase 2): when the shard is promoted, route this NEW
         // connection to one of its relays so the owner sheds connection + fan-out
@@ -4486,11 +4491,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // eslint-disable-next-line sonarjs/pseudo-random -- load distribution across relays, not a security-sensitive value
                 const target = relayName(shardKey, Math.floor(Math.random() * relayCount));
 
-                return forwardToShard(shardDO, target, new Request(request, { headers: upgradeHeaders }), regionHintFromRequest(request));
+                return selectLunoraProtocol(
+                    request,
+                    await forwardToShard(shardDO, target, new Request(request, { headers: upgradeHeaders }), regionHintFromRequest(request)),
+                );
             }
         }
 
-        return forwardToShard(shardDO, shardKey, new Request(request, { headers: upgradeHeaders }));
+        return selectLunoraProtocol(request, await forwardToShard(shardDO, shardKey, new Request(request, { headers: upgradeHeaders })));
     };
 
     /**
