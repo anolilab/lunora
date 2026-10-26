@@ -89,6 +89,7 @@
         "@lunora/shard-engine": "1.0.0-alpha.160",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
+        "@visulima/yaml": "catalog:cli",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",

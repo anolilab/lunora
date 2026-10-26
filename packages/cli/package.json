@@ -103,6 +103,7 @@
         "@types/react": "catalog:frontend",
         "@types/semver": "catalog:types",
         "@visulima/packem": "catalog:build",
+        "@visulima/yaml": "catalog:cli",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",

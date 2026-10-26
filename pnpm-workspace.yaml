@@ -499,6 +499,9 @@ catalogs:
     # there now. tui-kit peers `@visulima/tui` EXACTLY, so bump the two together.
     "@visulima/tui": 5.0.0
     "@visulima/tui-kit": 1.0.34
+    # `@visulima/fs@7`'s optional peer, exact. Declared as a devDependency next to fs so
+    # pnpm resolves that peer to 2.0.0 instead of the yaml@1.0.0 packem's fs@6 brings.
+    "@visulima/yaml": 2.0.0
     giget: 3.3.1
     magic-string: ^1.4.2
     react-reconciler: ^0.33.0
