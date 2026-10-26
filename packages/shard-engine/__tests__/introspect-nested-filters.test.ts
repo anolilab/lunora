@@ -726,6 +726,24 @@ describe("readTablePage — nested paths and array membership", () => {
         expect(selectMatchingIds(database.sql, { filters: [range("lt", "m")], table: "ranged" }).ids).toStrictEqual(["r2"]);
     });
 
+    it("keeps a boolean leaf out of a numeric range, and a number out of a boolean one", () => {
+        expect.assertions(2);
+
+        // json_extract reads a JSON boolean as 1 or 0, so only the leaf's JSON type keeps it out of a numeric range.
+        database.raw(`CREATE TABLE "rangedb" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+        database.sql.exec(`INSERT INTO "rangedb" VALUES (?, ?, ?)`, "b1", 1, encodeDocJson({ box: { size: 7 } }));
+        database.sql.exec(`INSERT INTO "rangedb" VALUES (?, ?, ?)`, "b2", 2, encodeDocJson({ box: { size: true } }));
+        database.sql.exec(`INSERT INTO "rangedb" VALUES (?, ?, ?)`, "b3", 3, encodeDocJson({ box: { size: false } }));
+
+        const rangeIds = (value: unknown): string[] =>
+            readTablePage(database.sql, { filters: [{ column: "box", operator: "gt", path: ["size"], value }], table: "rangedb" }).rows.map(
+                (row) => (row as { id: string }).id,
+            );
+
+        expect(rangeIds(0)).toStrictEqual(["b1"]);
+        expect(rangeIds(true)).toStrictEqual([]);
+    });
+
     describe("parameter budget", () => {
         // Each doc-field `eq` clause binds two parameters: its JSON path and its value.
         const eqClauses = (count: number): FilterClause[] =>

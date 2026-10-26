@@ -1466,7 +1466,15 @@ const buildNestedLeafClause = (clause: FilterClause, expression: string, pathPar
     const { operator } = clause;
 
     if (operator === "gt" || operator === "gte" || operator === "lt" || operator === "lte") {
-        const leafClass = typeof clause.value === "string" ? "'text'" : "'integer', 'real', 'true', 'false'";
+        // A bound compares only with leaves of its own JSON type. A boolean reads as 1 or 0 under
+        // json_extract, so it must not be taken for a number here.
+        let leafClass = "'integer', 'real'";
+
+        if (typeof clause.value === "string") {
+            leafClass = "'text'";
+        } else if (typeof clause.value === "boolean") {
+            leafClass = "'true', 'false'";
+        }
 
         return {
             // A nested leaf has no declared kind, so the value binds unprojected.
