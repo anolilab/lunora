@@ -1,3 +1,15 @@
+## @lunora/agent [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.251...@lunora/agent@1.0.0-alpha.252) (2026-10-26)
+
+### Features
+
+* **server:** require the table for ctx.db by-id reads and writes ([#1344](https://github.com/anolilab/lunora/issues/1344)) ([97244c5](https://github.com/anolilab/lunora/commit/97244c5eae27fb0c9ab19a71e7e0b50b02b13782))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.242
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.163
+
 ## @lunora/agent [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.250...@lunora/agent@1.0.0-alpha.251) (2026-10-26)
 
 
