@@ -17,8 +17,8 @@ export const feedback = sqliteTable("feedback", {
     commentCount: real("commentCount").notNull(),
     tags: text("tags", { mode: "json" }).$type<Array<string>>(),
 }, (t) => ({
-    by_upvotes: index("by_upvotes").on(t.upvoteCount),
     by_status: index("by_status").on(t.status),
+    by_upvotes: index("by_upvotes").on(t.upvoteCount),
 }));
 
 export const votes = sqliteTable("votes", {
@@ -27,8 +27,8 @@ export const votes = sqliteTable("votes", {
     feedbackId: text("feedbackId").references((): AnySQLiteColumn => feedback._id).notNull(),
     voterEmail: text("voterEmail").notNull(),
 }, (t) => ({
-    by_voter: index("by_voter").on(t.voterEmail),
     by_feedback_and_voter: uniqueIndex("by_feedback_and_voter").on(t.feedbackId, t.voterEmail),
+    by_voter: index("by_voter").on(t.voterEmail),
 }));
 
 export const comments = sqliteTable("comments", {
