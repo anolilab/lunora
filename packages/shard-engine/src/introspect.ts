@@ -1459,17 +1459,19 @@ const buildNestedLeafClause = (clause: FilterClause, expression: string, pathPar
         return { params: [...pathParameters, frame], sql: `${expression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };
     }
 
-    // A stored leaf that is an array or object (a nested bigint or date among them)
-    // comes back from `json_extract` as JSON text, and SQLite ranks every TEXT above
-    // every number: `gt` would match all such rows and `lt` none. Range-compare scalar
-    // leaves only.
+    // SQLite ranks every TEXT above every number, so a range over mixed leaves matches
+    // by type rather than value: `> 5` would take a text leaf, and `< "m"` a number. A
+    // range therefore compares only leaves of the bound's own JSON class. An array or
+    // object leaf (a nested bigint or date among them) is never of either class.
     const { operator } = clause;
 
     if (operator === "gt" || operator === "gte" || operator === "lt" || operator === "lte") {
+        const leafClass = typeof clause.value === "string" ? "'text'" : "'integer', 'real', 'true', 'false'";
+
         return {
             // A nested leaf has no declared kind, so the value binds unprojected.
             params: [...pathParameters, ...pathParameters, filterBindValue(clause, undefined)],
-            sql: `(json_type(${quoteIdentifier(DOC_COLUMN)}, ?) NOT IN ('array', 'object') AND ${expression} ${FILTER_SQL_OPERATOR[operator]} ?)`,
+            sql: `(json_type(${quoteIdentifier(DOC_COLUMN)}, ?) IN (${leafClass}) AND ${expression} ${FILTER_SQL_OPERATOR[operator]} ?)`,
         };
     }
 

@@ -682,6 +682,27 @@ describe("readTablePage — nested paths and array membership", () => {
         });
     });
 
+    it("compares a nested range only against leaves of the bound's own JSON type", () => {
+        expect.assertions(4);
+
+        // SQLite ranks TEXT above every number, so a text leaf would satisfy `> 5` and a number would satisfy `< "m"`.
+        database.raw(`CREATE TABLE "ranged" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+        database.sql.exec(`INSERT INTO "ranged" VALUES (?, ?, ?)`, "r1", 1, encodeDocJson({ box: { size: 7 } }));
+        database.sql.exec(`INSERT INTO "ranged" VALUES (?, ?, ?)`, "r2", 2, encodeDocJson({ box: { size: "9" } }));
+        database.sql.exec(`INSERT INTO "ranged" VALUES (?, ?, ?)`, "r3", 3, encodeDocJson({ box: { size: 2 } }));
+
+        const range = (operator: "gt" | "lt", value: unknown): FilterClause => {
+            return { column: "box", operator, path: ["size"], value };
+        };
+        const rangedIds = (filter: FilterClause): string[] =>
+            readTablePage(database.sql, { filters: [filter], table: "ranged" }).rows.map((row) => (row as { id: string }).id);
+
+        expect(rangedIds(range("gt", 5))).toStrictEqual(["r1"]);
+        expect(rangedIds(range("lt", "m"))).toStrictEqual(["r2"]);
+        expect(selectMatchingIds(database.sql, { filters: [range("gt", 5)], table: "ranged" }).ids).toStrictEqual(["r1"]);
+        expect(selectMatchingIds(database.sql, { filters: [range("lt", "m")], table: "ranged" }).ids).toStrictEqual(["r2"]);
+    });
+
     describe("parameter budget", () => {
         // Each doc-field `eq` clause binds two parameters: its JSON path and its value.
         const eqClauses = (count: number): FilterClause[] =>
