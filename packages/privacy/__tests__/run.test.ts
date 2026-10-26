@@ -419,6 +419,48 @@ describe("runExport", () => {
         expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
     });
 
+    it("expires an export whose ready claim lands after the erasure's recheck read it as processing", async () => {
+        const { port } = memoryData({});
+        const store = memoryRequests();
+        let exportId = "";
+        let reads = 0;
+        // The second read of the export is the erasure's recheck. Its stale copy is a run that is still processing, while the store
+        // already holds that run's ready claim, so the recheck's fail loses to it. The archive is ready, so it must still expire.
+        const racing = {
+            ...store,
+            get: async (id: string) => {
+                const row = store.rows.get(id);
+
+                if (id === exportId && row !== undefined) {
+                    reads += 1;
+
+                    if (reads === 2) {
+                        store.rows.set(id, {
+                            ...row,
+                            expiresAt: new Date(NOW.getTime() + 7 * 24 * 60 * 60 * 1000),
+                            status: "ready",
+                            storageKey: `${id}/run/export.zip`,
+                        });
+
+                        return { ...row, status: "processing" as const };
+                    }
+                }
+
+                return store.get(id);
+            },
+        };
+        const { privacy, runErasureWorkflow } = setup({ data: port, erasure: NO_GRACE, store: racing });
+        const exported = await privacy.requestExport();
+
+        exportId = exported.id;
+
+        const erasure = await privacy.requestErasure();
+
+        await runErasureWorkflow(erasure.id);
+
+        expect(store.rows.get(exported.id)?.status).toBe("expired");
+    });
+
     it("leaves another erasure request of the subject open when an erasure completes", async () => {
         const { port } = memoryData({});
         const { privacy, store } = setup({ data: port, erasure: NO_GRACE });

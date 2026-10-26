@@ -618,12 +618,27 @@ const completeErasure = async (ports: PrivacyPorts, requestId: string, subjectId
 
             if (rekeyed.type === "export" && rekeyed.status === "processing") {
                 await failOpenRequest(ports, rekeyed, "UNPROCESSABLE: the subject was erased before the export finished");
-            } else if (rekeyed.status === "ready" && current.status !== "ready") {
-                await expireRequestFiles(ports, rekeyed);
+            }
+
+            // The fail above loses to a ready claim that landed after the read, and then nothing else expires the export. Read again.
+            const latest = (await ports.store.get(request.id)) ?? rekeyed;
+
+            if (latest.status === "ready" && current.status !== "ready") {
+                await expireRequestFiles(ports, latest);
             }
         }),
     );
     await setStatus(ports, requestId, { from: "processing", patch: { subjectId: key }, to: "completed" });
+};
+
+/** Expire the subject's ready exports. `completeErasure` does this for an erasure that finishes; a failed one needs it here too. */
+const expireReadyExports = async (ports: PrivacyPorts, requestId: string): Promise<void> => {
+    const { subjectId } = await requireRequest(ports.store, requestId);
+    const requests = await ports.store.listForSubject(subjectId);
+
+    await Promise.all(
+        requests.filter((request) => request.type === "export" && request.status === "ready").map(async (request) => expireRequestFiles(ports, request)),
+    );
 };
 
 /**
@@ -688,6 +703,10 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
         }
 
         if (!verdict.complete) {
+            // Rows are gone by now, so a ready export of the subject holds data the erasure removed. Completion expires those, but
+            // a failed erasure never completes.
+            await steps.do("expire", async () => expireReadyExports(scope.ports, requestId));
+
             return { leftover: verdict.leftover, status: await failStep(scope, steps, requestId, verdict.leftover.join(",")) };
         }
 

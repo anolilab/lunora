@@ -5,7 +5,7 @@ import { defineDataset } from "../src/dataset";
 import { germany } from "../src/de";
 import type { DataPort } from "../src/ports";
 import { retain } from "../src/rules";
-import { exportFileOf, setup } from "./harness";
+import { exportFileOf, memoryRequests, NOW, setup } from "./harness";
 
 type Row = Readonly<Record<string, unknown>>;
 
@@ -103,6 +103,41 @@ describe("retention during erasure", () => {
         store.rows.set(erasure.id, { ...store.rows.get(erasure.id)!, status: "received" });
 
         await expect(privacy.runErasure(erasure.id)).resolves.toStrictEqual({ leftover: ["invoices", "notes"], status: "failed" });
+    });
+
+    it("expires an export that turned ready after the erasure removed its files, when the erasure then fails", async () => {
+        const { port } = rowData({ archive: false, ignoreDelete: true });
+        const store = memoryRequests();
+        let claiming: string | undefined;
+        // The first verify read happens after the erasure's files step, so an export that claims ready there is ready after its
+        // files were removed. The erasure then fails at verify, and only that failure can expire the export.
+        const racing = {
+            ...port,
+            remaining: async (dataset: Parameters<typeof port.remaining>[0], subjectId: string) => {
+                if (claiming !== undefined) {
+                    store.rows.set(claiming, {
+                        ...store.rows.get(claiming)!,
+                        expiresAt: new Date(NOW.getTime() + 60_000),
+                        status: "ready",
+                        storageKey: `${claiming}/run/export.zip`,
+                    });
+                    claiming = undefined;
+                }
+
+                return port.remaining(dataset, subjectId);
+            },
+        };
+        const { privacy } = setup({ data: racing, datasets: [billing], presets: [germany()], store });
+        const exported = await privacy.requestExport();
+
+        claiming = exported.id;
+
+        const erasure = await privacy.requestErasure();
+
+        store.rows.set(erasure.id, { ...store.rows.get(erasure.id)!, status: "received" });
+
+        await expect(privacy.runErasure(erasure.id)).resolves.toStrictEqual({ leftover: ["invoices", "notes"], status: "failed" });
+        expect(store.rows.get(exported.id)?.status).toBe("expired");
     });
 
     it("marks a dataset with a retained table as restricted in the manifest", async () => {
