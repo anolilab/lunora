@@ -1,5 +1,5 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
-import { Node } from "ts-morph";
+import { Node, VariableDeclarationKind } from "ts-morph";
 
 import type { TableWriteIR } from "../ir";
 import { collectCallRows } from "./ast";
@@ -106,7 +106,8 @@ const withFields = (write: Write | undefined, call: CallExpression, bodyIndex: n
 
 /**
  * The table an alias names when it is declared as a facade, `const db = ctx.db.posts`. An alias called `db` reads as
- * the generic writer by name, so without this its `db.patch(id, fields)` would take the id for the table.
+ * the generic writer by name, so without this its `db.patch(id, fields)` would take the id for the table. Only a
+ * `const` qualifies: a `let` can be reassigned to another table before the write.
  */
 const facadeAliasTable = (receiver: TsNode): string | undefined => {
     if (!Node.isIdentifier(receiver)) {
@@ -114,9 +115,15 @@ const facadeAliasTable = (receiver: TsNode): string | undefined => {
     }
 
     const declaration = receiver.getSymbol()?.getDeclarations()[0];
-    const initializer = declaration !== undefined && Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
 
-    if (initializer === undefined || !Node.isPropertyAccessExpression(initializer) || !isDatabaseAccessor(initializer.getExpression())) {
+    if (declaration === undefined || !Node.isVariableDeclaration(declaration)) {
+        return undefined;
+    }
+
+    const initializer = declaration.getInitializer();
+    const isConst = declaration.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const;
+
+    if (!isConst || initializer === undefined || !Node.isPropertyAccessExpression(initializer) || !isDatabaseAccessor(initializer.getExpression())) {
         return undefined;
     }
 
