@@ -3688,8 +3688,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async get(table, id) {
-            // The arguments are both `string`, so a call that still passes `(id, table)`
-            // type-checks; a UUID id never names a schema table, so this fails at once.
+            // Both arguments are `string`, so the compiler cannot tell a swapped
+            // `(id, table)` call from a valid one. An id never names a schema table,
+            // so rejecting an unknown table here turns a swap into an error.
             if (!Object.hasOwn(schema.tables, table)) {
                 throw new LunoraError("BAD_REQUEST", `ctx.db.get(table, id): "${table}" is not a table in this schema`);
             }

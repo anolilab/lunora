@@ -360,8 +360,9 @@ const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, a
     for (const row of args.rows) {
         line += 1;
 
-        // A dry run never reaches the writer: it reports the shape errors and nothing else, so the caller can refuse a file before the first
-        // real chunk lands.
+        // A dry run never reaches the writer: it reports the shape errors and
+        // nothing else, so the caller can refuse a file before the first real
+        // chunk lands.
         if (args.dryRun === true) {
             const shapeError = rowShapeError(schema, row, line);
 

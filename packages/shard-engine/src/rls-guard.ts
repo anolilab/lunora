@@ -199,7 +199,7 @@ const WRITER_METHOD_GATING = {
     findFirst: "loop-gated",
     findFirstOrThrow: "loop-gated",
     findMany: "loop-gated",
-    get: "id-gated",
+    get: "inline-table-gated",
     groupBy: "loop-gated",
     insert: "loop-gated",
     insertMany: "loop-gated",

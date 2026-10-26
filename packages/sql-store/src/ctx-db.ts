@@ -3481,7 +3481,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         },
 
         async get(table, id) {
-            const definition = schema.tables[table];
+            // `hasOwn`, not a lookup: a name such as `constructor` would otherwise resolve to a prototype member.
+            const definition = Object.hasOwn(schema.tables, table) ? schema.tables[table] : undefined;
 
             if (!definition) {
                 throw new LunoraError("BAD_REQUEST", `ctx.db.get(table, id): "${table}" is not a table in this schema`);

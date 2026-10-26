@@ -628,34 +628,6 @@ const wrapDatabase = <Context>(
         };
     };
 
-    /**
-     * Resolve the raw row for a bound table's id and whether that table is masked.
-     * The `lookupById` fast path settles a shard-local hit in one round-trip; a
-     * miss falls through to the table-pinned `get`, which reaches a `.global()` row
-     * through the writer's D1 fallback. The unwrapped `base.*` is used so the read
-     * itself isn't masked.
-     */
-    const locate = async (table: string, id: string): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
-        if (base.lookupById) {
-            // Pin the lookup to the bound table so a foreign id can't read another
-            // table's row around the mask (IDOR).
-            const located = await base.lookupById(id, table);
-
-            if (located) {
-                return { row: located.row, tableName: perTable.has(located.tableName) ? located.tableName : undefined };
-            }
-        }
-
-        const row = await base.get(table, id);
-
-        if (!row) {
-            // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
-            return { row: null, tableName: undefined };
-        }
-
-        return { row, tableName: perTable.has(table) ? table : undefined };
-    };
-
     /** Fail an analytical reduction closed when it touches a masked column on `tableName`. */
     const assertReductionAllowed = (tableName: string, fields: ReadonlyArray<string | undefined>, method: string): void => {
         const columns = perTable.get(tableName);
@@ -1043,8 +1015,9 @@ const wrapDatabase = <Context>(
         },
 
         async get(table, id) {
-            const { row, tableName } = await locate(table, id);
-            const columns = tableName === undefined ? undefined : perTable.get(tableName);
+            // The unwrapped `base.get` reads the row, so the read itself is not masked.
+            const row = await base.get(table, id);
+            const columns = perTable.get(table);
 
             if (!row || !columns) {
                 return row;
@@ -1065,8 +1038,8 @@ const wrapDatabase = <Context>(
               ) => await (base.related as NonNullable<MaskDatabase["related"]>)(start, withRelationMask(options))
             : undefined,
 
-        // Delegates to `base.lookupById` directly, not `locate` above (which
-        // folds the table name away) — the `...base` spread would otherwise expose it unmasked.
+        // Masks the seam's own result: the `...base` spread would otherwise expose
+        // `base.lookupById` unmasked.
         async lookupById(id, expectedTable) {
             const located = await base.lookupById?.(id, expectedTable);
 

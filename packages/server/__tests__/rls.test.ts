@@ -738,7 +738,7 @@ describe("rls — read path", () => {
         await expect(absent.handler(makeContext(fake, "u1"), {})).resolves.toBeNull();
     });
 
-    it("get() uses the lookupById fast path and skips the probe fan-out when present", async () => {
+    it("get() on a pinned table reads that table and skips the probe fan-out", async () => {
         expect.assertions(3);
 
         const policy = definePolicy<TestContext>({
@@ -757,12 +757,12 @@ describe("rls — read path", () => {
 
         enableGetWithTable(fake, rows);
 
-        // Owned + allowed: single lookupById lookup + one policy-check findFirst.
+        // Owned + allowed: one table-pinned get + one policy-check findFirst.
         const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.get("documents", "d1"));
         const result = await handler.handler(makeContext(fake, "u1"), {});
 
         expect(result?.["_id"]).toBe("d1");
-        expect(fake.calls.some((call) => call.method === "lookupById")).toBe(true);
+        expect(fake.calls.some((call) => call.method === "get" && call.tableOrId === "d1")).toBe(true);
 
         // No membership probe fan-out: the only findFirst is the policy check on
         // the owning table (with a baseWhere), never an unscoped probe.

@@ -1012,38 +1012,23 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     /**
      * Resolve the raw row for `id` and which policy-gated table (if any) owns
      * it. The single source of truth shared by `get()` and the write gate.
-     * Two paths:
      *
-     * - **Fast path** — when the writer implements the optional `lookupById`
-     * seam it already knows the owning table from its internal index, so we
-     * get `{ row, tableName }` in a single round-trip and only need to check
-     * whether that table participates in RLS.
-     * - **Fallback** — a writer without `lookupById`, or an unpinned miss, has
-     * no owner to read. A pinned id is read with `get(table, id)`; an unpinned
-     * one is probed with a `findFirst` on every policy table, which also returns
-     * the row. The probes run concurrently (latency bounded by the slowest single
-     * probe, not their sum). The unwrapped `base.*` is intentionally used so
-     * policy enforcement on writes doesn't recurse through itself.
+     * - **Pinned** (`expectedTable`): read the bound table with `get(table, id)`.
+     * The owner is that table when the row exists, so a foreign id resolves to
+     * absent. A `.global()` table is included: the writer's D1 fallback reaches it.
+     * - **Unpinned**: try the optional `lookupById` seam, which knows the owning
+     * table from its shard-local index, in one round-trip. A miss is not "absent":
+     * a `.global()` row always misses the seam. Those rows are found by probing
+     * every policy table with `findFirst`, which also returns the row. The probes
+     * run concurrently. Reporting the miss as absent would let the write gate
+     * perform update/delete with the policy never evaluated.
      *
-     * A `lookupById` MISS falls through to the probe path rather than reporting
-     * "no such row": the seam is shard-local, so every `.global()` row misses it
-     * (those rows live in D1 and only `get`/`findFirst` reach them through the
-     * writer's global fallback). Reporting the miss as absent is what let
-     * `gateById` classify a global row as "in no policy-gated table" and perform
-     * update/delete with the policy never evaluated. Resolving global rows inside
-     * `lookupById` itself was the alternative; it would have to probe every
-     * global table across the D1 hop for a bare id, whereas falling through here
-     * keeps the common case — a shard-local row that hits — at the ONE round-trip
-     * the seam exists for, and charges the extra probes only to a miss.
-     *
-     * `expectedTable` pins the lookup to one table (an id owned by another table
-     * resolves to "absent"); `probeTable` scopes only the FALLBACK probe set. A
-     * pin does NOT block the writer's global fallback: when `expectedTable` names
-     * a `.global()` table the engine still reaches its D1 row — `globalFallbackFor`
-     * allows the fall-through and re-applies the pin on the D1 writer — so
-     * `deleteAll`/`deleteWhere` pin `tableName` safely (their ids came from that
-     * table's own filtered read) and skip the per-policy-table probe fan-out that
-     * put a chunked erase into workerd's 1000-subrequest ceiling partway through.
+     * `probeTable` scopes only the unpinned probe set. A pin does NOT block the
+     * writer's global fallback: `deleteAll`/`deleteWhere` pin `tableName` safely
+     * (their ids came from that table's own filtered read) and skip the
+     * per-policy-table probe fan-out that put a chunked erase into workerd's
+     * 1000-subrequest ceiling partway through. The unguarded `raw` writer is read
+     * so policy enforcement on writes doesn't recurse through itself.
      *
      * `row` is `null` when the id doesn't exist. `tableName` is `undefined` when
      * the row exists but isn't in any policy-gated table (no policy applies →
@@ -1054,25 +1039,6 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         expectedTable?: string,
         probeTable?: string,
     ): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
-        if (raw.lookupById) {
-            // Pin the lookup to the bound table when the by-id facade forwards
-            // one, so a foreign id resolves to "absent" rather than another
-            // table's row (IDOR). Read through the UNGUARDED `raw` writer: this
-            // is a policy-evaluation probe, not caller-visible data, so it must
-            // not be denied by the secure-by-default guard.
-            const located = await raw.lookupById(id, expectedTable);
-
-            if (located) {
-                // Owned by a table that isn't policy-gated → tableName undefined.
-                return { row: located.row, tableName: policyTables.has(located.tableName) ? located.tableName : undefined };
-            }
-
-            // A miss is NOT "absent" — see the docblock: a `.global()` row can
-            // only be reached through the probe path below.
-        }
-
-        // A pinned id reads its one bound table (`.global()` included, through the
-        // writer's D1 fallback), so the owner is that table when the row exists.
         if (expectedTable !== undefined) {
             const row = await raw.get(expectedTable, id);
 
@@ -1082,6 +1048,18 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             }
 
             return { row, tableName: policyTables.has(expectedTable) ? expectedTable : undefined };
+        }
+
+        if (raw.lookupById) {
+            // Read through the UNGUARDED `raw` writer: this is a policy-evaluation
+            // probe, not caller-visible data, so it must not be denied by the
+            // secure-by-default guard.
+            const located = await raw.lookupById(id);
+
+            if (located) {
+                // Owned by a table that isn't policy-gated → tableName undefined.
+                return { row: located.row, tableName: policyTables.has(located.tableName) ? located.tableName : undefined };
+            }
         }
 
         // Unpinned: the writer has no table to read, so probe the policy tables. Ids

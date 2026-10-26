@@ -2178,7 +2178,7 @@ describe("mask — index name reused across kinds is looked up in its own namesp
 });
 
 describe("mask — get() table resolution", () => {
-    it("masks via the lookupById fast path", async () => {
+    it("masks a table-pinned get", async () => {
         expect.assertions(2);
 
         const rows = [{ _id: "u1", email: "a@x.com", table: "users" }];
@@ -2193,7 +2193,7 @@ describe("mask — get() table resolution", () => {
         const result = await handler.handler(makeContext(database, "u1"), {});
 
         expect(result?.["email"]).toBeNull();
-        expect(database.calls.some((call) => call.method === "lookupById")).toBe(true);
+        expect(database.calls.some((call) => call.method === "get" && call.tableOrId === "u1")).toBe(true);
     });
 
     it("masks via the probe fallback when lookupById is absent", async () => {
