@@ -17,9 +17,14 @@
             "title": "Auth — Auth0"
         },
         {
-            "description": "Sign in with Clerk for Lunora auth. Wires Clerk as an OIDC provider via better-auth's genericOAuth plugin, on top of the base `auth` item.",
+            "description": "Sign in with Clerk for Lunora auth, with Lunora (better-auth) owning the session. Wires Clerk as an OIDC provider via better-auth's genericOAuth plugin, on top of the base `auth` item. To let Clerk own the session and only verify its tokens, use auth-clerk-jwt instead.",
             "name": "auth-clerk",
             "title": "Auth — Clerk"
+        },
+        {
+            "description": "Use Clerk as the identity provider and let Clerk own the session: verify each request's Clerk session token against your instance's JWKS and feed the user, active organization, role and permissions into ctx.auth / RLS via a resolveIdentity adapter. For Clerk as a login button on a Lunora-owned better-auth session, use auth-clerk instead.",
+            "name": "auth-clerk-jwt",
+            "title": "Auth — Clerk sessions (bring your own auth)"
         },
         {
             "description": "Styled transactional email templates for the Lunora auth flows — verify address, reset password, magic link, one-time code, organization invitation, and the security notices that follow a change. Rendered server-side by @lunora/mail, so they are the same mail whichever frontend framework you use.",
@@ -65,6 +70,11 @@
             "description": "Copy-in, user-owned Vue auth screens on top of the base `auth` item and @lunora/vue: sign in/up, forgot/reset password, magic link, email OTP, two-factor (verify + setup), account & security settings, and organizations. Framework-agnostic controllers under lunora/auth-ui/core, thin Vue views under lunora/auth-ui/vue, and minimal token-aligned CSS — no Tailwind. Edit anything; upgrades are 3-way merged.",
             "name": "auth-ui-vue",
             "title": "Auth UI — Vue"
+        },
+        {
+            "description": "Use WorkOS AuthKit as the identity provider: verify each request's AuthKit access token against your client's JWKS and feed the user, organization, role, permissions, entitlements and feature flags into ctx.auth / RLS via a resolveIdentity adapter.",
+            "name": "auth-workos",
+            "title": "Auth — WorkOS AuthKit (bring your own auth)"
         },
         {
             "description": "Off-platform scheduled snapshots with retention — a cron-driven `snapshot` internalAction exports a configured set of tables to timestamped NDJSON in a dedicated R2 bucket, and a cron-driven `prune` internalAction ages snapshots out by retention window. Restore with `lunora backup restore <id|file>`, which imports a snapshot boundary; for in-place time-travel to an arbitrary moment use native PITR (`lunora backup pitr`). Reads through a shard-local `ctx.db`, so on a `.shardBy()` deployment it covers the default shard only.",
