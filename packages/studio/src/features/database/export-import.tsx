@@ -709,6 +709,8 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
 
     const onFileChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setImportFile(event.target.files?.[0] ?? null);
+        // A replacement file has its own rows, so the table picked for the previous one must not carry over to it.
+        setCsvPick(null);
     };
 
     const onCsvTableChange = (table: string): void => {

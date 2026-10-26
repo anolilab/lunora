@@ -617,6 +617,40 @@ describe("exportImportPanel", () => {
         expect(screen.getByTestId("ei-import").hasAttribute("disabled")).toBe(false);
     });
 
+    it("imports a replacement CSV into the table picked for it, not the table picked for the file it replaced", async () => {
+        expect.assertions(3);
+
+        const mock = createClient({ messages: EXPORT_ROWS, notes: [{ doc: { __id__: "n1", text: "note" }, table: "notes" }] });
+
+        render(renderPanel(mock));
+
+        await importCsv("id,text\nm3,first\n", "messages");
+
+        await screen.findByTestId("ei-import-result");
+
+        fireEvent.change(screen.getByTestId("ei-file"), {
+            target: { files: [new File(["id,text\nn2,second\nn3,third\n"], "notes.csv", { type: "text/csv" })] },
+        });
+
+        await screen.findByTestId("ei-csv-table");
+
+        expect(screen.getByTestId("ei-import").hasAttribute("disabled")).toBe(true);
+
+        fireEvent.click(await screen.findByTestId("ei-csv-table"));
+        pickOption(await screen.findByRole("option", { name: "notes" }));
+        fireEvent.click(screen.getByTestId("ei-import"));
+        fireEvent.click(screen.getByTestId("ei-import-confirm"));
+
+        // The two-row result is the milestone: the first import's result read "Inserted 1".
+        await screen.findByText("Inserted 2, 0 conflicts, 0 errors.");
+
+        expect(importCalls(mock)).toHaveLength(2);
+        expect(importCalls(mock)[1]?.rows).toStrictEqual([
+            { doc: { id: "n2", text: "second" }, table: "notes" },
+            { doc: { id: "n3", text: "third" }, table: "notes" },
+        ]);
+    });
+
     it("writes nothing when any CSV record is malformed, and names the record", async () => {
         expect.assertions(2);
 
