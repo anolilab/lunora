@@ -1371,6 +1371,7 @@ describe("shardDO admin introspection", () => {
 
     it.each([
         ["a missing type", { exportName: "orderPipeline", id: "wf-1" }],
+        ["a blank type", { exportName: "orderPipeline", id: "wf-1", type: "  " }],
         ["a missing id", { exportName: "orderPipeline", type: "order-approved" }],
         ["a missing exportName", { id: "wf-1", type: "order-approved" }],
         ["a reserved lunora: type", { exportName: "orderPipeline", id: "wf-1", type: "lunora:branch:x" }],
@@ -1395,6 +1396,29 @@ describe("shardDO admin introspection", () => {
 
         expect(response.status).toBe(400);
         expect(sent).toHaveLength(0);
+    });
+
+    it("delivers the event type untrimmed, so it matches a type the workflow waits for byte for byte", async () => {
+        expect.assertions(1);
+
+        const sentTypes: string[] = [];
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) =>
+                Promise.resolve({
+                    id,
+                    sendEvent: async (event: { type: string }) => {
+                        sentTypes.push(event.type);
+                    },
+                    status: () => Promise.resolve({ status: "waiting" }),
+                }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+
+        await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.sendWorkflowEvent, { exportName: "orderPipeline", id: "wf-1", type: " approved " }, ADMIN_TOKEN));
+
+        expect(sentTypes).toStrictEqual([" approved "]);
     });
 
     it("rejects (400) sendWorkflowEvent when the instance handle has no sendEvent", async () => {

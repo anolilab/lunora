@@ -196,6 +196,38 @@ describe("workflowsPanel", () => {
         });
     });
 
+    it("shows a failed refresh after a send in the event form, not the start form", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listWorkflows) {
+                    return METADATA;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.sendWorkflowEvent) {
+                    return { sent: true };
+                }
+
+                throw new Error("status unavailable");
+            },
+        });
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("workflows-row-billing");
+
+        fireEvent.change(screen.getByTestId("workflows-event-id"), { target: { value: "wf-1" } });
+        fireEvent.change(screen.getByTestId("workflows-event-type"), { target: { value: "order-approved" } });
+        fireEvent.click(screen.getByTestId("workflows-event-button"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("workflows-event-error").textContent).toContain("status unavailable");
+        });
+
+        expect(screen.queryByTestId("workflows-start-error")).toBeNull();
+    });
+
     it("rejects an invalid JSON event payload before sending", async () => {
         expect.hasAssertions();
 

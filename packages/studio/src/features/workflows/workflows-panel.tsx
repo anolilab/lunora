@@ -72,8 +72,8 @@ const effectiveExportName = (workflows: ReadonlyArray<WorkflowMetadata>, selecte
 interface SendEventFormProps {
     /** The selected workflow export the event is addressed to. */
     readonly exportName: string;
-    /** Called after a successful send, so the panel can refresh that instance's row. */
-    readonly onSent: (exportName: string, id: string) => void;
+    /** Called after a successful send, so the panel can refresh that instance's row; a rejection is shown in this form. */
+    readonly onSent: (exportName: string, id: string) => Promise<void>;
 }
 
 /** Deliver `{ type, payload }` to a waiting instance of the selected workflow over the `sendWorkflowEvent` admin RPC. */
@@ -89,7 +89,6 @@ const SendEventForm = ({ exportName, onSent }: SendEventFormProps): ReactElement
 
     const send = async (): Promise<void> => {
         const id = idInput.trim();
-        const type = typeInput.trim();
         const payload = parseOptionalJson(payloadText);
 
         if (payload === null) {
@@ -102,8 +101,8 @@ const SendEventForm = ({ exportName, onSent }: SendEventFormProps): ReactElement
         setError(null);
 
         try {
-            await client.query(SEND_WORKFLOW_EVENT, { exportName, id, payload: payload.value, type }, callOptions(""));
-            onSent(exportName, id);
+            await client.query(SEND_WORKFLOW_EVENT, { exportName, id, payload: payload.value, type: typeInput }, callOptions(""));
+            await onSent(exportName, id);
         } catch (error_: unknown) {
             setError(errorMessage(error_));
         }
@@ -264,18 +263,24 @@ const WorkflowsPanel = (): ReactElement => {
         fireAndForget(start());
     };
 
-    const refreshInstance = async (exportName: string, id: string): Promise<void> => {
+    const readInstance = async (exportName: string, id: string): Promise<void> => {
         setRefreshingId(id);
 
         try {
             const result = (await client.query(GET_WORKFLOW_INSTANCE_STATUS, { exportName, id }, callOptions(""))) as WorkflowInstanceStatusResult;
 
             upsertInstance({ error: result.error, exportName, id: result.id, output: result.output, status: result.status });
+        } finally {
+            setRefreshingId(null);
+        }
+    };
+
+    const refreshInstance = async (exportName: string, id: string): Promise<void> => {
+        try {
+            await readInstance(exportName, id);
         } catch (error_: unknown) {
             setStartError(errorMessage(error_));
         }
-
-        setRefreshingId(null);
     };
 
     const onSelectedExportChange = (event: ChangeEvent<HTMLSelectElement>): void => {
@@ -393,14 +398,7 @@ const WorkflowsPanel = (): ReactElement => {
                 </div>
             )}
 
-            {workflows.length > 0 && (
-                <SendEventForm
-                    exportName={selectedExportName}
-                    onSent={(exportName, id) => {
-                        fireAndForget(refreshInstance(exportName, id));
-                    }}
-                />
-            )}
+            {workflows.length > 0 && <SendEventForm exportName={selectedExportName} onSent={readInstance} />}
 
             {instances.length > 0 && (
                 <div className="flex flex-col gap-3" data-testid="workflows-instances">

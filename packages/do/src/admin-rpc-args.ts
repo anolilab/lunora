@@ -496,7 +496,8 @@ const RESERVED_WORKFLOW_EVENT_PREFIX = "lunora:";
 const parseSendWorkflowEventArgs = (args: Record<string, unknown>): SendWorkflowEventArgs => {
     const exportName = typeof args["exportName"] === "string" ? args["exportName"].trim() : "";
     const id = typeof args["id"] === "string" ? args["id"].trim() : "";
-    const type = typeof args["type"] === "string" ? args["type"].trim() : "";
+    // Untrimmed: delivery matches the type a workflow waits for byte for byte, so only emptiness is judged on the trimmed value.
+    const type = typeof args["type"] === "string" ? args["type"] : "";
 
     if (exportName === "") {
         throw new LunoraError("BAD_REQUEST", "sendWorkflowEvent: `exportName` is required");
@@ -506,7 +507,7 @@ const parseSendWorkflowEventArgs = (args: Record<string, unknown>): SendWorkflow
         throw new LunoraError("BAD_REQUEST", "sendWorkflowEvent: `id` is required");
     }
 
-    if (type === "") {
+    if (type.trim() === "") {
         throw new LunoraError("BAD_REQUEST", "sendWorkflowEvent: `type` is required");
     }
 
