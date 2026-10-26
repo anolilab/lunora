@@ -5,9 +5,10 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "./App.js";
 
-// `@cloudflare/vite-plugin` serves the Worker on the same origin as Vite,
-// so default to `location.origin` rather than a separate workerd port.
-const url = (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? globalThis.location.origin;
+// `@cloudflare/vite-plugin` serves the Worker on the same origin as this page, so the client uses that origin.
+// The example does not support a frontend on another origin: sign-in and the Lunora calls would need trusted origins
+// and credentialed CORS, which it does not configure.
+const url = globalThis.location.origin;
 const client = new LunoraClient({ url });
 
 const root = document.querySelector("#root");

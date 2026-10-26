@@ -14,6 +14,17 @@ export const tasks = sqliteTable("tasks", {
     byUser: index("byUser").on(t.userId),
 }));
 
+export const invoices = sqliteTable("invoices", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    amount: real("amount").notNull(),
+    issuedAt: real("issuedAt").notNull(),
+    number: text("number").notNull(),
+    userId: text("userId").notNull(),
+}, (t) => ({
+    byUser: index("byUser").on(t.userId),
+}));
+
 export const exportFiles = sqliteTable("exportFiles", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
