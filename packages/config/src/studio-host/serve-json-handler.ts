@@ -51,7 +51,7 @@ interface LocalEndpointResponse {
 }
 
 /** A transport-agnostic local-dev handler (schema edit, policy scaffold). */
-type LocalEndpointHandler = (request: LocalEndpointRequest) => LocalEndpointResponse;
+type LocalEndpointHandler = (request: LocalEndpointRequest) => LocalEndpointResponse | Promise<LocalEndpointResponse>;
 
 /** Read a request body to a string, rejecting once it exceeds {@link MAX_BODY_BYTES}. */
 const readBody = async (request: IncomingMessage): Promise<string> =>
@@ -212,7 +212,7 @@ const serveJsonHandler = (
                 return;
             }
 
-            const result = handle({ ...context, body: parsed, method: request.method ?? "POST", projectRoot });
+            const result = await handle({ ...context, body: parsed, method: request.method ?? "POST", projectRoot });
 
             respondJson(response, result.status, result.body);
         } catch (error: unknown) {

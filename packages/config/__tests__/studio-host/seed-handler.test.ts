@@ -35,10 +35,10 @@ describe("handleSeedRequest", () => {
         rmSync(projectRoot, { force: true, recursive: true });
     });
 
-    it("generates the requested number of rows for a table", () => {
+    it("generates the requested number of rows for a table", async () => {
         expect.assertions(3);
 
-        const result = handleSeedRequest({
+        const result = await handleSeedRequest({
             body: { count: 5, table: "users" },
             method: "POST",
             projectRoot,
@@ -51,19 +51,19 @@ describe("handleSeedRequest", () => {
         expect(body.rows[0]).toHaveProperty("email");
     });
 
-    it("is deterministic for the same seed", () => {
+    it("is deterministic for the same seed", async () => {
         expect.assertions(1);
 
-        const first = handleSeedRequest({ body: { count: 3, seed: 42, table: "users" }, method: "POST", projectRoot });
-        const second = handleSeedRequest({ body: { count: 3, seed: 42, table: "users" }, method: "POST", projectRoot });
+        const first = await handleSeedRequest({ body: { count: 3, seed: 42, table: "users" }, method: "POST", projectRoot });
+        const second = await handleSeedRequest({ body: { count: 3, seed: 42, table: "users" }, method: "POST", projectRoot });
 
         expect((first.body as { rows: unknown }).rows).toStrictEqual((second.body as { rows: unknown }).rows);
     });
 
-    it("links foreign keys to supplied existing ids instead of fabricating parents", () => {
+    it("links foreign keys to supplied existing ids instead of fabricating parents", async () => {
         expect.assertions(2);
 
-        const result = handleSeedRequest({
+        const result = await handleSeedRequest({
             body: { count: 4, existingIds: { users: ["user-a", "user-b"] }, table: "posts" },
             method: "POST",
             projectRoot,
@@ -74,7 +74,7 @@ describe("handleSeedRequest", () => {
         expect(body.rows.every((row) => row["authorId"] === "user-a" || row["authorId"] === "user-b")).toBe(true);
     });
 
-    it("refuses rather than return children whose parents it would then drop", () => {
+    it("refuses rather than return children whose parents it would then drop", async () => {
         expect.assertions(2);
 
         // With no ids for `users`, the planner FABRICATES parent rows and points the
@@ -83,13 +83,13 @@ describe("handleSeedRequest", () => {
         // that does not exist — a dangling FK the insert then either rejects or,
         // worse, accepts. The refusal lives in the studio client today, so a request
         // that does not come from it gets the dangling rows.
-        const result = handleSeedRequest({ body: { count: 4, table: "posts" }, method: "POST", projectRoot });
+        const result = await handleSeedRequest({ body: { count: 4, table: "posts" }, method: "POST", projectRoot });
 
         expect(result.status).toBe(409);
         expect(result.body).toStrictEqual({ error: "fk-parents-empty", ok: false, tables: ["users"] });
     });
 
-    it("refuses a required self-reference into an empty table with a 409, not a thrown 500", () => {
+    it("refuses a required self-reference into an empty table with a 409, not a thrown 500", async () => {
         expect.assertions(3);
 
         // The first row of a required self-reference has no earlier row to point at,
@@ -109,60 +109,60 @@ export default defineSchema({
             "utf8",
         );
 
-        const result = handleSeedRequest({ body: { count: 3, table: "nodes" }, method: "POST", projectRoot });
+        const result = await handleSeedRequest({ body: { count: 3, table: "nodes" }, method: "POST", projectRoot });
 
         expect(result.status).toBe(409);
         expect(result.body).toMatchObject({ error: "seed-refused", ok: false });
         expect((result.body as { message: string }).message).toMatch(/required foreign key "parentId" points at "nodes"/u);
     });
 
-    it("clamps the count to the safety bound", () => {
+    it("clamps the count to the safety bound", async () => {
         expect.assertions(1);
 
-        const result = handleSeedRequest({ body: { count: 100_000, table: "users" }, method: "POST", projectRoot });
+        const result = await handleSeedRequest({ body: { count: 100_000, table: "users" }, method: "POST", projectRoot });
 
         expect((result.body as { rows: ReadonlyArray<unknown> }).rows).toHaveLength(1000);
     });
 
-    it("returns 404 for an unknown table", () => {
+    it("returns 404 for an unknown table", async () => {
         expect.assertions(1);
 
-        expect(handleSeedRequest({ body: { table: "nope" }, method: "POST", projectRoot }).status).toBe(404);
+        await expect(handleSeedRequest({ body: { table: "nope" }, method: "POST", projectRoot })).resolves.toHaveProperty("status", 404);
     });
 
-    it("returns 404 when the schema file is missing", () => {
+    it("returns 404 when the schema file is missing", async () => {
         expect.assertions(1);
 
         rmSync(join(lunoraDirectory, "schema.ts"));
 
-        expect(handleSeedRequest({ body: { table: "users" }, method: "POST", projectRoot }).status).toBe(404);
+        await expect(handleSeedRequest({ body: { table: "users" }, method: "POST", projectRoot })).resolves.toHaveProperty("status", 404);
     });
 
-    it("rejects a POST body without a table", () => {
+    it("rejects a POST body without a table", async () => {
         expect.assertions(1);
 
-        expect(handleSeedRequest({ body: { count: 5 }, method: "POST", projectRoot }).status).toBe(400);
+        await expect(handleSeedRequest({ body: { count: 5 }, method: "POST", projectRoot })).resolves.toHaveProperty("status", 400);
     });
 
-    it("rejects a non-object body", () => {
+    it("rejects a non-object body", async () => {
         expect.assertions(1);
 
-        expect(handleSeedRequest({ body: undefined, method: "POST", projectRoot }).status).toBe(400);
+        await expect(handleSeedRequest({ body: undefined, method: "POST", projectRoot })).resolves.toHaveProperty("status", 400);
     });
 
-    it("rejects a body of literal null with a 400 (not a 500 TypeError)", () => {
+    it("rejects a body of literal null with a 400 (not a 500 TypeError)", async () => {
         expect.assertions(2);
 
         // `typeof null === "object"`, so a naive guard destructures null and 500s.
-        const result = handleSeedRequest({ body: null, method: "POST", projectRoot });
+        const result = await handleSeedRequest({ body: null, method: "POST", projectRoot });
 
         expect(result.status).toBe(400);
         expect(result.body).toStrictEqual({ error: "invalid-request", ok: false });
     });
 
-    it("rejects an unsupported HTTP method", () => {
+    it("rejects an unsupported HTTP method", async () => {
         expect.assertions(1);
 
-        expect(handleSeedRequest({ method: "GET", projectRoot }).status).toBe(405);
+        await expect(handleSeedRequest({ method: "GET", projectRoot })).resolves.toHaveProperty("status", 405);
     });
 });
