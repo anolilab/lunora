@@ -1,3 +1,14 @@
+## @lunora/config [1.0.0-alpha.413](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.412...@lunora/config@1.0.0-alpha.413) (2026-10-26)
+
+### Performance Improvements
+
+* drop unused TypeScript programs from dev startup binding scan ([#1349](https://github.com/anolilab/lunora/issues/1349)) ([8aa7725](https://github.com/anolilab/lunora/commit/8aa772521e2f101f5ad4585c49882df064ccaa8f))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.359
+
 ## @lunora/config [1.0.0-alpha.412](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.411...@lunora/config@1.0.0-alpha.412) (2026-10-26)
 
 ### Bug Fixes
