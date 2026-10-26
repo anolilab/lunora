@@ -1,6 +1,7 @@
 /**
- * One CSV field. `undefined` is an empty unquoted field: the importer leaves that key out of the document so the schema default applies.
- * A quoted empty field (`""`) is an empty string and stays in the document.
+ * One CSV field. `undefined` is an empty unquoted field: the importer leaves that key out of the document so the schema default applies,
+ * or stores `null` when the column is nullable and required (see {@link recordDocument}). A quoted empty field (`""`) is an empty string
+ * and stays in the document.
  */
 type CsvCell = string | undefined;
 
@@ -41,9 +42,9 @@ class CsvFormatError extends Error {
     }
 }
 
-/** A document built from one CSV record, with the record number it came from. */
+/** A document built from one CSV record, with the record number it came from. `null` is a blank cell in a nullable required column. */
 interface CsvDocument {
-    doc: Record<string, string>;
+    doc: Record<string, string | null>;
     record: number;
 }
 
@@ -246,19 +247,26 @@ const headerColumns = (cells: CsvCell[]): string[] => {
     return columns;
 };
 
-/** The document a data record makes, keyed by the header names. A record whose cell count differs from the header's throws. */
-const recordDocument = ({ cells, number: record }: CsvRecord, columns: ReadonlyArray<string>): CsvDocument => {
+/**
+ * The document a data record makes, keyed by the header names. A record whose cell count differs from the header's throws. An empty unquoted
+ * cell is left out, except in a column named in `nullOnEmpty`, where it is `null`: a nullable column that is not optional refuses a missing key,
+ * and a CSV has no other way to write null.
+ */
+const recordDocument = ({ cells, number: record }: CsvRecord, columns: ReadonlyArray<string>, nullOnEmpty: ReadonlySet<string>): CsvDocument => {
     if (cells.length !== columns.length) {
         throw new CsvFormatError({ expected: columns.length, found: cells.length, kind: "ragged", record });
     }
 
-    const fields: Record<string, string> = {};
+    const fields: Record<string, string | null> = {};
 
     columns.forEach((name, column) => {
         const cell = cells[column];
 
         if (cell !== undefined) {
             setField(fields, name, cell);
+        } else if (nullOnEmpty.has(name)) {
+            // eslint-disable-next-line unicorn/no-null -- a blank cell in a nullable column is null; `undefined` would leave the key out and the server would refuse it
+            setField(fields, name, null);
         }
     });
 
@@ -281,7 +289,7 @@ const parseCsvDocuments = (text: string): CsvDocument[] => {
 
     const columns = headerColumns(header.cells);
 
-    return records.map((record) => recordDocument(record, columns));
+    return records.map((record) => recordDocument(record, columns, new Set()));
 };
 
 /** A cell's text, read as its column kind. `rejected` names the kind the text failed to be. */
@@ -513,6 +521,13 @@ const coerceCsvDocument = ({ doc, record }: CsvDocument, kinds: ReadonlyMap<stri
     const coerced: Record<string, unknown> = {};
 
     for (const [column, text] of Object.entries(doc)) {
+        if (text === null) {
+            // eslint-disable-next-line unicorn/no-null -- the null a blank nullable cell was given by recordDocument, passed through unchanged
+            setField(coerced, column, null);
+
+            continue;
+        }
+
         const cell = coerceCell(text, kinds.get(column));
 
         if (cell.kind === "rejected") {
@@ -539,11 +554,12 @@ const coerceCsvDocuments = (documents: CsvDocument[], kinds: ReadonlyMap<string,
 
 /**
  * The coerced documents of CSV text that arrives in pieces, in file order. The first problem throws at its record, so a caller that
- * writes as it reads must check the file first: {@link checkCsvDocuments} reports the problem a whole-file check reports.
+ * writes as it reads must check the file first: {@link checkCsvDocuments} throws the same problem for the same file.
  */
 const readCsvDocuments = async function* (
     pieces: AsyncIterable<string> | Iterable<string>,
     kinds: ReadonlyMap<string, string>,
+    nullOnEmpty: ReadonlySet<string>,
 ): AsyncGenerator<CoercedDocument> {
     let columns: string[] | undefined;
 
@@ -551,10 +567,17 @@ const readCsvDocuments = async function* (
         if (columns === undefined) {
             columns = headerColumns(record.cells);
         } else {
-            yield coerceCsvDocument(recordDocument(record, columns), kinds);
+            yield coerceCsvDocument(recordDocument(record, columns, nullOnEmpty), kinds);
         }
     }
 };
+
+/**
+ * The columns whose blank cell is stored as null: nullable and not optional. An optional column is left out instead, so the server applies its
+ * default.
+ */
+const nullOnEmptyColumns = (columns: ReadonlyArray<{ name: string; nullable?: boolean; optional: boolean }>): Set<string> =>
+    new Set(columns.filter((column) => column.nullable === true && !column.optional).map((column) => column.name));
 
 /** The problem a check threw. Anything else is a bug in the check, not a problem with the file, so it is rethrown. */
 const asFormatError = (error: unknown): CsvFormatError => {
@@ -566,20 +589,20 @@ const asFormatError = (error: unknown): CsvFormatError => {
 };
 
 /**
- * Check CSV text that arrives in pieces, and throw the problem the whole-file check would throw. The stages come in order: a quote error,
- * then the header, then a row of the wrong width, then a cell that does not fit its column, each the first in file order. A quote error
- * stops the read at once; the other stages keep the first problem of each and read on, so the file is not held. `onDocument` receives every
- * document that passes its checks, in file order.
+ * Check CSV text that arrives in pieces, and throw the problem {@link readCsvDocuments} throws first. A quote error stops the read at once.
+ * Otherwise a bad header is thrown first, then the first record in file order that has the wrong width or a cell that does not fit its
+ * column. The check keeps only that first record problem and reads on, so the file is not held. `onDocument` receives every document that
+ * passes its checks, in file order.
  */
 const checkCsvDocuments = async (
     pieces: AsyncIterable<string> | Iterable<string>,
     kinds: ReadonlyMap<string, string>,
+    nullOnEmpty: ReadonlySet<string>,
     onDocument: (document: CoercedDocument) => void,
 ): Promise<void> => {
     let columns: string[] | undefined;
     let headerProblem: CsvFormatError | undefined;
-    let raggedProblem: CsvFormatError | undefined;
-    let cellProblem: CsvFormatError | undefined;
+    let recordProblem: CsvFormatError | undefined;
 
     for await (const record of readCsvRecords(pieces)) {
         if (columns === undefined) {
@@ -594,22 +617,13 @@ const checkCsvDocuments = async (
             continue;
         }
 
-        let document: CsvDocument;
-
-        try {
-            document = recordDocument(record, columns);
-        } catch (error) {
-            raggedProblem ??= asFormatError(error);
-
-            continue;
-        }
-
         let coerced: CoercedDocument;
 
         try {
-            coerced = coerceCsvDocument(document, kinds);
+            coerced = coerceCsvDocument(recordDocument(record, columns, nullOnEmpty), kinds);
         } catch (error) {
-            cellProblem ??= asFormatError(error);
+            // Records arrive in file order, so the first one to fail is the earliest problem in the file.
+            recordProblem ??= asFormatError(error);
 
             continue;
         }
@@ -617,12 +631,22 @@ const checkCsvDocuments = async (
         onDocument(coerced);
     }
 
-    const problem = headerProblem ?? raggedProblem ?? cellProblem;
+    const problem = headerProblem ?? recordProblem;
 
     if (problem !== undefined) {
         throw problem;
     }
 };
 
-export { checkCsvDocuments, coerceCsvDocuments, CsvFormatError, parseCsv, parseCsvDocuments, parseCsvRecords, readCsvDocuments, readCsvRecords };
+export {
+    checkCsvDocuments,
+    coerceCsvDocuments,
+    CsvFormatError,
+    nullOnEmptyColumns,
+    parseCsv,
+    parseCsvDocuments,
+    parseCsvRecords,
+    readCsvDocuments,
+    readCsvRecords,
+};
 export type { CellType, CoercedDocument, CsvCell, CsvDocument, CsvProblem, CsvRecord, CsvValue };

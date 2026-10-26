@@ -5,6 +5,7 @@ import {
     checkCsvDocuments,
     coerceCsvDocuments,
     CsvFormatError,
+    nullOnEmptyColumns,
     parseCsv,
     parseCsvDocuments,
     parseCsvRecords,
@@ -581,6 +582,7 @@ describe("streamed parsing", () => {
             readCsvDocuments(
                 Array.from(text, (character) => character),
                 kinds,
+                new Set(),
             ),
         );
 
@@ -592,6 +594,7 @@ describe("streamed parsing", () => {
             checkCsvDocuments(
                 Array.from(refused, (character) => character),
                 kinds,
+                new Set(),
                 () => seen.push(1),
             ),
         );
@@ -600,21 +603,22 @@ describe("streamed parsing", () => {
         // Every row but the refused one is a valid document, and the check keeps reading past the refused row to find the first problem.
         expect(seen).toHaveLength(1199);
 
-        const whole = await asyncProblemOf(() => checkCsvDocuments([text], kinds, () => undefined));
+        const whole = await asyncProblemOf(() => checkCsvDocuments([text], kinds, new Set(), () => undefined));
 
         expect(whole).toBeUndefined();
     });
 
     it("reports the same two-problem file as the eager check, however the text is cut", async () => {
-        expect.assertions(9);
+        expect.assertions(6);
 
         const cases: [string, Map<string, string>][] = [
             ['a,b\n1\n2,"open', new Map()],
             ["a,a\n1", new Map()],
-            ["id,count\nm1,x\nm2\n", new Map([["count", "number"]])],
         ];
         const problems = await Promise.all(
-            cases.map(([text, kinds]) => Promise.all(cuttings(text).map((pieces) => asyncProblemOf(() => checkCsvDocuments(pieces, kinds, () => undefined))))),
+            cases.map(([text, kinds]) =>
+                Promise.all(cuttings(text).map((pieces) => asyncProblemOf(() => checkCsvDocuments(pieces, kinds, new Set(), () => undefined)))),
+            ),
         );
 
         for (const [index, [text, kinds]] of cases.entries()) {
@@ -641,14 +645,69 @@ describe("problem precedence", () => {
         expect(problemOf(() => parseCsvDocuments("a,a\n1"))).toStrictEqual({ kind: "duplicate-header", name: "a" });
     });
 
-    it("reports a row of the wrong width before a cell that does not fit its column", () => {
+    it("reports the first bad row in file order, whether its problem is a cell or a width", async () => {
+        expect.assertions(2);
+
+        const kinds = new Map([["count", "number"]]);
+        const cellFirst = await asyncProblemOf(() => checkCsvDocuments(["id,count\nm1,x\nm2\n"], kinds, new Set(), () => undefined));
+        const raggedFirst = await asyncProblemOf(() => checkCsvDocuments(["id,count\nm1\nm2,x\n"], kinds, new Set(), () => undefined));
+
+        expect(cellFirst).toStrictEqual({ column: "count", expected: "number", kind: "cell-type", record: 2, value: "x" });
+        expect(raggedFirst).toStrictEqual({ expected: 2, found: 1, kind: "ragged", record: 2 });
+    });
+
+    it("reports a cell before a later row of the wrong width however the text is cut into pieces", async () => {
+        expect.assertions(3);
+
+        const kinds = new Map([["count", "number"]]);
+        const pieces = cuttings("id,count\nm1,x\nm2\n");
+        const problems = await Promise.all(pieces.map((cut) => asyncProblemOf(() => checkCsvDocuments(cut, kinds, new Set(), () => undefined))));
+
+        for (const problem of problems) {
+            expect(problem).toStrictEqual({ column: "count", expected: "number", kind: "cell-type", record: 2, value: "x" });
+        }
+    });
+
+    it("reads a cell problem before a later row of the wrong width, as the check does", async () => {
         expect.assertions(1);
 
-        expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments("id,count\nm1,x\nm2\n"), new Map([["count", "number"]])))).toStrictEqual({
-            expected: 2,
-            found: 1,
-            kind: "ragged",
-            record: 3,
-        });
+        const problem = await asyncProblemOf(() => collect(readCsvDocuments(["id,count\nm1,x\nm2\n"], new Map([["count", "number"]]), new Set())));
+
+        expect(problem).toStrictEqual({ column: "count", expected: "number", kind: "cell-type", record: 2, value: "x" });
+    });
+
+    it("stores null for a blank cell in a nullable column that is not optional, and keeps a quoted empty string", async () => {
+        expect.assertions(1);
+
+        const kinds = new Map([
+            ["count", "number"],
+            ["note", "string"],
+        ]);
+        const documents = await collect(readCsvDocuments(['id,note,count\nm1,,2\nm2,"",3\n'], kinds, new Set(["note"])));
+
+        expect(documents.map((document) => document.doc)).toStrictEqual([
+            { count: 2, id: "m1", note: null },
+            { count: 3, id: "m2", note: "" },
+        ]);
+    });
+
+    it("leaves a blank cell out of a column that is not nullable, so the server applies its default", async () => {
+        expect.assertions(1);
+
+        const documents = await collect(readCsvDocuments(["id,note\nm1,\n"], new Map(), new Set()));
+
+        expect(documents.map((document) => document.doc)).toStrictEqual([{ id: "m1" }]);
+    });
+
+    it("stores null only for a column that is nullable and not optional", () => {
+        expect.assertions(1);
+
+        expect(
+            nullOnEmptyColumns([
+                { name: "required", nullable: true, optional: false },
+                { name: "optional", nullable: true, optional: true },
+                { name: "plain", optional: false },
+            ]),
+        ).toStrictEqual(new Set(["required"]));
     });
 });

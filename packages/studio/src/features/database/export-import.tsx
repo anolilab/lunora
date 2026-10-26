@@ -17,7 +17,7 @@ import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/in
 import { recordShard } from "../../lib/shard-history";
 import { downloadFile } from "../data/grid-features";
 import type { CsvProblem } from "./csv";
-import { checkCsvDocuments, CsvFormatError, readCsvDocuments } from "./csv";
+import { checkCsvDocuments, CsvFormatError, nullOnEmptyColumns, readCsvDocuments } from "./csv";
 
 interface ExportImportPanelProps {
     /** Shard key the panel targets. Defaults to the root shard. */
@@ -83,8 +83,8 @@ const FILE_PIECE_BYTES = 1024 * 1024;
  * Yield a file's lines one at a time, 1-based, reading it in pieces so the whole
  * file is never held as one string. A piece can end mid-line, and mid-character:
  * the decoder keeps a partial character for the next piece and the carry keeps
- * a partial line whole. A line keeps its trailing `\r`, so joining the lines with
- * `\n` rebuilds the file's bytes exactly, which the CSV parser relies on.
+ * a partial line whole. A line keeps its trailing `\r`, which `JSON.parse` reads
+ * as whitespace, so an NDJSON line parses the same with or without it.
  */
 const fileLines = async function* (file: Blob): AsyncGenerator<{ line: string; lineNumber: number }> {
     // fatal: a non-UTF-8 file fails validation instead of importing U+FFFD in place of its characters.
@@ -161,26 +161,35 @@ const fileText = async function* (file: Blob): AsyncGenerator<string> {
  * Every record of a CSV file as an import entry for `table`. Each pass reads the file again and coerces a row only when it is reached.
  * {@link checkCsv} has read the whole file first, so a malformed record is refused before anything is written and never surfaces here.
  */
-const csvEntries = async function* (file: Blob, table: string, kinds: ReadonlyMap<string, string>): AsyncGenerator<ImportEntry> {
-    for await (const { doc, record } of readCsvDocuments(fileText(file), kinds)) {
+const csvEntries = async function* (
+    file: Blob,
+    table: string,
+    kinds: ReadonlyMap<string, string>,
+    nullOnEmpty: ReadonlySet<string>,
+): AsyncGenerator<ImportEntry> {
+    for await (const { doc, record } of readCsvDocuments(fileText(file), kinds, nullOnEmpty)) {
         yield { line: record, row: { doc, table } };
     }
 };
 
 /**
- * The validator kind of each column of `table`, from the same `describeTable` read the generate-rows dialog uses. A failed read comes back
- * as the message to show, since a CSV that cannot be checked against its columns must not be sent.
+ * The validator kind of each column of `table`, from the same `describeTable` read the generate-rows dialog uses, and the columns whose blank
+ * cell is stored as null: nullable and not optional. An optional column is left out instead, so the server takes its default. A failed read
+ * comes back as the message to show, since a CSV that cannot be checked against its columns must not be sent.
  */
 const readColumnKinds = async (
     client: ImportClient,
     t: Translate,
     shardKey: string,
     table: string,
-): Promise<{ failure: string } | { kinds: ReadonlyMap<string, string> }> => {
+): Promise<{ failure: string } | { kinds: ReadonlyMap<string, string>; nullOnEmpty: ReadonlySet<string> }> => {
     try {
         const { columns } = (await client.query(DESCRIBE_TABLE, { table }, callOptions(shardKey))) as TableColumnsResult;
 
-        return { kinds: new Map(columns.map((column) => [column.name, column.type])) };
+        return {
+            kinds: new Map(columns.map((column) => [column.name, column.type])),
+            nullOnEmpty: nullOnEmptyColumns(columns),
+        };
     } catch (error_) {
         return { failure: t("Couldn't read the columns of {table}: {message}", { message: errorMessage(error_), table }) };
     }
@@ -223,10 +232,10 @@ const countRows = async (entries: AsyncIterable<ImportEntry> | Iterable<ImportEn
  * Read a CSV file once: check every record, count its rows, and throw on a row too wide to send alone. A wide row is held back until the
  * whole file has parsed, so a malformed record is reported first, as a whole-file parse would report it. Nothing is written by this pass.
  */
-const checkCsv = async (file: Blob, table: string, kinds: ReadonlyMap<string, string>): Promise<number> => {
+const checkCsv = async (file: Blob, table: string, kinds: ReadonlyMap<string, string>, nullOnEmpty: ReadonlySet<string>): Promise<number> => {
     const count: { rows: number; wide?: number } = { rows: 0 };
 
-    await checkCsvDocuments(fileText(file), kinds, ({ doc, record }) => {
+    await checkCsvDocuments(fileText(file), kinds, nullOnEmpty, ({ doc, record }) => {
         count.rows += 1;
 
         if (count.wide === undefined && wireBytes({ doc, table }) > IMPORT_CHUNK_BYTES) {
@@ -443,13 +452,14 @@ const sendImport = async (
 
     // A CSV cell is coerced to its column's kind, so the kinds must be read first. Without them the file cannot be checked, and it is
     // refused here rather than sent as text the writer would reject row by row.
-    const kindsRead = csvTable === null ? { kinds: new Map<string, string>() } : await readColumnKinds(client, t, shardKey, csvTable);
+    const kindsRead =
+        csvTable === null ? { kinds: new Map<string, string>(), nullOnEmpty: new Set<string>() } : await readColumnKinds(client, t, shardKey, csvTable);
 
     if ("failure" in kindsRead) {
         return { failure: { message: kindsRead.failure, rows: 0 }, total };
     }
 
-    const { kinds } = kindsRead;
+    const { kinds, nullOnEmpty } = kindsRead;
 
     try {
         if (csvTable === null) {
@@ -459,7 +469,7 @@ const sendImport = async (
         } else {
             const table = csvTable;
 
-            prepared = { rows: await checkCsv(file, table, kinds), source: () => csvEntries(file, table, kinds) };
+            prepared = { rows: await checkCsv(file, table, kinds, nullOnEmpty), source: () => csvEntries(file, table, kinds, nullOnEmpty) };
         }
     } catch (error_) {
         return { failure: { message: describeInvalidFile(csvTable, error_, t), rows: 0 }, total };
