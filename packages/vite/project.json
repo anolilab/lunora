@@ -3,9 +3,8 @@
     "tags": ["type:package", "category:bundler-plugin"],
     "targets": {
         "test:bench": {
-            "cache": true,
-            "dependsOn": ["build", "^build"],
-            "inputs": ["default", "^production", "{projectRoot}/vitest.bench.config.ts"]
+            "cache": false,
+            "dependsOn": ["build", "^build"]
         }
     }
 }

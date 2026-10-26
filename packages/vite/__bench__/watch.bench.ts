@@ -66,20 +66,21 @@ const makeWatcher = (): Watcher => {
 const makeHarness = (): Harness => {
     const watcher = makeWatcher();
     let notify: (() => void) | undefined;
-    const send = (): void => {
+    // Only the client's notification counts: the worker is told first, and a save is done once the browser hears of it.
+    const notifyClient = (): void => {
         notify?.();
         notify = undefined;
     };
-    const environment = (name: string) => {
+    const noop = (): void => {};
+    const environment = (name: string, send: () => void) => {
         return { hot: { send }, moduleGraph: { idToModuleMap: new Map(), invalidateModule: (): void => {} }, name };
     };
-    const noop = (): void => {};
 
     // Typed as the slice of `ViteDevServer` the codegen plugin reads.
     const server = {
         config: { logger: { error: noop, info: noop, warn: noop } },
-        environments: { client: environment("client"), worker: environment("worker") },
-        hot: { send },
+        environments: { client: environment("client", notifyClient), worker: environment("worker", noop) },
+        hot: { send: noop },
         httpServer: { once: noop },
         restart: async (): Promise<void> => {},
         watcher,
