@@ -2,7 +2,7 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { NormalizeIdAuthorizationIR } from "../ir";
-import { chainRootOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { chainRootOf, descendantsOfKind, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { chainUsesWrappedCall } from "./builder-chain";
 import { contextSurfaceNodesIn, contextSurfacePathOf } from "./context-root";
@@ -129,7 +129,7 @@ const hasNullGate = (handler: InspectableHandler, name: string): boolean =>
  * `undefined` when the normalized id never reaches such a sink.
  */
 const idSinkMethod = (handler: InspectableHandler, name: string): NormalizeIdAuthorizationIR["sinkMethod"] | undefined => {
-    for (const call of handler.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(handler, SyntaxKind.CallExpression)) {
         const callee = call.getExpression();
 
         if (!Node.isPropertyAccessExpression(callee)) {
@@ -211,7 +211,7 @@ const comparesRowProperty = (handler: InspectableHandler): boolean =>
  * SECURITY-category finding never fires on genuinely-authorized code.
  */
 const handlerMentionsOwnership = (handler: InspectableHandler): boolean => {
-    for (const identifier of handler.getDescendantsOfKind(SyntaxKind.Identifier)) {
+    for (const identifier of descendantsOfKind(handler, SyntaxKind.Identifier)) {
         if (OWNERSHIP_IDENTIFIER_NAMES.has(identifier.getText())) {
             return true;
         }
@@ -256,7 +256,7 @@ const normalizeIdAuthorizationsInDeclaration = (declaration: TsNode, relativePat
     const seen = new Set<string>();
     const rows: NormalizeIdAuthorizationIR[] = [];
 
-    for (const call of handler.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(handler, SyntaxKind.CallExpression)) {
         const table = normalizeIdTable(call);
 
         if (table === undefined) {

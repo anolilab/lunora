@@ -251,4 +251,21 @@ describe("reused Project — per-pass caches see edits", () => {
         expect(after.generated.internal).toContain("createPost");
         expect(readGenerated(workdir)).toStrictEqual(freshGenerated());
     });
+
+    it("re-reads an edited handler body on the next pass", () => {
+        expect.assertions(3);
+
+        const project = createCodegenProject(lunoraDirectory);
+        const before = runCodegen({ project, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(before.advisorContext?.nondeterministicCalls ?? []).toHaveLength(0);
+
+        writeFileSync(join(lunoraDirectory, "posts.ts"), postsModule("[ctx, Math.random()]"), "utf8");
+        refreshCodegenProject(project, lunoraDirectory);
+
+        const after = runCodegen({ project, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(after.advisorContext?.nondeterministicCalls).toHaveLength(1);
+        expect(readGenerated(workdir)).toStrictEqual(freshGenerated());
+    });
 });

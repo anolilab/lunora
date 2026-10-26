@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { ProcedureMiddlewareIR } from "../ir";
 import { argumentNames, procedureArgumentObjects } from "../procedure-argument-objects";
-import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { descendantsOfKind, findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { calleeName } from "./callee";
 import { contextSurfaceNodesIn, contextSurfacePathOf, isContextIdentifier } from "./context-root";
@@ -645,7 +645,7 @@ const outboundErrorHandlingFacts = (declaration: TsNode): { handlesErrors: boole
  * unqualified builtin counts here — a subclass or a catalog helper does not.
  */
 const throwsBareError = (declaration: TsNode): boolean =>
-    declaration.getDescendantsOfKind(SyntaxKind.ThrowStatement).some((statement) => {
+    descendantsOfKind(declaration, SyntaxKind.ThrowStatement).some((statement) => {
         const thrown = statement.getExpression();
 
         if (!Node.isNewExpression(thrown)) {
@@ -827,7 +827,7 @@ const behaviourOf = (
     let usesInsertManyUnsafe = false;
     let writesUserTable = false;
 
-    for (const call of declaration.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(declaration, SyntaxKind.CallExpression)) {
         if (isUserTableInsert(call)) {
             writesUserTable = true;
         }

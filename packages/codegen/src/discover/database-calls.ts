@@ -7,6 +7,7 @@
 import type { CallExpression, Node as TsNode } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { descendantsOfKind } from "./ast";
 import { denotesContextDatabase } from "./context-root";
 
 /**
@@ -104,7 +105,7 @@ const tablesAccessedIn = (
     const tablesRead = new Set<string>();
     const tablesWritten = new Set<string>();
 
-    for (const call of declaration.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(declaration, SyntaxKind.CallExpression)) {
         if (isDatabaseCall(call, readMethods)) {
             const table = tableArgumentOf(call);
 
