@@ -11,6 +11,12 @@ SemVer promise until the package graduates.
 
 ## `@lunora/jwt-auth`
 
+### `ANONYMOUS` (const)
+
+```ts
+const ANONYMOUS: null;
+```
+
 ### `Auth0Options` (interface)
 
 ```ts
@@ -25,7 +31,7 @@ interface Auth0Options extends PresetOverrides {
 
 ```ts
 interface ClerkOptions extends PresetOverrides {
-    authorizedParties?: string[];
+    authorizedParties: string | string[];
     issuer?: string;
     publishableKey?: string;
 }
@@ -50,15 +56,35 @@ type JwtIdentityResolver = (request: Request, env?: unknown, context?: Execution
 ### `JwtIdentityResolverOptions` (interface)
 
 ```ts
-interface JwtIdentityResolverOptions {
+interface JwtIdentityResolverOptions extends JwtVerifierOptions {
+    claims?: (payload: JWTPayload) => Record<string, unknown> | null;
+}
+```
+
+### `JwtKeySet` (type)
+
+```ts
+type JwtKeySet = CryptoKey | JWTVerifyGetKey | KeyObject;
+```
+
+### `JwtVerifier` (type)
+
+```ts
+type JwtVerifier = (request: Request) => Promise<VerifiedJwt | undefined>;
+```
+
+### `JwtVerifierOptions` (interface)
+
+```ts
+interface JwtVerifierOptions {
     algorithms?: string[];
     audience?: string | string[];
-    claims?: (payload: JWTPayload) => Record<string, unknown> | null;
     clockTolerance?: number;
     issuer?: string | string[];
     jwksUrl?: string | URL;
-    keySet?: JWTVerifyGetKey | CryptoKey | Uint8Array;
+    keySet?: JwtKeySet;
     onError?: (error: unknown, request: Request) => void;
+    requiredClaims?: string[];
     token?: TokenSource;
 }
 ```
@@ -76,6 +102,15 @@ interface SupabaseOptions extends PresetOverrides {
 
 ```ts
 type TokenSource = (request: Request) => string | null | undefined;
+```
+
+### `VerifiedJwt` (interface)
+
+```ts
+interface VerifiedJwt {
+    expired: boolean;
+    payload: JWTPayload;
+}
 ```
 
 ### `WorkOsOptions` (interface)
@@ -117,16 +152,46 @@ const cookieToken: (name: string) => TokenSource;
 const firstToken: (...sources: TokenSource[]) => TokenSource;
 ```
 
+### `headerToken` (const)
+
+```ts
+const headerToken: (name: string) => TokenSource;
+```
+
+### `httpsOrigin` (const)
+
+```ts
+const httpsOrigin: (value: string, name: string) => string;
+```
+
 ### `jwtIdentityResolver` (const)
 
 ```ts
 const jwtIdentityResolver: (options: JwtIdentityResolverOptions) => JwtIdentityResolver;
 ```
 
+### `jwtVerifier` (const)
+
+```ts
+const jwtVerifier: (options: JwtVerifierOptions) => JwtVerifier;
+```
+
+### `nonEmpty` (const)
+
+```ts
+const nonEmpty: (value: unknown) => string | undefined;
+```
+
 ### `supabase` (const)
 
 ```ts
 const supabase: (options: SupabaseOptions) => JwtIdentityResolver;
+```
+
+### `verifyJwt` (const)
+
+```ts
+const verifyJwt: (token: string, options: Omit<JwtVerifierOptions, "onError" | "token">) => Promise<JWTPayload>;
 ```
 
 ### `workos` (const)

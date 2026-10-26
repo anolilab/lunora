@@ -36,7 +36,7 @@ interface AccessJwtFallbackOptions extends Omit<RequestVerifyOptions, "aud" | "t
 ### `AccessKeySet` (type)
 
 ```ts
-type AccessKeySet = CryptoKey | JWTVerifyGetKey | KeyObject | Uint8Array;
+type AccessKeySet = JwtKeySet;
 ```
 
 ### `AccessRoleMap` (type)
