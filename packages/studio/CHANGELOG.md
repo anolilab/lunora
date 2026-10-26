@@ -1,3 +1,9 @@
+## @lunora/studio [1.0.0-alpha.345](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.344...@lunora/studio@1.0.0-alpha.345) (2026-10-26)
+
+### Bug Fixes
+
+* **privacy:** erasure replay, coverage, retention and persistence fixes ([#1286](https://github.com/anolilab/lunora/issues/1286)) ([1ef4e1b](https://github.com/anolilab/lunora/commit/1ef4e1be46596c97f576e125cdf6c11d2d86b324))
+
 ## @lunora/studio [1.0.0-alpha.344](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.343...@lunora/studio@1.0.0-alpha.344) (2026-10-26)
 
 ### Features
