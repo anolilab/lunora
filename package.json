@@ -70,6 +70,8 @@
         "test:templates": "./scripts/template-build-smoke.sh",
         "test:celld": "pnpm exec vis run build --query \"project=platform-celld\" && LUNORA_CELLD_TESTS=1 pnpm --filter \"@lunora/platform-celld\" run test --project celld",
         "test:workerd": "./scripts/test-workerd.sh",
+        "client-size:check": "node scripts/check-client-size.js",
+        "client-size:update": "node scripts/check-client-size.js --update",
         "worker-size:check": "node scripts/check-worker-size.js",
         "worker-size:update": "node scripts/check-worker-size.js --update",
         "worker-startup:check": "node scripts/check-worker-startup.js",

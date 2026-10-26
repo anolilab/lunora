@@ -262,6 +262,13 @@ worker_size:
     # This file too, or the hole reopens one level up.
     - ".github/file-filters.yml"
 
+# Browser bundle budget (`@lunora/client` + one adapter). Self-lists like `worker_size`.
+client_size:
+    - "scripts/check-client-size.js"
+    - "client-size.json"
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+
 # Worker startup budget (Cloudflare's 1 s startup-CPU limit). Self-lists like `worker_size`.
 worker_startup:
     - "scripts/check-worker-startup.js"
