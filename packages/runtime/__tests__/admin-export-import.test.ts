@@ -933,7 +933,7 @@ describe("createWorker — admin import endpoint", () => {
     describe("onConflict=replace", () => {
         const replaceImport = async (
             url: string,
-            workerOptions: { importGlobalsSupportsReplace?: boolean },
+            workerOptions: { importGlobalsSupportsDryRun?: boolean; importGlobalsSupportsReplace?: boolean },
         ): Promise<{ body: Record<string, unknown>; importGlobals: ReturnType<typeof vi.fn>; status: number }> => {
             const importGlobals = vi.fn<(request: { onConflict?: string }) => Promise<unknown>>(async () => {
                 return { conflicts: 0, errors: [], inserted: {}, replaced: 1 };
@@ -997,6 +997,17 @@ describe("createWorker — admin import endpoint", () => {
             expect.assertions(2);
 
             const { body, importGlobals } = await replaceImport("https://app.example/_lunora/admin/import?onConflict=replace", {});
+
+            expect(importGlobals).not.toHaveBeenCalled();
+            expect(body["errors"]).toMatchObject([{ code: "GLOBAL_REPLACE_UNSUPPORTED", line: 1 }]);
+        });
+
+        it("refuses those rows in a dry run too, so a client's check catches it before anything is written", async () => {
+            expect.assertions(2);
+
+            const { body, importGlobals } = await replaceImport("https://app.example/_lunora/admin/import?dryRun=true&onConflict=replace", {
+                importGlobalsSupportsDryRun: true,
+            });
 
             expect(importGlobals).not.toHaveBeenCalled();
             expect(body["errors"]).toMatchObject([{ code: "GLOBAL_REPLACE_UNSUPPORTED", line: 1 }]);

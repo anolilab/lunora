@@ -920,6 +920,13 @@ const probeDryRunSupport = async (target: ImportPassTarget, replace: boolean): P
     }
 };
 
+/** The endpoint as the check pass and the write pass call it; `--replace` puts the mode on both. */
+const importUrls = (endpoint: string, replace: boolean): { check: string; write: string } => {
+    const mode = replace ? "onConflict=replace" : undefined;
+
+    return { check: `${endpoint}?dryRun=true${mode === undefined ? "" : `&${mode}`}`, write: mode === undefined ? endpoint : `${endpoint}?${mode}` };
+};
+
 const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     // Route the human/progress channel once, here: every helper below is handed
@@ -948,8 +955,8 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
 
     const { baseUrl, fetchImpl, token } = request;
     const replace = options.replace === true;
-    // Only the write pass carries the mode: the check probes no `_id`, so it answers the same either way.
-    const requestUrl = replace ? `${request.requestUrl}?onConflict=replace` : request.requestUrl;
+    const urls = importUrls(request.requestUrl, replace);
+    const { write: requestUrl } = urls;
     const batchSize = options.batchSize ?? DEFAULT_IMPORT_BATCH_SIZE;
     const target: ImportPassTarget = { batchSize, fetchImpl, requestUrl: request.requestUrl, token };
 
@@ -970,7 +977,9 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
         return { body: undefined, code: 1, error: "import: the storage phase failed — no rows were written", inserted: 0 };
     }
 
-    const check = await runImportPass(quietOptions(options), source, plan, { ...target, requestUrl: `${request.requestUrl}?dryRun=true` });
+    // The check carries the mode too: a worker whose global importer cannot replace refuses those rows here,
+    // before any blob or shard row is written, rather than after the shard plane has already been overwritten.
+    const check = await runImportPass(quietOptions(options), source, plan, { ...target, requestUrl: urls.check });
     const refusal = checkRefusal(check, options.verify === true);
 
     if (refusal !== undefined) {

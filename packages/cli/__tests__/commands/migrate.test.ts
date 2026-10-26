@@ -1250,9 +1250,13 @@ describe("lunora migrate d1-to-hyperdrive | hyperdrive-to-d1", () => {
          * existing `_id` only under `?onConflict=replace`, which it echoes.
          */
         const deployments =
-            (source: Map<string, string>, target: Map<string, string>): StreamingFetchLike =>
+            (source: Map<string, string>, target: Map<string, string>, checks: string[] = []): StreamingFetchLike =>
             async (input: string, init?: { body?: unknown }) => {
                 const url = new URL(input);
+
+                if (url.searchParams.get("dryRun") === "true" && typeof init?.body === "string" && init.body.trim() !== "") {
+                    checks.push(input);
+                }
 
                 if (url.pathname.includes("/_lunora/admin/export")) {
                     const ndjson = [...source].map(([id, key]) => JSON.stringify({ doc: { _creationTime: 1, _id: id, key }, table: "settings" })).join("\n");
@@ -1327,14 +1331,15 @@ describe("lunora migrate d1-to-hyperdrive | hyperdrive-to-d1", () => {
         const rollBack = async (
             target: Map<string, string>,
             replace: boolean,
-        ): Promise<{ result: Awaited<ReturnType<typeof runMigrateBackendCommand>>; warnings: string[] }> => {
+        ): Promise<{ checks: string[]; result: Awaited<ReturnType<typeof runMigrateBackendCommand>>; warnings: string[] }> => {
+            const checks: string[] = [];
             const warnings: string[] = [];
             const logger: Logger = { error: () => {}, info: () => {}, success: () => {}, warn: (message: string) => warnings.push(message) };
             // Copied to Hyperdrive at cutover as "old", then edited there.
             const hyperdrive = new Map([["a", "edited on hyperdrive"]]);
             const result = await runMigrateBackendCommand({
                 direction: "hyperdrive-to-d1",
-                fetchImpl: deployments(hyperdrive, target),
+                fetchImpl: deployments(hyperdrive, target, checks),
                 fromToken: "source-token",
                 fromUrl: "https://new.example.com",
                 logger,
@@ -1345,7 +1350,7 @@ describe("lunora migrate d1-to-hyperdrive | hyperdrive-to-d1", () => {
                 yes: true,
             });
 
-            return { result, warnings };
+            return { checks, result, warnings };
         };
 
         it("leaves a row D1 already holds unchanged without --replace, and says so", async () => {
@@ -1360,13 +1365,15 @@ describe("lunora migrate d1-to-hyperdrive | hyperdrive-to-d1", () => {
         });
 
         it("restores the edited value with --replace", async () => {
-            expect.assertions(2);
+            expect.assertions(3);
 
             const d1 = new Map([["a", "old"]]);
-            const { result } = await rollBack(d1, true);
+            const { checks, result } = await rollBack(d1, true);
 
             expect(d1.get("a")).toBe("edited on hyperdrive");
             expect(result).toMatchObject({ code: 0, imported: 0, replaced: 1 });
+            // The pre-write check runs in the same mode, so a target that cannot replace refuses before anything is written.
+            expect(checks.map((url) => new URL(url).searchParams.get("onConflict"))).toStrictEqual(["replace"]);
         });
 
         it("refuses --replace against a worker that would ignore it, before writing anything", async () => {
