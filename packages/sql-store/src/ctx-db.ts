@@ -1117,6 +1117,22 @@ const sweepSqlCdcRetention = async (exec: SqlCtxExec, dialect: SqlDialect, reten
 
     const cutoff = now - retentionMs;
 
+    // Without an index on `ts`, the DELETE below walks the log in `seq` order and,
+    // when nothing has expired, reads every row to find that out. `ts` follows
+    // `seq` up to writer clock skew, so the oldest row answers "anything expired?"
+    // with a primary-key seek. A row stamped earlier than an unexpired head waits
+    // for the head to expire: retention is a floor on what is kept, so it may
+    // keep a row a little longer, never drop one early.
+    const head = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT ${sql.identifier("ts")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("seq")} = (SELECT MIN(${sql.identifier("seq")}) FROM ${sql.identifier(CDC_LOG_TABLE)})`,
+    );
+
+    if (head.length === 0 || Number(head[0]?.["ts"]) > cutoff) {
+        return;
+    }
+
     // Bounded per pass for the same reason the shard-local sweep is: the first
     // sweep after an operator enables retention faces the entire accumulated
     // log, and an unbounded DELETE that aborts leaves no progress behind.

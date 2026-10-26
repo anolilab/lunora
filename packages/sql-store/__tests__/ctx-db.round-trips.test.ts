@@ -2,7 +2,7 @@ import type { SchemaLike, TriggerEventLike, ValidatorLike } from "@lunora/shard-
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { SqlCtxExec } from "../src/ctx-db";
-import { createSqlCtxDb } from "../src/ctx-db";
+import { createSqlCtxDb, sweepSqlCdcRetention } from "../src/ctx-db";
 import { createSqliteBatchHarness, makeSqliteDialect } from "./_helpers/sqlite";
 
 /**
@@ -239,6 +239,40 @@ describe("createSqlCtxDb — the changed-tables poll", () => {
 
         expect(plan.some((step) => step.includes("__cdc_log_table_seq (table=? AND seq>?)"))).toBe(true);
         expect(plan.filter((step) => step.startsWith("SCAN __cdc_log"))).toStrictEqual([]);
+    });
+
+    it("skips the retention DELETE with one primary-key seek when nothing has expired", async () => {
+        // The DELETE's `WHERE ts <= ? ORDER BY seq LIMIT` has no index on `ts`, so with nothing expired it read
+        // every row of the log to delete none.
+        expect.assertions(3);
+
+        const { exec, statements } = recording(harness.exec);
+
+        // Every row's `ts` is in [0, LOG_ROWS), so a cutoff of -1 expires none of them.
+        await sweepSqlCdcRetention(exec, dialect, 10_000, 9999);
+
+        expect(statements.filter((statement) => statement.trim().startsWith("DELETE"))).toStrictEqual([]);
+
+        const probe = statements.find((statement) => statement.includes("MIN(")) as string;
+        const plan = harness.database
+            .prepare(`EXPLAIN QUERY PLAN ${probe}`)
+            .all()
+            .map((step) => String(step["detail"]));
+
+        expect(plan.filter((step) => step.startsWith("SCAN"))).toStrictEqual([]);
+        expect({ ...harness.database.prepare(`SELECT COUNT(*) AS n FROM "__cdc_log"`).get() }).toStrictEqual({ n: LOG_ROWS });
+    });
+
+    it("still deletes the expired rows once the oldest one has expired", async () => {
+        expect.assertions(1);
+
+        // cutoff = 99: rows stamped 0..99 expire.
+        await sweepSqlCdcRetention(harness.exec, dialect, 10_000, 10_099);
+
+        expect({ ...harness.database.prepare(`SELECT COUNT(*) AS n, MIN(ts) AS oldest FROM "__cdc_log"`).get() }).toStrictEqual({
+            n: LOG_ROWS - 100,
+            oldest: 100,
+        });
     });
 
     it("reports the same tables and cursor as grouping the log", async () => {
