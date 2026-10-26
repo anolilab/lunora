@@ -44,6 +44,15 @@ describe("lunoraSolutionFinder", () => {
         expect(solution?.body).toBe(expected?.body);
     });
 
+    it("falls back to the catalog hint for a coded error whose message matches no solution", async () => {
+        expect.assertions(2);
+
+        const solution = await lunoraSolutionFinder.handle({ code: "DELIVERY_FENCED", message: "unrelated text" }, { file: "", line: 0 });
+
+        expect(solution?.body).toContain("Retry with the same transport key");
+        await expect(lunoraSolutionFinder.handle({ code: "NOT_FOUND", message: "unrelated text" }, { file: "", line: 0 })).resolves.toBeUndefined();
+    });
+
     it("defers (returns undefined) for unrelated errors", async () => {
         expect.assertions(2);
 
