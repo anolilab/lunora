@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { subscriptionFrames } from "../src/subscription-delivery";
 
@@ -290,6 +290,39 @@ describe("subscriptionFrames — sockets sharing one result", () => {
         expect(subscriptionFrames({ ...shared, cursorSuffix: `,"cursor":9,"epoch":"e"`, lastMutationId: 3, subId: "b" })).toStrictEqual([
             `{"type":"delta","id":"b",${delta},"lastMutationId":3,"cursor":9,"epoch":"e"}`,
         ]);
+    });
+
+    it("computes the diff once for sockets sharing a result, table and baseline", () => {
+        expect.assertions(2);
+
+        // The diff parses its baseline once, so counting parses of that exact string
+        // counts diffs. A memo that stopped sharing would parse it once per socket.
+        const previous = Array.from({ length: 20 }, (_, index) => row(`shared-${String(index)}`));
+        const next = [...previous, row("shared-new")];
+        const previousJson = JSON.stringify(previous);
+        const otherBaseline = JSON.stringify(previous.slice(0, 19));
+        const parse = vi.spyOn(JSON, "parse");
+
+        try {
+            for (const subId of ["a", "b", "c"]) {
+                subscriptionFrames({ cursorSuffix: "", nextResult: next, previousJson, snapshotJson: JSON.stringify(next), subId, table: "messages" });
+            }
+
+            expect(parse.mock.calls.filter(([text]) => text === previousJson)).toHaveLength(1);
+
+            subscriptionFrames({
+                cursorSuffix: "",
+                nextResult: next,
+                previousJson: otherBaseline,
+                snapshotJson: JSON.stringify(next),
+                subId: "d",
+                table: "messages",
+            });
+
+            expect(parse.mock.calls.filter(([text]) => text === otherBaseline)).toHaveLength(1);
+        } finally {
+            parse.mockRestore();
+        }
     });
 
     it("diffs the same result separately against each distinct baseline and table", () => {
