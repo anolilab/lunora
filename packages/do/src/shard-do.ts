@@ -1689,6 +1689,21 @@ const socketIdentity = (attachment: SocketAttachment): SubscriptionIdentity => {
     return { identity: attachment.identity === undefined ? undefined : structuredClone(attachment.identity), ip: attachment.ip, userId: attachment.userId };
 };
 
+/**
+ * A thunk returning one `structuredClone(args)`, made on its first call. User
+ * code must not reach a socket's stored args, and a refresh that never runs
+ * user code (backoff, a memo skip, a shared run) skips the clone.
+ */
+const cloneArgsOnFirstUse = (args: Record<string, unknown>): (() => Record<string, unknown>) => {
+    let copy: Record<string, unknown> | undefined;
+
+    return () => {
+        copy ??= structuredClone(args);
+
+        return copy;
+    };
+};
+
 /** Canonical string of EVERY {@link SubscriptionIdentity} field: sockets share a live-query run only when it is equal. */
 /* eslint-disable unicorn/no-null -- stableStringify folds absent fields to an explicit null */
 const subscriptionIdentityKey = (identity: SubscriptionIdentity): string =>
@@ -12800,7 +12815,7 @@ abstract class ShardDO {
             ? // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null = the identity-independent bucket
               reactiveCacheKey(functionPath, args, null)
             : // The key reads the identity, never keeps it, so the stored one serves without a copy.
-              reactiveCacheKey(functionPath, args, subscriptionIdentityKey({ identity: attachment.identity, ip: attachment.ip, userId: attachment.userId }));
+              reactiveCacheKey(functionPath, args, subscriptionIdentityKey(attachment));
         const cached = cache.get(key);
 
         if (cached !== undefined) {
@@ -13717,15 +13732,9 @@ abstract class ShardDO {
                     // scoped live query would evaluate anonymous and return zero rows.
                     // (Admin + reserved flag reads ignore the identity payload.)
                     //
-                    // `args` is the attachment's stored value. User code gets ONE copy of
-                    // it, shared by the authorization and the run as before, made only
-                    // when one of them is reached.
-                    let copy: Record<string, unknown> | undefined;
-                    const handedArgs = (): Record<string, unknown> => {
-                        copy ??= structuredClone(args);
-
-                        return copy;
-                    };
+                    // `args` is the attachment's stored value; the authorization and the
+                    // run share one copy of it.
+                    const handedArgs = cloneArgsOnFirstUse(args);
                     let permit: SubscriptionDeliveryPermit | undefined;
                     if (this.deliveryAuthorization) {
                         permit = await this.authorizeSubscription(ws, subId, socketIdentity(attachment), functionPath, handedArgs());
