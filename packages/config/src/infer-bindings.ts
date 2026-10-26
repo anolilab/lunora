@@ -37,7 +37,7 @@ import {
 } from "@lunora/codegen";
 // `worker-entry.ts` lexes the entry's exports; the lexer's wasm must be initialised first.
 import { init as initLexer } from "es-module-lexer";
-import { Project } from "ts-morph";
+import { Project, ts } from "ts-morph";
 
 import type { AgentIR } from "./agent-info";
 import { discoverAgentInfo } from "./agent-info";
@@ -651,9 +651,6 @@ const hostsShardRegistry = (durableObjects: ReadonlyArray<DurableObjectSpec>, ge
 /** The package whose barrel exports `EventLogDO`, so a star re-export of it forwards the class. */
 const EVENT_LOG_PACKAGE = "@lunora/replica";
 
-/** A value `export * from "…"`; `export type *` forwards no runtime name and is not matched. */
-const STAR_REEXPORT = /\bexport\s*\*\s*from\s*["']([^"']+)["']/gu;
-
 /** The source extension a `.js`-style relative specifier names, so it can be probed against the `.ts` file. */
 const SOURCE_SPECIFIER_EXTENSION = /\.[cm]?[jt]sx?$/u;
 
@@ -675,6 +672,25 @@ const resolveBarrel = (fromFile: string, specifier: string): string | undefined 
 };
 
 /**
+ * The specifiers of a module's `export * from "…"` statements, read from the parsed syntax tree so a comment
+ * or string that spells one forwards nothing. `export type *` forwards no runtime name and is skipped, as is
+ * `export * as ns`, which binds a namespace rather than forwarding the module's names.
+ */
+const starReexportSpecifiers = (modulePath: string): string[] => {
+    const source = ts.createSourceFile(modulePath, readFileSync(modulePath, "utf8"), ts.ScriptTarget.Latest);
+
+    return source.statements.flatMap((statement) =>
+        ts.isExportDeclaration(statement) &&
+        statement.exportClause === undefined &&
+        !statement.isTypeOnly &&
+        statement.moduleSpecifier !== undefined &&
+        ts.isStringLiteral(statement.moduleSpecifier)
+            ? [statement.moduleSpecifier.text]
+            : [],
+    );
+};
+
+/**
  * Whether a module forwards `EventLogDO` as a runtime value: it exports the class itself, star-re-exports
  * the replica package, or star-re-exports a relative barrel that does. `visited` ends a barrel cycle, which
  * forwards no name it has not already been asked about.
@@ -690,7 +706,7 @@ const forwardsEventLogDO = (modulePath: string, visited: Set<string>): boolean =
         return true;
     }
 
-    for (const [, specifier = ""] of readFileSync(modulePath, "utf8").matchAll(STAR_REEXPORT)) {
+    for (const specifier of starReexportSpecifiers(modulePath)) {
         if (specifier === EVENT_LOG_PACKAGE) {
             return true;
         }
