@@ -23,7 +23,11 @@ type Context = WorkflowRunContext<{ requestId: string }>;
 /** The harness's context lacks the `orm` surface codegen adds; the privacy code never reads it. */
 const appCtx = (ctx: unknown): MutationCtx => ctx as MutationCtx;
 
-const DAY_MS = 86_400_000;
+/** A fixed issue date, so the retention periods do not depend on the day the suite runs. */
+const ISSUED = Date.UTC(2026, 2, 1);
+/** An archive date long past, and one far in the future, so the purge does not depend on the wall clock either. */
+const PAST = Date.UTC(2000, 0, 1);
+const FUTURE = Date.UTC(2100, 0, 1);
 const SUBJECT = { userId: "u1" };
 const OTHER = { userId: "u2" };
 
@@ -57,8 +61,8 @@ describe("retention on erasure and the sweep", () => {
         await t.run(async (ctx) => {
             const database = appCtx(ctx).db;
 
-            await database.insert("invoices", { amount: 4200, issuedAt: Date.now(), number: "INV-1", userId: SUBJECT.userId });
-            await database.insert("invoices", { amount: 900, issuedAt: Date.now(), number: "INV-2", userId: OTHER.userId });
+            await database.insert("invoices", { amount: 4200, issuedAt: ISSUED, number: "INV-1", userId: SUBJECT.userId });
+            await database.insert("invoices", { amount: 900, issuedAt: ISSUED, number: "INV-2", userId: OTHER.userId });
         });
         await t.withIdentity(SUBJECT).mutation(addTask, { title: "book flights" });
     });
@@ -77,7 +81,7 @@ describe("retention on erasure and the sweep", () => {
         const [kept] = await archivedRows(t);
 
         expect(kept).toMatchObject({ datasetId: "billing", subjectId: SUBJECT.userId, table: "invoices" });
-        expect(kept?.retainUntil).toBeGreaterThan(Date.now());
+        expect(kept?.retainUntil).toBeGreaterThan(ISSUED);
         expect(kept?.row).toContain("INV-1");
     });
 
@@ -86,7 +90,7 @@ describe("retention on erasure and the sweep", () => {
 
         const before = await t.run(async (ctx) => restoredSubjectIdsOf(appCtx(ctx)));
 
-        await t.run(async (ctx) => appCtx(ctx).db.insert("invoices", { amount: 1200, issuedAt: Date.now(), number: "INV-3", userId: "u3" }));
+        await t.run(async (ctx) => appCtx(ctx).db.insert("invoices", { amount: 1200, issuedAt: ISSUED, number: "INV-3", userId: "u3" }));
 
         const after = await t.run(async (ctx) => restoredSubjectIdsOf(appCtx(ctx)));
 
@@ -97,21 +101,19 @@ describe("retention on erasure and the sweep", () => {
     it("purges a kept invoice once its period has ended, and keeps the rest", async () => {
         expect.assertions(3);
 
-        const now = Date.now();
-
         await t.run(async (ctx) => {
             const database = appCtx(ctx).db;
 
             await database.insert("privacy_archive", {
                 datasetId: "billing",
-                retainUntil: now - DAY_MS,
+                retainUntil: PAST,
                 row: "{}",
                 subjectId: SUBJECT.userId,
                 table: "invoices",
             });
             await database.insert("privacy_archive", {
                 datasetId: "billing",
-                retainUntil: now + 365 * DAY_MS,
+                retainUntil: FUTURE,
                 row: "{}",
                 subjectId: SUBJECT.userId,
                 table: "invoices",
@@ -125,6 +127,6 @@ describe("retention on erasure and the sweep", () => {
         const remaining = await archivedRows(t);
 
         expect(remaining).toHaveLength(1);
-        expect(remaining[0]?.retainUntil).toBeGreaterThan(now);
+        expect(remaining[0]?.retainUntil).toBe(FUTURE);
     });
 });

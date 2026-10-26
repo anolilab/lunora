@@ -19,7 +19,7 @@ data, erases it, cancels a pending erasure, sees their requests, and downloads t
   package's dispatcher (`@lunora/privacy/workflow`) over the app's own ports.
 - **Export.** `requestExport` opens a request and starts `privacyExport`. The workflow
   collects each dataset as its own step, then writes a ZIP and a PDF summary.
-- **Download.** `downloadUrl` returns a link to the finished archive. The link is an HMAC
+- **Download.** `downloadLink` returns a link to the finished archive. The link is an HMAC
   over the file's key and expiry, signed with `PRIVACY_FILE_SECRET`, and `lunora/http.ts`
   serves it at `/privacy/files` once the signature and expiry check out. Every refusal is
   the same 404, so a forged link, an expired one and a missing file look alike.

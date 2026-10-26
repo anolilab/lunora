@@ -58,12 +58,16 @@ export const retryPrivacyRequest = internalMutation.input({ requestId: v.string(
 
 /**
  * Every subject id the shard's personal-data tables hold: who a restore may have brought back. A subject
- * with only invoices is included, so the helper reads both tables and dedupes the ids.
+ * whose invoices were all erased into the retention archive has no live invoice row, so the archive is read too.
  */
 export const restoredSubjectIdsOf = async (ctx: { readonly db: { readonly query: QueryCtx["db"]["query"] } }): Promise<string[]> => {
-    const [tasks, invoices] = await Promise.all([ctx.db.query("tasks").collect(), ctx.db.query("invoices").collect()]);
+    const [tasks, invoices, archived] = await Promise.all([
+        ctx.db.query("tasks").collect(),
+        ctx.db.query("invoices").collect(),
+        ctx.db.query("privacy_archive").collect(),
+    ]);
 
-    return [...new Set([...tasks, ...invoices].map((row) => row.userId))];
+    return [...new Set([...tasks.map((row) => row.userId), ...invoices.map((row) => row.userId), ...archived.map((row) => row.subjectId)])];
 };
 
 /**

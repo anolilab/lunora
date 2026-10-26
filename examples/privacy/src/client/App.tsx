@@ -11,6 +11,9 @@ import { SignIn } from "./SignIn";
  * here comes from the server, and the server decides whose data it is from the signed-in session. It mounts
  * only once there is a session, so its live queries never subscribe as an anonymous caller.
  */
+/** The Worker's origin: the same one the Lunora client talks to. */
+const lunoraOrigin = (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? globalThis.location.origin;
+
 const Workspace = ({ email }: { readonly email: string }): ReactElement => {
     const [draft, setDraft] = useState("");
     const [message, setMessage] = useState<string | undefined>(undefined);
@@ -114,7 +117,9 @@ const Workspace = ({ email }: { readonly email: string }): ReactElement => {
                                     onClick={() => {
                                         void attempt("Download", async () => {
                                             // A fresh link on each click: it expires after fifteen minutes.
-                                            globalThis.location.assign(await downloadLink({ requestId: request.id }));
+                                            // The link is a path on the Worker, so resolve it against the Worker's origin.
+                                            const link = await downloadLink({ requestId: request.id });
+                                            globalThis.location.assign(new URL(link, lunoraOrigin).href);
                                         });
                                     }}
                                     type="button"
