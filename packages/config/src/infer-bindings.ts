@@ -440,7 +440,8 @@ const namespaceReachesClient = (sourceFile: SourceFile, localName: string): bool
         }
 
         if (Node.isQualifiedName(parent)) {
-            return parent.getRight().getText() === EVENT_LOG_CLIENT;
+            // A type reference names a type, which builds nothing, so `ns.EventLogDOClient` in a type position is not a runtime use.
+            return !Node.isTypeReference(parent.getParent()) && parent.getRight().getText() === EVENT_LOG_CLIENT;
         }
 
         return true;
