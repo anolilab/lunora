@@ -15,6 +15,7 @@ import type {
     Project,
     SourceFile,
     Symbol as TsSymbol,
+    ts,
     VariableDeclaration,
 } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
@@ -75,6 +76,9 @@ const isSkippedEntry = (entry: string, isDirectory: boolean, includeTests: boole
 const excludeCache = new Map<string, { isExcluded: (relativePath: string) => boolean; key: string }>();
 
 const NOTHING_EXCLUDED = (): boolean => false;
+
+/** The walks {@link listLunoraSourceFiles} did inside the current {@link withSourceListMemo} run; unset outside one. */
+let sourceListMemo: Map<string, ReadonlyArray<string>> | undefined;
 
 /**
  * The `codegen.exclude` globs of the `lunora.config.*` nearest above
@@ -211,15 +215,51 @@ const walkLunoraSourceFiles = (
  */
 const listLunoraSourceFiles = (directory: string, options: { includeSkipped?: boolean } = {}): string[] => {
     const includeSkipped = options.includeSkipped ?? false;
-    const isExcluded = includeSkipped ? NOTHING_EXCLUDED : configuredExcludes(directory);
+    const key = `${String(includeSkipped)}\0${directory}`;
+    const memoized = sourceListMemo?.get(key);
 
-    return walkLunoraSourceFiles(
+    // A copy every time: callers own the array they get (the fingerprint pushes `schema.ts` onto it).
+    if (memoized !== undefined) {
+        return [...memoized];
+    }
+
+    const isExcluded = includeSkipped ? NOTHING_EXCLUDED : configuredExcludes(directory);
+    const files = walkLunoraSourceFiles(
         directory,
         [],
         directory,
         new Set(),
         (entry, relativePath, isDirectory) => isSkippedEntry(entry, isDirectory, includeSkipped) || isExcluded(relativePath),
     );
+
+    sourceListMemo?.set(key, files);
+
+    return [...files];
+};
+
+/**
+ * Run `run` with {@link listLunoraSourceFiles} memoized for its duration.
+ *
+ * Some forty discoverers each walk the same tree, and on a 200-module app those
+ * walks — a `statSync` and a `realpathSync` per entry, every time — were a
+ * quarter of a codegen pass. Within one synchronous run the tree cannot change
+ * under codegen (its own writes land in the skipped `_generated/`), so one walk
+ * serves them all. Outside a run nothing is memoized, so a long-lived caller (a
+ * watcher's fingerprint) always sees the tree as it is now. Re-entrant: a nested
+ * call shares the outer run's memo.
+ */
+const withSourceListMemo = <T>(run: () => T): T => {
+    if (sourceListMemo !== undefined) {
+        return run();
+    }
+
+    sourceListMemo = new Map();
+
+    try {
+        return run();
+    } finally {
+        sourceListMemo = undefined;
+    }
 };
 
 /**
@@ -338,6 +378,34 @@ type RowsOf<Row extends object> = ReadonlyArray<Row> | Row | undefined;
 /** Narrows {@link RowsOf} to its several-rows case. */
 const isRowList = <Row extends object>(rows: RowsOf<Row>): rows is ReadonlyArray<Row> => Array.isArray(rows);
 
+/** Per-file {@link descendantsOfKind} results, keyed by the compiler node so a re-parse starts over. */
+const DESCENDANTS_CACHE = new WeakMap<ts.SourceFile, Map<SyntaxKind, ReadonlyArray<Node>>>();
+
+/**
+ * `sourceFile.getDescendantsOfKind(kind)`, walked once per parse of the file.
+ * Dozens of feeders scan every file for the same `CallExpression`s, and the
+ * tree walk was the bulk of their cost. Keyed by the compiler node, as
+ * `EXPORT_NAMES_CACHE` is: an edit re-parses the file into a new node, so a
+ * stale list is never served, and an unchanged file keeps its list across runs.
+ */
+const descendantsOfKind = <Kind extends SyntaxKind>(sourceFile: SourceFile, kind: Kind): ReadonlyArray<KindToNodeMappings[Kind]> => {
+    let byKind = DESCENDANTS_CACHE.get(sourceFile.compilerNode);
+
+    if (byKind === undefined) {
+        byKind = new Map();
+        DESCENDANTS_CACHE.set(sourceFile.compilerNode, byKind);
+    }
+
+    let nodes = byKind.get(kind);
+
+    if (nodes === undefined) {
+        nodes = sourceFile.getDescendantsOfKind(kind);
+        byKind.set(kind, nodes);
+    }
+
+    return nodes as ReadonlyArray<KindToNodeMappings[Kind]>;
+};
+
 /**
  * Resolve each file into the shared `Project` (reusing an already-added
  * `SourceFile`) and map every descendant of `kind` through `rowOf` with the
@@ -354,7 +422,7 @@ const collectNodeRowsFrom = <Row extends object, Kind extends SyntaxKind>(
     for (const { displayPath, filePath } of files) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
-        for (const node of sourceFile.getDescendantsOfKind(kind)) {
+        for (const node of descendantsOfKind(sourceFile, kind)) {
             const produced = rowOf(node, displayPath);
 
             if (isRowList(produced)) {
@@ -870,6 +938,7 @@ export {
     collectNodeRows,
     collectSecurityCallRows,
     defaultExportExpression,
+    descendantsOfKind,
     findObjectProperty,
     functionKeyOf,
     functionReferenceSegments,
@@ -897,6 +966,7 @@ export {
     unwrapExpression,
     unwrapToCallExpression,
     walkChain,
+    withSourceListMemo,
 };
 export type { ChainEnd, RowsOf, ScannedSourceFile };
 

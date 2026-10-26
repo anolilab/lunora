@@ -5,6 +5,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { globalVectorIndexMessage } from "../../../../../shared/global-vector-index";
 import { diagnosticAt } from "../../diagnostics";
 import type { SchemaIR, TableIR, VectorIndexIR } from "../../ir";
+import { descendantsOfKind } from "../ast";
 import { applyExtensions, parseStandaloneVectorIndexes } from "./internal/extensions";
 import { chainedStringLiteralArgument, getBooleanProperty, getStringProperty } from "./internal/properties";
 import { parseBaseTables } from "./internal/table-builder";
@@ -117,7 +118,7 @@ const markStandaloneAggregates = (tables: TableIR[], argument: TsNode | undefine
 const discoverSchema = (project: Project, schemaPath: string, projectRoot?: string): SchemaIR => {
     const file: SourceFile = project.addSourceFileAtPath(schemaPath);
 
-    const defineSchemaCall = file.getDescendantsOfKind(SyntaxKind.CallExpression).find((call) => {
+    const defineSchemaCall = descendantsOfKind(file, SyntaxKind.CallExpression).find((call) => {
         const callee = call.getExpression();
 
         return Node.isIdentifier(callee) && callee.getText() === "defineSchema";

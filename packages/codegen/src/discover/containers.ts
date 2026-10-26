@@ -25,7 +25,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { ContainerImageIR, ContainerIR, DefaultScheduledContainerIR, DurableObjectScheduledContainerIR } from "../ir";
-import { findObjectProperty, isWriteTarget, outermostValueWrapper, propertyKeyName, stringPropertyFor, symbolConstInitializer } from "./ast";
+import { descendantsOfKind, findObjectProperty, isWriteTarget, outermostValueWrapper, propertyKeyName, stringPropertyFor, symbolConstInitializer } from "./ast";
 import { addressableExportNameOf } from "./attribution";
 
 /** The only file containers may be declared in — mirrors `lunora/crons.ts`. */
@@ -133,7 +133,7 @@ const unwrapTypeOnly = (expression: Expression): Expression => {
  * would put a different number in wrangler.jsonc than the one the app runs.
  */
 const isWrittenThrough = (symbol: TsSymbol, sourceFile: SourceFile): boolean =>
-    sourceFile.getDescendantsOfKind(SyntaxKind.Identifier).some((identifier) => {
+    descendantsOfKind(sourceFile, SyntaxKind.Identifier).some((identifier) => {
         if (identifier.getSymbol() !== symbol) {
             return false;
         }
