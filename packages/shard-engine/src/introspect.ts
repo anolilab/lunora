@@ -1538,13 +1538,14 @@ const wireFrameTagExclusion = (documentExpression: string): string => {
  * ({@link wireFrameTagExclusion}): a search for `date` must not select the row, and a bulk
  * delete must not remove it.
  * Both trees are rooted at the same bound path so their node ids line up. A top-level
- * boolean or a missing field matches nothing.
+ * boolean is tested by its type name too, so it matches the same terms an array's boolean does.
+ * A missing field matches nothing.
  * @returns the SQL conjunct and bound params
  */
 const buildTopLevelContains = (document: string, path: unknown, term: string): { params: unknown[]; sql: string } => {
     return {
-        params: [path, path, term, path, path, term, path, path, path],
-        sql: `CASE WHEN json_type(${document}, ?) IN ('text', 'integer', 'real') THEN ${containsSql(`json_extract(${document}, ?)`)} WHEN json_type(${document}, ?) IN ('array', 'object') THEN EXISTS (SELECT 1 FROM json_tree(${document}, ?) AS j WHERE j.type IN ('text', 'integer', 'real', 'true', 'false') AND ${containsSql("CASE WHEN j.type IN ('true', 'false') THEN j.type ELSE j.value END")} AND ${wireFrameTagExclusion(`${document}, ?`)}) ELSE 0 END`,
+        params: [path, path, term, path, path, term, path, path, term, path, path, path],
+        sql: `CASE WHEN json_type(${document}, ?) IN ('text', 'integer', 'real') THEN ${containsSql(`json_extract(${document}, ?)`)} WHEN json_type(${document}, ?) IN ('true', 'false') THEN ${containsSql(`json_type(${document}, ?)`)} WHEN json_type(${document}, ?) IN ('array', 'object') THEN EXISTS (SELECT 1 FROM json_tree(${document}, ?) AS j WHERE j.type IN ('text', 'integer', 'real', 'true', 'false') AND ${containsSql("CASE WHEN j.type IN ('true', 'false') THEN j.type ELSE j.value END")} AND ${wireFrameTagExclusion(`${document}, ?`)}) ELSE 0 END`,
     };
 };
 

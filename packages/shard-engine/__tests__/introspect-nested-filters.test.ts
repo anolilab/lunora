@@ -705,6 +705,16 @@ describe("readTablePage — nested paths and array membership", () => {
             expect(topIds("meta", "true")).toStrictEqual(["t11"]);
         });
 
+        it("matches a top-level boolean field by its JSON type name, as an array's boolean does", () => {
+            expect.assertions(2);
+
+            database.sql.exec(`INSERT INTO "topc" VALUES (?, ?, ?)`, "t12", 1, encodeDocJson({ scalarOn: true }));
+            database.sql.exec(`INSERT INTO "topc" VALUES (?, ?, ?)`, "t13", 1, encodeDocJson({ scalarOn: false }));
+
+            expect(topIds("scalarOn", "true")).toStrictEqual(["t12"]);
+            expect(topIds("scalarOn", "false")).toStrictEqual(["t13"]);
+        });
+
         it("does not match the codec tag of a bigint at a later element of an escaped user array", () => {
             expect.assertions(1);
 
