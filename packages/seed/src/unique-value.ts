@@ -318,6 +318,14 @@ const planUniqueFkDeal = (pool: ReadonlyArray<string>, table: string, column: st
 const acceptedBy = (validator: Validator, domain: ReadonlyArray<unknown>): ReadonlyArray<unknown> => domain.filter((value) => validator.safeParse(value).ok);
 
 /**
+ * Add `null` to a closed domain when the column is `.nullable()`: a SQL NULL is one more value the
+ * column can hold, so an array of `v.literal("x").nullable()` has `[null]` as a distinct element.
+ */
+const withNullable = (inner: Validator, domain: ReadonlyArray<unknown> | undefined): ReadonlyArray<unknown> | undefined =>
+    // eslint-disable-next-line unicorn/no-null -- null is the value a .nullable() validator accepts
+    domain === undefined || metaOf(inner).column?.notNull !== false ? domain : [...new Set([...domain, null])];
+
+/**
  * Every value a validator can produce when that set is finite and known: an enum, a boolean, a
  * literal, `null`, or a union of those. `undefined` when it is open (a string, a number, an id, …).
  */
@@ -326,16 +334,16 @@ const finiteDomain = (validator: Validator): ReadonlyArray<unknown> | undefined 
     const { enum: enumValues } = constraintsOf(inner);
 
     if (Array.isArray(enumValues) && enumValues.length > 0) {
-        return [...new Set<unknown>(enumValues)];
+        return withNullable(inner, [...new Set<unknown>(enumValues)]);
     }
 
     switch (inner.kind) {
         case "boolean": {
-            return [false, true];
+            return withNullable(inner, [false, true]);
         }
 
         case "literal": {
-            return [metaOf(inner).value];
+            return withNullable(inner, [metaOf(inner).value]);
         }
 
         case "null": {
@@ -346,7 +354,7 @@ const finiteDomain = (validator: Validator): ReadonlyArray<unknown> | undefined 
         case "union": {
             const domains = (metaOf(inner).members ?? []).map((member) => finiteDomain(member));
 
-            return domains.length > 0 && domains.every((domain) => domain !== undefined) ? [...new Set(domains.flat())] : undefined;
+            return withNullable(inner, domains.length > 0 && domains.every((domain) => domain !== undefined) ? [...new Set(domains.flat())] : undefined);
         }
 
         default: {

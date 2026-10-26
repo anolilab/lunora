@@ -248,6 +248,17 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(() => seedPlan(lengths, { counts: { boxes: 5 } })).toThrow(/has only 4 possible values/u);
     });
 
+    it("counts null as one more element of a nullable array domain", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({ boxes: defineTable({ xs: v.array(v.literal("x").nullable()).max(1).unique() }) });
+        const xs = rowsOf(seedPlan(schema, { counts: { boxes: 3 } }), "boxes").map((row) => JSON.stringify(row.xs));
+
+        expect(new Set(xs).size).toBe(3);
+        expect(xs).toContain("[null]");
+        expect(() => seedPlan(schema, { counts: { boxes: 4 } })).toThrow(/unique column "xs" has only 3 possible values/u);
+    });
+
     it("counts the arrays a finite element domain can form towards a composite's capacity", () => {
         expect.hasAssertions();
 
