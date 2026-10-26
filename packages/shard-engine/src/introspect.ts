@@ -1518,7 +1518,8 @@ const buildNestedLeafClause = (clause: FilterClause, expression: string, pathPar
  * chain with a recursive CTE, so it is exact at any nesting depth.
  *
  * `documentExpression` is walked three times, so a caller that binds a path there binds it
- * three times.
+ * three times. Each evaluation walks the document, so a search costs time roughly quadratic in
+ * the number of frames that match the term (#1343).
  */
 const wireFrameTagExclusion = (documentExpression: string): string => {
     const walk = `json_tree(${documentExpression})`;
