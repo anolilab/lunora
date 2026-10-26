@@ -952,48 +952,75 @@ const REDACTED_JSON_MEMO_ENTRIES = 256;
 /** The longest input (as JSON) {@link redactedJson} remembers; a larger one is redacted every time. */
 const REDACTED_JSON_MEMO_MAX_CHARS = 4096;
 
-/** Deeper than this, {@link isJsonData} gives up and the value is simply not memoised. */
+/** Deeper than this, {@link isSmallJsonData} gives up and the value is simply not memoised. */
 const JSON_DATA_MAX_DEPTH = 32;
 
 const redactedJsonMemo = new Map<string, string>();
 
 /**
- * True when `value` is nothing but JSON data — `null`, booleans, strings, finite
- * numbers, and arrays / plain objects of them — so its `JSON.stringify` names it
- * exactly. Anything else (an `undefined` property, a `Date`, a `Map`, a class
- * instance, a hole) is either dropped or flattened by `JSON.stringify` while the
- * redactor sees it, so two different values could share one text.
+ * True when `value` is small and nothing but JSON data — `null`, booleans,
+ * strings, finite numbers, and arrays / plain objects of them — so its
+ * `JSON.stringify` names it exactly. Anything else (an `undefined` property, a
+ * `Date`, a `Map`, a class instance, a hole) is either dropped or flattened by
+ * `JSON.stringify` while the redactor sees it, so two different values could
+ * share one text.
+ *
+ * "Small" is a running budget of {@link REDACTED_JSON_MEMO_MAX_CHARS}, charged
+ * one per value plus the length of every string and key, so the walk stops early
+ * on a large payload and the caller never stringifies one just to key the memo.
  */
-const isJsonData = (value: unknown, depth = 0): boolean => {
-    if (value === null || typeof value === "string" || typeof value === "boolean") {
-        return true;
-    }
+const isSmallJsonData = (value: unknown): boolean => {
+    let budget = REDACTED_JSON_MEMO_MAX_CHARS;
 
-    if (typeof value === "number") {
-        return Number.isFinite(value);
-    }
+    const visit = (node: unknown, depth: number): boolean => {
+        budget -= 1;
 
-    if (typeof value !== "object" || depth >= JSON_DATA_MAX_DEPTH) {
-        return false;
-    }
-
-    if (Array.isArray(value)) {
-        for (let index = 0; index < value.length; index += 1) {
-            if (!Object.hasOwn(value, index) || !isJsonData(value[index], depth + 1)) {
-                return false;
-            }
+        if (budget < 0) {
+            return false;
         }
 
-        return true;
-    }
+        if (node === null || typeof node === "boolean") {
+            return true;
+        }
 
-    const proto = Object.getPrototypeOf(value) as object | null;
+        if (typeof node === "string") {
+            budget -= node.length;
 
-    if (proto !== null && proto !== Object.prototype) {
-        return false;
-    }
+            return budget >= 0;
+        }
 
-    return Object.values(value).every((field) => isJsonData(field, depth + 1));
+        if (typeof node === "number") {
+            return Number.isFinite(node);
+        }
+
+        if (typeof node !== "object" || depth >= JSON_DATA_MAX_DEPTH) {
+            return false;
+        }
+
+        if (Array.isArray(node)) {
+            for (let index = 0; index < node.length; index += 1) {
+                if (!Object.hasOwn(node, index) || !visit(node[index], depth + 1)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        const proto = Object.getPrototypeOf(node) as object | null;
+
+        if (proto !== null && proto !== Object.prototype) {
+            return false;
+        }
+
+        return Object.entries(node).every(([key, field]) => {
+            budget -= key.length;
+
+            return budget >= 0 && visit(field, depth + 1);
+        });
+    };
+
+    return visit(value, 0);
 };
 
 /**
@@ -1005,11 +1032,12 @@ const isJsonData = (value: unknown, depth = 0): boolean => {
  * Its output depends on nothing but its input, and the same inputs recur: one
  * caller's identity on every request, one channel's query args from every
  * subscriber. So the redacted text is kept for each input text, but only for
- * pure JSON data (see {@link isJsonData}), whose text identifies it exactly, and
- * only for small inputs, so the memo cannot hold large payloads. Oldest entry out.
+ * small, pure JSON data (see {@link isSmallJsonData}), whose text identifies it
+ * exactly; a large payload takes the uncached path without being stringified for
+ * a key, and the memo cannot hold one. Oldest entry out.
  */
 const redactedJson = (value: unknown, captureRaw: boolean): string => {
-    if (captureRaw || !isJsonData(value)) {
+    if (captureRaw || !isSmallJsonData(value)) {
         return JSON.stringify(redactArgs(value, captureRaw));
     }
 

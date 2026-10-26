@@ -105,13 +105,14 @@ const runRequestLogScenarios = (factory: () => SqlHarness): void => {
         });
 
         it("stores the same redaction for a repeated identity/args, raw only under captureRaw, and never shares one across look-alike values", () => {
-            expect.assertions(4);
+            expect.assertions(5);
 
             const database = createHarness();
 
             try {
                 const identity = { email: "alice@example.com", roles: ["admin"] };
                 const args = { channelId: "c1", password: "hunter2" };
+                const large = { note: "n".repeat(5000), password: "hunter2" };
                 // The same JSON text, `{}`, for two values the redactor treats differently.
                 const lookAlikes = [{}, { password: undefined }];
                 /** What the column holds for `value`: its redaction, as JSON text read back. */
@@ -124,6 +125,8 @@ const runRequestLogScenarios = (factory: () => SqlHarness): void => {
                 appendRequestLogEntry(database.sql, entry({ identity, redactedArgs: args }));
                 appendRequestLogEntry(database.sql, entry({ identity: { ...identity }, redactedArgs: { ...args } }));
                 appendRequestLogEntry(database.sql, entry({ redactedArgs: args }), { captureRaw: true });
+                // Past the memo's size cap: redacted on the uncached path, the same way.
+                appendRequestLogEntry(database.sql, entry({ redactedArgs: large }));
 
                 for (const lookAlike of lookAlikes) {
                     appendRequestLogEntry(database.sql, entry({ redactedArgs: lookAlike }));
@@ -138,8 +141,9 @@ const runRequestLogScenarios = (factory: () => SqlHarness): void => {
                     }),
                 ).toStrictEqual([expected, expected]);
                 expect(rows[2]!.redactedArgs).toStrictEqual(args);
-                expect(rows[3]!.redactedArgs).toStrictEqual(stored(lookAlikes[0]));
-                expect(rows[4]!.redactedArgs).toStrictEqual(stored(lookAlikes[1]));
+                expect(rows[3]!.redactedArgs).toStrictEqual(stored(large));
+                expect(rows[4]!.redactedArgs).toStrictEqual(stored(lookAlikes[0]));
+                expect(rows[5]!.redactedArgs).toStrictEqual(stored(lookAlikes[1]));
             } finally {
                 database.close();
             }
