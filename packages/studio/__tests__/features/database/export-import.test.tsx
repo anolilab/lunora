@@ -497,6 +497,45 @@ describe("exportImportPanel", () => {
         expect(error.textContent).not.toContain("counts below");
     });
 
+    it("says rows may have been written when a chunk's request fails after earlier chunks only met conflicts", async () => {
+        expect.assertions(3);
+
+        let imports = 0;
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.importShard) {
+                    if ((args as { dryRun?: boolean }).dryRun === true) {
+                        return { conflicts: 0, errors: [], inserted: {} };
+                    }
+
+                    imports += 1;
+
+                    if (imports === 2) {
+                        throw new Error("connection reset");
+                    }
+
+                    // The first chunk writes nothing: every row meets an _id already in use.
+                    return { conflicts: 500, errors: [], inserted: {} };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        const lines = Array.from({ length: 1200 }, (_, index) => JSON.stringify({ doc: { __id__: `m${index.toString()}` }, table: "messages" }));
+
+        render(renderPanel(mock));
+
+        importText(lines.join("\n"));
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toContain("Import stopped after 500 rows: connection reset");
+        expect(error.textContent).toContain("The chunk from line 501 may have written rows");
+        expect(importCalls(mock)).toHaveLength(2);
+    });
+
     it("says nothing was written when the first chunk is refused before any row lands", async () => {
         expect.assertions(2);
 

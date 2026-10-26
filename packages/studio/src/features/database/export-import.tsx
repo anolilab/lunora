@@ -294,6 +294,61 @@ const CSV_NAME = /\.csv$/iu;
 
 const isCsvFile = (file: File): boolean => CSV_NAME.test(file.name) || file.type === "text/csv";
 
+/** The user-facing text for a CSV cell that does not fit its column. */
+const describeCellProblem = (problem: Extract<CsvProblem, { kind: "cell-type" }>, t: Translate): string => {
+    if (problem.expected === "boolean") {
+        return t("line {line}: column “{column}” must be true or false, got “{value}”.", {
+            column: problem.column,
+            line: problem.record,
+            value: problem.value,
+        });
+    }
+
+    if (problem.tooLong === true) {
+        return t("line {line}: column “{column}” holds an integer longer than the import can send.", {
+            column: problem.column,
+            line: problem.record,
+        });
+    }
+
+    if (problem.expected === "bigint") {
+        return t("line {line}: column “{column}” must be an integer, got “{value}”.", {
+            column: problem.column,
+            line: problem.record,
+            value: problem.value,
+        });
+    }
+
+    if (problem.zoneless === true) {
+        return t("line {line}: column “{column}” holds “{value}”, a time with no zone. Add Z for UTC or an offset such as +02:00.", {
+            column: problem.column,
+            line: problem.record,
+            value: problem.value,
+        });
+    }
+
+    if (problem.expected === "date") {
+        return t("line {line}: column “{column}” must be an ISO-8601 date or epoch milliseconds, got “{value}”.", {
+            column: problem.column,
+            line: problem.record,
+            value: problem.value,
+        });
+    }
+
+    if (problem.inexact === true) {
+        return t(
+            "line {line}: column “{column}” holds “{value}”, which a number column cannot store exactly. Store a whole number past 9007199254740991 in a bigint column.",
+            {
+                column: problem.column,
+                line: problem.record,
+                value: problem.value,
+            },
+        );
+    }
+
+    return t("line {line}: column “{column}” must be a number, got “{value}”.", { column: problem.column, line: problem.record, value: problem.value });
+};
+
 /** The user-facing text for a structural CSV problem. */
 const describeCsvProblem = (problem: CsvProblem, t: Translate): string => {
     if (problem.kind === "duplicate-header") {
@@ -313,50 +368,7 @@ const describeCsvProblem = (problem: CsvProblem, t: Translate): string => {
     }
 
     if (problem.kind === "cell-type") {
-        if (problem.expected === "boolean") {
-            return t("line {line}: column “{column}” must be true or false, got “{value}”.", {
-                column: problem.column,
-                line: problem.record,
-                value: problem.value,
-            });
-        }
-
-        if (problem.expected === "bigint") {
-            return t("line {line}: column “{column}” must be an integer, got “{value}”.", {
-                column: problem.column,
-                line: problem.record,
-                value: problem.value,
-            });
-        }
-
-        if (problem.zoneless === true) {
-            return t("line {line}: column “{column}” holds “{value}”, a time with no zone. Add Z for UTC or an offset such as +02:00.", {
-                column: problem.column,
-                line: problem.record,
-                value: problem.value,
-            });
-        }
-
-        if (problem.expected === "date") {
-            return t("line {line}: column “{column}” must be an ISO-8601 date or epoch milliseconds, got “{value}”.", {
-                column: problem.column,
-                line: problem.record,
-                value: problem.value,
-            });
-        }
-
-        if (problem.inexact === true) {
-            return t(
-                "line {line}: column “{column}” holds “{value}”, which a number column cannot store exactly. Store a whole number past 9007199254740991 in a bigint column.",
-                {
-                    column: problem.column,
-                    line: problem.record,
-                    value: problem.value,
-                },
-            );
-        }
-
-        return t("line {line}: column “{column}” must be a number, got “{value}”.", { column: problem.column, line: problem.record, value: problem.value });
+        return describeCellProblem(problem, t);
     }
 
     if (problem.kind === "text-after-quote") {
@@ -434,10 +446,11 @@ type ImportClient = ReturnType<typeof useLunora>;
 const insertedRowCount = (inserted: Record<string, number>): number => Object.values(inserted).reduce((sum, count) => sum + count, 0);
 
 /**
- * Stream a file into the shard. Resolves `undefined` when every chunk landed; otherwise the message to show and how many rows were
- * written before it stopped. The file is read in full first, so a malformed line or record is rejected before anything is written. Each later
- * pass reads the file again and sends its rows in chunks as they go, so neither format is held whole. `csvTable` is the target of a CSV
- * file and `null` for NDJSON, whose lines carry their own table.
+ * Stream a file into the shard. Resolves `undefined` when every chunk landed; otherwise the message to show, how many rows the completed
+ * chunks sent, and, when a chunk's request failed without an answer, the line that chunk starts at: its rows may have been written. The file
+ * is read in full first, so a malformed line or record is rejected before anything is written. Each later pass reads the file again and
+ * sends its rows in chunks as they go, so neither format is held whole. `csvTable` is the target of a CSV file and `null` for NDJSON, whose
+ * lines carry their own table.
  */
 const sendImport = async (
     client: ImportClient,
@@ -446,7 +459,7 @@ const sendImport = async (
     onProgress: (text: string) => void,
     file: File,
     csvTable: null | string,
-): Promise<{ failure: { message: string; rows: number } | undefined; total: ImportShardResult }> => {
+): Promise<{ failure: { message: string; rows: number; unknownFrom?: number } | undefined; total: ImportShardResult }> => {
     const total: ImportShardResult = { conflicts: 0, errors: [], inserted: {} };
     let prepared: { rows: number; source: ImportSource };
 
@@ -512,6 +525,8 @@ const sendImport = async (
     }
 
     let sent = 0;
+    // The start line of the chunk whose request has not answered yet. A request that fails without an answer leaves its rows' fate unknown.
+    const pending: { startLine?: number } = {};
 
     const sendChunk = async (rows: ExportRow[], startLine: number): Promise<void> => {
         onProgress(
@@ -522,8 +537,11 @@ const sendImport = async (
             }),
         );
 
+        pending.startLine = startLine;
+
         const result = (await client.query(IMPORT_SHARD, { dryRun: false, rows, startLine }, callOptions(shardKey))) as ImportShardResult;
 
+        pending.startLine = undefined;
         total.conflicts += result.conflicts;
         total.errors.push(...result.errors);
 
@@ -564,8 +582,9 @@ const sendImport = async (
 
         return { failure: undefined, total };
     } catch (error_) {
-        // The rows the shard reported as written, not the rows sent: a refused row is never written. The caller shows this count next to the error.
-        return { failure: { message: errorMessage(error_), rows: insertedRowCount(total.inserted) }, total };
+        // A refusal clears `pending` before it throws, so only a request that never answered leaves it set. `rows` counts the rows of the
+        // completed chunks, refused or conflicting ones included, because the caller says how far the import got.
+        return { failure: { message: errorMessage(error_), rows: sent, unknownFrom: pending.startLine }, total };
     }
 };
 
@@ -654,22 +673,26 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         if (failure === undefined) {
             recordShard(shardKey);
             setImportResult(total);
-        } else if (failure.rows > 0 && total.errors.length === 0) {
-            // A transport failure: the failed chunk may have written rows, which the counts cannot show.
-            setImportResult(total);
-            setError(
-                t("Import stopped after {rows} rows: {message}. The counts below cover completed chunks only; the failed chunk may also have written rows.", {
-                    message: failure.message,
-                    rows: failure.rows,
-                }),
-            );
-        } else {
+        } else if (failure.unknownFrom === undefined) {
             // A refusal names its bad rows and its message already says how many rows were written, so it is shown as it is.
             if (total.errors.length > 0) {
                 setImportResult(total);
             }
 
             setError(failure.message);
+        } else {
+            // A request that never answered: its chunk may have written rows, whatever the completed chunks reported.
+            setImportResult(total);
+            setError(
+                t(
+                    "Import stopped after {rows} rows: {message}. The counts below cover completed chunks only. The chunk from line {line} may have written rows: check the table for rows from line {line} onward before importing again, or delete the written rows first and then import the whole file.",
+                    {
+                        line: failure.unknownFrom,
+                        message: failure.message,
+                        rows: failure.rows,
+                    },
+                ),
+            );
         }
 
         // The import wrote rows to this shard (possibly only some chunks), so the data

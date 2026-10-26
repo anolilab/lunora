@@ -1,3 +1,5 @@
+import { encodeWire } from "@lunora/wire";
+
 /**
  * One CSV field. `undefined` is an empty unquoted field: the importer leaves that key out of the document so the schema default applies,
  * or stores `null` when the column is nullable and required (see {@link recordDocument}). A quoted empty field (`""`) is an empty string
@@ -16,7 +18,7 @@ type CsvProblem =
     | { kind: "duplicate-header"; name: string }
     | { column: number; kind: "empty-header" }
     | { expected: number; found: number; kind: "ragged"; record: number }
-    | { column: string; expected: CellType; inexact?: true; kind: "cell-type"; record: number; value: string; zoneless?: true }
+    | { column: string; expected: CellType; inexact?: true; kind: "cell-type"; record: number; tooLong?: true; value: string; zoneless?: true }
     | { kind: "text-after-quote"; record: number }
     | { kind: "unterminated-quote"; record: number };
 
@@ -293,7 +295,7 @@ const parseCsvDocuments = (text: string): CsvDocument[] => {
 };
 
 /** A cell's text, read as its column kind. `rejected` names the kind the text failed to be. */
-type CoercedCell = { kind: "ok"; value: CsvValue } | { expected: CellType; inexact?: true; kind: "rejected"; zoneless?: true };
+type CoercedCell = { kind: "ok"; value: CsvValue } | { expected: CellType; inexact?: true; kind: "rejected"; tooLong?: true; zoneless?: true };
 
 /** Digits with an optional minus sign: the text a `bigint` column can hold. */
 const INTEGER_TEXT = /^-?\d+$/u;
@@ -479,6 +481,17 @@ const coerceDate = (text: string): CoercedCell => {
     return millis === undefined || !Number.isFinite(new Date(millis).getTime()) ? { expected: "date", kind: "rejected" } : { kind: "ok", value: millis };
 };
 
+/** Whether the wire codec can carry `value`, which it cannot once its digits pass the codec's bound. */
+const carriedByWire = (value: bigint): boolean => {
+    try {
+        encodeWire(value);
+
+        return true;
+    } catch {
+        return false;
+    }
+};
+
 /**
  * Read one cell's text as its column kind. A number takes a decimal, and a timestamp or date takes whole-number epoch milliseconds or an
  * ISO-8601 date or date-time with an offset. Every kind but text is trimmed of surrounding whitespace first. Booleans take `true` or `false` in any case. Bigints take
@@ -488,7 +501,15 @@ const coerceCell = (text: string, kind: string | undefined): CoercedCell => {
     if (kind === "bigint") {
         const trimmed = text.trim();
 
-        return INTEGER_TEXT.test(trimmed) ? { kind: "ok", value: BigInt(trimmed) } : { expected: "bigint", kind: "rejected" };
+        if (!INTEGER_TEXT.test(trimmed)) {
+            return { expected: "bigint", kind: "rejected" };
+        }
+
+        const value = BigInt(trimmed);
+
+        // The wire codec refuses a digit string past its bound. Refused here, the cell's record and column can be named; left to the
+        // wire-size check, the error would name neither.
+        return carriedByWire(value) ? { kind: "ok", value } : { expected: "bigint", kind: "rejected", tooLong: true };
     }
 
     if (kind === "boolean") {
@@ -537,6 +558,7 @@ const coerceCsvDocument = ({ doc, record }: CsvDocument, kinds: ReadonlyMap<stri
                 ...(cell.inexact === true && { inexact: true as const }),
                 kind: "cell-type",
                 record,
+                ...(cell.tooLong === true && { tooLong: true as const }),
                 value: text,
                 ...(cell.zoneless === true && { zoneless: true as const }),
             });

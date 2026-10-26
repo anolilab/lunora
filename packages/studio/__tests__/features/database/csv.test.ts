@@ -460,6 +460,19 @@ describe("coerceCsvDocuments", () => {
         }
     });
 
+    it("refuses a bigint cell the wire codec cannot carry, naming its record and column, and keeps the longest one it carries", () => {
+        expect.assertions(2);
+
+        expect(coerced("amount", "9".repeat(1024))).toBe(BigInt("9".repeat(1024)));
+        expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments(`id,amount\nm1,${"9".repeat(1025)}\n`), kinds))).toMatchObject({
+            column: "amount",
+            expected: "bigint",
+            kind: "cell-type",
+            record: 2,
+            tooLong: true,
+        });
+    });
+
     it("reports the first bad cell in file order, so a file with several bad cells names one stable record", () => {
         expect.assertions(1);
 
