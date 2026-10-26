@@ -32,7 +32,10 @@ in the repository. It covers every layer a client needs:
   minted at `POST /_lunora/admin/ws-token`, the only credential that rides `?token=`.
   A socket still awaiting `connect` 10 seconds after its upgrade is closed with
   `4003`. A shard at its cap of 1024 such sockets answers a new unauthenticated
-  upgrade with `503`, which is transient: retry with backoff.
+  upgrade with `503`, which is transient: retry with backoff. A browser
+  client whose session is a bearer offers it on the upgrade as the
+  `lunora.bearer.<base64url>` subprotocol, which the worker hands to
+  `resolveIdentity` (§6.1).
 
 ## Conformance fixtures
 

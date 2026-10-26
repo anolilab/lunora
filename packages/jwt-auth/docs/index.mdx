@@ -1,0 +1,86 @@
+---
+title: "@lunora/jwt-auth"
+description: Bring your own auth — verify JWTs from Clerk, WorkOS AuthKit, Auth0, Supabase or any OIDC issuer against their JWKS and feed the identity into ctx.auth and RLS via a resolveIdentity adapter.
+---
+
+`@lunora/jwt-auth` turns an external identity provider's JWT into a Lunora
+identity. The provider owns users and sessions. The Worker verifies each
+request's token against the provider's JWKS. The verified user becomes
+`ctx.auth` for every query, mutation and action, and feeds RLS and live
+subscriptions.
+
+```sh
+pnpm add @lunora/jwt-auth
+```
+
+It is **experimental**: the API may change before it graduates. The guide is
+[External auth](/docs/concepts/external-auth). This page is the API reference.
+
+## `jwtIdentityResolver(options)`
+
+Returns a `resolveIdentity`-compatible function.
+
+| Option           | Default                   | Meaning                                                                                                                      |
+| ---------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `issuer`         | —                         | Expected `iss` (string or list). Without `jwksUrl`, the JWKS is discovered from `<issuer>/.well-known/openid-configuration`. |
+| `jwksUrl`        | —                         | The provider's JWKS (https). One of `issuer` / `jwksUrl` is required.                                                        |
+| `audience`       | none                      | Expected `aud`. Set it whenever the provider issues one.                                                                     |
+| `algorithms`     | every asymmetric JOSE alg | Allowed signing algorithms.                                                                                                  |
+| `token`          | `bearerToken`             | `(request) => string \| null \| undefined`. See `cookieToken(name)` and `firstToken(...sources)`.                            |
+| `claims`         | none                      | `(payload) => Record \| null`: extra identity claims. `null` refuses the token. A returned `userId` overrides `sub`.         |
+| `clockTolerance` | `0`                       | Seconds of skew allowed on `exp` / `nbf`.                                                                                    |
+| `onError`        | —                         | Observes a present-but-invalid token. Never fires for a missing one.                                                         |
+| `keySet`         | remote JWKS               | A local key or key set, mostly for tests.                                                                                    |
+
+The identity is `{ userId: sub, exp, ...claims(payload) }`. These cases resolve
+to `null` (anonymous):
+
+- no token;
+- a token that fails verification;
+- a token with no `sub`;
+- a token that `claims` refuses.
+
+A correctly signed token whose only fault is a past `exp` keeps its identity.
+The runtime then answers `TOKEN_EXPIRED`. Missing configuration throws when the
+resolver is created.
+
+One remote key set is cached per JWKS URL per isolate. An unknown `kid` refetches
+it once, which handles key rotation.
+
+## Presets
+
+```ts
+import { auth0, clerk, supabase, workos } from "@lunora/jwt-auth";
+
+clerk({ publishableKey: env.CLERK_PUBLISHABLE_KEY, authorizedParties: ["https://app.example.com"] });
+workos({ clientId: env.WORKOS_CLIENT_ID });
+auth0({ domain: "acme.us.auth0.com", audience: "https://api.example.com" });
+supabase({ projectUrl: "https://<ref>.supabase.co" });
+```
+
+| Preset     | Verifies                                                                                                                     | Identity claims                                                                                                                       |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `clerk`    | RS256, `iss` = Frontend API; `azp` ∈ `authorizedParties`; refuses `sts: "pending"`. Bearer, then the `__session` cookie.     | `orgId`, `orgSlug`, `orgRole`, `orgPermissions` (`org:<feature>:<perm>`, decoded from v2 `fea`/`o.per`/`o.fpm`), `roles`, `sessionId` |
+| `workos`   | RS256, `iss` = `https://api.workos.com` (either spelling) or `authDomain`; `client_id` = `clientId`.                         | `orgId`, `role`, `roles`, `permissions`, `entitlements`, `featureFlags`, `sessionId`, `impersonator`                                  |
+| `auth0`    | RS256, `iss` = `https://<domain>/`, `aud` = `audience`. Refuses `client-credentials` tokens unless `allowClientCredentials`. | `orgId`, `permissions`                                                                                                                |
+| `supabase` | ES256/RS256, `iss` = `<project>/auth/v1`, `aud` = `authenticated`. Refuses anonymous sign-ins unless `allowAnonymousUsers`.  | `email`, `role`, `aal`, `isAnonymous`, `sessionId`                                                                                    |
+
+Every preset also takes `claims`, `clockTolerance`, `onError`, `keySet` and
+`token`. Its own claims mapping runs first, and yours is merged over it.
+
+Sources: Clerk
+[manual JWT verification](https://clerk.com/docs/guides/sessions/manual-jwt-verification)
+and [session tokens](https://clerk.com/docs/guides/sessions/session-tokens).
+WorkOS [sessions](https://workos.com/docs/authkit/sessions) and
+[session tokens](https://workos.com/docs/reference/authkit/session-tokens).
+Auth0
+[validate access tokens](https://auth0.com/docs/secure/tokens/access-tokens/validate-access-tokens).
+Supabase [signing keys](https://supabase.com/docs/guides/auth/signing-keys),
+[JWT fields](https://supabase.com/docs/guides/auth/jwt-fields) and
+[anonymous sign-ins](https://supabase.com/docs/guides/auth/auth-anonymous).
+
+## Platform
+
+The resolver uses only `fetch`, WebCrypto (through `jose`) and module-level
+caches. It runs wherever the Worker runs and needs no binding, so it adds no
+`PlatformCapabilities` entry.

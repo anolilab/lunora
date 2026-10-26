@@ -56,6 +56,7 @@
         "---Auth & security---",
         "concepts/adopt-in-an-existing-app",
         "concepts/authentication",
+        "concepts/external-auth",
         "concepts/auth-ui",
         "concepts/rls",
         "concepts/masking",

@@ -54,6 +54,11 @@
         "description": "Cloudflare Access (Zero Trust) identity: Worker-scoped Access policies or JWKS-verified Access JWTs, fed into ctx.auth / RLS.",
         "features": ["Worker-scoped Access policies", "JWKS-verified Access JWTs", "Feeds ctx.auth & RLS"]
     },
+    "jwt-auth": {
+        "displayName": "JWT Auth",
+        "description": "Bring your own auth: verify Clerk, WorkOS, Auth0, Supabase or any OIDC JWT against its JWKS and feed the identity into ctx.auth / RLS.",
+        "features": ["Clerk, WorkOS, Auth0, Supabase presets", "Any OIDC issuer via discovery", "Feeds ctx.auth & RLS"]
+    },
     "codegen": {
         "displayName": "Codegen",
         "description": "Emits _generated/{api,server,dataModel}.ts from your schema.ts.",

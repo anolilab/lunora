@@ -29,6 +29,16 @@ import { jwtIdentityResolver } from "@lunora/jwt-auth";
 const resolveIdentity = jwtIdentityResolver({ issuer: "https://auth.example.com/", audience: "https://api.example.com" });
 ```
 
+Defaults fail closed:
+
+- A missing, invalid or foreign token resolves anonymous.
+- A Supabase anonymous sign-in (`is_anonymous: true`) resolves anonymous
+  unless you pass `allowAnonymousUsers: true`.
+- An Auth0 machine-to-machine (`client-credentials`) token resolves anonymous
+  unless you pass `allowClientCredentials: true`.
+- Clerk v2 organization permissions are decoded from their `fea`/`o.fpm`
+  bitmasks. A malformed encoding forwards no permissions.
+
 See the [package docs](./docs/index.mdx) and the
 [external auth guide](https://lunora.sh/docs/concepts/external-auth) for client
 token wiring, WebSockets and RLS.

@@ -1,6 +1,6 @@
 ---
 name: lunora-setup-auth
-description: Adds authentication to a Lunora app with the `auth` registry item (better-auth via `@lunora/auth`, users and sessions in D1). Covers email/password sign-up and sign-in, Clerk or Auth0 OAuth, magic link, email OTP, copy-in auth screens (`lunora add auth-ui`), wiring `/api/auth/*` and `resolveIdentity` into the Worker, and gating functions on `ctx.auth.userId`. Use when the user asks to "add auth", "add login/sign-in/sign-up", "protect this query", or "add Clerk/Auth0/magic link/OTP", runs `lunora add auth` or `lunora registry add auth`, edits `lunora/auth/index.ts`, or `ctx.auth.userId` is unexpectedly `null`.
+description: Adds authentication to a Lunora app with the `auth` registry item (better-auth via `@lunora/auth`, users and sessions in D1). Covers email/password sign-up and sign-in, Clerk or Auth0 OAuth, magic link, email OTP, copy-in auth screens (`lunora add auth-ui`), wiring `/api/auth/*` and `resolveIdentity` into the Worker, and gating functions on `ctx.auth.userId`. Use when the user asks to "add auth", "add login/sign-in/sign-up", "protect this query", or "add Clerk/Auth0/magic link/OTP", wants to keep an external identity provider (Clerk, WorkOS, Auth0, Supabase, any OIDC JWT) as the session owner, runs `lunora add auth` or `lunora registry add auth`, edits `lunora/auth/index.ts`, or `ctx.auth.userId` is unexpectedly `null`.
 ---
 
 # Lunora Setup Auth
@@ -12,6 +12,39 @@ calls, so don't wire it for auth. If you need auth state in a Durable Object
 instead of D1, use `LunoraAuthDO` / `.auth({ namespace, internalSecret })`.
 
 If the project has no Lunora backend yet, start with `lunora-quickstart`.
+
+## Already have an identity provider? Skip better-auth
+
+If the app's users sign in through Clerk, WorkOS AuthKit, Auth0, Supabase or any
+OIDC issuer, and that provider should keep owning the session, don't add the
+`auth` item. Verify the provider's JWT instead with `@lunora/jwt-auth`:
+
+```bash
+lunora registry add auth-clerk-jwt   # or: auth-workos
+```
+
+```ts
+import { clerk } from "@lunora/jwt-auth"; // workos, auth0, supabase, jwtIdentityResolver
+import { memoizeIdentity } from "lunorash/runtime";
+
+defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .extend((env) => ({
+        resolveIdentity: memoizeIdentity(clerk({ publishableKey: env.CLERK_PUBLISHABLE_KEY ?? "", authorizedParties: ["https://app.example.com"] })),
+    }))
+    .build();
+```
+
+On the client, create the `LunoraClient` with `authTokenOnUpgrade: true`, call
+`setAuthToken(token, userId)` after sign-in, and refresh it in `onTokenExpired`.
+`authTokenOnUpgrade` is what authenticates live-query sockets: the browser
+offers the bearer as a `Sec-WebSocket-Protocol` entry. Without it, a WorkOS
+socket, or a cross-origin Clerk one, is anonymous. Org and role claims arrive
+as `orgId` and `roles`, and RLS reads `roles`. Full guide:
+`/docs/concepts/external-auth`, with runnable apps in `examples/clerk-auth` and
+`examples/workos-auth`.
+
+The rest of this skill covers the better-auth path.
 
 ## Step 1: Add the item
 
