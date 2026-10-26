@@ -16,7 +16,8 @@ What it shows:
   as `roles: [o.rol]` on the identity, and `rls(..., { roles: [orgAdmin] })`
   maps it to the `notes:read-org` permission.
 - **Token wiring and refresh.** `src/client/clerk-token-bridge.tsx` hands
-  `useAuth().getToken()` to `LunoraClient.setAuthToken` and refreshes it from
+  `useAuth().getToken()` to `LunoraClient.setAuthToken`, refreshes it ten
+  seconds before each `exp`, and again from
   `onTokenExpired`.
 - **Authenticated live queries.** The client sets `authTokenOnUpgrade: true`,
   so its WebSockets carry the token as a `Sec-WebSocket-Protocol` entry, never
@@ -68,9 +69,10 @@ in-memory harness.
 
 ## Notes
 
-- Clerk session tokens expire after 60 seconds. When one lapses, the server
-  closes the socket with code 4001 and the client reconnects warm with a fresh
-  token, resuming from its cursor. That happens about once a minute per socket.
+- Clerk session tokens expire after 60 seconds. Each refresh reconnects the
+  sockets warm with the new token, resuming from their cursors, so that
+  happens about once a minute per socket. If a refresh comes too late, the
+  server closes the socket with code 4001 and the same reconnect follows.
   To reduce it, issue tokens from a longer-lived Clerk JWT template.
 - `memoizeIdentity` reuses a verification for 5 seconds. That is also how long
   a revoked session keeps working.

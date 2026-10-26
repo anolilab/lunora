@@ -10,7 +10,7 @@
  *
  * Wire it into your Worker entry as the `resolveIdentity` option:
  *
- *   import { workosIdentity } from "../lunora/identity/workos";
+ *   import { workosIdentity } from "../../lunora/identity/workos"; // from src/server/index.ts
  *
  *   createWorker({ resolveIdentity: workosIdentity(env), shardDO: env.SHARD });
  *

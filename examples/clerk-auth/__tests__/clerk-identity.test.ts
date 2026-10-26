@@ -89,4 +89,33 @@ describe("clerk-auth example", () => {
 
         await expect(resolveIdentity(new Request(`${APP}/_lunora/rpc`, { headers: { authorization: `Bearer ${forged}` } }))).resolves.toBeNull();
     });
+
+    it("keeps a live query scoped to the subscriber as other users write", async () => {
+        expect.assertions(5);
+
+        const t = lunoraTest(schema);
+        const alice = await asCaller(t, { sub: "user_alice" });
+        const bob = await asCaller(t, { sub: "user_bob" });
+        const live = alice.subscribe(mine, {});
+
+        const initial = await live.next();
+
+        expect(initial.value).toStrictEqual([]);
+
+        await alice.mutation(add, { text: "alice live" });
+
+        const afterOwn = await live.next();
+
+        expect(afterOwn.value?.map((note) => note.text)).toStrictEqual(["alice live"]);
+
+        // Another user's write re-evaluates the subscription, but RLS keeps the result Alice's.
+        await bob.mutation(add, { text: "bob live" });
+
+        const afterOther = await live.next();
+
+        expect(afterOther.value?.map((note) => note.text)).toStrictEqual(["alice live"]);
+
+        await live.return();
+        t.close();
+    });
 });

@@ -9,7 +9,7 @@
  *
  * Wire it into your Worker entry as the `resolveIdentity` option:
  *
- *   import { clerkIdentity } from "../lunora/identity/clerk";
+ *   import { clerkIdentity } from "../../lunora/identity/clerk"; // from src/server/index.ts
  *
  *   createWorker({ resolveIdentity: clerkIdentity(env), shardDO: env.SHARD });
  *

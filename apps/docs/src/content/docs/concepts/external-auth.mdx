@@ -135,10 +135,22 @@ function ClerkTokenBridge({ children }) {
         if (!isLoaded) return;
         if (!isSignedIn) return void client.setAuthToken(null);
 
-        const refresh = async () => client.setAuthToken(await getToken(), userId);
+        let timer;
+        const refresh = async () => {
+            const token = await getToken();
+
+            client.setAuthToken(token, userId);
+            // Refresh ~10 s before `exp` (decoded from the token; see examples/clerk-auth).
+            timer = setTimeout(refresh, refreshDelayMs(token));
+        };
 
         void refresh();
-        return client.onTokenExpired(() => void refresh());
+        const unsubscribe = client.onTokenExpired(() => void refresh());
+
+        return () => {
+            clearTimeout(timer);
+            unsubscribe();
+        };
     }, [getToken, isLoaded, isSignedIn, orgId, userId]);
 
     return children;
@@ -148,9 +160,12 @@ function ClerkTokenBridge({ children }) {
 - `setAuthToken(token, userId)` stamps `Authorization: Bearer` on every query,
   mutation and action. The second argument is the subject. It keeps a refresh
   from looking like an account switch, so queued offline writes survive it.
-- `onTokenExpired` fires when the server refuses an expired token. Fetch a fresh
-  one and call `setAuthToken` again. HTTP calls retry with it, and sockets
-  reconnect.
+- Refresh **before** the token expires. A query, mutation or action sent with a
+  lapsed token is refused `TOKEN_EXPIRED`, and an online call is not resent for
+  you. With `authTokenOnUpgrade`, each refresh also reconnects the sockets warm.
+- `onTokenExpired` covers what the timer misses: a socket the server closed
+  with `4001`, or a queued offline write refused on replay, which is held and
+  sent again after `setAuthToken`.
 - Re-run the effect when the organization changes. The provider mints a token
   carrying the new org claims.
 
@@ -181,11 +196,12 @@ which read the forwarded request and the `connect` frame. A real
 `Authorization` header, as React Native sends, takes precedence.
 [`protocol/README.md` §6.1](https://github.com/anolilab/lunora/blob/alpha/protocol/README.md) has the details.
 
-A socket keeps the identity it upgraded with until its `exp`. At that point the
-Durable Object closes it with `4001`, `onTokenExpired` fires, and the client
-reconnects with the fresh token, resuming each subscription from its cursor.
-With Clerk's 60-second session tokens that is one warm reconnect a minute per
-socket. To reduce it, mint a longer-lived token from a Clerk JWT template
+A socket keeps the identity it upgraded with until its `exp`. A proactive
+refresh reconnects it warm before then, resuming each subscription from its
+cursor. If the refresh is late, the Durable Object closes the socket with
+`4001`, `onTokenExpired` fires, and the client reconnects with the fresh token.
+With Clerk's 60-second session tokens, either way that is one warm reconnect a
+minute per socket. To reduce it, mint a longer-lived token from a Clerk JWT template
 (`getToken({ template })`), or lengthen the access-token lifetime in WorkOS.
 
 ## RLS with org and role claims

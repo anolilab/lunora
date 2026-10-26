@@ -36,7 +36,7 @@ defineApp<Env>()
 ```
 
 On the client, create the `LunoraClient` with `authTokenOnUpgrade: true`, call
-`setAuthToken(token, userId)` after sign-in, and refresh it in `onTokenExpired`.
+`setAuthToken(token, userId)` after sign-in, refresh it shortly before its `exp`, and again from `onTokenExpired`.
 `authTokenOnUpgrade` is what authenticates live-query sockets: the browser
 offers the bearer as a `Sec-WebSocket-Protocol` entry. Without it, a WorkOS
 socket, or a cross-origin Clerk one, is anonymous. Org and role claims arrive

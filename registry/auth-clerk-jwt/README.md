@@ -28,7 +28,7 @@ This adds `@lunora/jwt-auth` to `package.json`, scaffolds
 Worker entry:
 
 ```ts
-import { clerkIdentity } from "../lunora/identity/clerk";
+import { clerkIdentity } from "../../lunora/identity/clerk"; // from src/server/index.ts
 
 createWorker({ resolveIdentity: clerkIdentity(env), shardDO: env.SHARD });
 ```

@@ -17,7 +17,8 @@ What it shows:
   the `notes:read-org` permission.
 - **Token wiring and refresh.** `src/client/workos-token-bridge.tsx` hands
   `useAuth().getAccessToken()` to `LunoraClient.setAuthToken` and refreshes it
-  from `onTokenExpired`. AuthKit keeps the access token in memory, not in a
+  ten seconds before each `exp` and from `onTokenExpired`. AuthKit keeps the
+  access token in memory, not in a
   cookie on your domain, so a bearer is the only way it reaches the API.
 - **Authenticated live queries.** The client sets `authTokenOnUpgrade: true`,
   so its WebSockets carry the token as a `Sec-WebSocket-Protocol` entry, never
@@ -73,8 +74,9 @@ real procedures on the in-memory harness.
 ## Notes
 
 - Set the access-token lifetime under **Sessions** in the dashboard. Each
-  socket reconnects warm once per lifetime, when the server closes it with
-  code 4001.
+  refresh reconnects the sockets warm, once per lifetime. If a refresh comes
+  too late, the server closes the socket with code 4001 and the same
+  reconnect follows.
 - `memoizeIdentity` reuses a verification for 5 seconds. That is also how long
   a revoked session keeps working.
 

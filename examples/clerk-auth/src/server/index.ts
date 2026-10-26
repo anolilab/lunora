@@ -30,7 +30,9 @@ const app = defineApp<Env>()
         return {
             resolveIdentity: memoizeIdentity(
                 clerk({
-                    authorizedParties: env.CLERK_AUTHORIZED_PARTIES?.split(",").map((origin) => origin.trim()),
+                    authorizedParties: env.CLERK_AUTHORIZED_PARTIES?.split(",")
+                        .map((origin) => origin.trim())
+                        .filter((origin) => origin.length > 0),
                     publishableKey: env.CLERK_PUBLISHABLE_KEY ?? "",
                 }),
             ),
