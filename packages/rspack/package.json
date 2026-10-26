@@ -67,6 +67,7 @@
         "@lunora/config": "1.0.0-alpha.406"
     },
     "devDependencies": {
+        "@codspeed/vitest-plugin": "catalog:test",
         "@rsbuild/core": "catalog:build",
         "@rspack/core": "catalog:build",
         "@types/node": "catalog:types",
