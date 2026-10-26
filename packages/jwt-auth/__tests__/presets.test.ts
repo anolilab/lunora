@@ -48,10 +48,12 @@ describe(clerk, () => {
     });
 
     it("refuses an empty authorizedParties at construction", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         expect(() => clerk({ authorizedParties: [], issuer })).toThrow(/authorizedParties/);
         expect(() => clerk({ authorizedParties: " , ", issuer })).toThrow(/CSRF/);
+        // A JS caller that omits the option gets the named error, not a TypeError.
+        expect(() => clerk({ issuer } as Parameters<typeof clerk>[0])).toThrow(/authorizedParties/);
     });
 
     it("reads a comma-separated authorizedParties as an env var holds it", async () => {

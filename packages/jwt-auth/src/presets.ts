@@ -243,7 +243,16 @@ const clerkClaims =
  * `claims`, together with the `orgId` it belongs to.
  */
 const clerk = (options: ClerkOptions): JwtIdentityResolver => {
-    const authorizedParties = (typeof options.authorizedParties === "string" ? options.authorizedParties.split(",") : options.authorizedParties)
+    // Read as `unknown`: a JS caller can omit the option, and that must fail by name below, not as a TypeError.
+    const configured: unknown = options.authorizedParties;
+    let listed: unknown[] = Array.isArray(configured) ? configured : [];
+
+    if (typeof configured === "string") {
+        listed = configured.split(",");
+    }
+
+    const authorizedParties = listed
+        .filter((party): party is string => typeof party === "string")
         .map((party) => party.trim())
         .filter((party) => party.length > 0);
 
