@@ -67,6 +67,7 @@
         "@visulima/vite-overlay": "catalog:vite"
     },
     "devDependencies": {
+        "@codspeed/vitest-plugin": "catalog:test",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

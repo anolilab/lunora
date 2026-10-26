@@ -31,7 +31,12 @@ describe("vite dev", () => {
 
             try {
                 await server.listen();
-                await fetch(new URL("_lunora/health", server.resolvedUrls?.local[0]));
+                // Any non-asset path reaches the fixture worker, which answers "ok".
+                const response = await fetch(new URL("_lunora/health", server.resolvedUrls?.local[0]));
+
+                if (!response.ok) {
+                    throw new Error(`dev server answered ${String(response.status)}`);
+                }
             } finally {
                 await server.close();
             }

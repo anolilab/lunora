@@ -90,6 +90,8 @@ const makeHarness = (): Harness => {
 };
 
 interface Started {
+    /** The project this instance serves; its saves edit files here. */
+    fixture: string;
     harness: Harness;
     plugin: Plugin;
 }
@@ -106,10 +108,15 @@ const start = async (fixture: string): Promise<Started> => {
     call(plugin.configureServer, harness.server);
     await call(plugin.buildStart, {});
 
-    return { harness, plugin };
+    return { fixture, harness, plugin };
 };
 
-const save = async ({ harness }: Started, file: string): Promise<void> => {
+// Edits the instance's OWN project: CodSpeed's runner calls `beforeAll` a second
+// time, reassigning `fixture`, and an instance from the first call ignores (as it
+// should) a change outside its project — the save would wait forever.
+const save = async ({ fixture: root, harness }: Started, relativePath: string): Promise<void> => {
+    const file = join(root, relativePath);
+
     // A real edit, so codegen has something to refresh.
     appendFileSync(file, "\n");
 
@@ -121,14 +128,17 @@ const save = async ({ harness }: Started, file: string): Promise<void> => {
 
 let fixture: string;
 let steady: Started;
-// Its own instance: the scheduling row leaves a debounced regeneration behind.
+// Its own instance AND fixture: the scheduling row leaves a debounced
+// regeneration behind, which must not write into a timed save's project.
+let schedulingFixture: string;
 let scheduling: Started;
 const firstSavePool: Started[] = [];
 
 beforeAll(async () => {
     fixture = createFixture("watch");
     steady = await start(fixture);
-    scheduling = await start(fixture);
+    schedulingFixture = createFixture("watch-scheduling");
+    scheduling = await start(schedulingFixture);
 
     // One started server per measured first save (plus warmup), made outside
     // the timed body: the first save is only "first" once.
@@ -140,6 +150,7 @@ beforeAll(async () => {
 
 afterAll(() => {
     removeFixture(fixture);
+    removeFixture(schedulingFixture);
 });
 
 describe("watcher handlers (synchronous part)", () => {
@@ -148,7 +159,7 @@ describe("watcher handlers (synchronous part)", () => {
     });
 
     bench("Lunora function change (schedules a regeneration)", () => {
-        scheduling.harness.watcher.emit("change", join(fixture, "lunora", "mod0.ts"));
+        scheduling.harness.watcher.emit("change", join(schedulingFixture, "lunora", "mod0.ts"));
     });
 });
 
@@ -159,7 +170,7 @@ describe("Lunora save → HMR notify (end to end)", () => {
             const started = firstSavePool.pop();
 
             if (started !== undefined) {
-                await save(started, join(fixture, "lunora", "mod1.ts"));
+                await save(started, join("lunora", "mod1.ts"));
             }
         },
         { iterations: saveIterations, time: 0, warmupIterations: 1 },
@@ -168,7 +179,7 @@ describe("Lunora save → HMR notify (end to end)", () => {
     bench(
         "steady-state save",
         async () => {
-            await save(steady, join(fixture, "lunora", "mod1.ts"));
+            await save(steady, join("lunora", "mod1.ts"));
         },
         { iterations: saveIterations, time: 0, warmupIterations: 1 },
     );
