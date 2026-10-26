@@ -13673,11 +13673,9 @@ abstract class ShardDO {
     }
 
     /**
-     * `frameCursor` / `frameEpoch` are the post-write high-watermark the caller
-     * resolved for this pass — the same for every sub flushed in it (they all
-     * observe the committed state), stamped on every frame as the cursor each
-     * subscriber advances to. Read once by the caller, in the same synchronous
-     * step, rather than re-probed here.
+     * `frameCursor` / `frameEpoch` are the pass's post-write high-watermark, the
+     * same for every sub it flushes, stamped on every frame as the cursor each
+     * subscriber advances to.
      */
     private async refreshSubscriptions(
         changed: Set<string>,
