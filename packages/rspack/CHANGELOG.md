@@ -1,3 +1,9 @@
+## @lunora/rspack [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.105...@lunora/rspack@1.0.0-alpha.106) (2026-10-26)
+
+### Performance Improvements
+
+* **rspack:** skip untouched rebuilds and defer studio-host ([#1341](https://github.com/anolilab/lunora/issues/1341)) ([badfe93](https://github.com/anolilab/lunora/commit/badfe938486840ca1c4e099052a704c62e438f51))
+
 ## @lunora/rspack [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.104...@lunora/rspack@1.0.0-alpha.105) (2026-10-26)
 
 
