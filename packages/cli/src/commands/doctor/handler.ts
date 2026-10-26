@@ -407,6 +407,31 @@ const checkVectorMetadataIndexes = (cwd: string, findings: Finding[]): void => {
     }
 };
 
+const d1PlaceholderFindings = (config: unknown, suffix: string, celld: boolean): Finding[] => {
+    const databases = ((config as { d1_databases?: ReadonlyArray<{ binding?: string; database_id?: string }> } | undefined)?.d1_databases ?? []).filter(
+        Boolean,
+    );
+    const found: Finding[] = [];
+
+    for (const database of databases) {
+        const databaseId = typeof database.database_id === "string" ? database.database_id : "";
+        const blocks = celld ? isUnfinishedD1Id(databaseId) && databaseId !== D1_PLACEHOLDER_ID : isD1PlaceholderId(databaseId);
+
+        if (blocks) {
+            const label = typeof database.binding === "string" && database.binding.length > 0 ? database.binding : "<unnamed>";
+
+            found.push({
+                code: "d1-placeholder-id",
+                fix: "Run `lunora doctor --fix` to create the database and write its id into wrangler.jsonc, or run `wrangler d1 create <name>` and paste the returned database_id in yourself.",
+                level: "fail",
+                message: `D1 binding "${label}"${suffix} has a placeholder database_id ("${databaseId || "<empty>"}").`,
+            });
+        }
+    }
+
+    return found;
+};
+
 /** Any D1 `database_id` still a placeholder → FAIL (the binding can't resolve). */
 const checkD1Placeholders = (cwd: string, parsed: WranglerConfig | undefined, findings: Finding[]): void => {
     if (parsed === undefined) {
@@ -415,23 +440,16 @@ const checkD1Placeholders = (cwd: string, parsed: WranglerConfig | undefined, fi
 
     // celld's projection replaces only the exact placeholder with a name-derived id; any other placeholder still reaches it.
     const celld = (readProjectTarget(cwd) ?? DEFAULT_TARGET) === "celld";
-    const databases = ((parsed as { d1_databases?: ReadonlyArray<{ binding?: string; database_id?: string }> }).d1_databases ?? []).filter(Boolean);
+    // `deploy --env` reads each env block's own array, so a placeholder there blocks that deploy too.
+    const scopes: { config: unknown; suffix: string }[] = [
+        { config: parsed, suffix: "" },
+        ...Object.entries(parsed.env ?? {}).map(([name, block]) => {
+            return { config: block, suffix: ` in env.${name}` };
+        }),
+    ];
 
-    for (const database of databases) {
-        const databaseId = typeof database.database_id === "string" ? database.database_id : "";
-
-        const blocks = celld ? isUnfinishedD1Id(databaseId) && databaseId !== D1_PLACEHOLDER_ID : isD1PlaceholderId(databaseId);
-
-        if (blocks) {
-            const label = typeof database.binding === "string" && database.binding.length > 0 ? database.binding : "<unnamed>";
-
-            findings.push({
-                code: "d1-placeholder-id",
-                fix: "Run `lunora doctor --fix` to create the database and write its id into wrangler.jsonc, or run `wrangler d1 create <name>` and paste the returned database_id in yourself.",
-                level: "fail",
-                message: `D1 binding "${label}" has a placeholder database_id ("${databaseId || "<empty>"}").`,
-            });
-        }
+    for (const { config, suffix } of scopes) {
+        findings.push(...d1PlaceholderFindings(config, suffix, celld));
     }
 };
 
@@ -797,8 +815,8 @@ const configuredAccounts = (parsed: WranglerConfig | undefined): Map<string, str
 
 /**
  * How close the Cloudflare account is to its Durable Object class cap (plan
- * 462). The one doctor check that goes online, and only with credentials in the
- * environment; without them it says it did not check.
+ * 462). One of the doctor checks that go online, and only with credentials in
+ * the environment; without them it says it did not check.
  *
  * Doctor takes no `--env`, so it checks every account the config deploys to,
  * naming each when there is more than one. `CLOUDFLARE_ACCOUNT_ID` overrides

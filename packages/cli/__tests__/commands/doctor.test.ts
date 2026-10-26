@@ -1222,6 +1222,25 @@ describe("runDoctor", () => {
         });
     });
 
+    describe("d1 placeholder in an env block", () => {
+        it("reports the env block that holds it, since deploy --env reads that block", async () => {
+            expect.assertions(2);
+
+            const config = {
+                ...(JSON.parse(CLEAN_WRANGLER) as object),
+                env: { staging: { d1_databases: [{ binding: "DB", database_id: "<replace-with-d1-create-id>" }] } },
+            };
+
+            seed(workdir, JSON.stringify(config, null, 4));
+
+            const { findings } = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
+            const finding = findings.find((candidate) => candidate.code === "d1-placeholder-id");
+
+            expect(finding?.message).toContain('"DB" in env.staging');
+            expect(finding?.level).toBe("fail");
+        });
+    });
+
     describe("cloudflare api token", () => {
         /** The URL a fetch call was made to, whichever form the caller passed it in. */
         const urlOf = (input: RequestInfo | URL): string => (input instanceof Request ? input.url : input.toString());
@@ -1273,6 +1292,18 @@ describe("runDoctor", () => {
                 "https://api.cloudflare.com/client/v4/user/tokens/verify",
                 "https://api.cloudflare.com/client/v4/accounts/acc/tokens/verify",
             ]);
+        });
+
+        it("falls back to the account endpoint on a user-endpoint 403, too", async () => {
+            expect.assertions(1);
+
+            const fetchImpl = vi.fn<typeof globalThis.fetch>(async (url) =>
+                urlOf(url).endsWith("/user/tokens/verify")
+                    ? Response.json({ errors: [{ code: 9109, message: "forbidden" }], success: false }, { status: 403 })
+                    : Response.json({ result: { status: "active" }, success: true }),
+            );
+
+            await expect(tokenFinding(fetchImpl, credentials)).resolves.toMatchObject({ code: "cloudflare-token-ok", level: "pass" });
         });
 
         it("fails a token that both endpoints refuse with 401, as a rejection", async () => {

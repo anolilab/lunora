@@ -79,7 +79,8 @@ const judgeToken = async (token: string, accountId: string | undefined, fetchImp
         return { verdict: "rejected" };
     }
 
-    if (user.status !== 401) {
+    // A 403 can mean the user endpoint does not let a token ask about itself, so it is not a verdict either.
+    if (user.status !== 401 && user.status !== 403) {
         return { reason: `HTTP ${String(user.status)}`, verdict: "unchecked" };
     }
 
