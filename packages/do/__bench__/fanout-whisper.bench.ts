@@ -93,15 +93,16 @@ const buildRig = (n: number): FanoutRig => {
 };
 
 const defineFanoutBench = (n: number): void => {
+    let rig: FanoutRig;
+
+    // CodSpeed's instrumented runner honors beforeAll but not module-top-level state, so the rig is built in a hook.
+    // Registered here, at file level, rather than inside the `describe`: vitest's bench runner skips hooks registered
+    // in a `describe` (its `runBenchmarkSuite` recurses into sub-suites without running their hooks).
+    beforeAll(() => {
+        rig = buildRig(n);
+    });
+
     describe(`whisper fan-out — ${String(n)} subscribers`, () => {
-        let rig: FanoutRig;
-
-        // CodSpeed's instrumented runner honors beforeAll but not module-top-level
-        // state, so the rig is built here.
-        beforeAll(() => {
-            rig = buildRig(n);
-        });
-
         bench(`broadcastWhisper to ${String(n)} members`, async () => {
             await rig.shard.webSocketMessage(rig.next(), ENVELOPE);
         });

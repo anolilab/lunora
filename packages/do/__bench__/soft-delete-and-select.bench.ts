@@ -50,21 +50,23 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
 let plain: DatabaseWriterLike;
 let soft: DatabaseWriterLike;
 
+// File-level, not inside the `describe`: vitest's bench runner skips hooks registered in a `describe` (its
+// `runBenchmarkSuite` recurses into sub-suites without running their hooks), so the writers would stay undefined.
+beforeAll(async () => {
+    const plainHarness = createSqliteExec();
+    const softHarness = createSqliteExec();
+
+    runShardMigrations(plainHarness.sql, plainSchema);
+    runShardMigrations(softHarness.sql, softSchema);
+
+    plain = createShardContextDatabase({ schema: plainSchema, sql: plainHarness.sql });
+    soft = createShardContextDatabase({ schema: softSchema, sql: softHarness.sql });
+
+    await seed(plain);
+    await seed(soft);
+});
+
 describe("soft-delete scoping + select projection", () => {
-    beforeAll(async () => {
-        const plainHarness = createSqliteExec();
-        const softHarness = createSqliteExec();
-
-        runShardMigrations(plainHarness.sql, plainSchema);
-        runShardMigrations(softHarness.sql, softSchema);
-
-        plain = createShardContextDatabase({ schema: plainSchema, sql: plainHarness.sql });
-        soft = createShardContextDatabase({ schema: softSchema, sql: softHarness.sql });
-
-        await seed(plain);
-        await seed(soft);
-    });
-
     bench("findMany — plain table (no scope)", async () => {
         await plain.findMany("todos", { where: { priority: "high" } });
     });

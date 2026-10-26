@@ -24,17 +24,18 @@ const NOW = 1_700_000_000_000;
 
 const limiter = new RateLimiter({ config, now: () => NOW });
 
-describe("RateLimiter.getValue", () => {
-    // Prime in beforeAll: CodSpeed's instrumented runner honors beforeAll but does
-    // NOT pick up module-top-level await state, so a top-level prime would leave
-    // the limiter empty and getValue() projecting from "no prior".
-    beforeAll(async () => {
-        for (let index = 0; index < 100; index += 1) {
-            // eslint-disable-next-line no-await-in-loop -- ordered stateful calls
-            await limiter.limit("hits", { key: "user-42" });
-        }
-    });
+// Prime in a file-level beforeAll. CodSpeed's instrumented runner does not pick up module-top-level await state, and
+// vitest's own bench runner skips hooks registered inside a `describe` (its `runBenchmarkSuite` recurses into
+// sub-suites without running their hooks), which left getValue() projecting from "no prior". A file-level hook
+// runs under both.
+beforeAll(async () => {
+    for (let index = 0; index < 100; index += 1) {
+        // eslint-disable-next-line no-await-in-loop -- ordered stateful calls
+        await limiter.limit("hits", { key: "user-42" });
+    }
+});
 
+describe("RateLimiter.getValue", () => {
     bench("1 lookup + projection", async () => {
         await limiter.getValue("hits", { key: "user-42" });
     });
