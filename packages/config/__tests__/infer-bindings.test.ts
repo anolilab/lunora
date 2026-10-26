@@ -1900,6 +1900,32 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
     });
 
+    it("keys LUNORA_RELAY_SECRET when the entry re-exports the replica package through a tsconfig path alias", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("tsconfig.json", `{\n    "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["src/*"] } }\n}\n`);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport * from "@/server/barrel";\n`);
+        write("src/server/barrel.ts", `export * from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys the client's relay secret for a client imported through a tsconfig path alias", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("tsconfig.json", `{\n    "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["src/*"] } }\n}\n`);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/client.ts", `export * from "@lunora/replica";\n`);
+        write(
+            "src/server/events.ts",
+            `import { EventLogDOClient } from "@/server/client";\n\nexport const log = (env: Env) => new EventLogDOClient({ env });\n`,
+        );
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
     it("keys LUNORA_RELAY_SECRET for a barrel reached first through a path that hides the replica class and then through an open one", async () => {
         expect.assertions(1);
 

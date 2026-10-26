@@ -217,9 +217,35 @@ const BARREL_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", 
  * source extension is probed, then a directory's `index`. A bare specifier is left undefined; the caller
  * matches {@link EVENT_LOG_PACKAGE} by name before asking.
  */
+/** The compiler options of the nearest tsconfig.json, read the way TypeScript reads them. Empty when the project has none. */
+const compilerOptionsFor = (fromFile: string): ts.CompilerOptions => {
+    const configPath = ts.findConfigFile(dirname(fromFile), (path) => ts.sys.fileExists(path));
+
+    if (configPath === undefined) {
+        return {};
+    }
+
+    const read = ts.readConfigFile(configPath, (path) => ts.sys.readFile(path));
+
+    return ts.parseJsonConfigFileContent(read.config, ts.sys, dirname(configPath)).options;
+};
+
+/**
+ * The file a re-export's specifier names. A relative specifier is probed against the TypeScript source extensions and a directory's
+ * `index`. Any other specifier (a tsconfig `paths` alias, `baseUrl`) resolves the way the project's own TypeScript resolves it. The replica package is matched by name before a barrel is resolved, so it is never read as a file here.
+ */
 const resolveBarrel = (fromFile: string, specifier: string): string | undefined => {
-    if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
+    if (specifier === EVENT_LOG_PACKAGE) {
         return undefined;
+    }
+
+    if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
+        const options: ts.CompilerOptions = { moduleResolution: ts.ModuleResolutionKind.Bundler, ...compilerOptionsFor(fromFile) };
+
+        // Only the project's own sources are followed. An installed package's exports map is not read, so no node_modules file is parsed.
+        const resolved = ts.resolveModuleName(specifier, fromFile, options, ts.sys).resolvedModule;
+
+        return resolved?.isExternalLibraryImport === true ? undefined : resolved?.resolvedFileName;
     }
 
     const stem = join(dirname(fromFile), specifier.replace(SOURCE_SPECIFIER_EXTENSION, ""));
