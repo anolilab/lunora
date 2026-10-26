@@ -319,7 +319,7 @@ const describeCellProblem = (problem: Extract<CsvProblem, { kind: "cell-type" }>
     }
 
     if (problem.expected === "date") {
-        return t("line {line}: column “{column}” must be an ISO-8601 date or epoch milliseconds, got “{value}”.", {
+        return t("line {line}: column “{column}” must be an ISO-8601 date or epoch milliseconds of at least 11 digits, got “{value}”.", {
             column: problem.column,
             line: problem.record,
             value: problem.value,
@@ -431,6 +431,18 @@ type ImportClient = ReturnType<typeof useLunora>;
 /** A shard's answer to an `importShard` check: the echo of `dryRun` marks one that honoured the flag. */
 type DryRunAnswer = ImportShardResult & { dryRun?: boolean };
 
+/**
+ * Why an import stopped. `refused` marks a failure whose message already says what was written. `nextLine` is the line after the last
+ * completed chunk, which is where an import that stopped between two requests has to resume.
+ */
+interface ImportFailure {
+    message: string;
+    nextLine?: number;
+    refused?: true;
+    rows: number;
+    unknownFrom?: number;
+}
+
 /** The rows a shard reported as written, summed over its tables. */
 const insertedRowCount = (inserted: Record<string, number>): number => Object.values(inserted).reduce((sum, count) => sum + count, 0);
 
@@ -448,7 +460,7 @@ const sendImport = async (
     onProgress: (text: string) => void,
     file: File,
     csvTable: null | string,
-): Promise<{ failure: { message: string; rows: number; unknownFrom?: number } | undefined; total: ImportShardResult }> => {
+): Promise<{ failure: ImportFailure | undefined; total: ImportShardResult }> => {
     const total: ImportShardResult = { conflicts: 0, errors: [], inserted: {} };
     let prepared: { rows: number; source: ImportSource };
 
@@ -523,6 +535,9 @@ const sendImport = async (
     }
 
     let sent = 0;
+    let nextLine = 1;
+    // Set when the shard refused rows, whose message says what was written.
+    const stop: { refused?: true } = {};
     // The start line of the chunk whose request has not answered yet. A request that fails without an answer leaves its rows' fate unknown.
     const pending: { startLine?: number } = {};
 
@@ -548,12 +563,15 @@ const sendImport = async (
         }
 
         sent += rows.length;
+        nextLine = startLine + rows.length;
 
         // The shard refused rows that the check let through, so the rest of the file is not sent. The thrown error reaches the
         // caller's catch, which keeps the structured errors above for display. Rows the shard accepted are already written, so the
         // message names how many and where a re-import has to resume; a whole-file re-import would write them twice.
         if (result.errors.length > 0) {
             const written = insertedRowCount(total.inserted);
+
+            stop.refused = true;
 
             throw new Error(
                 written === 0
@@ -582,7 +600,7 @@ const sendImport = async (
     } catch (error_) {
         // A refusal clears `pending` before it throws, so only a request that never answered leaves it set. `rows` counts the rows of the
         // completed chunks, refused or conflicting ones included, because the caller says how far the import got.
-        return { failure: { message: errorMessage(error_), rows: sent, unknownFrom: pending.startLine }, total };
+        return { failure: { message: errorMessage(error_), nextLine, rows: sent, unknownFrom: pending.startLine, ...stop }, total };
     }
 };
 
@@ -671,13 +689,27 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         if (failure === undefined) {
             recordShard(shardKey);
             setImportResult(total);
-        } else if (failure.unknownFrom === undefined) {
-            // A refusal names its bad rows and its message already says how many rows were written, so it is shown as it is.
+        } else if (failure.unknownFrom === undefined && (failure.refused === true || failure.rows === 0)) {
+            // A refusal names its bad rows and its message already says how many rows were written, so it is shown as it is. So is a
+            // failure before any chunk was sent, where nothing was written.
             if (total.errors.length > 0) {
                 setImportResult(total);
             }
 
             setError(failure.message);
+        } else if (failure.unknownFrom === undefined) {
+            // The file could not be read for the next chunk, so no request is in doubt but the chunks before it are written.
+            setImportResult(total);
+            setError(
+                t(
+                    "Import stopped after {rows} rows: {message}. The counts below cover those rows. Rows from line {line} onward were not sent: do not import the whole file again, import from that line onward, or delete the written rows first and then import the whole file.",
+                    {
+                        line: failure.nextLine,
+                        message: failure.message,
+                        rows: failure.rows,
+                    },
+                ),
+            );
         } else {
             // A request that never answered: its chunk may have written rows, whatever the completed chunks reported.
             setImportResult(total);

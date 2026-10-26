@@ -509,6 +509,56 @@ describe("exportImportPanel", () => {
         expect(importCalls(mock)).toHaveLength(2);
     });
 
+    it("says rows were written and where to resume when the file cannot be read for a later chunk", async () => {
+        expect.assertions(4);
+
+        const mock = createClient();
+        const lines = Array.from({ length: 2400 }, (_, index) =>
+            JSON.stringify({ doc: { __id__: `m${index.toString()}`, text: "x".repeat(900) }, table: "messages" }),
+        );
+        const text = lines.join("\n");
+        let laterPieces = 0;
+
+        // The file is read in three passes (count, check, write). The write pass reads its second piece only after the first piece's
+        // chunks are sent, so a read that fails there stops the import between two requests.
+        class ChangingFile extends File {
+            public override slice(start?: number, end?: number, type?: string): Blob {
+                if ((start ?? 0) > 0) {
+                    laterPieces += 1;
+
+                    if (laterPieces === 5) {
+                        const unreadable = new Blob([]);
+
+                        unreadable.arrayBuffer = async () => {
+                            throw new Error("The requested file could not be read");
+                        };
+
+                        return unreadable;
+                    }
+                }
+
+                return super.slice(start, end, type);
+            }
+        }
+
+        render(renderPanel(mock));
+
+        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new ChangingFile([text], "shard.ndjson")] } });
+        fireEvent.click(screen.getByTestId("ei-import"));
+        fireEvent.click(screen.getByTestId("ei-import-confirm"));
+
+        const error = await screen.findByTestId("ei-error");
+        const written = importCalls(mock).reduce((sum, call) => sum + call.rows.length, 0);
+
+        expect(written).toBeGreaterThan(0);
+        expect(error.textContent).toContain(`Import stopped after ${written.toString()} rows`);
+        expect(error.textContent).toContain(`Rows from line ${(written + 1).toString()} onward were not sent`);
+
+        const importResult = await screen.findByTestId("ei-import-result");
+
+        expect(importResult.textContent).toContain(`Inserted ${written.toString()}`);
+    });
+
     it("says nothing was written when the first chunk is refused before any row lands", async () => {
         expect.assertions(2);
 
@@ -822,6 +872,23 @@ describe("exportImportPanel", () => {
 
         expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
         expect(error.textContent).toBe("Invalid CSV: line 1001: column “count” must be a number, got “x”.");
+    });
+
+    it("tells the operator that epoch milliseconds in a date cell need at least 11 digits", async () => {
+        expect.assertions(2);
+
+        const mock = createClient(undefined, TYPED_COLUMNS);
+
+        render(renderPanel(mock));
+
+        await importCsv("id,day\nm1,86400000\n", "messages");
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
+        expect(error.textContent).toBe(
+            "Invalid CSV: line 2: column “day” must be an ISO-8601 date or epoch milliseconds of at least 11 digits, got “86400000”.",
+        );
     });
 
     it("writes nothing for a number a double would round, and points to a bigint column", async () => {
