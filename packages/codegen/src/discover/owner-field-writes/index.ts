@@ -222,7 +222,9 @@ const identityWritesInObjectLiteral = (
 /** Identity columns written from `args` by a single `ctx.db` write call. */
 const ownerFieldWritesInCall = (call: CallExpression, relativePath: string, ownerFieldOf: (exportName: string) => string | undefined): OwnerFieldWriteIR[] => {
     const method = contextDatabaseWriteMethod(call.getExpression());
-    const documentArgument = method === undefined ? undefined : call.getArguments()[1];
+    // `patch` and `replace` take the table and the id before the document; `insert` takes the table before it.
+    const documentIndex = method === "patch" || method === "replace" ? 2 : 1;
+    const documentArgument = method === undefined ? undefined : call.getArguments()[documentIndex];
 
     if (method === undefined || documentArgument === undefined) {
         return [];

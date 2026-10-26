@@ -106,4 +106,65 @@ describe("discoverTableWrites", () => {
 
         expect(tablesAt.get(markerLine(SOURCE, "dynamic"))).toStrictEqual([""]);
     });
+
+    it("reads a table name held in a constant of literal type", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "constant.ts"),
+            `type Id<T extends string> = string & { readonly __table: T };
+interface Db {
+    patch: (table: string, id: Id<"posts">, patch: object) => Promise<void>;
+}
+declare const mutation: (config: { handler: (ctx: { db: Db }, args: { id: Id<"posts"> }) => Promise<void> }) => unknown;
+
+const POSTS = "posts";
+
+export const rename = mutation({
+    handler: async (ctx, args) => {
+        await ctx.db.patch(POSTS, args.id, {});
+    },
+});
+`,
+            "utf8",
+        );
+
+        const project = new Project({ compilerOptions: { strict: true }, skipAddingFilesFromTsConfig: true });
+        const tables = discoverTableWrites(project, join(workdir, "lunora"))
+            .filter((write) => write.file === "constant")
+            .map((write) => write.table);
+
+        expect(tables).toStrictEqual(["posts"]);
+    });
+
+    it("reads the table of a `const db = ctx.db.<table>` alias, so its id-first patch keeps its fields", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "alias.ts"),
+            `type Id<T extends string> = string & { readonly __table: T };
+interface Db {
+    todos: { patch: (id: Id<"todos">, patch: object) => Promise<void> };
+    patch: (table: string, id: string, patch: object) => Promise<void>;
+}
+declare const mutation: (config: { handler: (ctx: { db: Db }, args: { id: Id<"todos"> }) => Promise<void> }) => unknown;
+
+export const rename = mutation({
+    handler: async (ctx, args) => {
+        const db = ctx.db.todos;
+
+        await db.patch(args.id, { title: "x" });
+    },
+});
+`,
+            "utf8",
+        );
+
+        const project = new Project({ compilerOptions: { strict: true }, skipAddingFilesFromTsConfig: true });
+        const writes = discoverTableWrites(project, join(workdir, "lunora"))
+            .filter((write) => write.file === "alias")
+            .map((write) => [write.method, write.table, write.fields]);
+
+        expect(writes).toStrictEqual([["patch", "todos", ["title"]]]);
+    });
 });
