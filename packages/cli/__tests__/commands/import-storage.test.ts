@@ -79,8 +79,12 @@ const fakeWorker = (): FakeWorker => {
         };
     };
 
-    /** `POST /_lunora/admin/import` — record the rows and report them inserted. */
-    const handleImport = (body: string | Uint8Array | undefined) => {
+    /** `POST /_lunora/admin/import` — record the rows and report them inserted. A `dryRun` POST is a check and records nothing. */
+    const handleImport = (body: string | Uint8Array | undefined, dryRun: boolean) => {
+        if (dryRun) {
+            return json({ conflicts: 0, errors: [], inserted: {}, received: 0 });
+        }
+
         const inserted: Record<string, number> = {};
 
         for (const line of (typeof body === "string" ? body : "").split("\n").filter((entry) => entry.trim().length > 0)) {
@@ -138,7 +142,7 @@ const fakeWorker = (): FakeWorker => {
         const method = init?.method ?? "GET";
 
         if (url.pathname === "/_lunora/admin/import") {
-            return handleImport(init?.body);
+            return handleImport(init?.body, url.searchParams.get("dryRun") === "true");
         }
 
         // The signed-URL minter, and the app-served endpoint the minted URL
@@ -984,7 +988,7 @@ describe("lunora import --with-storage", () => {
 
             // A worker that swallows one row per batch: parity is what catches it.
             const lossyFetch: StreamingFetchLike = async (input, init) => {
-                if (new URL(input).pathname === "/_lunora/admin/import") {
+                if (new URL(input).pathname === "/_lunora/admin/import" && new URL(input).searchParams.get("dryRun") !== "true") {
                     return {
                         body: null,
                         json: async () => {
@@ -1083,7 +1087,7 @@ describe("lunora import --with-storage", () => {
             const root = writeConvexExport({}, { users: [{ _id: "u1" }, { _id: "u2" }] });
 
             const conflictingFetch: StreamingFetchLike = async (input, init) => {
-                if (new URL(input).pathname === "/_lunora/admin/import") {
+                if (new URL(input).pathname === "/_lunora/admin/import" && new URL(input).searchParams.get("dryRun") !== "true") {
                     return {
                         body: null,
                         json: async () => {

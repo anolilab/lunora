@@ -49,7 +49,12 @@ const importRecorder = () => {
     const imported: { doc: Record<string, unknown>; table: string }[] = [];
 
     return {
-        handle: (body: string | Uint8Array | undefined) => {
+        handle: (body: string | Uint8Array | undefined, dryRun = false) => {
+            // A check writes nothing and records nothing: it only answers whether the rows would be refused.
+            if (dryRun) {
+                return jsonResponse({ conflicts: 0, errors: [], inserted: {}, received: 0 });
+            }
+
             const inserted: Record<string, number> = {};
 
             for (const line of (typeof body === "string" ? body : new TextDecoder().decode(body)).split("\n").filter((entry) => entry.trim().length > 0)) {
@@ -72,7 +77,7 @@ const sink = (): Sink => {
     return {
         fetchImpl: async (input, init) =>
             new URL(input).pathname === "/_lunora/admin/import"
-                ? recorder.handle(init?.body)
+                ? recorder.handle(init?.body, new URL(input).searchParams.get("dryRun") === "true")
                 : jsonResponse({ conflicts: 0, errors: [], inserted: {}, received: 0 }),
         imported: recorder.imported,
     };
@@ -536,7 +541,7 @@ describe("storage transfer with a resumable checkpoint", () => {
             const method = init?.method ?? "GET";
 
             if (url.pathname === "/_lunora/admin/import") {
-                return recorder.handle(init?.body);
+                return recorder.handle(init?.body, url.searchParams.get("dryRun") === "true");
             }
 
             if (url.pathname === "/_lunora/admin/storage" && method === "GET") {

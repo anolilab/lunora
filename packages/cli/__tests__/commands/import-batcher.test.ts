@@ -43,14 +43,15 @@ const writeConvexExport = (_blobs: Record<string, string>, tables: Record<string
     return root;
 };
 
-/** Records every row the import posts. */
+/** Records every row the import posts. A `dryRun` POST is a check: it answers as the real pass would, and records and inserts nothing. */
 const fakeWorker = () => {
     const imported: { doc: Record<string, unknown>; table: string }[] = [];
 
     const fetchImpl: StreamingFetchLike = async (input, init) => {
         const inserted: Record<string, number> = {};
+        const dryRun = new URL(input).searchParams.get("dryRun") === "true";
 
-        if (new URL(input).pathname === "/_lunora/admin/import") {
+        if (new URL(input).pathname === "/_lunora/admin/import" && !dryRun) {
             for (const line of String(init?.body ?? "")
                 .split("\n")
                 .filter((entry) => entry.trim().length > 0)) {
@@ -187,7 +188,8 @@ describe("the import batcher", () => {
         let batches = 0;
 
         const failingFetch: StreamingFetchLike = async (input, init) => {
-            if (new URL(input).pathname === "/_lunora/admin/import") {
+            // Counts the real batches only: a check POST runs first and must not use up the failure meant for the real pass.
+            if (new URL(input).pathname === "/_lunora/admin/import" && new URL(input).searchParams.get("dryRun") !== "true") {
                 batches += 1;
 
                 if (batches === 2) {
@@ -285,5 +287,105 @@ describe("the import batcher", () => {
         expect(logs.error.join("\n")).toContain("tenant-7");
         expect(logs.error.join("\n")).toContain("timed out");
         expect(result.body?.failed).toStrictEqual([{ message: "shard did not respond", shardKey: "tenant-7", timedOut: true }]);
+    });
+
+    /** A worker that honours `?dryRun=true`: it refuses any row marked `refuse`, and writes the rest only on a real pass. */
+    const checkingWorker =
+        (writes: string[], dryRuns: boolean[]): StreamingFetchLike =>
+        async (input, init) => {
+            const dryRun = new URL(input).searchParams.get("dryRun") === "true";
+            const rows = String(init?.body ?? "")
+                .split("\n")
+                .filter((line) => line.trim().length > 0)
+                .map((line) => JSON.parse(line) as { doc: { _id: string; refuse?: boolean }; table: string });
+            const errors = rows
+                .filter((row) => row.doc.refuse === true)
+                .map((row, index) => {
+                    return { code: "INVALID", line: index + 1, message: "refused", table: row.table };
+                });
+
+            dryRuns.push(dryRun);
+
+            if (!dryRun) {
+                writes.push(...rows.filter((row) => row.doc.refuse !== true).map((row) => row.doc._id));
+            }
+
+            return {
+                body: null,
+                json: async () => {
+                    return { conflicts: 0, errors, inserted: {}, received: rows.length };
+                },
+                ok: true,
+                status: 200,
+                text: async () => "",
+            };
+        };
+
+    it("writes no row when a later row would be refused, so the rows before it are not left behind", async () => {
+        expect.assertions(4);
+
+        const root = writeConvexExport({}, { docs: [{ _id: "d1" }, { _id: "d2" }, { _id: "d3", refuse: true }] });
+        const writes: string[] = [];
+        const dryRuns: boolean[] = [];
+        const { logger } = capturingLogger();
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: checkingWorker(writes, dryRuns),
+            file: root,
+            logger,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(1);
+        expect(result.error).toBe(`import: ${root} was not written: 1 row(s) would be refused`);
+        expect(dryRuns).toStrictEqual([true]);
+        expect(writes).toStrictEqual([]);
+    });
+
+    it("stops before the real pass when a worker writes during its check, as one that ignores the flag does", async () => {
+        expect.assertions(3);
+
+        const root = writeConvexExport({}, { docs: [{ _id: "d1" }, { _id: "d2" }] });
+        const writes: string[] = [];
+        const dryRuns: boolean[] = [];
+        const { logger } = capturingLogger();
+        const ignoringFlag: StreamingFetchLike = async (input, init) => {
+            const worker = checkingWorker(writes, dryRuns);
+            const response = await worker(input, init);
+
+            // The worker wrote whatever it was sent, dry run or not, and reports the rows as inserted.
+            if (new URL(input).searchParams.get("dryRun") === "true") {
+                writes.push(
+                    ...String(init?.body ?? "")
+                        .split("\n")
+                        .filter((line) => line.trim().length > 0)
+                        .map((line) => (JSON.parse(line) as { doc: { _id: string } }).doc._id),
+                );
+
+                return {
+                    ...response,
+                    json: async () => {
+                        return { conflicts: 0, errors: [], inserted: { docs: 2 }, received: 2 };
+                    },
+                };
+            }
+
+            return response;
+        };
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: ignoringFlag,
+            file: root,
+            logger,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(1);
+        expect(result.error).toContain("wrote rows during its check");
+        expect(dryRuns).toStrictEqual([true]);
     });
 });

@@ -127,6 +127,33 @@ const workerDoubleOver = (bucket: Bucket): { fetchImpl: StreamingFetchLike; impo
     const imported: string[] = [];
     const puts: { bucket: string | undefined; key: string }[] = [];
 
+    /** A `dryRun` POST is the check before the import: it records nothing. A real POST records its rows and reports every document inserted. */
+    const importAnswer = (url: URL, body: string): Awaited<ReturnType<StreamingFetchLike>> => {
+        if (url.searchParams.get("dryRun") === "true") {
+            return {
+                body: null,
+                json: async () => {
+                    return { inserted: {}, received: 0 };
+                },
+                ok: true,
+                status: 200,
+                text: async () => "",
+            };
+        }
+
+        imported.push(body);
+
+        return {
+            body: null,
+            json: async () => {
+                return { inserted: { users: DOCUMENTS.length }, received: DOCUMENTS.length };
+            },
+            ok: true,
+            status: 200,
+            text: async () => "",
+        };
+    };
+
     const fetchImpl: StreamingFetchLike = async (input, init) => {
         const url = new URL(input);
         const method = init?.method ?? "GET";
@@ -141,9 +168,7 @@ const workerDoubleOver = (bucket: Bucket): { fetchImpl: StreamingFetchLike; impo
         }
 
         if (url.pathname === "/_lunora/admin/import") {
-            imported.push(String(init?.body ?? ""));
-
-            return json({ inserted: { users: DOCUMENTS.length }, received: DOCUMENTS.length });
+            return importAnswer(url, String(init?.body ?? ""));
         }
 
         if (url.pathname === "/_lunora/admin/storage/object") {

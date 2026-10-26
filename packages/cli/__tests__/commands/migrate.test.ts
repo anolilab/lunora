@@ -1122,6 +1122,19 @@ describe("lunora migrate d1-to-hyperdrive", () => {
         const fetchImpl: StreamingFetchLike = async (input: string) => {
             calls.push(input);
 
+            // The check before the import writes nothing and reports no rows inserted.
+            if (new URL(input).searchParams.get("dryRun") === "true") {
+                return {
+                    body: null,
+                    json: async () => {
+                        return { conflicts: 0, errors: [], inserted: {} };
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            }
+
             if (input.includes("/_lunora/admin/export")) {
                 return {
                     body: new ReadableStream<Uint8Array>({
