@@ -329,6 +329,22 @@ const valueExportsOf = (statement: ts.VariableStatement, imported: ReadonlyMap<s
 };
 
 /**
+ * The export an exported class makes when it extends a name the file imported, such as `export class Log extends EventLogDO`. A subclass
+ * inherits the base's `fetch`, so it serves the same routes as the imported class does.
+ */
+const subclassExportsOf = (statement: ts.ClassDeclaration, imported: ReadonlyMap<string, NameSource>): ModuleExport[] => {
+    const base = statement.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types[0]?.expression;
+
+    if (!isExported(statement) || statement.name === undefined || base === undefined || !ts.isIdentifier(base)) {
+        return [];
+    }
+
+    const binding = imported.get(base.text);
+
+    return binding === undefined ? [] : [{ exported: statement.name.text, module: binding.module, name: binding.name }];
+};
+
+/**
  * Every export of a module that forwards from another module: `export { a as b } from "m"`, an export of a name it imported,
  * `export const b = a` of a name it imported, and `export * from "m"`. Read from the syntax tree, so a comment or string forwards
  * nothing. `export * as ns` binds a namespace, not the names, so it is skipped.
@@ -339,6 +355,10 @@ const forwardedExports = (source: ts.SourceFile): ModuleExport[] => {
     return source.statements.flatMap((statement): ModuleExport[] => {
         if (ts.isVariableStatement(statement)) {
             return valueExportsOf(statement, imported);
+        }
+
+        if (ts.isClassDeclaration(statement)) {
+            return subclassExportsOf(statement, imported);
         }
 
         if (!ts.isExportDeclaration(statement) || statement.isTypeOnly) {

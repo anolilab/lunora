@@ -1597,6 +1597,24 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
     });
 
+    it("keys LUNORA_RELAY_SECRET for an entry that exports a subclass of the imported EventLogDO", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nimport { EventLogDO } from "@lunora/replica";\n\nexport class Log extends EventLogDO {}\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for an exported class that extends an unrelated import", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nimport { ShardDO as Base } from "@lunora/do";\n\nexport class Log extends Base {}\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
     it("keys LUNORA_RELAY_SECRET for an entry that exports the imported EventLogDO as a value", async () => {
         expect.assertions(1);
 
