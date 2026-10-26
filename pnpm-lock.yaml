@@ -2194,6 +2194,9 @@ importers:
 
   examples/privacy:
     dependencies:
+      '@lunora/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@lunora/privacy':
         specifier: workspace:*
         version: link:../../packages/privacy
@@ -2209,6 +2212,9 @@ importers:
       '@lunora/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow
+      better-auth:
+        specifier: catalog:auth
+        version: 1.7.7(84ebbefaea2f0371e8cc0eff3e1685c9)
       lunorash:
         specifier: workspace:*
         version: link:../../packages/lunora
@@ -4428,6 +4434,9 @@ importers:
         specifier: catalog:privacy
         version: 0.8.3
     devDependencies:
+      '@cloudflare/vitest-plugin':
+        specifier: catalog:cloudflare
+        version: 1.4.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)(vitest@4.1.11)
       '@types/node':
         specifier: catalog:types
         version: 26.6.4

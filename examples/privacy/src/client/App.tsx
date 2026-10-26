@@ -3,13 +3,25 @@ import type { ReactElement, SyntheticEvent } from "react";
 import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
+import { authClient } from "./auth-client";
+import { SignIn } from "./SignIn";
 
 /**
- * One page for the whole privacy surface: a task list, and the requests a user can
- * open against their own data. Every request id here comes from the server, and the
- * server decides whose data it is from the signed-in session.
+ * A finished export's download link. The server signs it and the `/privacy/files` route checks it, so
+ * the link is only asked for while the export is ready.
  */
-export const App = (): ReactElement => {
+const DownloadLink = ({ requestId }: { readonly requestId: string }): ReactElement | undefined => {
+    const link = useQuery(api.requests.downloadUrl, { requestId });
+
+    return link === undefined ? undefined : <a href={link}>Download</a>;
+};
+
+/**
+ * The signed-in page: a task list, and the requests a user can open against their own data. Every request id
+ * here comes from the server, and the server decides whose data it is from the signed-in session. It mounts
+ * only once there is a session, so its live queries never subscribe as an anonymous caller.
+ */
+const Workspace = ({ email }: { readonly email: string }): ReactElement => {
     const [draft, setDraft] = useState("");
     const [message, setMessage] = useState<string | undefined>(undefined);
 
@@ -46,6 +58,18 @@ export const App = (): ReactElement => {
     return (
         <main>
             <h1>Your data</h1>
+
+            <p>
+                Signed in as {email}{" "}
+                <button
+                    onClick={() => {
+                        void authClient.signOut();
+                    }}
+                    type="button"
+                >
+                    Sign out
+                </button>
+            </p>
 
             <form
                 onSubmit={(event) => {
@@ -93,7 +117,7 @@ export const App = (): ReactElement => {
                 <ul>
                     {(requests ?? []).map((request) => (
                         <li key={request.id}>
-                            {request.type} · {request.status}{" "}
+                            {request.type} · {request.status} {request.status === "ready" ? <DownloadLink requestId={request.id} /> : undefined}
                             {request.status === "grace" ? (
                                 <button
                                     onClick={() => {
@@ -112,4 +136,19 @@ export const App = (): ReactElement => {
             {message === undefined ? undefined : <p role="status">{message}</p>}
         </main>
     );
+};
+
+/** The session gate: the sign-in form until there is a session, then the page. */
+export const App = (): ReactElement => {
+    const session = authClient.useSession();
+
+    if (session.isPending) {
+        return <p>Loading…</p>;
+    }
+
+    if (session.data === null) {
+        return <SignIn />;
+    }
+
+    return <Workspace email={session.data.user.email} />;
 };

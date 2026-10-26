@@ -6,12 +6,13 @@
  *   await privacyFor(ctx, await identityOf(ctx)).requestExport();
  */
 import type { PrivacyConfig } from "@lunora/privacy";
-import { defineDataset, definePrivacy } from "@lunora/privacy";
+import { authDataset, defineDataset, definePrivacy, retain } from "@lunora/privacy";
 import { remotePorts } from "@lunora/privacy/workflow";
 import type { WorkflowRunContext } from "@lunora/workflow";
 
 import { internal } from "./_generated/internal.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
+import { authDatabaseFrom, withAuthTables } from "./privacy-auth";
 import { localPorts } from "./privacy-ports";
 import { presets } from "./privacy-presets";
 import { tombstonesFrom } from "./privacy-tombstones";
@@ -23,6 +24,23 @@ export const tasksData = defineDataset("tasks", {
     purpose: "Tasks the user keeps in the list",
     tables: { tasks: {} },
 });
+
+/**
+ * The invoices a user was billed. The German voucher rule keeps each one for its statutory period, so
+ * erasure archives the row rather than deleting it, and the sweep purges it once that period has ended.
+ */
+export const billingData = defineDataset("billing", {
+    legalBasis: "legal_obligation",
+    origin: "provided",
+    purpose: "Invoices issued to the user, kept for the tax retention period",
+    tables: { invoices: { erase: retain("de.voucher", { from: "issuedAt" }) } },
+});
+
+/**
+ * better-auth's sign-in tables: the user, session and account rows. They live in D1, so only the workflow
+ * reaches them (see `privacy-auth.ts`).
+ */
+export const authData = authDataset();
 
 /** The params of the restore workflow: the subject ids the restored shard holds. */
 export interface RestoreParameters {
@@ -44,8 +62,11 @@ const tombstoneSecret = process.env.PRIVACY_TOMBSTONE_SECRET;
 
 /** A workflow step's ports: the shard through `ctx.run`, and the tombstones, which live outside it, through `ctx.env`. */
 const workflowPorts = (context: PrivacyWorkflowRun) => {
+    const remote = remotePorts(async (call) => context.run(internal.requests.privacyPort, call));
+
     return {
-        ...remotePorts(async (call) => context.run(internal.requests.privacyPort, call)),
+        ...remote,
+        data: withAuthTables(remote.data, authDatabaseFrom(context.env)),
         tombstones: tombstonesFrom(context.env),
     };
 };
@@ -56,7 +77,7 @@ const workflowPorts = (context: PrivacyWorkflowRun) => {
  * up and judge a row the same way.
  */
 export const privacyConfig: PrivacyConfig<PrivacyContext> = {
-    datasets: [tasksData],
+    datasets: [tasksData, billingData, authData],
     ports: (context) => ("db" in context ? localPorts(context) : workflowPorts(context)),
     presets,
     tombstoneSecret,

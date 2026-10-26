@@ -1,6 +1,8 @@
+import { handleAuthRequest } from "@lunora/auth";
 import type { ExecutionContextLike, ScheduledControllerLike } from "lunorash/runtime";
 
 import { createShardDO } from "../../lunora/_generated/shard.js";
+import { authFor } from "./auth";
 import type { WorkerEnv } from "./worker";
 import { buildWorker } from "./worker";
 
@@ -21,6 +23,13 @@ let worker: ReturnType<typeof buildWorker> | undefined;
  */
 export default {
     async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContextLike): Promise<Response> {
+        // Sign-in is better-auth's own router, mounted before Lunora's. Everything else falls through.
+        const authResponse = await handleAuthRequest(await authFor(env), request);
+
+        if (authResponse) {
+            return authResponse;
+        }
+
         worker ??= buildWorker(env);
 
         return worker.fetch(request, env, ctx);

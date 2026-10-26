@@ -12,6 +12,8 @@ import type { PrivacyTombstonesDO } from "../../src/server/privacy-tombstones-do
 export { PrivacyTombstonesDO } from "../../src/server/privacy-tombstones-do";
 
 export interface Env {
+    AUTH_SECRET: string;
+    DB: D1Database;
     PRIVACY: DurableObjectNamespace<PrivacyTestDO>;
     PRIVACY_TOMBSTONES: DurableObjectNamespace<PrivacyTombstonesDO>;
 }

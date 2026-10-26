@@ -11,6 +11,7 @@ export interface InternalApiTypes {
         retryPrivacyRequest: FunctionReference<"mutation", { requestId: string }, { requestId: string; status: "restarted"; } | { requestId: string; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; }>;
     };
     requests: {
+        exportFile: FunctionReference<"query", { key: string }, null | import("../privacy-files.js").StoredFile>;
         privacyPort: FunctionReference<"mutation", { method: string; payload: string }, string>;
         privacySweep: FunctionReference<"mutation", {}, { expired: string[]; purged: number; }>;
         privacyTick: FunctionReference<"mutation", {}, { approaching: string[]; overdue: string[]; }>;
@@ -24,6 +25,7 @@ export const internal: InternalApiTypes = {
         retryPrivacyRequest: { __lunoraRef: "admin:retryPrivacyRequest" },
     },
     requests: {
+        exportFile: { __lunoraRef: "requests:exportFile" },
         privacyPort: { __lunoraRef: "requests:privacyPort" },
         privacySweep: { __lunoraRef: "requests:privacySweep" },
         privacyTick: { __lunoraRef: "requests:privacyTick" },

@@ -8,9 +8,11 @@ import { dispatchPort } from "@lunora/privacy/workflow";
 import { rateLimit } from "lunorash/ratelimit";
 import { v } from "lunorash/values";
 
-import { internalMutation, mutation, query } from "./_generated/server.js";
+import type { QueryCtx } from "./_generated/server.js";
+import { internalMutation, internalQuery, mutation, query } from "./_generated/server.js";
 import { byCaller, limiter } from "./limits";
 import { privacyConfig, privacyFor } from "./privacy";
+import type { StoredFile } from "./privacy-files";
 import { localPorts } from "./privacy-ports";
 import { identityOf } from "./subject";
 
@@ -101,6 +103,20 @@ export const privacySweep = internalMutation.mutation(async ({ ctx }) => {
 
     return { expired: expired.map((request) => request.id), purged };
 });
+
+/** The archive part a `${requestId}/${name}` key names, or `null`. The download route calls it only after the link checks out. */
+export const readExportFile = async (ctx: Pick<QueryCtx, "db">, key: string): Promise<null | StoredFile> => {
+    const [requestId = "", ...rest] = key.split("/");
+    const row = await ctx.db
+        .query("exportFiles")
+        .withIndex("byRequestAndName", (q) => q.eq("requestId", requestId).eq("name", rest.join("/")))
+        .first();
+
+    return row === null ? null : { body: row.body, encoding: row.encoding, name: row.name };
+};
+
+/** Internal: the download route reads an archive part through it. Never reachable from a client. */
+export const exportFile = internalQuery.input({ key: v.string().max(256) }).query(async ({ args: { key }, ctx }) => readExportFile(ctx, key));
 
 /** The port the durable workflows call through `ctx.run`. Internal: never reachable from a client. */
 export const privacyPort = internalMutation

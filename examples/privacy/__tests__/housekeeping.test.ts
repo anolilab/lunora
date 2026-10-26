@@ -12,6 +12,7 @@ import { privacyPort, privacySweep } from "../lunora/requests";
 import schema from "../lunora/schema";
 import { addTask } from "../lunora/tasks";
 import { buildWorker } from "../src/server/worker";
+import { d1Double } from "./d1-double";
 import { tombstoneNamespace, workflowContext } from "./workflow-context";
 
 type Harness = ReturnType<typeof lunoraTest>;
@@ -66,7 +67,11 @@ describe("privacy housekeeping", () => {
 
         const shard = shardSpy();
 
-        await buildWorker({ SHARD: shard.namespace }).scheduled({ cron: DAILY, scheduledTime: 0 }, {}, fakeContext);
+        await buildWorker({ AUTH_SECRET: "test-auth-secret-0123456789abcdef", DB: d1Double().db, SHARD: shard.namespace }).scheduled(
+            { cron: DAILY, scheduledTime: 0 },
+            {},
+            fakeContext,
+        );
 
         expect(shard.bodies).toContainEqual({ args: {}, functionPath: "requests:privacySweep" });
     });
@@ -78,7 +83,7 @@ describe("privacy housekeeping", () => {
 
         await privacyWorkflows.exportHandler(
             workflowContext({
-                env: { PRIVACY_TOMBSTONES: tombstoneNamespace() },
+                env: { DB: d1Double().db, PRIVACY_TOMBSTONES: tombstoneNamespace() },
                 params: { requestId: request.id },
                 run: async (_reference, args) => t.run(async (ctx) => appCtx(ctx).runMutation(privacyPort, args)),
             }),

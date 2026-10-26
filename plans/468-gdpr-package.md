@@ -7,6 +7,15 @@ LR/TR item in §10. Phase 1 starts only after the Phase 0 gate in §7 is green. 
 protection lawyer, and every row marked **TAX REVIEW** needs a Steuerberater, before the matching
 default ships. Nothing in this plan is legal advice.
 
+**Update 2026-10-26.** The example (`examples/privacy`) now covers the download (a signed `/privacy/files`
+route, mounted on the Worker, over the `exportFiles` table), a retained table (`invoices` under `de.voucher`, archived to
+`privacy_archive` and purged by the sweep), and export expiry, all on workerd. The generated workflow
+entrypoints for the per-call handlers are checked by `__tests__/generated-workflows.test.ts`, which closes
+the §4.2 check. The summary PDF was re-measured on workerd with `@cantoo/pdf-lib` (600 datasets: 37 pages,
+96 KB, 300 ms; the earlier 40-page figure was for `pdf-lib` 1.17.1, so the two are not like-for-like).
+Still open: every LR/TR item in §10, and an `authDataset` for the example, which needs the example to
+adopt `@lunora/auth` first (its identity is claims, not shard rows).
+
 ## 0. Headline finding
 
 Every Lunora app that handles EU users has to provide data export (GDPR Art. 15 and 20) and account

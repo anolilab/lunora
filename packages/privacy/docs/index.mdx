@@ -89,8 +89,8 @@ export const privacyPort = internalMutation
 
 Register the durable handlers with `defineWorkflow`. The config must be an object literal in your `workflows.ts`, because codegen reads it statically. Each handler binds the ports from its own context.
 
-:::caution[Not yet verified]
-Codegen has been checked only with a handler that is a property of a module-level object. The handlers here sit on the per-call `privacyFor(ctx)` result, which codegen has not been checked against yet. Plan §4.2 tracks this. Do not ship the registration on the strength of this page alone.
+:::note[Verified]
+The per-call `privacyFor(ctx)` handlers are checked against codegen. `examples/privacy` registers them in `lunora/workflows.ts`, and its generated entrypoints are checked by `__tests__/generated-workflows.test.ts`.
 :::
 
 ```ts
@@ -136,8 +136,6 @@ A table with a `userId` column must be covered by a dataset, or excluded with a 
 
 ## What is not finished
 
-- There is no full end-to-end demo. `examples/privacy` runs export and erasure over a task list, but it has no sign-in and declares no `authDataset`, so the auth tables are not erased. Payments has no dataset either: the tie-in is `retain()` with the `de.voucher` retention rule, and the app binds its own tables to it. The example does not use `retain()`.
-- The workerd suite for the storage paths is not written.
-- The workflow registration above is not yet verified against codegen (see the caution above).
+- The example has no `authDataset`. Its identity comes from the session's claims, not from shard rows, so there is nothing for it to cover. An app that adds `@lunora/auth` keeps its auth tables in its own database and should declare one over them.
 - The Studio's Privacy requests tab appears only when the app declares `@lunora/privacy`.
 - The legal and tax review of the defaults is still open. See the [legal basis page](/docs/packages/privacy/legal).
