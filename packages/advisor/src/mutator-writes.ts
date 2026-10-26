@@ -1,11 +1,11 @@
 /**
- * One whole-row `ctx.db.replace(id, document)` write discovered inside a custom
+ * One whole-row `ctx.db.replace("table", id, document)` write discovered inside a custom
  * mutator's authoritative `server` impl (`lunora/mutators.ts`) — the input the
  * `mutator_full_row_replace` lint consumes.
  *
  * In the local-first sync engine a `replace` overwrites the entire row, so a
  * concurrent edit to a *different* column (committed between this mutator's read
- * and its write) is silently clobbered. `patch(id, { onlyTheField })` merges at
+ * and its write) is silently clobbered. `patch("table", id, { onlyTheField })` merges at
  * the column level instead, letting independent field edits coexist — the
  * blessed pattern for mutators on a synced (poke-live) table. Produced by the
  * codegen feeder, which attributes each `replace` to the mutator export

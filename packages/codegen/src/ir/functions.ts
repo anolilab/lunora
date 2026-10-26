@@ -196,11 +196,11 @@ export interface MutatorIR {
 }
 
 /**
- * A whole-row `ctx.db.replace(id, document)` write discovered inside a custom
+ * A whole-row `ctx.db.replace("table", id, document)` write discovered inside a custom
  * mutator's inline `server` impl (`lunora/mutators.ts`) — the input the
  * `mutator_full_row_replace` advisor lint consumes. A `replace` overwrites the
  * entire row, so a concurrent edit to a different column on a synced table is
- * clobbered; `ctx.db.patch(id, { field })` merges at the column level instead.
+ * clobbered; `ctx.db.patch("table", id, { field })` merges at the column level instead.
  * Structurally identical to `AdvisorMutatorWrite` so it passes straight through
  * to the advisor without conversion, exactly as `InsertWriteIR` does for
  * `AdvisorInsertWrite`.
