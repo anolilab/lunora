@@ -118,8 +118,8 @@ const filesPrefixOf = (dataset: Dataset, subjectId: string): string | undefined 
 const expireRequestFiles = async (ports: PrivacyPorts, request: RequestRecord): Promise<void> => {
     await deleteRequestFiles(ports.files, request);
 
-    if (request.status === "ready") {
-        await ports.store.update(request.id, { status: transition("ready", "expired") });
+    // A claim, so when a sweep and an erasure both expire the same export only the one that moves it writes the event.
+    if (request.status === "ready" && (await ports.store.claim(request.id, "ready", { status: transition("ready", "expired") }))) {
         await ports.store.addEvent(request.id, ports.now(), "expired");
     }
 };

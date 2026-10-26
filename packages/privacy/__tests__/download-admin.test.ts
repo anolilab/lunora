@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import type { ErasureOptions } from "../src/define";
 import type { DataPort } from "../src/ports";
+import type { RequestRecord } from "../src/requests";
 import type { TombstonePort } from "../src/tombstones";
-import { codeOf, exportFileOf, memoryData, memoryTombstones, setup } from "./harness";
+import { codeOf, exportFileOf, memoryData, memoryRequests, memoryTombstones, setup } from "./harness";
 
 describe("downloadUrl", () => {
     it("returns a fifteen-minute link to a finished export for its subject", async () => {
@@ -208,6 +209,26 @@ describe("admin", () => {
         expect([...files.files.keys()].filter((key) => key.startsWith(`${opened.id}/`))).toStrictEqual([]);
         await expect(privacy.admin.open()).resolves.toStrictEqual([]);
         await expect(privacy.tick()).resolves.toStrictEqual({ approaching: [], overdue: [] });
+    });
+
+    it("writes one expired event when two sweeps reach the same ready export", async () => {
+        const memory = memoryRequests();
+        let stale: ReadonlyArray<RequestRecord> | undefined;
+        // The second sweep reads the export as it was before the first sweep expired it, the way a concurrent sweep would.
+        const racing = {
+            ...memory,
+            listOpen: async () => stale ?? memory.listOpen(),
+        };
+        const { advance, privacy, store } = setup({ store: racing });
+        const opened = await privacy.requestExport();
+
+        await privacy.runExport(opened.id);
+        stale = await memory.listOpen();
+        advance(8);
+        await privacy.admin.sweep();
+        await privacy.admin.sweep();
+
+        expect(store.events.filter((event) => event === `${opened.id}:expired`)).toHaveLength(1);
     });
 
     it("leaves a ready export inside its window alone", async () => {
