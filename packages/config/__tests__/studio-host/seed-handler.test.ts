@@ -89,6 +89,33 @@ describe("handleSeedRequest", () => {
         expect(result.body).toStrictEqual({ error: "fk-parents-empty", ok: false, tables: ["users"] });
     });
 
+    it("refuses a required self-reference into an empty table with a 409, not a thrown 500", () => {
+        expect.assertions(3);
+
+        // The first row of a required self-reference has no earlier row to point at,
+        // and the planner refuses it. The endpoint must answer with the refusal, not
+        // let the throw escape as a server error the studio cannot explain.
+        writeFileSync(
+            join(lunoraDirectory, "schema.ts"),
+            `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    nodes: defineTable({
+        name: v.string(),
+        parentId: v.id("nodes"),
+    }),
+});
+`,
+            "utf8",
+        );
+
+        const result = handleSeedRequest({ body: { count: 3, table: "nodes" }, method: "POST", projectRoot });
+
+        expect(result.status).toBe(409);
+        expect(result.body).toMatchObject({ error: "seed-refused", ok: false });
+        expect((result.body as { message: string }).message).toMatch(/required foreign key "parentId" points at "nodes"/u);
+    });
+
     it("clamps the count to the safety bound", () => {
         expect.assertions(1);
 
