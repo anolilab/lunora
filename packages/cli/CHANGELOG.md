@@ -1,3 +1,24 @@
+## @lunora/cli [1.0.0-alpha.431](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.430...@lunora/cli@1.0.0-alpha.431) (2026-10-26)
+
+### Features
+
+* **studio:** import a CSV file into a table ([#1321](https://github.com/anolilab/lunora/issues/1321)) ([360930a](https://github.com/anolilab/lunora/commit/360930a9edc00a56f90c5cdf6a9d3218e428aeea))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.257
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.135
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.353
+* **@lunora/config:** upgraded to 1.0.0-alpha.407
+* **@lunora/container:** upgraded to 1.0.0-alpha.92
+* **@lunora/d1:** upgraded to 1.0.0-alpha.207
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.263
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.239
+* **@lunora/seed:** upgraded to 1.0.0-alpha.255
+* **@lunora/testing:** upgraded to 1.0.0-alpha.302
+
 ## @lunora/cli [1.0.0-alpha.430](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.429...@lunora/cli@1.0.0-alpha.430) (2026-10-25)
 
 ### Bug Fixes
