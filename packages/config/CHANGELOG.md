@@ -1,3 +1,19 @@
+## @lunora/config [1.0.0-alpha.415](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.414...@lunora/config@1.0.0-alpha.415) (2026-10-26)
+
+### Code Refactoring
+
+* **config:** extract the relay-secret export-graph resolver ([#1361](https://github.com/anolilab/lunora/issues/1361)) ([bec9225](https://github.com/anolilab/lunora/commit/bec922505024d7f1d72592e4f27140612add3efb))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.361
+* **@lunora/seed:** upgraded to 1.0.0-alpha.259
+* **@lunora/studio:** upgraded to 1.0.0-alpha.347
+* **@visulima/colorize:** 2.1.1 → 3.0.0
+* **@visulima/fs:** 6.0.29 → 7.0.0
+* **@visulima/package:** 5.0.42 → 6.0.0
+
 ## @lunora/config [1.0.0-alpha.414](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.413...@lunora/config@1.0.0-alpha.414) (2026-10-26)
 
 
