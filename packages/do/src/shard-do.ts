@@ -5396,11 +5396,7 @@ abstract class ShardDO {
 
         this.forkSealed = true;
 
-        const epoch = bumpCdcEpoch(this.sql as SqlExec);
-
-        this.invalidateCdcMetaCache();
-
-        return epoch;
+        return this.bumpCdcEpochUncached();
     }
 
     /**
@@ -12334,8 +12330,7 @@ abstract class ShardDO {
         // Best-effort: `cdcEnabled()` is false on a stub `sql` handle or a
         // pre-CDC shard, so the bump simply no-ops there.
         if (this.cdcEnabled()) {
-            bumpCdcEpoch(this.sql as SqlExec);
-            this.invalidateCdcMetaCache();
+            this.bumpCdcEpochUncached();
         }
 
         this.recordAudit("pitrRestore", { detail: { restart, restoredTo: armed.restoredTo, undoBookmark: armed.undoBookmark } });
@@ -16727,6 +16722,15 @@ abstract class ShardDO {
         this.cdcEpochCache ??= readCdcEpoch(this.sql as SqlExec);
 
         return this.cdcEpochCache;
+    }
+
+    /** Bump the CDC epoch and drop the CDC memos in one step, so no caller can bump without invalidating. */
+    private bumpCdcEpochUncached(): string {
+        const epoch = bumpCdcEpoch(this.sql as SqlExec);
+
+        this.invalidateCdcMetaCache();
+
+        return epoch;
     }
 
     /**
