@@ -672,6 +672,9 @@ class OwnerRelay extends RelayLink {
     /** The binding this owner last saw or read back, memoized so a cold wake reads `__lunora_relay_binding` at most once. See {@link OwnerRelay.bindingName}. */
     private recordedBinding: string | undefined;
 
+    /** Whether this wake already read `__lunora_relay_binding` back, whatever it found. */
+    private bindingReadBack = false;
+
     /** The owner's current promotion state (plan 075 Phase 4), carried across `relayCount()` calls so hysteresis has memory — a shard hovering near the threshold can't flap. */
     private promotionState: PromotionState = "owned";
 
@@ -1378,9 +1381,13 @@ class OwnerRelay extends RelayLink {
             return live;
         }
 
-        if (this.recordedBinding !== undefined) {
+        // `recordedBinding` alone cannot say "already read, nothing there", so a
+        // shard that never recorded one re-read the table on every flush.
+        if (this.recordedBinding !== undefined || this.bindingReadBack) {
             return this.recordedBinding;
         }
+
+        this.bindingReadBack = true;
 
         try {
             const rows = this.host.sql().exec<{ binding: string }>("SELECT binding FROM __lunora_relay_binding WHERE id = 1").toArray();
