@@ -773,7 +773,11 @@ const fillDevSecrets = (deps: {
     cwd: string;
     info?: (message: string) => void;
     randomHex?: (bytes: number) => string;
-    /** The project's secret sources (`secretSourcesFromBindings`); narrows what is minted to the keys its role needs. Omit for every registry key. */
+
+    /**
+     * The project's secret sources (`secretSourcesFromBindings`). They narrow what is minted to the keys its role needs. Omit them to mint
+     * every registry key.
+     */
     secretSources?: ReadonlyArray<string>;
 }): FillDevSecretsResult => {
     const devVariablesPath = join(deps.cwd, DEV_VARS_FILE);

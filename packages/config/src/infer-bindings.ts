@@ -212,11 +212,6 @@ const SOURCE_SPECIFIER_EXTENSION = /\.[cm]?[jt]sx?$/u;
 /** Barrel source extensions in probe order: TypeScript first, so a `.js` specifier resolves to its `.ts` source. */
 const BARREL_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 
-/**
- * The file a relative star re-export names: its specifier's extension is dropped and each supported
- * source extension is probed, then a directory's `index`. A bare specifier is left undefined; the caller
- * matches {@link EVENT_LOG_PACKAGE} by name before asking.
- */
 /** The compiler options of the nearest tsconfig.json, read the way TypeScript reads them. Empty when the project has none. */
 const compilerOptionsFor = (fromFile: string): ts.CompilerOptions => {
     const configPath = ts.findConfigFile(dirname(fromFile), (path) => ts.sys.fileExists(path));
@@ -231,8 +226,9 @@ const compilerOptionsFor = (fromFile: string): ts.CompilerOptions => {
 };
 
 /**
- * The file a re-export's specifier names. A relative specifier is probed against the TypeScript source extensions and a directory's
- * `index`. Any other specifier (a tsconfig `paths` alias, `baseUrl`) resolves the way the project's own TypeScript resolves it. The replica package is matched by name before a barrel is resolved, so it is never read as a file here.
+ * The file a re-export's specifier names. A relative specifier is probed against the TypeScript source extensions and a
+ * directory's `index`. Any other specifier (a tsconfig `paths` alias, `baseUrl`) resolves the way the project's own TypeScript
+ * resolves it. The replica package is matched by name before a barrel is resolved, so it is never read as a file here.
  */
 const resolveBarrel = (fromFile: string, specifier: string): string | undefined => {
     if (specifier === EVENT_LOG_PACKAGE) {
