@@ -3321,12 +3321,6 @@ interface WirePolicyEdit extends WireRlsEdit {
 }
 ```
 
-### `applyStudioAssetCache` (const)
-
-```ts
-const applyStudioAssetCache: (request: IncomingMessage, response: ServerResponse, fileName: string, stamp: number | undefined) => boolean;
-```
-
 ### `assetContentType` (const)
 
 ```ts
@@ -3439,6 +3433,12 @@ const resolveAdminToken: (root: string) => string | undefined;
 
 ```ts
 const resolveStandaloneDirectory: (resolveFrom?: string) => string | undefined;
+```
+
+### `sendStudioAsset` (const)
+
+```ts
+const sendStudioAsset: (request: IncomingMessage, response: ServerResponse, body: Buffer, contentType: string, fileName: string, stamp: number | undefined) => void;
 ```
 
 ### `sendStudioDocument` (const)
