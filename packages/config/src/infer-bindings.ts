@@ -206,6 +206,165 @@ const EVENT_LOG_PACKAGE = "@lunora/replica";
 /** The export a worker constructs to reach a log, so the one whose use asks for the relay secret. */
 const EVENT_LOG_CLIENT = "EventLogDOClient";
 
+/** The source extension a `.js`-style relative specifier names, so it can be probed against the `.ts` file. */
+const SOURCE_SPECIFIER_EXTENSION = /\.[cm]?[jt]sx?$/u;
+
+/** Barrel source extensions in probe order: TypeScript first, so a `.js` specifier resolves to its `.ts` source. */
+const BARREL_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+
+/**
+ * The file a relative star re-export names: its specifier's extension is dropped and each supported
+ * source extension is probed, then a directory's `index`. A bare specifier is left undefined; the caller
+ * matches {@link EVENT_LOG_PACKAGE} by name before asking.
+ */
+const resolveBarrel = (fromFile: string, specifier: string): string | undefined => {
+    if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
+        return undefined;
+    }
+
+    const stem = join(dirname(fromFile), specifier.replace(SOURCE_SPECIFIER_EXTENSION, ""));
+    const files = BARREL_SOURCE_EXTENSIONS.map((extension) => `${stem}${extension}`);
+    const indexes = BARREL_SOURCE_EXTENSIONS.map((extension) => join(stem, `index${extension}`));
+
+    return [...files, ...indexes].find((candidate) => existsSync(candidate));
+};
+
+/** Where a binding reads a name from: the module it is imported or re-exported from, and the name it has there. */
+interface NameSource {
+    module: string;
+    name: string;
+}
+
+/**
+ * The named imports a file binds, keyed by local name. A type-only import compiles away, so it binds nothing the file can forward.
+ */
+const namedImportSources = (source: ts.SourceFile): Map<string, NameSource> => {
+    const imported = new Map<string, NameSource>();
+
+    for (const statement of source.statements) {
+        if (
+            !ts.isImportDeclaration(statement) ||
+            statement.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword ||
+            !ts.isStringLiteral(statement.moduleSpecifier)
+        ) {
+            continue;
+        }
+
+        const bindings = statement.importClause?.namedBindings;
+        const elements = bindings !== undefined && ts.isNamedImports(bindings) ? bindings.elements : [];
+
+        for (const element of elements) {
+            if (!element.isTypeOnly) {
+                imported.set(element.name.text, { module: statement.moduleSpecifier.text, name: (element.propertyName ?? element.name).text });
+            }
+        }
+    }
+
+    return imported;
+};
+
+/**
+ * One export a module makes that forwards from another module. `exported` is the name it is exported under, or `undefined` for a
+ * star re-export, which carries the requested name through unchanged. `name` is the name read from `module`, or `undefined` for a star.
+ */
+interface ModuleExport {
+    exported: string | undefined;
+    module: string;
+    name: string | undefined;
+}
+
+/**
+ * Every export of a module that forwards from another module: `export { a as b } from "m"`, an export of a name it imported, and
+ * `export * from "m"`. Read from the syntax tree, so a comment or string forwards nothing. `export * as ns` binds a namespace, not
+ * the names, so it is skipped.
+ */
+const forwardedExports = (modulePath: string): ModuleExport[] => {
+    const source = ts.createSourceFile(modulePath, readFileSync(modulePath, "utf8"), ts.ScriptTarget.Latest);
+    const imported = namedImportSources(source);
+
+    return source.statements.flatMap((statement): ModuleExport[] => {
+        if (!ts.isExportDeclaration(statement) || statement.isTypeOnly) {
+            return [];
+        }
+
+        const { exportClause, moduleSpecifier } = statement;
+        const from = moduleSpecifier !== undefined && ts.isStringLiteral(moduleSpecifier) ? moduleSpecifier.text : undefined;
+
+        if (exportClause === undefined) {
+            return from === undefined ? [] : [{ exported: undefined, module: from, name: undefined }];
+        }
+
+        if (!ts.isNamedExports(exportClause)) {
+            return [];
+        }
+
+        return exportClause.elements.flatMap((element): ModuleExport[] => {
+            if (element.isTypeOnly) {
+                return [];
+            }
+
+            const exported = element.name.text;
+            const local = (element.propertyName ?? element.name).text;
+
+            if (from !== undefined) {
+                return [{ exported, module: from, name: local }];
+            }
+
+            const binding = imported.get(local);
+
+            return binding === undefined ? [] : [{ exported, module: binding.module, name: binding.name }];
+        });
+    });
+};
+
+/**
+ * Whether a module forwards the replica package's `target` export under `requested`, or under any name when `requested` is `undefined`
+ * (the worker entry: any export the worker makes of the event-log class hosts the log). A relative barrel is asked for the name its
+ * export reads, so `export { Log as EventLogDO } from "./barrel"` asks the barrel for `Log`. `visited` ends a barrel cycle: a module
+ * asked for the same name twice forwards nothing new.
+ */
+const forwardsReplicaExport = (modulePath: string, target: string, requested: string | undefined, visited: Set<string>): boolean => {
+    const key = JSON.stringify([modulePath, requested]);
+
+    if (visited.has(key)) {
+        return false;
+    }
+
+    visited.add(key);
+
+    return forwardedExports(modulePath).some((forward) => {
+        if (requested !== undefined && forward.exported !== undefined && forward.exported !== requested) {
+            return false;
+        }
+
+        // A star carries the requested name through; a named export reads the name its specifier names.
+        const name = forward.exported === undefined ? requested : forward.name;
+
+        if (forward.module === EVENT_LOG_PACKAGE) {
+            return name === undefined || name === target;
+        }
+
+        const barrel = resolveBarrel(modulePath, forward.module);
+
+        return barrel !== undefined && forwardsReplicaExport(barrel, target, name, visited);
+    });
+};
+
+/**
+ * Whether a file imports `EventLogDOClient` by name from a relative module that forwards it from the replica package, through
+ * any chain of barrels. Such a file constructs the client without naming the package itself.
+ */
+const importsClientFromBarrel = (sourceFile: SourceFile): boolean =>
+    sourceFile.getImportDeclarations().some((declaration) => {
+        const barrel = declaration.isTypeOnly() ? undefined : resolveBarrel(sourceFile.getFilePath(), declaration.getModuleSpecifierValue());
+
+        return (
+            barrel !== undefined &&
+            declaration.getNamedImports().some((specifier) => !specifier.isTypeOnly() && specifier.getNameNode().getText() === EVENT_LOG_CLIENT) &&
+            forwardsReplicaExport(barrel, EVENT_LOG_CLIENT, EVENT_LOG_CLIENT, new Set())
+        );
+    });
+
 /**
  * Whether a file reads `EventLogDOClient` through the namespace import bound as `localName`. A member read of another export builds
  * no client, so `ns.EventLogDO` asks for nothing. Any other use (the bare namespace, `ns["…"]`, `typeof ns`) could reach the client.
@@ -316,6 +475,7 @@ const constructsEventLogClient = (sourceFile: SourceFile): boolean => {
                     !declaration.isTypeOnly() &&
                     declaration.getNamedExports().some((specifier) => !specifier.isTypeOnly() && specifier.getNameNode().getText() === EVENT_LOG_CLIENT),
             ) ||
+        importsClientFromBarrel(sourceFile) ||
         sourceFile.getDescendantsOfKind(ts.SyntaxKind.CallExpression).some((call) => isReplicaImportCall(call) && dynamicImportReachesClient(call))
     );
 };
@@ -615,7 +775,12 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
 
             // A `lunora/` file that imports a relative module can reach a capability through that module (a barrel that
             // re-exports the agent package's tool), so it is parsed even without a package name or context read there.
-            if (CAPABILITY_PACKAGE_PATTERN.test(code) || (inLunora && (mayReadCapabilityContext(code) || RELATIVE_IMPORT_PATTERN.test(code)))) {
+            // A file that names the client may import it from a barrel that is not a candidate, so it is parsed for that import too.
+            if (
+                CAPABILITY_PACKAGE_PATTERN.test(code) ||
+                code.includes(EVENT_LOG_CLIENT) ||
+                (inLunora && (mayReadCapabilityContext(code) || RELATIVE_IMPORT_PATTERN.test(code)))
+            ) {
                 // Registered now, while the program is not built, so the text is not kept for the signal pass.
                 project.createSourceFile(file, code, { overwrite: true });
                 candidates.push({ file, inLunora });
@@ -774,157 +939,13 @@ const hostsShardRegistry = (durableObjects: ReadonlyArray<DurableObjectSpec>, ge
     durableObjects.some((object) => object.binding === "SHARD_REGISTRY") ||
     (isMergedProject(generatedDirectory) && existsSync(join(generatedDirectory, "shardRegistry.ts")));
 
-/** The source extension a `.js`-style relative specifier names, so it can be probed against the `.ts` file. */
-const SOURCE_SPECIFIER_EXTENSION = /\.[cm]?[jt]sx?$/u;
-
-/** Barrel source extensions in probe order: TypeScript first, so a `.js` specifier resolves to its `.ts` source. */
-const BARREL_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
-
-/**
- * The file a relative star re-export names: its specifier's extension is dropped and each supported
- * source extension is probed, then a directory's `index`. A bare specifier is left undefined; the caller
- * matches {@link EVENT_LOG_PACKAGE} by name before asking.
- */
-const resolveBarrel = (fromFile: string, specifier: string): string | undefined => {
-    if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
-        return undefined;
-    }
-
-    const stem = join(dirname(fromFile), specifier.replace(SOURCE_SPECIFIER_EXTENSION, ""));
-    const files = BARREL_SOURCE_EXTENSIONS.map((extension) => `${stem}${extension}`);
-    const indexes = BARREL_SOURCE_EXTENSIONS.map((extension) => join(stem, `index${extension}`));
-
-    return [...files, ...indexes].find((candidate) => existsSync(candidate));
-};
-
-/** Where a binding reads a name from: the module it is imported or re-exported from, and the name it has there. */
-interface NameSource {
-    module: string;
-    name: string;
-}
-
-/**
- * The named imports a file binds, keyed by local name. A type-only import compiles away, so it binds nothing the file can forward.
- */
-const namedImportSources = (source: ts.SourceFile): Map<string, NameSource> => {
-    const imported = new Map<string, NameSource>();
-
-    for (const statement of source.statements) {
-        if (
-            !ts.isImportDeclaration(statement) ||
-            statement.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword ||
-            !ts.isStringLiteral(statement.moduleSpecifier)
-        ) {
-            continue;
-        }
-
-        const bindings = statement.importClause?.namedBindings;
-        const elements = bindings !== undefined && ts.isNamedImports(bindings) ? bindings.elements : [];
-
-        for (const element of elements) {
-            if (!element.isTypeOnly) {
-                imported.set(element.name.text, { module: statement.moduleSpecifier.text, name: (element.propertyName ?? element.name).text });
-            }
-        }
-    }
-
-    return imported;
-};
-
-/**
- * One export a module makes that forwards from another module. `exported` is the name it is exported under, or `undefined` for a
- * star re-export, which carries the requested name through unchanged. `name` is the name read from `module`, or `undefined` for a star.
- */
-interface ModuleExport {
-    exported: string | undefined;
-    module: string;
-    name: string | undefined;
-}
-
-/**
- * Every export of a module that forwards from another module: `export { a as b } from "m"`, an export of a name it imported, and
- * `export * from "m"`. Read from the syntax tree, so a comment or string forwards nothing. `export * as ns` binds a namespace, not
- * the names, so it is skipped.
- */
-const forwardedExports = (modulePath: string): ModuleExport[] => {
-    const source = ts.createSourceFile(modulePath, readFileSync(modulePath, "utf8"), ts.ScriptTarget.Latest);
-    const imported = namedImportSources(source);
-
-    return source.statements.flatMap((statement): ModuleExport[] => {
-        if (!ts.isExportDeclaration(statement) || statement.isTypeOnly) {
-            return [];
-        }
-
-        const { exportClause, moduleSpecifier } = statement;
-        const from = moduleSpecifier !== undefined && ts.isStringLiteral(moduleSpecifier) ? moduleSpecifier.text : undefined;
-
-        if (exportClause === undefined) {
-            return from === undefined ? [] : [{ exported: undefined, module: from, name: undefined }];
-        }
-
-        if (!ts.isNamedExports(exportClause)) {
-            return [];
-        }
-
-        return exportClause.elements.flatMap((element): ModuleExport[] => {
-            if (element.isTypeOnly) {
-                return [];
-            }
-
-            const exported = element.name.text;
-            const local = (element.propertyName ?? element.name).text;
-
-            if (from !== undefined) {
-                return [{ exported, module: from, name: local }];
-            }
-
-            const binding = imported.get(local);
-
-            return binding === undefined ? [] : [{ exported, module: binding.module, name: binding.name }];
-        });
-    });
-};
-
-/**
- * Whether a module forwards the replica package's `EventLogDO` under `requested`, or under any name when `requested` is `undefined`
- * (the worker entry: any export the worker makes of the class hosts the log). A relative barrel is asked for the name its export
- * reads, so `export { Log as EventLogDO } from "./barrel"` asks the barrel for `Log`. `visited` ends a barrel cycle: a module asked
- * for the same name twice forwards nothing new.
- */
-const forwardsEventLogDO = (modulePath: string, requested: string | undefined, visited: Set<string>): boolean => {
-    const key = JSON.stringify([modulePath, requested]);
-
-    if (visited.has(key)) {
-        return false;
-    }
-
-    visited.add(key);
-
-    return forwardedExports(modulePath).some((forward) => {
-        if (requested !== undefined && forward.exported !== undefined && forward.exported !== requested) {
-            return false;
-        }
-
-        // A star carries the requested name through; a named export reads the name its specifier names.
-        const name = forward.exported === undefined ? requested : forward.name;
-
-        if (forward.module === EVENT_LOG_PACKAGE) {
-            return name === undefined || name === "EventLogDO";
-        }
-
-        const barrel = resolveBarrel(modulePath, forward.module);
-
-        return barrel !== undefined && forwardsEventLogDO(barrel, name, visited);
-    });
-};
-
 /**
  * Whether the worker entry hosts `EventLogDO`. A composed entry star-re-exports only the generated
  * modules, so it never hosts the log by itself. A hand-written entry can reach the class through a
  * barrel, so star re-exports are followed rather than reading only the entry's own export list.
  */
 const hostsEventLog = (entry: ReturnType<typeof resolveWorkerEntry>): boolean =>
-    !entry.composed && entry.path !== undefined && forwardsEventLogDO(entry.path, undefined, new Set());
+    !entry.composed && entry.path !== undefined && forwardsReplicaExport(entry.path, "EventLogDO", undefined, new Set());
 
 /**
  * Scan a Lunora project and report which Cloudflare bindings its code implies.
