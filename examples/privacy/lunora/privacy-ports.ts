@@ -206,7 +206,8 @@ const dataPort = (ctx: LocalContext): DataPort => {
     return {
         collect: async (dataset, subjectId) => {
             switch (dataset.id) {
-                case "auth": {
+                case "auth":
+                case "signInTokens": {
                     throw signInFromMutation();
                 }
                 case "billing": {
@@ -222,7 +223,8 @@ const dataPort = (ctx: LocalContext): DataPort => {
         },
         eraseBatch: async (dataset, subjectId, now, disposition) => {
             switch (dataset.id) {
-                case "auth": {
+                case "auth":
+                case "signInTokens": {
                     throw signInFromMutation();
                 }
                 case "billing": {
@@ -238,7 +240,8 @@ const dataPort = (ctx: LocalContext): DataPort => {
         },
         remaining: async (dataset, subjectId) => {
             switch (dataset.id) {
-                case "auth": {
+                case "auth":
+                case "signInTokens": {
                     throw signInFromMutation();
                 }
                 case "billing": {

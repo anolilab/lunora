@@ -81,6 +81,10 @@ data, erases it, cancels a pending erasure, sees their requests, and downloads t
 
 ## Run it
 
+The page, the Lunora client and the sign-in client all use the page's origin, and the Worker serves that origin. The
+example does not support a frontend on another origin: sign-in and the Lunora calls would need trusted origins and
+credentialed CORS, which it does not configure.
+
 ```bash
 pnpm install
 pnpm --filter @lunora-example/privacy run codegen

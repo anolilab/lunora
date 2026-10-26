@@ -42,6 +42,18 @@ export const billingData = defineDataset("billing", {
  */
 export const authData = authDataset();
 
+/**
+ * better-auth's verification table: identifiers and tokens for email verification, password reset and sign-in
+ * codes. A row matches a subject by the address it was issued to or by the user id it carries (see `privacy-auth.ts`),
+ * so this dataset is served from D1 as well.
+ */
+export const signInTokens = defineDataset("signInTokens", {
+    legalBasis: "contract",
+    origin: "provided",
+    purpose: "Verification codes and tokens issued to the user for sign-in and account recovery",
+    tables: { verification: {} },
+});
+
 /** The params of the restore workflow: the subject ids the restored shard holds. */
 export interface RestoreParameters {
     restoredSubjectIds: string[];
@@ -77,7 +89,8 @@ const workflowPorts = (context: PrivacyWorkflowRun) => {
  * up and judge a row the same way.
  */
 export const privacyConfig: PrivacyConfig<PrivacyContext> = {
-    datasets: [tasksData, billingData, authData],
+    // `signInTokens` comes before `authData`: erasing the user row removes the address its rows are matched by.
+    datasets: [tasksData, billingData, signInTokens, authData],
     ports: (context) => ("db" in context ? localPorts(context) : workflowPorts(context)),
     presets,
     tombstoneSecret,
@@ -90,8 +103,19 @@ export const privacyFor = definePrivacy(privacyConfig);
  * says was erased. The package reads the tombstone keys and re-runs each dataset's erasure, which is
  * idempotent, so a retried step finishes the work rather than repeating it. Returns the re-erased ids.
  */
-const restoreHandler = async (context: WorkflowRunContext<RestoreParameters>): Promise<string[]> =>
-    context.step.do("restore", async () => [...(await privacyFor(context).restore({ restoredSubjectIds: context.params.restoredSubjectIds }))]);
+const restoreHandler = async (context: WorkflowRunContext<RestoreParameters>): Promise<string[]> => {
+    const reerased = await context.step.do("restore", async () => [
+        ...(await privacyFor(context).restore({ restoredSubjectIds: context.params.restoredSubjectIds })),
+    ]);
+
+    // A restore can bring back archived rows whose retention period has already ended. The sweep purges them now, rather than
+    // leaving them until the next daily run.
+    await context.step.do("purge", async () => {
+        await privacyFor(context).admin.sweep();
+    });
+
+    return reerased;
+};
 
 /**
  * The durable handlers. Each one binds the ports from its own context, so the step

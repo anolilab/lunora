@@ -1,8 +1,8 @@
 /**
- * An in-memory D1 for the node suite. It answers the four statement shapes `lunora/privacy-auth.ts` issues
- * (the table list, a subject's rows, a subject's count, and a delete by subject), over plain arrays. The
- * tables are better-auth's `user`, `session` and `account`. The workerd suite runs the same statements
- * against real D1, so a statement this double does not answer throws rather than guessing.
+ * An in-memory D1 for the node suite. It answers the statement shapes `lunora/privacy-auth.ts` issues: the table
+ * list, a subject's rows, a subject's count, and a delete, each with a WHERE clause of one or more `"column" = ?`
+ * conditions joined by OR. The tables are better-auth's `user`, `session`, `account` and `verification`. The
+ * workerd suite runs the same statements against real D1, so a statement this double does not answer throws.
  */
 import type { AuthDatabase, AuthStatement } from "../lunora/privacy-auth";
 
@@ -12,9 +12,10 @@ type Row = Record<string, unknown>;
 export type Tables = Map<string, Row[]>;
 
 const SELECT_TABLES = /^SELECT name FROM sqlite_master WHERE type = 'table'$/u;
-const SELECT_ROWS = /^SELECT \* FROM "(\w+)" WHERE "(\w+)" = \?$/u;
-const SELECT_COUNT = /^SELECT COUNT\(\*\) AS count FROM "(\w+)" WHERE "(\w+)" = \?$/u;
-const DELETE_ROWS = /^DELETE FROM "(\w+)" WHERE "(\w+)" = \?$/u;
+const SELECT_ROWS = /^SELECT \* FROM "(\w+)" WHERE (.+)$/u;
+const SELECT_COUNT = /^SELECT COUNT\(\*\) AS count FROM "(\w+)" WHERE (.+)$/u;
+const DELETE_ROWS = /^DELETE FROM "(\w+)" WHERE (.+)$/u;
+const CONDITION = /^"(\w+)" = \?$/u;
 
 const rowsIn = (tables: Tables, table: string): Row[] => {
     const rows = tables.get(table);
@@ -26,7 +27,29 @@ const rowsIn = (tables: Tables, table: string): Row[] => {
     return rows;
 };
 
-/** A statement over `tables`, with the values bound so far. Anything outside the four shapes throws. */
+/**
+ * Whether a row meets a WHERE clause of `"column" = ?` conditions joined by OR. The values are bound in the order
+ * the conditions list their placeholders.
+ */
+const matches = (row: Row, where: string, values: unknown[]): boolean => {
+    let next = 0;
+
+    return where.split(" OR ").some((condition) => {
+        const found = CONDITION.exec(condition.trim());
+
+        if (found === null) {
+            throw new Error(`The D1 double does not answer the condition: ${condition}`);
+        }
+
+        const value = values[next];
+
+        next += 1;
+
+        return row[found[1] ?? ""] === value;
+    });
+};
+
+/** A statement over `tables`, with the values bound so far. Anything outside the statement shapes throws. */
 const statementOver = (tables: Tables, query: string, values: unknown[]): AuthStatement => {
     const run = (): { readonly results: Row[] } => {
         if (SELECT_TABLES.test(query)) {
@@ -40,28 +63,27 @@ const statementOver = (tables: Tables, query: string, values: unknown[]): AuthSt
         const select = SELECT_ROWS.exec(query);
 
         if (select !== null) {
-            const [, table = "", column = ""] = select;
+            const [, table = "", where = ""] = select;
 
-            return { results: rowsIn(tables, table).filter((row) => row[column] === values[0]) };
+            return { results: rowsIn(tables, table).filter((row) => matches(row, where, values)) };
         }
 
         const count = SELECT_COUNT.exec(query);
 
         if (count !== null) {
-            const [, table = "", column = ""] = count;
+            const [, table = "", where = ""] = count;
 
-            return { results: [{ count: rowsIn(tables, table).filter((row) => row[column] === values[0]).length }] };
+            return { results: [{ count: rowsIn(tables, table).filter((row) => matches(row, where, values)).length }] };
         }
 
         const remove = DELETE_ROWS.exec(query);
 
         if (remove !== null) {
-            const [, table = "", column = ""] = remove;
-            const rows = rowsIn(tables, table);
+            const [, table = "", where = ""] = remove;
 
             tables.set(
                 table,
-                rows.filter((row) => row[column] !== values[0]),
+                rowsIn(tables, table).filter((row) => !matches(row, where, values)),
             );
 
             return { results: [] };
@@ -81,12 +103,13 @@ const statementOver = (tables: Tables, query: string, values: unknown[]): AuthSt
     };
 };
 
-/** A fresh in-memory database with the three sign-in tables, and the binding that reads it. */
+/** A fresh in-memory database with the four sign-in tables, and the binding that reads it. */
 export const d1Double = (): { readonly db: AuthDatabase; readonly tables: Tables } => {
     const tables: Tables = new Map([
         ["account", []],
         ["session", []],
         ["user", []],
+        ["verification", []],
     ]);
 
     const db: AuthDatabase = {
@@ -114,9 +137,10 @@ export const d1Double = (): { readonly db: AuthDatabase; readonly tables: Tables
     return { db, tables };
 };
 
-/** One subject's sign-in rows: a user, a session and a password account. */
+/** One subject's sign-in rows: a user, a session, a password account and an email-verification record. */
 export const seedSignIn = (tables: Tables, userId: string): void => {
     rowsIn(tables, "user").push({ email: `${userId}@example.test`, id: userId, name: userId });
     rowsIn(tables, "session").push({ id: `${userId}-session`, token: `${userId}-token`, userId });
     rowsIn(tables, "account").push({ id: `${userId}-account`, providerId: "credential", userId });
+    rowsIn(tables, "verification").push({ id: `${userId}-verification`, identifier: `${userId}@example.test`, value: "code" });
 };

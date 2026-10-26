@@ -85,6 +85,24 @@ describe("retention on erasure and the sweep", () => {
         expect(kept?.row).toContain("INV-1");
     });
 
+    it("purges an archived invoice whose period has ended when a restore brings it back", async () => {
+        expect.assertions(1);
+
+        await t.run(async (ctx) => {
+            await appCtx(ctx).db.insert("privacy_archive", { datasetId: "billing", retainUntil: PAST, row: "{}", subjectId: "u9", table: "invoices" });
+        });
+
+        await privacyWorkflows.restoreHandler(
+            workflowContext({
+                env: { DB: d1.db, PRIVACY_TOMBSTONES: tombstones },
+                params: { restoredSubjectIds: [] },
+                run: async (_reference, args) => t.run(async (ctx) => appCtx(ctx).runMutation(privacyPort, args)),
+            }),
+        );
+
+        await expect(archivedRows(t)).resolves.toStrictEqual([]);
+    });
+
     it("lists a subject with only invoices among the subjects a restore re-erases", async () => {
         expect.assertions(2);
 
