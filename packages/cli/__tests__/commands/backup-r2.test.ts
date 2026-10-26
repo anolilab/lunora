@@ -98,7 +98,7 @@ const createWorkerDouble = (): { bucket: Map<string, Buffer>; fetchImpl: Streami
     /** A `dryRun` POST is the check before the import: it records nothing. A real POST records its rows and reports them inserted. */
     const importAnswer = (url: URL, body: string): ReturnType<typeof jsonResponse> => {
         if (url.searchParams.get("dryRun") === "true") {
-            return jsonResponse({ inserted: {}, received: 0 });
+            return jsonResponse({ dryRun: true, inserted: {}, received: 0 });
         }
 
         imported.push(body);

@@ -822,6 +822,43 @@ const checkRefusal = (check: ImportPass): string | undefined => {
     return refused.length > 0 ? `${String(refused.length)} row(s) would be refused` : undefined;
 };
 
+/** Each shard the fan-out never reached. Its rows are in neither `inserted` nor `errors`, so the run has to name them. */
+const logUnreachedShards = (logger: Logger, shards: ImportShardFailure[]): void => {
+    for (const shard of shards) {
+        logger.error(
+            `import: shard "${shard.shardKey}" was never reached${shard.timedOut ? " (timed out)" : ""} — its rows were NOT written: ${shard.message}`,
+        );
+    }
+};
+
+/**
+ * Why the worker cannot check a file before writing it, or `undefined` when it can. A worker built before `?dryRun=true` existed ignores the
+ * flag and writes every row it is sent, and the check would learn that only after the rows are in. So the probe sends no row, which no worker
+ * version can write, and only a worker that honours the flag echoes `dryRun: true` in its answer.
+ */
+const probeDryRunSupport = async (target: ImportPassTarget): Promise<string | undefined> => {
+    try {
+        const response = await target.fetchImpl(`${target.requestUrl}?dryRun=true`, {
+            // A blank line rather than an empty body: a request with no body is refused before any line is read.
+            body: "\n",
+            headers: { authorization: `Bearer ${target.token}`, "content-type": "application/x-ndjson" },
+            method: "POST",
+        });
+
+        if (!response.ok) {
+            return `the worker at ${target.requestUrl} answered HTTP ${String(response.status)} to the check`;
+        }
+
+        const json = (await response.json()) as { dryRun?: unknown };
+
+        return json.dryRun === true
+            ? undefined
+            : `the worker at ${target.requestUrl} predates ?dryRun=true, so it would write the file while checking it; deploy the current runtime and import again`;
+    } catch (error) {
+        return `the worker at ${target.requestUrl} did not answer the check: ${failureMessage(error)}`;
+    }
+};
+
 const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     // Route the human/progress channel once, here: every helper below is handed
@@ -851,6 +888,13 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     const { baseUrl, fetchImpl, requestUrl, token } = request;
     const batchSize = options.batchSize ?? DEFAULT_IMPORT_BATCH_SIZE;
     const target: ImportPassTarget = { batchSize, fetchImpl, requestUrl, token };
+
+    // Before any row or blob is sent: a worker that cannot check must not see the file at all.
+    const unsupported = await probeDryRunSupport(target);
+
+    if (unsupported !== undefined) {
+        return { body: undefined, code: 1, error: `import: ${options.file} was not written: ${unsupported}`, inserted: 0 };
+    }
 
     // Phase 1: check the whole file, writing nothing, before any blob moves. A
     // refused file leaves neither a row nor a blob behind. The check runs quietly
@@ -907,11 +951,7 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     // unwritten, and its rows land in neither `inserted` nor `errors`. The
     // endpoint says so with 207 Multi-Status, whose `Response.ok` is `true` —
     // so without this the run reported a clean success over missing data.
-    for (const shard of failedShards) {
-        options.logger.error(
-            `import: shard "${shard.shardKey}" was never reached${shard.timedOut ? " (timed out)" : ""} — its rows were NOT written: ${shard.message}`,
-        );
-    }
+    logUnreachedShards(options.logger, failedShards);
 
     const failed =
         streamFailure !== undefined || errors.length > 0 || failedShards.length > 0 || parityMismatch > 0 || unmigratedFailure || unresolvedPathFailure;

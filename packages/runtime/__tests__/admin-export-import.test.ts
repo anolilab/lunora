@@ -895,6 +895,40 @@ describe("createWorker — admin import endpoint", () => {
         expect(body.errors).toHaveLength(1);
         expect(body.errors[0]!.code).toBe("GLOBAL_NOT_CONFIGURED");
     });
+
+    it("echoes the dry run in its answer, and a real import carries no echo", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const post = async (url: string): Promise<Record<string, unknown>> => {
+            const response = await worker.fetch(
+                new Request(url, { body: "\n", headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
+                {},
+                fakeContext,
+            );
+
+            return response.json();
+        };
+
+        await expect(post("https://app.example/_lunora/admin/import?dryRun=true")).resolves.toMatchObject({ dryRun: true });
+        await expect(post("https://app.example/_lunora/admin/import")).resolves.not.toHaveProperty("dryRun");
+    });
 });
 
 /**

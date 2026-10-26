@@ -1127,7 +1127,7 @@ describe("lunora migrate d1-to-hyperdrive", () => {
                 return {
                     body: null,
                     json: async () => {
-                        return { conflicts: 0, errors: [], inserted: {} };
+                        return { conflicts: 0, dryRun: true, errors: [], inserted: {} };
                     },
                     ok: true,
                     status: 200,
@@ -1268,7 +1268,20 @@ describe("lunora migrate d1-to-hyperdrive", () => {
 
         // Export streams rows, but the import batch POST returns a hard failure,
         // which makes runImportCommand throw — the temp dir must still be removed.
+        // The dry-run check and its probe are answered by a worker that honours the flag, so the failure lands on the real batch.
         const fetchImpl: StreamingFetchLike = async (input: string) => {
+            if (new URL(input).searchParams.get("dryRun") === "true") {
+                return {
+                    body: null,
+                    json: async () => {
+                        return { conflicts: 0, dryRun: true, errors: [], inserted: {} };
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            }
+
             if (input.includes("/_lunora/admin/export")) {
                 return {
                     body: new ReadableStream<Uint8Array>({

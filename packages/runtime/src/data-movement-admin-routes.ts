@@ -384,12 +384,17 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         const result = await streamingImport(request, forwardedHeaders, dryRun);
 
+        // A client sends a dry run only to a worker that honours the flag, and an
+        // older worker answers with the same body and writes. The echo is how it
+        // tells them apart before any row is sent.
+        const body = dryRun ? { ...result, dryRun: true } : result;
+
         // A shard the fan-out never reached leaves an unknown slice of the batch
         // unwritten, and its rows contribute to neither `inserted` nor `errors`.
         // Answering 200 there makes a partial write indistinguishable from a clean
         // one to every client that checks the status code and nothing else — 207
         // Multi-Status says "read the body", which is exactly the situation.
-        return Response.json(result, {
+        return Response.json(body, {
             headers: { "content-type": "application/json" },
             status: result.failed.length > 0 ? 207 : 200,
         });

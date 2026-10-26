@@ -133,7 +133,7 @@ describe("lunora seed", () => {
                 return {
                     body: null,
                     json: async () => {
-                        return { conflicts: 0, errors: [], inserted: {} };
+                        return { conflicts: 0, dryRun: true, errors: [], inserted: {} };
                     },
                     ok: true,
                     status: 200,
@@ -192,7 +192,7 @@ describe("lunora seed", () => {
                 return {
                     body: null,
                     json: async () => {
-                        return { conflicts: 0, errors: [], inserted: {} };
+                        return { conflicts: 0, dryRun: true, errors: [], inserted: {} };
                     },
                     ok: true,
                     status: 200,
@@ -280,7 +280,7 @@ describe("lunora seed", () => {
                 return {
                     body: null,
                     json: async () => {
-                        return { conflicts: 0, errors: [], inserted: {} };
+                        return { conflicts: 0, dryRun: true, errors: [], inserted: {} };
                     },
                     ok: true,
                     status: 200,

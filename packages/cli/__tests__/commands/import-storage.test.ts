@@ -82,7 +82,7 @@ const fakeWorker = (): FakeWorker => {
     /** `POST /_lunora/admin/import` — record the rows and report them inserted. A `dryRun` POST is a check and records nothing. */
     const handleImport = (body: string | Uint8Array | undefined, dryRun: boolean) => {
         if (dryRun) {
-            return json({ conflicts: 0, errors: [], inserted: {}, received: 0 });
+            return json({ conflicts: 0, dryRun: true, errors: [], inserted: {}, received: 0 });
         }
 
         const inserted: Record<string, number> = {};
@@ -283,7 +283,10 @@ describe("lunora import --with-storage", () => {
             const url = new URL(input);
 
             if (url.pathname === "/_lunora/admin/import" && url.searchParams.get("dryRun") === "true") {
-                checkedBodies.push(String(init?.body));
+                // The blank-line probe that precedes the check is not a check of the rows.
+                if (String(init?.body).trim() !== "") {
+                    checkedBodies.push(String(init?.body));
+                }
 
                 if (refusing) {
                     return {
@@ -291,6 +294,7 @@ describe("lunora import --with-storage", () => {
                         json: async () => {
                             return {
                                 conflicts: 0,
+                                dryRun: true,
                                 errors: [{ code: "INVALID", line: 1, message: "refused", table: "files" }],
                                 inserted: {},
                                 received: 0,

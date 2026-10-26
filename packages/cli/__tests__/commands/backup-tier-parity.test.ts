@@ -133,7 +133,7 @@ const workerDoubleOver = (bucket: Bucket): { fetchImpl: StreamingFetchLike; impo
             return {
                 body: null,
                 json: async () => {
-                    return { inserted: {}, received: 0 };
+                    return { dryRun: true, inserted: {}, received: 0 };
                 },
                 ok: true,
                 status: 200,

@@ -58,7 +58,7 @@ const capturingImportFetch =
         return {
             body: null,
             json: async () => {
-                return { inserted: check ? {} : { users: 1 } };
+                return { inserted: check ? {} : { users: 1 }, ...(check ? { dryRun: true } : {}) };
             },
             ok: true,
             status: 200,

@@ -43,6 +43,25 @@ const writeConvexExport = (_blobs: Record<string, string>, tables: Record<string
     return root;
 };
 
+/**
+ * The probe the command sends before any row: a `?dryRun=true` POST whose body is a blank line. A worker that honours the flag answers it with
+ * the echo, and nothing else.
+ */
+const isProbe = (input: string, init?: { body?: string | Uint8Array }): boolean =>
+    new URL(input).searchParams.get("dryRun") === "true" && String(init?.body ?? "").trim() === "";
+
+const probeReply = (): Awaited<ReturnType<StreamingFetchLike>> => {
+    return {
+        body: null,
+        json: async () => {
+            return { conflicts: 0, dryRun: true, errors: [], inserted: {}, received: 0 };
+        },
+        ok: true,
+        status: 200,
+        text: async () => "",
+    };
+};
+
 /** Records every row the import posts. A `dryRun` POST is a check: it answers as the real pass would, and records and inserts nothing. */
 const fakeWorker = () => {
     const imported: { doc: Record<string, unknown>; table: string }[] = [];
@@ -65,7 +84,7 @@ const fakeWorker = () => {
         return {
             body: null,
             json: async () => {
-                return { conflicts: 0, errors: [], inserted, received: imported.length };
+                return { conflicts: 0, errors: [], inserted, received: imported.length, ...(dryRun ? { dryRun: true } : {}) };
             },
             ok: true,
             status: 200,
@@ -109,7 +128,11 @@ describe("the import batcher", () => {
 
         const result = await runImportCommand({
             cwd: workDir,
-            fetchImpl: async () => {
+            fetchImpl: async (input, init) => {
+                if (isProbe(input, init)) {
+                    return probeReply();
+                }
+
                 throw new TypeError("fetch failed");
             },
             file: root,
@@ -242,7 +265,11 @@ describe("the import batcher", () => {
             },
         );
 
-        const partialFetch: StreamingFetchLike = async (input) => {
+        const partialFetch: StreamingFetchLike = async (input, init) => {
+            if (isProbe(input, init)) {
+                return probeReply();
+            }
+
             if (new URL(input).pathname !== "/_lunora/admin/import") {
                 return {
                     body: null,
@@ -304,7 +331,10 @@ describe("the import batcher", () => {
                     return { code: "INVALID", line: index + 1, message: "refused", table: row.table };
                 });
 
-            dryRuns.push(dryRun);
+            // The probe carries no row and is not a check, so only a POST with rows is recorded as one.
+            if (rows.length > 0) {
+                dryRuns.push(dryRun);
+            }
 
             if (!dryRun) {
                 writes.push(...rows.filter((row) => row.doc.refuse !== true).map((row) => row.doc._id));
@@ -313,7 +343,7 @@ describe("the import batcher", () => {
             return {
                 body: null,
                 json: async () => {
-                    return { conflicts: 0, errors, inserted: {}, received: rows.length };
+                    return { conflicts: 0, errors, inserted: {}, received: rows.length, ...(dryRun ? { dryRun: true } : {}) };
                 },
                 ok: true,
                 status: 200,
@@ -355,7 +385,7 @@ describe("the import batcher", () => {
             const worker = checkingWorker(writes, dryRuns);
             const response = await worker(input, init);
 
-            // The worker wrote whatever it was sent, dry run or not, and reports the rows as inserted.
+            // It echoes the flag, so the probe passes, but writes whatever a check is sent: the post-check still has to catch it.
             if (new URL(input).searchParams.get("dryRun") === "true") {
                 writes.push(
                     ...String(init?.body ?? "")
@@ -367,7 +397,7 @@ describe("the import batcher", () => {
                 return {
                     ...response,
                     json: async () => {
-                        return { conflicts: 0, errors: [], inserted: { docs: 2 }, received: 2 };
+                        return { conflicts: 0, errors: [], inserted: { docs: 2 }, received: 2, dryRun: true };
                     },
                 };
             }
@@ -387,5 +417,45 @@ describe("the import batcher", () => {
         expect(result.code).toBe(1);
         expect(result.error).toContain("wrote rows during its check");
         expect(dryRuns).toStrictEqual([true]);
+    });
+
+    it("refuses before sending any row to a worker that predates the dry-run flag, so the file is never written", async () => {
+        expect.assertions(3);
+
+        const root = writeConvexExport({}, { docs: [{ _id: "d1" }, { _id: "d2" }] });
+        const writes: string[] = [];
+        const { logger } = capturingLogger();
+        // A worker from before the flag: it ignores `?dryRun=true`, writes every row it is sent, and never echoes the flag.
+        const olderWorker: StreamingFetchLike = async (_input, init) => {
+            const rows = String(init?.body ?? "")
+                .split("\n")
+                .filter((line) => line.trim().length > 0)
+                .map((line) => (JSON.parse(line) as { doc: { _id: string } }).doc._id);
+
+            writes.push(...rows);
+
+            return {
+                body: null,
+                json: async () => {
+                    return { conflicts: 0, errors: [], inserted: { docs: rows.length }, received: rows.length };
+                },
+                ok: true,
+                status: 200,
+                text: async () => "",
+            };
+        };
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: olderWorker,
+            file: root,
+            logger,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(1);
+        expect(result.error).toContain("predates ?dryRun=true");
+        expect(writes).toStrictEqual([]);
     });
 });
