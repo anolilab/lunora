@@ -20,7 +20,8 @@ OIDC issuer, and that provider should keep owning the session, don't add the
 `auth` item. Verify the provider's JWT instead with `@lunora/jwt-auth`:
 
 ```bash
-lunora registry add auth-clerk-jwt   # or: auth-workos
+lunora init --auth=clerk             # new project: or workos | auth0 (wires everything below)
+lunora registry add auth-clerk-jwt   # existing project: or auth-workos-jwt | auth-auth0-jwt
 ```
 
 ```ts
@@ -30,17 +31,25 @@ import { memoizeIdentity } from "lunorash/runtime";
 defineApp<Env>()
     .shard((env) => env.SHARD)
     .extend((env) => ({
-        resolveIdentity: memoizeIdentity(clerk({ publishableKey: env.CLERK_PUBLISHABLE_KEY ?? "", authorizedParties: ["https://app.example.com"] })),
+        resolveIdentity: memoizeIdentity(clerk({ publishableKey: env.CLERK_PUBLISHABLE_KEY ?? "", authorizedParties: env.CLERK_AUTHORIZED_PARTIES ?? "" })),
     }))
     .build();
 ```
 
-On the client, create the `LunoraClient` with `authTokenOnUpgrade: true`, call
-`setAuthToken(token, userId)` after sign-in, refresh it shortly before its `exp`, and again from `onTokenExpired`.
-`authTokenOnUpgrade` is what authenticates live-query sockets: the browser
-offers the bearer as a `Sec-WebSocket-Protocol` entry. Without it, a WorkOS
-socket, or a cross-origin Clerk one, is anonymous. Org and role claims arrive
-as `orgId` and `roles`, and RLS reads `roles`. Full guide:
+On the client, create the `LunoraClient` with `authTokenOnUpgrade: true` and,
+once signed in, call `setAuthTokenProvider(client, getToken, { subject: userId })`
+from `lunorash/client`. It refreshes before `exp` and on `onTokenExpired`; map
+the provider's "signed out" error (WorkOS `LoginRequiredError`, Auth0
+`login_required`) to `null`. `authTokenOnUpgrade` is what authenticates
+live-query sockets: the browser offers the bearer as a `Sec-WebSocket-Protocol`
+entry. Without it, a WorkOS or Auth0 socket, or a cross-origin Clerk one, is
+anonymous.
+
+Org claims arrive as `orgId` with the org role (`orgRole` for Clerk, `role` /
+`orgRoles` for WorkOS); no preset sets the app-wide `roles` RLS reads, since
+any Clerk user can create an organization and be its admin. Check the org role
+together with `orgId` in a policy. `CLERK_AUTHORIZED_PARTIES` is required.
+Full guide:
 `/docs/concepts/external-auth`, with runnable apps in `examples/clerk-auth` and
 `examples/workos-auth`.
 

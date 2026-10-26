@@ -15,6 +15,8 @@ import { AUTH_UI_REACT_NATIVE_REFUSAL, EMAIL_ITEM, promptAuthProvider } from "..
 import { MAIL_DESTINATION_PROMPT, resolveTypedDestination, withMailDestination } from "../add/mail";
 import { promptBucketName, withStorageBucketName } from "../add/storage";
 import type { RegistryManifest } from "../registry/types";
+import type { AuthChoice, ExternalAuthProvider } from "./external-auth";
+import { AUTH_CHOICE_OPTIONS, EXTERNAL_AUTH, isExternalAuthProvider } from "./external-auth";
 
 /**
  * A feature offered in the post-scaffold multi-select. `auth`/`email` carry a
@@ -43,7 +45,7 @@ type OfferTransformManifest = (manifest: RegistryManifest) => RegistryManifest;
 
 const STACK_FEATURE_OPTIONS: ReadonlyArray<{ description: string; label: string; value: StackFeature }> = [
     { description: "LLMs via Workers AI (summarize, generate, stream)", label: "AI", value: "ai" },
-    { description: "Sign-up / sign-in (asks which provider)", label: "Authentication", value: "auth" },
+    { description: "Sign-up / sign-in with @lunora/auth (asks which provider)", label: "Authentication", value: "auth" },
     { description: "Copy-in auth screens for your framework (sign in/up, reset, 2FA)", label: "Auth UI", value: "auth-ui" },
     { description: "Snapshot + restore your Durable Object data", label: "Backups", value: "backup" },
     { description: "Headless browser screenshots + PDFs", label: "Browser rendering", value: "browser" },
@@ -61,6 +63,9 @@ const STACK_FEATURE_OPTIONS: ReadonlyArray<{ description: string; label: string;
 
 /** The selectable feature values, for validating a `--add` list. */
 const STACK_FEATURE_VALUES: ReadonlyArray<StackFeature> = STACK_FEATURE_OPTIONS.map((option) => option.value);
+
+/** The interactive multi-select leaves `auth` out: the offer asks the auth choice first, on its own ({@link AUTH_CHOICE_OPTIONS}). */
+const MULTI_SELECT_OPTIONS = STACK_FEATURE_OPTIONS.filter((option) => option.value !== "auth");
 
 /** Map a feature value to the registry item it applies as (most are identity; `email` → the mail item). */
 const featureItem = (feature: StackFeature): string => (feature === "email" ? EMAIL_ITEM : feature);
@@ -95,6 +100,8 @@ const parseFeatureList = (raw: string, warn: (message: string) => void): StackFe
  * before any apply runs.
  */
 interface FeatureApply {
+    /** An external identity provider to wire into the Worker and client once its registry item is applied. */
+    externalAuth?: ExternalAuthProvider;
     label: string;
     names: ReadonlyArray<string>;
     transformManifest?: OfferTransformManifest;
@@ -108,6 +115,9 @@ interface OfferDeps {
      * customizes that item's manifest before it is written.
      */
     applyAll: (plans: ReadonlyArray<FeatureApply>) => Promise<boolean>;
+
+    /** The auth choice made up front (the `--auth` flag). When set, the interactive auth question is skipped. */
+    auth?: AuthChoice;
     /** When `false`, skip all prompts and print the later-setup hint. */
     interactive: boolean;
     logger: Logger;
@@ -144,6 +154,12 @@ interface OfferDeps {
         options: ReadonlyArray<{ description?: string; label: string; value: FeatureItem }>,
         settings?: { default?: FeatureItem },
     ) => Promise<FeatureItem | undefined>;
+    /** Single-select among the auth choices (TTY-backed in production). */
+    selectAuth: (
+        message: string,
+        options: ReadonlyArray<{ description?: string; label: string; value: AuthChoice }>,
+        settings?: { default?: AuthChoice },
+    ) => Promise<AuthChoice | undefined>;
     /** Single-line text input (TTY-backed in production) — used for the storage bucket-name prompt. */
     text: (message: string, settings?: { default?: string; placeholder?: string }) => Promise<string>;
 }
@@ -262,12 +278,50 @@ const preselectedPlans = (deps: OfferDeps, preselected: ReadonlyArray<StackFeatu
     return { plans, refused };
 };
 
+/**
+ * The plan for an auth choice made with `--auth` or as the first interactive
+ * question. Lunora auth is the `auth` feature (with its prompts when
+ * interactive); an external provider is its `auth-<p>-jwt` item plus the
+ * wiring; `none` adds nothing.
+ */
+const externalAuthPlan = (choice: AuthChoice | undefined): FeatureApply | undefined =>
+    choice !== undefined && isExternalAuthProvider(choice) ? { externalAuth: choice, label: choice, names: [EXTERNAL_AUTH[choice].item] } : undefined;
+
 /** Per-feature collectors that need a sub-prompt; everything else applies as its bare item name. */
 const FEATURE_COLLECTORS: Partial<Record<StackFeature, (deps: OfferDeps, picked: ReadonlyArray<StackFeature>) => Promise<FeatureApply | undefined>>> = {
     auth: collectAuthFeature,
     "auth-ui": async (deps, picked) => collectAuthUiFeature(deps, picked.includes("auth")),
     email: collectEmailFeature,
     storage: collectStorageFeature,
+};
+
+/**
+ * `--add` (or `--auth` without a TTY): apply the named features with their
+ * shipped defaults — no multi-select, no sub-prompts (scriptable / repeatable).
+ *
+ * Both halves reach the exit code: `--add` is the scriptable form, so a feature
+ * that could not be added must fail the run — a refused one no less than one
+ * whose apply errored. The INTERACTIVE offer stays best-effort — declining or
+ * failing an optional extra must not fail a scaffold the user already saw
+ * succeed.
+ */
+const applyPreselected = async (deps: OfferDeps): Promise<boolean> => {
+    const preselected = [...(deps.preselected ?? [])];
+
+    if (deps.auth === "lunora" && !preselected.includes("auth")) {
+        preselected.unshift("auth");
+    }
+
+    const { plans, refused } = preselectedPlans(deps, preselected);
+    const authPlan = externalAuthPlan(deps.auth);
+
+    if (authPlan !== undefined) {
+        plans.unshift(authPlan);
+    }
+
+    const applied = await deps.applyAll(plans);
+
+    return applied && !refused;
 };
 
 /**
@@ -284,19 +338,8 @@ const FEATURE_COLLECTORS: Partial<Record<StackFeature, (deps: OfferDeps, picked:
  * per item. Non-interactive: prints how to add them later and changes nothing.
  */
 const offerRegistryExtras = async (deps: OfferDeps): Promise<boolean> => {
-    // `--add`: apply the named features with their shipped defaults — no
-    // multi-select, no sub-prompts (scriptable / repeatable).
-    if (deps.preselected !== undefined && deps.preselected.length > 0) {
-        const { plans, refused } = preselectedPlans(deps, deps.preselected);
-
-        // Both halves reach the exit code: `--add` is the scriptable form, so a
-        // feature that could not be added must fail the run — a refused one no
-        // less than one whose apply errored. The INTERACTIVE offer below stays
-        // best-effort — declining or failing an optional extra must not fail a
-        // scaffold the user already saw succeed.
-        const applied = await deps.applyAll(plans);
-
-        return applied && !refused;
+    if ((deps.preselected !== undefined && deps.preselected.length > 0) || (deps.auth !== undefined && !deps.interactive)) {
+        return applyPreselected(deps);
     }
 
     if (!deps.interactive) {
@@ -308,15 +351,18 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<boolean> => {
         return true;
     }
 
-    const picked = await deps.multiSelect("Which features do you want to add?", STACK_FEATURE_OPTIONS, { defaults: [] });
+    const auth = deps.auth ?? (await deps.selectAuth("Which auth do you want?", AUTH_CHOICE_OPTIONS, { default: "none" })) ?? "none";
+    const selected = await deps.multiSelect("Which features do you want to add?", MULTI_SELECT_OPTIONS, { defaults: [] });
+    const picked = auth === "lunora" && !selected.includes("auth") ? ["auth" as const, ...selected] : selected;
+    const chosenAuthPlan = externalAuthPlan(auth);
 
-    if (picked.length === 0) {
+    if (picked.length === 0 && chosenAuthPlan === undefined) {
         return true;
     }
 
     // Collect every answer first. Sequential by design: each sub-prompt asks the
     // user one at a time, so running them in parallel would interleave prompts.
-    const plans: FeatureApply[] = [];
+    const plans: FeatureApply[] = chosenAuthPlan === undefined ? [] : [chosenAuthPlan];
 
     for (const feature of picked) {
         const collect = FEATURE_COLLECTORS[feature];

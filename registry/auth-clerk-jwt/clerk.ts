@@ -23,21 +23,25 @@
 import type { JwtIdentityResolver } from "@lunora/jwt-auth";
 import { clerk } from "@lunora/jwt-auth";
 
-interface ClerkEnv {
-    /** Comma-separated origins allowed in the token's `azp` claim (your app's URLs). Required. */
-    CLERK_AUTHORIZED_PARTIES?: string;
-    /** Your Clerk publishable key (`pk_test_…` / `pk_live_…`); it encodes the Frontend API the tokens are issued by. */
-    CLERK_PUBLISHABLE_KEY?: string;
-}
+/**
+ * A string env var, or `""` when unset. Read by name, so the resolver accepts
+ * whatever `Env` type the Worker entry declares.
+ */
+const envString = (env: object, name: string): string => {
+    const value: unknown = Reflect.get(env, name);
+
+    return typeof value === "string" ? value : "";
+};
 
 /**
- * Build the Clerk identity resolver. Throws at startup when
- * CLERK_PUBLISHABLE_KEY or CLERK_AUTHORIZED_PARTIES is unset or empty, so a
- * misconfigured deployment never boots resolving every caller to anonymous or
- * skipping the `azp` check.
+ * Build the Clerk identity resolver from CLERK_PUBLISHABLE_KEY (it encodes the
+ * Frontend API that issues the tokens) and CLERK_AUTHORIZED_PARTIES (the
+ * comma-separated origins allowed in `azp`). Throws at startup when either is
+ * unset or empty, so a misconfigured deployment never boots resolving every
+ * caller to anonymous or skipping the `azp` check.
  */
-export const clerkIdentity = (env: ClerkEnv): JwtIdentityResolver =>
+export const clerkIdentity = (env: object): JwtIdentityResolver =>
     clerk({
-        authorizedParties: env.CLERK_AUTHORIZED_PARTIES ?? "",
-        publishableKey: env.CLERK_PUBLISHABLE_KEY ?? "",
+        authorizedParties: envString(env, "CLERK_AUTHORIZED_PARTIES"),
+        publishableKey: envString(env, "CLERK_PUBLISHABLE_KEY"),
     });

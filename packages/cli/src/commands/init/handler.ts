@@ -40,6 +40,8 @@ import type { FeatureItem } from "../add/features";
 import { detectAuthUiItem, isReactNativeProject } from "../add/features";
 import { runAddCommand } from "../registry/commands";
 import describeDownloadFailure from "./download-failure";
+import type { AuthChoice } from "./external-auth";
+import { parseAuthChoice, wireExternalAuth } from "./external-auth";
 import { emitMascot, emitStep } from "./flow";
 import type { InitOptions } from "./index";
 import type { FeatureApply, OfferDeps } from "./offer-extras";
@@ -95,6 +97,13 @@ interface InitCommandOptions {
      * pulled without the caller opting in.
      */
     allowUnsafeSource?: boolean;
+
+    /**
+     * The auth choice (the `--auth` flag): `lunora` (better-auth), `clerk`,
+     * `workos`, `auth0` or `none`. Skips the interactive auth question; without a
+     * TTY it is applied with its shipped defaults.
+     */
+    auth?: string;
     /** When set, also scaffold a CI deploy pipeline for the given provider. */
     ci?: CiProvider;
 
@@ -166,7 +175,7 @@ interface InitCommandOptions {
      * interactive regardless of TTY, and these drive the feature multi-select,
      * the auth-provider sub-select, and the storage bucket-name text input.
      */
-    prompt?: Pick<OfferDeps, "multiSelect" | "select" | "text">;
+    prompt?: Partial<Pick<OfferDeps, "selectAuth">> & Pick<OfferDeps, "multiSelect" | "select" | "text">;
 
     /**
      * Override the git ref (branch, tag, or commit) the default template source
@@ -1339,7 +1348,10 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
 
         // --dry-run: report what would be added without touching the project.
         if (options.dryRun === true) {
-            logWould(options.logger, `add ${plans.map((plan) => plan.label).join(", ")}`);
+            logWould(
+                options.logger,
+                `add ${plans.map((plan) => (plan.externalAuth === undefined ? plan.label : `${plan.label} (and wire resolveIdentity)`)).join(", ")}`,
+            );
 
             return true;
         }
@@ -1390,11 +1402,27 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
             options.logger[level](message);
         }
 
+        // An external provider's registry item scaffolds the resolver; wiring it
+        // into the Worker and the client edits project files the item cannot know.
+        for (const [index, plan] of plans.entries()) {
+            if (plan.externalAuth !== undefined && results[index]?.code === 0) {
+                wireExternalAuth(projectDirectory, plan.externalAuth, options.logger);
+            }
+        }
+
         return results.every((result) => result.code === 0);
     };
 
+    const auth: AuthChoice | undefined =
+        options.auth === undefined
+            ? undefined
+            : parseAuthChoice(options.auth, (message) => {
+                  options.logger.warn(message);
+              });
+
     const deps: OfferDeps = {
         applyAll,
+        auth,
         interactive,
         logger: options.logger,
         multiSelect: options.prompt?.multiSelect ?? ((message, choices, settings) => tuiMultiSelect(message, choices, { ...settings, badge: BADGES.add })),
@@ -1418,11 +1446,16 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
         select:
             options.prompt?.select ??
             ((message, choices, settings): Promise<FeatureItem | undefined> => tuiSelect(message, choices, { ...settings, badge: BADGES.add })),
+        // Injected prompts (tests) without an auth answer decline auth rather than reaching for a TTY.
+        selectAuth:
+            options.prompt === undefined
+                ? (message, choices, settings): Promise<AuthChoice | undefined> => tuiSelect(message, choices, { ...settings, badge: BADGES.add })
+                : (options.prompt.selectAuth ?? (() => Promise.resolve("none" as const))),
         text: options.prompt?.text ?? ((message, settings) => tuiText(message, { ...settings, badge: BADGES.add })),
     };
 
-    // `--add` applies its features directly (no headline, no multi-select).
-    if (preselected.length > 0) {
+    // `--add` applies its features directly (no headline, no multi-select), as does `--auth` without a TTY.
+    if (preselected.length > 0 || (auth !== undefined && !interactive)) {
         const added = await offerRegistryExtras(deps);
 
         await offerLintIgnores(projectDirectory, interactive, options);
@@ -2024,6 +2057,7 @@ const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argum
 
     return runInitCommand({
         add: options.add,
+        auth: options.auth,
         allowUnsafeSource: options.allowUnsafeSource === true,
         cwd,
         ci: resolveCiProvider(options.ci, logger),

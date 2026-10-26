@@ -24,6 +24,7 @@ const baseDeps = (overrides: Partial<OfferDeps>): OfferDeps => {
         multiSelect: async () => [],
         projectName: "lunora-app",
         select: async () => "auth",
+        selectAuth: async () => "none",
         text: async () => "",
         ...overrides,
     };
@@ -373,6 +374,77 @@ describe("offerRegistryExtras", () => {
 
             expect(plans()).toStrictEqual([]);
             expect(lines.join("\n")).toMatch(/no React Native port/);
+        });
+    });
+
+    describe("auth choice", () => {
+        it("asks the auth choice first and applies an external provider's jwt item with its wiring", async () => {
+            expect.assertions(2);
+
+            const { applyAll, plans } = captureApplyAll();
+            const selectAuth = vi.fn<OfferDeps["selectAuth"]>(async () => "clerk");
+
+            await offerRegistryExtras(baseDeps({ applyAll, multiSelect: async () => ["email"], selectAuth }));
+
+            expect(selectAuth).toHaveBeenCalledTimes(1);
+            expect(plans().map((plan) => [plan.externalAuth, [...plan.names]])).toStrictEqual([
+                ["clerk", ["auth-clerk-jwt"]],
+                [undefined, ["mail"]],
+            ]);
+        });
+
+        it("runs the Lunora auth path (provider + database prompts) when lunora is chosen", async () => {
+            expect.assertions(2);
+
+            const { applyAll, plans } = captureApplyAll();
+            const text = vi.fn<OfferDeps["text"]>(async () => "my-db");
+
+            await offerRegistryExtras(baseDeps({ applyAll, selectAuth: async () => "lunora", text }));
+
+            expect(plans().map((plan) => [...plan.names])).toStrictEqual([["auth"]]);
+            expect(text).toHaveBeenCalledTimes(1);
+        });
+
+        it("applies nothing for none with no features", async () => {
+            expect.assertions(1);
+
+            const applyAll = vi.fn<OfferDeps["applyAll"]>(async () => true);
+
+            await offerRegistryExtras(baseDeps({ applyAll }));
+
+            expect(applyAll).not.toHaveBeenCalled();
+        });
+
+        it("applies --auth without a TTY instead of printing the hint, and skips the question", async () => {
+            expect.assertions(2);
+
+            const { applyAll, plans } = captureApplyAll();
+            const selectAuth = vi.fn<OfferDeps["selectAuth"]>(async () => "none");
+
+            await offerRegistryExtras(baseDeps({ applyAll, auth: "workos", interactive: false, selectAuth }));
+
+            expect(selectAuth).not.toHaveBeenCalled();
+            expect(plans().map((plan) => [plan.externalAuth, [...plan.names]])).toStrictEqual([["workos", ["auth-workos-jwt"]]]);
+        });
+
+        it("combines --auth with --add", async () => {
+            expect.assertions(1);
+
+            const { applyAll, plans } = captureApplyAll();
+
+            await offerRegistryExtras(baseDeps({ applyAll, auth: "auth0", preselected: ["email"] }));
+
+            expect(plans().map((plan) => [...plan.names])).toStrictEqual([["auth-auth0-jwt"], ["mail"]]);
+        });
+
+        it("maps --auth lunora onto the base auth item", async () => {
+            expect.assertions(1);
+
+            const { applyAll, plans } = captureApplyAll();
+
+            await offerRegistryExtras(baseDeps({ applyAll, auth: "lunora", interactive: false }));
+
+            expect(plans().map((plan) => [...plan.names])).toStrictEqual([["auth"]]);
         });
     });
 });

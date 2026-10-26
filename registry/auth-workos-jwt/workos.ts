@@ -24,20 +24,24 @@
 import type { JwtIdentityResolver } from "@lunora/jwt-auth";
 import { workos } from "@lunora/jwt-auth";
 
-interface WorkOsEnv {
-    /** Your custom authentication domain, when configured. Must be the host the client's `apiHostname` names. */
-    WORKOS_AUTH_DOMAIN?: string;
-    /** Your WorkOS client id (`client_…`). */
-    WORKOS_CLIENT_ID?: string;
-}
+/**
+ * A string env var, or `""` when unset. Read by name, so the resolver accepts
+ * whatever `Env` type the Worker entry declares.
+ */
+const envString = (env: object, name: string): string => {
+    const value: unknown = Reflect.get(env, name);
+
+    return typeof value === "string" ? value : "";
+};
 
 /**
- * Build the WorkOS identity resolver. Throws at startup when WORKOS_CLIENT_ID
- * is unset, so a misconfigured deployment never boots resolving every caller to
- * anonymous.
+ * Build the WorkOS identity resolver from WORKOS_CLIENT_ID and, when you use a
+ * custom authentication domain, WORKOS_AUTH_DOMAIN (the host the client's
+ * `apiHostname` names). Throws at startup when WORKOS_CLIENT_ID is unset, so a
+ * misconfigured deployment never boots resolving every caller to anonymous.
  */
-export const workosIdentity = (env: WorkOsEnv): JwtIdentityResolver =>
-    workos({
-        ...(env.WORKOS_AUTH_DOMAIN ? { authDomain: env.WORKOS_AUTH_DOMAIN } : {}),
-        clientId: env.WORKOS_CLIENT_ID ?? "",
-    });
+export const workosIdentity = (env: object): JwtIdentityResolver => {
+    const authDomain = envString(env, "WORKOS_AUTH_DOMAIN");
+
+    return workos({ ...(authDomain ? { authDomain } : {}), clientId: envString(env, "WORKOS_CLIENT_ID") });
+};

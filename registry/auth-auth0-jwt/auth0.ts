@@ -22,20 +22,24 @@
 import type { JwtIdentityResolver } from "@lunora/jwt-auth";
 import { auth0 } from "@lunora/jwt-auth";
 
-interface Auth0Env {
-    /** Your API's identifier (Dashboard → Applications → APIs), the access token's `aud`. */
-    AUTH0_AUDIENCE?: string;
-    /** Your Auth0 domain, e.g. `acme.us.auth0.com`, or your custom domain. */
-    AUTH0_DOMAIN?: string;
-}
+/**
+ * A string env var, or `""` when unset. Read by name, so the resolver accepts
+ * whatever `Env` type the Worker entry declares.
+ */
+const envString = (env: object, name: string): string => {
+    const value: unknown = Reflect.get(env, name);
+
+    return typeof value === "string" ? value : "";
+};
 
 /**
- * Build the Auth0 identity resolver. Throws at startup when AUTH0_DOMAIN or
- * AUTH0_AUDIENCE is unset, so a misconfigured deployment never boots resolving
- * every caller to anonymous.
+ * Build the Auth0 identity resolver from AUTH0_DOMAIN (your tenant or custom
+ * domain) and AUTH0_AUDIENCE (your API identifier). Throws at startup when
+ * either is unset, so a misconfigured deployment never boots resolving every
+ * caller to anonymous.
  */
-export const auth0Identity = (env: Auth0Env): JwtIdentityResolver =>
+export const auth0Identity = (env: object): JwtIdentityResolver =>
     auth0({
-        audience: env.AUTH0_AUDIENCE ?? "",
-        domain: env.AUTH0_DOMAIN ?? "",
+        audience: envString(env, "AUTH0_AUDIENCE"),
+        domain: envString(env, "AUTH0_DOMAIN"),
     });
