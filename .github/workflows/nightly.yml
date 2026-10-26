@@ -227,10 +227,12 @@
             - "name": "Git checkout"
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
+            # Same pin as the PR template job: Astro refuses to run below Node 22.23.4 and its check exits
+            # without a diagnostic on 22.22.
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
               "with":
-                  "node-version": "22.22"
+                  "node-version": "22.23.4"
                   "cache-prefix": "nightly-templates"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
