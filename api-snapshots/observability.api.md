@@ -702,6 +702,15 @@ interface RecordFunctionMetricInput {
 }
 ```
 
+### `RedactedRequestLogValues` (interface)
+
+```ts
+interface RedactedRequestLogValues {
+    args: string | undefined;
+    identity: string | undefined;
+}
+```
+
 ### `RequestLogEntry` (interface)
 
 ```ts
@@ -1006,7 +1015,7 @@ interface TracerDeps {
 ### `appendRequestLogEntry` (const)
 
 ```ts
-const appendRequestLogEntry: (sql: SqlExec, entry: AppendRequestLogEntry, options?: RequestLogWriteOptions) => void;
+const appendRequestLogEntry: (sql: SqlExec, entry: AppendRequestLogEntry, options?: RequestLogWriteOptions) => RedactedRequestLogValues;
 ```
 
 ### `applyHostRootSpan` (const)
@@ -1093,7 +1102,7 @@ const emitLogEvent: (input: LogEventInput, options?: RequestLogWriteOptions) => 
 ### `emitRequestLogEvent` (const)
 
 ```ts
-const emitRequestLogEvent: (entry: AppendRequestLogEntry, options?: RequestLogWriteOptions) => void;
+const emitRequestLogEvent: (entry: AppendRequestLogEntry, options?: RequestLogWriteOptions, redacted?: RedactedRequestLogValues) => void;
 ```
 
 ### `ensureAuthMetricsTables` (const)

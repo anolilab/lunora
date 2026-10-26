@@ -149,6 +149,15 @@ interface RequestLogWriteOptions {
     retention?: number;
 }
 
+/**
+ * The `identity` / `args` text {@link appendRequestLogEntry} wrote, handed to
+ * {@link emitRequestLogEvent} so the same dispatch is not redacted twice.
+ */
+interface RedactedRequestLogValues {
+    args: string | undefined;
+    identity: string | undefined;
+}
+
 /** Filters for {@link readRequestLog}, all AND-combined; every value is a bound SQL parameter, so nothing here injects SQL. */
 interface ReadRequestLogOptions {
     /** Functions whose path begins with this prefix (a `<file>:` or `<file>:<fn>` correlation). */
@@ -1102,12 +1111,20 @@ const redactedJson = (value: unknown, captureRaw: boolean): string => {
  * masking a PII-bearing value — e.g. two different `<n>`-bucketed IDs that
  * redact to two different tag lengths (`<DL>` vs `<BANKACC>`) — can't split an
  * existing Issue or change its identity.
+ *
+ * Returns the redacted `identity` / `args` text it stored, for
+ * {@link emitRequestLogEvent} to reuse.
  */
-const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, options: RequestLogWriteOptions = {}): void => {
+const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, options: RequestLogWriteOptions = {}): RedactedRequestLogValues => {
     ensureRequestLogTable(sql);
 
     const captureRaw = options.captureRaw ?? false;
     const retention = options.retention ?? REQUEST_LOG_RETENTION;
+    const identity = entry.identity === undefined ? undefined : redactedJson(entry.identity, captureRaw);
+    const redacted: RedactedRequestLogValues = {
+        args: entry.redactedArgs === undefined ? undefined : redactedJson(entry.redactedArgs, captureRaw),
+        identity,
+    };
 
     // Fingerprint the RAW message — `fingerprintError` is pure/synchronous and
     // cheap, so this costs nothing on the (rare) error path. `undefined` on a
@@ -1134,9 +1151,9 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
         // `user_id` column above stays raw; it's the non-PII correlation key the
         // `getRequestLog` filters key on.
         // eslint-disable-next-line unicorn/no-null -- anonymous request or no claims attached.
-        entry.identity === undefined ? null : redactedJson(entry.identity, captureRaw),
+        redacted.identity ?? null,
         // eslint-disable-next-line unicorn/no-null -- no args were sent on this dispatch.
-        entry.redactedArgs === undefined ? null : redactedJson(entry.redactedArgs, captureRaw),
+        redacted.args ?? null,
         entry.outcome,
         // eslint-disable-next-line unicorn/no-null -- success path: no error message. Redacted like args/identity — see the module docstring on `redactArgs`.
         entry.errorMessage === undefined ? null : redactArgs(entry.errorMessage, captureRaw),
@@ -1167,6 +1184,24 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
     pruneOncePerWindow(sql, Math.floor(entry.ts / REQUEST_LOG_PRUNE_WINDOW_MS), "request-log", () => {
         runSql(sql, `DELETE FROM "${REQUEST_LOG_TABLE}" WHERE seq <= (SELECT MAX(seq) - ? FROM "${REQUEST_LOG_TABLE}")`, retention);
     });
+
+    return redacted;
+};
+
+/**
+ * One `args` / `identity` value for the Logpush event: the text
+ * {@link appendRequestLogEntry} already redacted, parsed back, when the caller
+ * has it. Parsing a few hundred bytes costs a fraction of a second redaction
+ * pass, and `JSON.stringify` of the parsed value reproduces that text, so the
+ * event line is byte-identical either way. Under `captureRaw` the value is used
+ * as-is: nothing was redacted, so there is nothing to save.
+ */
+const entryValue = (value: unknown, redactedText: string | undefined, captureRaw: boolean): unknown => {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    return redactedText === undefined || captureRaw ? redactArgs(value, captureRaw) : (JSON.parse(redactedText) as unknown);
 };
 
 /**
@@ -1182,13 +1217,15 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
  * trace so a SIEM can alert on it); everything else to `console.log`. The
  * `source: "lunora"` / `type: "request"` envelope lets a consumer filter these
  * events out of the raw Workers-trace firehose. `captureRaw` (dev only) skips
- * redaction, mirroring the durable write. Best-effort by contract — the caller
- * wraps it so a serialization hiccup can never fail the served request.
+ * redaction, mirroring the durable write. `redacted` is what
+ * {@link appendRequestLogEntry} returned for this same entry and options; without
+ * it the event redacts on its own. Best-effort by contract — the caller wraps it
+ * so a serialization hiccup can never fail the served request.
  */
-const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWriteOptions = {}): void => {
+const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWriteOptions = {}, redacted?: RedactedRequestLogValues): void => {
     const captureRaw = options.captureRaw ?? false;
     const event = {
-        args: entry.redactedArgs === undefined ? undefined : redactArgs(entry.redactedArgs, captureRaw),
+        args: entryValue(entry.redactedArgs, redacted?.args, captureRaw),
         cacheHit: entry.cacheHit,
         // Deploy attribution on EVERY invocation, so "did this start with a
         // specific deploy?" is a group-by in the Workers Logs Query Builder
@@ -1198,7 +1235,7 @@ const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWr
         durationMs: entry.durationMs,
         error: entry.errorMessage === undefined ? undefined : redactArgs(entry.errorMessage, captureRaw),
         function: entry.functionPath,
-        identity: entry.identity === undefined ? undefined : redactArgs(entry.identity, captureRaw),
+        identity: entryValue(entry.identity, redacted?.identity, captureRaw),
         outcome: entry.outcome,
         // Search Cloudflare Traces / Workers Logs by it to reach the platform's
         // view of this request. Absent off the edge.
@@ -1731,6 +1768,7 @@ export type {
     LogEventInput,
     ReadIssuesOptions,
     ReadRequestLogOptions,
+    RedactedRequestLogValues,
     RequestLogEntry,
     RequestLogResult,
     RequestLogWriteOptions,
