@@ -10753,9 +10753,10 @@ abstract class ShardDO {
         const parsed = parseImportShardArgs(args);
         const result = await this.runShardImport({ dryRun: parsed.dryRun, rows: parsed.rows, startLine: parsed.startLine });
 
-        // A dry run writes nothing, so there is no table to flush and no change to audit.
+        // A dry run writes nothing, so there is no table to flush and no change to audit. The echo is how a client tells a shard that
+        // honoured the flag from one built before it existed, which ignores the flag, writes the rows and answers the same body.
         if (parsed.dryRun) {
-            return adminResponse(result);
+            return adminResponse({ ...result, dryRun: true });
         }
 
         // The import inserts rows through the writer, which records touched tables;

@@ -452,6 +452,38 @@ describe("shardDO admin export/import dispatch", () => {
         expect(body.result.errors).toEqual([]);
     });
 
+    it("echoes dryRun on a dry-run importShard and writes nothing, so a client can tell it from a shard that ignores the flag", async () => {
+        expect.assertions(4);
+
+        const shard = new ExportShardImpl(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.importShard, {
+                dryRun: true,
+                rows: [{ doc: { _id: "u2", email: "b@b.com", name: "Bob" }, table: "users" }],
+            }),
+        );
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ result: { dryRun?: boolean; inserted: Record<string, number> } }>();
+
+        expect(body.result.dryRun).toBe(true);
+        expect(body.result.inserted).toEqual({});
+        expect(database.sql.exec("SELECT count(*) AS n FROM users").one()).toEqual({ n: 1 });
+    });
+
+    it("does not echo dryRun on a real importShard", async () => {
+        expect.assertions(1);
+
+        const shard = new ExportShardImpl(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.importShard, { rows: [] }));
+        const body = await response.json<{ result: Record<string, unknown> }>();
+
+        expect(body.result).not.toHaveProperty("dryRun");
+    });
+
     it("answers a rejected importShard with the structured error envelope", async () => {
         expect.assertions(2);
 

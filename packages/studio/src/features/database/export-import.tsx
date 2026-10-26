@@ -319,14 +319,6 @@ const describeCellProblem = (problem: Extract<CsvProblem, { kind: "cell-type" }>
         });
     }
 
-    if (problem.zoneless === true) {
-        return t("line {line}: column “{column}” holds “{value}”, a time with no zone. Add Z for UTC or an offset such as +02:00.", {
-            column: problem.column,
-            line: problem.record,
-            value: problem.value,
-        });
-    }
-
     if (problem.expected === "date") {
         return t("line {line}: column “{column}” must be an ISO-8601 date or epoch milliseconds, got “{value}”.", {
             column: problem.column,
@@ -442,6 +434,9 @@ interface ExportedShard {
 /** The client `sendImport` writes through; the panel's own `useLunora()` result. */
 type ImportClient = ReturnType<typeof useLunora>;
 
+/** A shard's answer to an `importShard` check: the echo of `dryRun` marks one that honoured the flag. */
+type DryRunAnswer = ImportShardResult & { dryRun?: boolean };
+
 /** The rows a shard reported as written, summed over its tables. */
 const insertedRowCount = (inserted: Record<string, number>): number => Object.values(inserted).reduce((sum, count) => sum + count, 0);
 
@@ -502,14 +497,25 @@ const sendImport = async (
     onProgress(t("Checking {total} rows before writing…", { total: rowCount }));
 
     try {
+        // A shard built before dry runs ignores the flag and writes every row it is sent, and the check would learn that only after the
+        // rows are in. So the first request carries no row, which no shard version can write, and only a shard that honours the flag
+        // echoes `dryRun: true` in its answer.
+        const probe = (await client.query(IMPORT_SHARD, { dryRun: true, rows: [], startLine: 1 }, callOptions(shardKey))) as DryRunAnswer;
+
+        if (probe.dryRun !== true) {
+            return {
+                failure: {
+                    message: t(
+                        "This shard predates import checks, so it would write the file while checking it. Nothing was sent. Update the app and import again.",
+                    ),
+                    rows: 0,
+                },
+                total,
+            };
+        }
+
         await forEachRowChunk(source(), async (rows, startLine) => {
             const result = (await client.query(IMPORT_SHARD, { dryRun: true, rows, startLine }, callOptions(shardKey))) as ImportShardResult;
-
-            // A check never inserts and never meets a conflict. A server that predates dry runs ignores the flag and writes, and the real pass
-            // would then write every row again, so stop on the first chunk that shows a write.
-            if (result.conflicts > 0 || Object.values(result.inserted).some((count) => count > 0)) {
-                throw new Error(t("This server cannot check an import before writing, so the check may already have written rows. Nothing more was sent."));
-            }
 
             check.errors.push(...result.errors);
         });

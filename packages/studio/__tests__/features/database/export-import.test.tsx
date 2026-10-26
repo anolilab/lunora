@@ -55,7 +55,7 @@ const createClient = (rowsByTable?: Record<string, ExportRow[]>, columns: Column
                 const { dryRun, rows } = args as ImportArgs;
 
                 // A check writes nothing, so it reports nothing inserted.
-                return { conflicts: 0, errors: [], inserted: dryRun === true ? {} : { messages: rows.length } };
+                return { conflicts: 0, errors: [], inserted: dryRun === true ? {} : { messages: rows.length }, ...(dryRun === true ? { dryRun: true } : {}) };
             }
 
             throw new Error(`unexpected ${reference}`);
@@ -103,11 +103,11 @@ const importCalls = (mock: MockClientHooks): ImportArgs[] =>
         .map((call) => call[1] as ImportArgs)
         .filter((args) => args.dryRun === false);
 
-/** The `importShard` calls that only checked their rows, in the order the panel sent them. */
+/** The `importShard` calls that only checked their rows, in the order the panel sent them. The empty probe that precedes them is not one. */
 const dryChecks = (mock: MockClientHooks): ImportArgs[] =>
     callsTo(mock, ADMIN_FUNCTIONS.importShard)
         .map((call) => call[1] as ImportArgs)
-        .filter((args) => args.dryRun === true);
+        .filter((args) => args.dryRun === true && args.rows.length > 0);
 
 /**
  * A server that answers `importShard` for a 1200-row file. A check (`dryRun: true`) refuses the row on `badLine` when a chunk holds it, and
@@ -127,13 +127,14 @@ const createCheckingClient = (badLine?: number): MockClientHooks =>
                 if (dryRun === true && refused) {
                     return {
                         conflicts: 0,
+                        dryRun: true,
                         errors: [{ code: "VALIDATION_ERROR", line: badLine, message: "text must be a string", table: "messages" }],
                         inserted: {},
                     };
                 }
 
                 // A check writes nothing, so it reports nothing inserted.
-                return { conflicts: 0, errors: [], inserted: dryRun === true ? {} : { messages: rows.length } };
+                return { conflicts: 0, errors: [], inserted: dryRun === true ? {} : { messages: rows.length }, ...(dryRun === true ? { dryRun: true } : {}) };
             }
 
             throw new Error(`unexpected ${reference}`);
@@ -165,12 +166,13 @@ const createCsvServer = (refusedRecord?: number): MockClientHooks =>
                 if (dryRun === true && index >= 0 && index < rows.length) {
                     return {
                         conflicts: 0,
+                        dryRun: true,
                         errors: [{ code: "VALIDATION_ERROR", line: startLine + index, message: "text must be a string", table: "messages" }],
                         inserted: {},
                     };
                 }
 
-                return { conflicts: 0, errors: [], inserted: dryRun === true ? {} : { messages: rows.length } };
+                return { conflicts: 0, errors: [], inserted: dryRun === true ? {} : { messages: rows.length }, ...(dryRun === true ? { dryRun: true } : {}) };
             }
 
             throw new Error(`unexpected ${reference}`);
@@ -388,7 +390,7 @@ describe("exportImportPanel", () => {
             query: (reference, args): unknown => {
                 if (reference === ADMIN_FUNCTIONS.importShard) {
                     if ((args as { dryRun?: boolean }).dryRun === true) {
-                        return { conflicts: 0, errors: [], inserted: {} };
+                        return { conflicts: 0, errors: [], inserted: {}, dryRun: true };
                     }
 
                     imports += 1;
@@ -427,7 +429,7 @@ describe("exportImportPanel", () => {
             query: (reference, args): unknown => {
                 if (reference === ADMIN_FUNCTIONS.importShard) {
                     if ((args as { dryRun?: boolean }).dryRun === true) {
-                        return { conflicts: 0, errors: [], inserted: {} };
+                        return { conflicts: 0, errors: [], inserted: {}, dryRun: true };
                     }
 
                     writes += 1;
@@ -464,7 +466,7 @@ describe("exportImportPanel", () => {
                     const { dryRun, rows, startLine } = args as ImportArgs;
 
                     if (dryRun === true) {
-                        return { conflicts: 0, errors: [], inserted: {} };
+                        return { conflicts: 0, errors: [], inserted: {}, dryRun: true };
                     }
 
                     // The first chunk (lines 1-500) writes every row. The second (lines 501-1000) refuses line 510 and writes the other 499.
@@ -506,7 +508,7 @@ describe("exportImportPanel", () => {
             query: (reference, args): unknown => {
                 if (reference === ADMIN_FUNCTIONS.importShard) {
                     if ((args as { dryRun?: boolean }).dryRun === true) {
-                        return { conflicts: 0, errors: [], inserted: {} };
+                        return { conflicts: 0, errors: [], inserted: {}, dryRun: true };
                     }
 
                     imports += 1;
@@ -543,7 +545,7 @@ describe("exportImportPanel", () => {
             query: (reference, args): unknown => {
                 if (reference === ADMIN_FUNCTIONS.importShard) {
                     if ((args as { dryRun?: boolean }).dryRun === true) {
-                        return { conflicts: 0, errors: [], inserted: {} };
+                        return { conflicts: 0, errors: [], inserted: {}, dryRun: true };
                     }
 
                     return {
@@ -593,7 +595,7 @@ describe("exportImportPanel", () => {
 
                 // The check the panel sends first is not a write, so it is not part of the round trip.
                 if ((args as { dryRun?: boolean }).dryRun === true) {
-                    return { conflicts: 0, errors: [], inserted: {} };
+                    return { conflicts: 0, errors: [], inserted: {}, dryRun: true };
                 }
 
                 imported.push(...(args as { rows: ExportRow[] }).rows);
@@ -771,6 +773,7 @@ describe("exportImportPanel", () => {
                 if (reference === ADMIN_FUNCTIONS.importShard) {
                     return {
                         conflicts: 0,
+                        dryRun: true,
                         errors: [{ code: "VALIDATION", line: 3, message: "text must be a string", table: "messages" }],
                         inserted: {},
                     };
@@ -867,21 +870,18 @@ describe("exportImportPanel", () => {
         );
     });
 
-    it("writes nothing for a date-time with no zone, and says to add Z or an offset", async () => {
-        expect.assertions(2);
+    it("sends a date-time with no offset as the UTC instant it names", async () => {
+        expect.assertions(1);
 
         const mock = createClient(undefined, TYPED_COLUMNS);
 
         render(renderPanel(mock));
 
-        await importCsv("id,day\nm1,2026-03-01T09:00:00\n", "messages");
+        await importCsv("id,day\nm1,2026-10-26T12:30:00\n", "messages");
 
-        const error = await screen.findByTestId("ei-error");
+        await screen.findByTestId("ei-import-result");
 
-        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
-        expect(error.textContent).toBe(
-            "Invalid CSV: line 2: column “day” holds “2026-03-01T09:00:00”, a time with no zone. Add Z for UTC or an offset such as +02:00.",
-        );
+        expect(importCalls(mock)[0]?.rows[0]?.doc).toStrictEqual({ day: Date.UTC(2026, 9, 26, 12, 30), id: "m1" });
     });
 
     it("sends a column named __proto__ to the server as a field of its own, beside the others", async () => {
@@ -923,10 +923,11 @@ describe("exportImportPanel", () => {
         expect(error.textContent).toBe("Nothing was written, because some rows would be refused. Fix the rows listed below and import again.");
     });
 
-    it("stops at the first check that reports a write, since the server ignored the dry-run flag", async () => {
+    it("refuses before sending any row when the shard does not echo the dry-run flag", async () => {
         expect.assertions(3);
 
-        // A server that predates dry runs answers a check like a real import: it inserts the rows and says so.
+        // A shard that predates dry runs ignores the flag and answers a check like a real import: it inserts the rows and says so, and it
+        // does not echo `dryRun`.
         const mock = createMockClient({
             query: (reference, args): unknown => {
                 if (reference === ADMIN_FUNCTIONS.importShard) {
@@ -944,8 +945,10 @@ describe("exportImportPanel", () => {
 
         const error = await screen.findByTestId("ei-error");
 
-        expect(error.textContent).toBe("This server cannot check an import before writing, so the check may already have written rows. Nothing more was sent.");
-        expect(dryChecks(mock)).toHaveLength(1);
+        expect(error.textContent).toBe(
+            "This shard predates import checks, so it would write the file while checking it. Nothing was sent. Update the app and import again.",
+        );
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard).flatMap((call) => (call[1] as ImportArgs).rows)).toHaveLength(0);
         expect(importCalls(mock)).toHaveLength(0);
     });
 
