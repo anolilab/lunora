@@ -377,6 +377,12 @@ const subjectErasureBlocks = async (store: RequestStore, subjectId: string): Pro
  */
 const archiveBlocked = (requests: ReadonlyArray<RequestRecord>): boolean => requests.some((request) => blocksExports(request));
 
+/**
+ * Whether an erasure of the subject has begun or completed, found from the request store alone. A completed erasure rekeys its
+ * requests to the tombstone key, so the raw id misses it: the key is derived from the secret, so this needs no tombstone port and
+ * runs wherever the secret is set. Without a secret no erasure can have completed (`requireTombstones` refuses one), so only the raw
+ * id is read.
+ */
 const erasureBlocksSubject = async (store: RequestStore, subjectId: string, secret: string | undefined): Promise<boolean> => {
     if (await subjectErasureBlocks(store, subjectId)) {
         return true;
