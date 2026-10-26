@@ -2643,6 +2643,18 @@ const resolveShardBindingName = (env: unknown, namespace: ShardNamespaceLike): s
     return Object.entries(env).find(([, value]) => value === namespace)?.[0];
 };
 
+/**
+ * What a caller already holds for one inbound call, handed down so the helpers
+ * neither re-parse its URL nor re-serialize its envelope. Every field is
+ * optional: absent, each helper derives it from the request as it would anyway.
+ */
+interface InboundCall {
+    executionContext?: ExecutionContextLike;
+    /** The envelope text {@link forwardsVerbatim} cleared for the shard. */
+    forwardBody?: string;
+    url?: URL;
+}
+
 /** Build the POST the shard's `/rpc` route expects: `{ args, functionPath }` under the caller's headers, or `body` when the caller already holds that text. */
 const shardRpcRequest = (
     functionPath: string,
@@ -3098,10 +3110,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         request: Request,
         env: unknown,
         resolveIdentity: WorkerOptions["resolveIdentity"],
-        executionContext?: ExecutionContextLike,
-        requestOrigin?: string,
+        call: InboundCall = {},
     ): Promise<ForwardContext> => {
-        const resolved = await resolveForwardContext(request, env, resolveIdentity, options.trustedClientIpHeader, executionContext, requestOrigin);
+        const resolved = await resolveForwardContext(request, env, resolveIdentity, options.trustedClientIpHeader, call.executionContext, call.url?.origin);
 
         if (options.functions !== undefined) {
             resolved.headers[ORIGIN_PAYWALL_HEADER] = ORIGIN_PAYWALL_APPLIED;
@@ -3125,9 +3136,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         request: Request,
         env: unknown,
         resolveIdentity: WorkerOptions["resolveIdentity"],
-        executionContext?: ExecutionContextLike,
-        requestOrigin?: string,
-    ): Promise<ForwardContext> => assertLiveCredential(await forwardContext(request, env, resolveIdentity, executionContext, requestOrigin));
+        call?: InboundCall,
+    ): Promise<ForwardContext> => assertLiveCredential(await forwardContext(request, env, resolveIdentity, call));
 
     // Forward-context for the cross-shard admin orchestrators (migrate / rank /
     // pitr / export / import / …). They authorize fanned-out per-shard RPCs by
@@ -4796,14 +4806,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         shardKey: string,
         forwardedHeaders: Record<string, string>,
         sinkContext?: ObservabilitySinkContext,
-        // Both come from `handleRpc`, which already holds them: the envelope text
-        // `parseEnvelope` cleared for verbatim forwarding, and the URL `handle` parsed.
-        forwardBody?: string,
-        requestUrl?: URL,
+        call: InboundCall = {},
     ): Promise<Response> => {
         const rpcStartedAt = Date.now();
         const { observability, sampling } = options;
-        const requestMeta = requestTelemetryMeta(request, requestUrl);
+        const requestMeta = requestTelemetryMeta(request, call.url);
 
         // Open this dispatch's trace. `beginDispatchTrace` applies the inbound-trust
         // policy, mints the span, and settles the sampled verdict in one place, so
@@ -4833,7 +4840,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         try {
             // Re-emit the RPC body at the shard's `/rpc` route — on a region-local
             // replica when this read is eligible for one, else on the owner.
-            const response = await forwardRpcToShard(request, functionPath, args, shardKey, outgoingHeaders, forwardBody);
+            const response = await forwardRpcToShard(request, functionPath, args, shardKey, outgoingHeaders, call.forwardBody);
             const detail = decodeErrorDetail(response.headers.get(ERROR_DETAIL_HEADER));
 
             // A non-2xx from the shard is reported as ok=false even though no
@@ -4930,6 +4937,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         assertMethod(request, "POST", "RPC");
 
         const envelope = await parseEnvelope(request);
+        const call: InboundCall = { forwardBody: envelope.forwardBody, url };
 
         // Dev diagnostic (opt-in via `LUNORA_DEBUG_RPC`): one line per RPC so a
         // client-side request loop shows up as a wall of identical entries in the
@@ -4954,7 +4962,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // Forward selected headers from the inbound request so the DO can
         // honour auth, sessions, and D1 read-your-writes consistency.
-        const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity, undefined, url.origin);
+        const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity, call);
 
         assertExpectedSubject(request, identity);
 
@@ -5028,7 +5036,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             const shardKey = envelope.shardKey ?? defaultShard;
 
             const dispatch = (): Promise<Response> =>
-                dispatchSingleShard(request, envelope.functionPath, envelope.args ?? {}, shardKey, forwardedHeaders, sinkContext, envelope.forwardBody, url);
+                dispatchSingleShard(request, envelope.functionPath, envelope.args ?? {}, shardKey, forwardedHeaders, sinkContext, call);
 
             // Paid procedure: run the injected x402 gate around the shard
             // dispatch (challenge / verify / dispatch / settle). The gate's
@@ -5428,7 +5436,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // byte-identical to `handleRpc`'s. The context is passed explicitly
             // because this path has no `fetch` funnel to have recorded it, and an
             // SSR host may well hand us a rebuilt `Request` object.
-            const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity, callOptions.context);
+            const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity, {
+                executionContext: callOptions.context,
+            });
 
             // Run the IDENTICAL per-shard authorization gate. A `shardKey` of
             // `undefined` resolves to `defaultShard` for both the gate and the
