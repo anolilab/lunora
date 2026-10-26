@@ -176,7 +176,7 @@ describe("runExport", () => {
         expect(listed).toBe(0);
     });
 
-    it("checks the tombstone store once per export run, not once per step", async () => {
+    it("checks the tombstone store a fixed number of times per export run, not once per step", async () => {
         const tombstones = memoryTombstones();
         let checks = 0;
         const port: TombstonePort = {
@@ -194,7 +194,7 @@ describe("runExport", () => {
         await runExportWorkflow(opened.id);
 
         expect(store.rows.get(opened.id)?.status).toBe("ready");
-        expect(checks).toBe(1);
+        expect(checks).toBe(2);
     });
 
     it("records UNPROCESSABLE, not INTERNAL, when a tombstone holds the key of the export's rekeyed subject", async () => {
@@ -220,6 +220,18 @@ describe("runExport", () => {
         expect(store.rows.get(opened.id)?.status).toBe("failed");
         expect(details.join("|")).toContain("UNPROCESSABLE: the subject's erasure has begun or completed");
         expect(details.join("|")).not.toContain("INTERNAL");
+    });
+
+    it("refuses a raw-id export whose subject is tombstoned when no erasure request is on record", async () => {
+        const tombstones = memoryTombstones();
+        const { privacy, runExportWorkflow, store } = setup({ data: memoryData({}).port, tombstones });
+        const opened = await privacy.requestExport();
+
+        // A restore from before the erasure rolls the erasure request back. The tombstone survives it, under the HMAC of the raw id.
+        await tombstones.add(tombstoneKeyOf(SUBJECT.subjectId, SECRET), NOW);
+        await runExportWorkflow(opened.id);
+
+        expect(store.rows.get(opened.id)?.status).toBe("failed");
     });
 
     it("completes an inline export when the tombstone store is unreachable, as from a mutation", async () => {

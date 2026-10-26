@@ -434,14 +434,19 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string, 
                 return true;
             }
 
-            // The tombstone is keyed by HMAC. A request an erasure re-keyed already carries that key, so the probe asks for it
-            // as stored. A fresh request carries the raw id, which no tombstone matches; the store check above covers it.
+            // The tombstone is keyed by HMAC. A request an erasure re-keyed carries that key, so the probe asks for it as stored.
+            // A request that still carries the raw id is probed under its HMAC too: a restore can roll back the erasure request
+            // the store check relies on, and the tombstone survives the restore.
             if (tombstones === undefined || scope.tombstoneSecret === undefined || scope.tombstoneSecret === "") {
                 return false;
             }
 
             try {
-                return await tombstones.has(subjectId);
+                if (await tombstones.has(subjectId)) {
+                    return true;
+                }
+
+                return await tombstones.has(tombstoneKeyOf(subjectId, scope.tombstoneSecret));
             } catch (error) {
                 // An app with no tombstone store leaves the port unbound, so the answer is "not tombstoned". Only that error
                 // is absorbed: the request store check above has already run, and any other failure stops the export.
