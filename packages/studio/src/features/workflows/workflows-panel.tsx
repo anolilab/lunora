@@ -17,6 +17,7 @@ import { WorkflowInstanceHistory } from "./workflow-instances";
 
 const CREATE_WORKFLOW_INSTANCE = adminRef(ADMIN_FUNCTIONS.createWorkflowInstance);
 const GET_WORKFLOW_INSTANCE_STATUS = adminRef(ADMIN_FUNCTIONS.getWorkflowInstanceStatus);
+const SEND_WORKFLOW_EVENT = adminRef(ADMIN_FUNCTIONS.sendWorkflowEvent);
 
 /** One workflow instance the panel is observing — created here or refreshed by id. */
 interface ObservedInstance {
@@ -44,6 +45,21 @@ const formatPayload = (instance: ObservedInstance): string => {
     }
 };
 
+/** Parse an optional JSON textarea: `undefined` when blank, `null` (the sentinel) when invalid. */
+const parseOptionalJson = (text: string): { value: unknown } | null => {
+    const trimmed = text.trim();
+
+    if (trimmed === "") {
+        return { value: undefined };
+    }
+
+    try {
+        return { value: JSON.parse(trimmed) as unknown };
+    } catch {
+        return null;
+    }
+};
+
 /** The effective selection: the operator's pick while it still exists, else the first declared workflow. Derived rather than synced in an effect, so a codegen that drops the selected workflow re-defaults on the next render. */
 const effectiveExportName = (workflows: ReadonlyArray<WorkflowMetadata>, selectedExport: string): string => {
     if (workflows.some((workflow) => workflow.exportName === selectedExport)) {
@@ -51,6 +67,106 @@ const effectiveExportName = (workflows: ReadonlyArray<WorkflowMetadata>, selecte
     }
 
     return workflows[0]?.exportName ?? "";
+};
+
+interface SendEventFormProps {
+    /** The selected workflow export the event is addressed to. */
+    readonly exportName: string;
+    /** Called after a successful send, so the panel can refresh that instance's row. */
+    readonly onSent: (exportName: string, id: string) => void;
+}
+
+/** Deliver `{ type, payload }` to a waiting instance of the selected workflow over the `sendWorkflowEvent` admin RPC. */
+const SendEventForm = ({ exportName, onSent }: SendEventFormProps): ReactElement => {
+    const client = useLunora();
+    const t = useT();
+
+    const [idInput, setIdInput] = useState("");
+    const [typeInput, setTypeInput] = useState("");
+    const [payloadText, setPayloadText] = useState("");
+    const [sending, setSending] = useState(false);
+    const [error, setError] = useState<null | string>(null);
+
+    const send = async (): Promise<void> => {
+        const id = idInput.trim();
+        const type = typeInput.trim();
+        const payload = parseOptionalJson(payloadText);
+
+        if (payload === null) {
+            setError(t("Payload must be valid JSON"));
+
+            return;
+        }
+
+        setSending(true);
+        setError(null);
+
+        try {
+            await client.query(SEND_WORKFLOW_EVENT, { exportName, id, payload: payload.value, type }, callOptions(""));
+            onSent(exportName, id);
+        } catch (error_: unknown) {
+            setError(errorMessage(error_));
+        }
+
+        setSending(false);
+    };
+
+    return (
+        <div className="flex flex-col gap-3" data-testid="workflows-event">
+            <h3 className="text-sm font-medium">{t("Send event")}</h3>
+
+            {error !== null && (
+                <p className="text-sm text-destructive" data-testid="workflows-event-error" role="alert">
+                    {error}
+                </p>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2">
+                <Input
+                    aria-label={t("Instance id")}
+                    className="max-w-48"
+                    data-testid="workflows-event-id"
+                    onChange={(event) => {
+                        setIdInput(event.target.value);
+                    }}
+                    placeholder={t("Instance id")}
+                    value={idInput}
+                />
+
+                <Input
+                    aria-label={t("Event type")}
+                    className="max-w-48"
+                    data-testid="workflows-event-type"
+                    onChange={(event) => {
+                        setTypeInput(event.target.value);
+                    }}
+                    placeholder={t("Event type")}
+                    value={typeInput}
+                />
+
+                <Button
+                    data-testid="workflows-event-button"
+                    disabled={sending || exportName === "" || idInput.trim() === "" || typeInput.trim() === ""}
+                    onClick={() => {
+                        fireAndForget(send());
+                    }}
+                >
+                    {sending ? t("Sending…") : t("Send event")}
+                </Button>
+            </div>
+
+            <Textarea
+                aria-label={t("Payload (JSON)")}
+                className="font-mono"
+                data-testid="workflows-event-payload"
+                onChange={(event) => {
+                    setPayloadText(event.target.value);
+                }}
+                placeholder={t("Payload (JSON, optional)")}
+                value={payloadText}
+            />
+        </div>
+    );
 };
 
 /**
@@ -66,7 +182,8 @@ const effectiveExportName = (workflows: ReadonlyArray<WorkflowMetadata>, selecte
  * The "Start instance" form calls the create-instance admin RPC
  * (`binding.create({ id?, params })`); each created/refreshed instance is added
  * to the observed-instances table, whose "Refresh" re-reads the instance-status
- * admin RPC (`binding.get(id).status()`).
+ * admin RPC (`binding.get(id).status()`). "Send event" delivers `{ type, payload }`
+ * to a waiting instance (`binding.get(id).sendEvent(...)`) and then refreshes it.
  */
 const WorkflowsPanel = (): ReactElement => {
     const client = useStudioClient();
@@ -115,17 +232,12 @@ const WorkflowsPanel = (): ReactElement => {
             return;
         }
 
-        let parameters: unknown;
-        const trimmed = paramsText.trim();
+        const parameters = parseOptionalJson(paramsText);
 
-        if (trimmed !== "") {
-            try {
-                parameters = JSON.parse(trimmed);
-            } catch {
-                setStartError(t("Params must be valid JSON"));
+        if (parameters === null) {
+            setStartError(t("Params must be valid JSON"));
 
-                return;
-            }
+            return;
         }
 
         setStarting(true);
@@ -135,7 +247,7 @@ const WorkflowsPanel = (): ReactElement => {
             const id = instanceIdInput.trim();
             const result = (await client.query(
                 CREATE_WORKFLOW_INSTANCE,
-                { exportName, id: id === "" ? undefined : id, params: parameters },
+                { exportName, id: id === "" ? undefined : id, params: parameters.value },
                 callOptions(""),
             )) as CreateWorkflowInstanceResult;
 
@@ -279,6 +391,15 @@ const WorkflowsPanel = (): ReactElement => {
                         value={paramsText}
                     />
                 </div>
+            )}
+
+            {workflows.length > 0 && (
+                <SendEventForm
+                    exportName={selectedExportName}
+                    onSent={(exportName, id) => {
+                        fireAndForget(refreshInstance(exportName, id));
+                    }}
+                />
             )}
 
             {instances.length > 0 && (

@@ -615,9 +615,12 @@ Two static [advisors](/docs/concepts/advisors) keep workflow wiring honest:
 
 The Studio's **Workflows** panel (under the Functions domain) lists every
 declared workflow with its export name, generated class, binding, and deployed
-name; lets you **start an instance** from a JSON-params form; and shows a table
-of instances with their live status (queued / running / complete / errored) and
-output. See [the Studio guide](/docs/packages/studio#functions).
+name; lets you **start an instance** from a JSON-params form; **sends an event**
+(type plus optional JSON payload) to an instance waiting in `ctx.waitForEvent`,
+the same `instance.sendEvent` call `ctx.workflows.sendEvent` makes, minus the
+payload validation (the admin op has no event definition to parse against, and
+the reserved `lunora:` types are refused); and shows a table of instances with
+their live status (queued / running / complete / errored) and output. See [the Studio guide](/docs/packages/studio#functions).
 
 <Callout type="warn">
     Cloudflare bills for workflow instance-state storage. Keep step payloads small and set a `retention` policy when you don't need long-lived instance history.

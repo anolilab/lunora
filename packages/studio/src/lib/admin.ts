@@ -98,6 +98,7 @@ export const ADMIN_FUNCTIONS = {
     runSql: "__lunora_admin__:runSql",
     sendQueueMessage: "__lunora_admin__:sendQueueMessage",
     sendTestMail: "__lunora_admin__:sendTestMail",
+    sendWorkflowEvent: "__lunora_admin__:sendWorkflowEvent",
     setIssueSeverity: "__lunora_admin__:setIssueSeverity",
     storageOrphans: "__lunora_admin__:storageOrphans",
     storageReferences: "__lunora_admin__:storageReferences",

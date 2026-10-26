@@ -77,6 +77,7 @@ const ADMIN_FUNCTIONS: {
     readonly runSql: "__lunora_admin__:runSql";
     readonly sendQueueMessage: "__lunora_admin__:sendQueueMessage";
     readonly sendTestMail: "__lunora_admin__:sendTestMail";
+    readonly sendWorkflowEvent: "__lunora_admin__:sendWorkflowEvent";
     readonly setIssueSeverity: "__lunora_admin__:setIssueSeverity";
     readonly storageOrphans: "__lunora_admin__:storageOrphans";
     readonly storageReferences: "__lunora_admin__:storageReferences";
@@ -2605,6 +2606,11 @@ const MESSAGE_IDS: readonly [
     "Params (JSON)",
     "Params (JSON, optional)",
     "Params must be valid JSON",
+    "Send event",
+    "Event type",
+    "Payload (JSON)",
+    "Payload (JSON, optional)",
+    "Payload must be valid JSON",
     "Instances",
     "Status",
     "Output",

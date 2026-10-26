@@ -147,7 +147,8 @@ Everything that reads or shapes stored state.
 - **Workflows**: _Inspect declared Cloudflare Workflows and their bindings._
   Lists every [durable workflow](/docs/packages/workflow) with its export name,
   generated class, binding, and deployed name; starts an instance from a
-  JSON-params form; and tracks instances with their live status (queued /
+  JSON-params form; sends an event (type plus JSON payload) to a waiting
+  instance; and tracks instances with their live status (queued /
   running / complete / errored) and output.
 - **Queues**: _Inspect declared Cloudflare Queues: their producer bindings,
   consumer mode, and dead-letter queue_ ([`@lunora/queue`](/docs/packages/queue)).

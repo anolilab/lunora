@@ -393,11 +393,13 @@ const parseSeverityArgument = (args: Record<string, unknown>): IssueSeverity | n
 /**
  * Minimal structural shape of a created/fetched workflow instance handle, mirrored
  * from `@lunora/workflow`'s WorkflowInstanceLike so `@lunora/do` stays free of a
- * dependency on the workflow package. Only the members the admin ops touch (`id`
- * and `status()`) are modelled.
+ * dependency on the workflow package. Only the members the admin ops touch (`id`,
+ * `status()` and `sendEvent()`) are modelled. `sendEvent` is optional because the
+ * binding check only vouches for `create`/`get`.
  */
 interface WorkflowInstanceHandle {
     id: string;
+    sendEvent?: (event: { payload?: unknown; type: string }) => Promise<void>;
     status: () => Promise<{ error?: { message?: unknown; name?: unknown }; output?: unknown; status?: unknown }>;
 }
 
@@ -467,6 +469,55 @@ const parseGetWorkflowInstanceStatusArgs = (args: Record<string, unknown>): GetW
     }
 
     return { exportName, id };
+};
+
+/** Parsed `sendWorkflowEvent` admin-RPC payload: which instance of which declared workflow, and the event to deliver. */
+interface SendWorkflowEventArgs {
+    exportName: string;
+    id: string;
+    payload?: unknown;
+    type: string;
+}
+
+/**
+ * The event-type namespace `@lunora/workflow` reserves for its own events
+ * (`RESERVED_EVENT_TYPE_PREFIX` there; `@lunora/do` has no dependency on that
+ * package). `ctx.parallel` children report their outcome to the parent as a
+ * `lunora:branch:*` event, so an admin-sent one could forge a branch result.
+ */
+const RESERVED_WORKFLOW_EVENT_PREFIX = "lunora:";
+
+/**
+ * Validate the `sendWorkflowEvent` admin-RPC payload. Requires non-empty
+ * `exportName`, `id` and `type`, and refuses a reserved `lunora:` type; `payload`
+ * is passed through untouched (the admin op has no event definition to parse it
+ * against). Throws a 400 `LunoraError` on a bad shape.
+ */
+const parseSendWorkflowEventArgs = (args: Record<string, unknown>): SendWorkflowEventArgs => {
+    const exportName = typeof args["exportName"] === "string" ? args["exportName"].trim() : "";
+    const id = typeof args["id"] === "string" ? args["id"].trim() : "";
+    const type = typeof args["type"] === "string" ? args["type"].trim() : "";
+
+    if (exportName === "") {
+        throw new LunoraError("BAD_REQUEST", "sendWorkflowEvent: `exportName` is required");
+    }
+
+    if (id === "") {
+        throw new LunoraError("BAD_REQUEST", "sendWorkflowEvent: `id` is required");
+    }
+
+    if (type === "") {
+        throw new LunoraError("BAD_REQUEST", "sendWorkflowEvent: `type` is required");
+    }
+
+    if (type.startsWith(RESERVED_WORKFLOW_EVENT_PREFIX)) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `sendWorkflowEvent: event type "${type}" is reserved — the "${RESERVED_WORKFLOW_EVENT_PREFIX}" prefix is used by the framework's own events`,
+        );
+    }
+
+    return { exportName, id, payload: args["payload"], type };
 };
 
 /** Coerce an unknown `status()` payload field into a known instance state, defaulting to `"unknown"`. */
@@ -1622,6 +1673,7 @@ export {
     parseSampleErrorsHeader,
     parseSampleRate,
     parseSendQueueMessageArgs,
+    parseSendWorkflowEventArgs,
     parseSeverityArgument,
     parseTablePageFilters,
     parseTablePageOrderBy,

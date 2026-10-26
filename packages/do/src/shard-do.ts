@@ -373,6 +373,7 @@ import {
     parseSampleErrorsHeader,
     parseSampleRate,
     parseSendQueueMessageArgs,
+    parseSendWorkflowEventArgs,
     parseSeverityArgument,
     parseTablePageFilters,
     parseTablePageOrderBy,
@@ -11384,6 +11385,29 @@ abstract class ShardDO {
 
         return adminResponse(result);
     }
+
+    /**
+     * Serve `__lunora_admin__:sendWorkflowEvent` — the studio's "Send event"
+     * form: deliver `{ type, payload }` to a waiting instance through the
+     * binding's `instance.sendEvent`, the same call `ctx.workflows.sendEvent`
+     * makes. Audited, since it moves a running workflow forward. Admin-gated by
+     * `handleAdminRpc`'s caller.
+     */
+    private async handleSendWorkflowEvent(args: Record<string, unknown>): Promise<Response> {
+        const parsed = parseSendWorkflowEventArgs(args);
+        const binding = this.declaredWorkflowHandle(parsed.exportName);
+        const instance = await binding.get(parsed.id);
+
+        if (typeof instance.sendEvent !== "function") {
+            throw new LunoraError("BAD_REQUEST", `workflow "${parsed.exportName}" instances do not accept events on this deployment`);
+        }
+
+        await instance.sendEvent({ payload: parsed.payload, type: parsed.type });
+
+        this.recordAudit("sendWorkflowEvent", { id: parsed.id, detail: { exportName: parsed.exportName, type: parsed.type } });
+
+        return adminResponse({ sent: true });
+    }
     /* eslint-enable no-secrets/no-secrets */
 
     /**
@@ -11900,6 +11924,7 @@ abstract class ShardDO {
             [ADMIN_FUNCTIONS.replayQueueMessage]: (args) => this.handleReplayQueueMessage(args),
             [ADMIN_FUNCTIONS.sendQueueMessage]: (args) => this.handleSendQueueMessage(args),
             [ADMIN_FUNCTIONS.sendTestMail]: (args) => this.handleSendTestMail(args),
+            [ADMIN_FUNCTIONS.sendWorkflowEvent]: (args) => this.handleSendWorkflowEvent(args),
         };
     }
 
