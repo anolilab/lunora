@@ -104,6 +104,47 @@ const runRequestLogScenarios = (factory: () => SqlHarness): void => {
             }
         });
 
+        it("stores the same redaction for a repeated identity/args, raw only under captureRaw, and never shares one across look-alike values", () => {
+            expect.assertions(4);
+
+            const database = createHarness();
+
+            try {
+                const identity = { email: "alice@example.com", roles: ["admin"] };
+                const args = { channelId: "c1", password: "hunter2" };
+                // The same JSON text, `{}`, for two values the redactor treats differently.
+                const lookAlikes = [{}, { password: undefined }];
+                /** What the column holds for `value`: its redaction, as JSON text read back. */
+                const stored = (value: unknown): unknown => {
+                    const text = JSON.stringify(redactArgs(value));
+
+                    return JSON.parse(text) as unknown;
+                };
+
+                appendRequestLogEntry(database.sql, entry({ identity, redactedArgs: args }));
+                appendRequestLogEntry(database.sql, entry({ identity: { ...identity }, redactedArgs: { ...args } }));
+                appendRequestLogEntry(database.sql, entry({ redactedArgs: args }), { captureRaw: true });
+
+                for (const lookAlike of lookAlikes) {
+                    appendRequestLogEntry(database.sql, entry({ redactedArgs: lookAlike }));
+                }
+
+                const rows = readRequestLog(database.sql).toSorted((a, b) => a.seq - b.seq);
+                const expected = { identity: stored(identity), redactedArgs: stored(args) };
+
+                expect(
+                    rows.slice(0, 2).map((row) => {
+                        return { identity: row.identity, redactedArgs: row.redactedArgs };
+                    }),
+                ).toStrictEqual([expected, expected]);
+                expect(rows[2]!.redactedArgs).toStrictEqual(args);
+                expect(rows[3]!.redactedArgs).toStrictEqual(stored(lookAlikes[0]));
+                expect(rows[4]!.redactedArgs).toStrictEqual(stored(lookAlikes[1]));
+            } finally {
+                database.close();
+            }
+        });
+
         it("round-trips the dispatch's trace id, leaving it undefined when there was none", () => {
             expect.assertions(2);
 

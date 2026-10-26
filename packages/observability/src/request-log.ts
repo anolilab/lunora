@@ -946,6 +946,93 @@ const cacheHitColumn = (cacheHit: boolean | undefined): null | number => {
     return cacheHit ? 1 : 0;
 };
 
+/** How many redacted request-log values {@link redactedJson} remembers per isolate. */
+const REDACTED_JSON_MEMO_ENTRIES = 256;
+
+/** The longest input (as JSON) {@link redactedJson} remembers; a larger one is redacted every time. */
+const REDACTED_JSON_MEMO_MAX_CHARS = 4096;
+
+/** Deeper than this, {@link isJsonData} gives up and the value is simply not memoised. */
+const JSON_DATA_MAX_DEPTH = 32;
+
+const redactedJsonMemo = new Map<string, string>();
+
+/**
+ * True when `value` is nothing but JSON data — `null`, booleans, strings, finite
+ * numbers, and arrays / plain objects of them — so its `JSON.stringify` names it
+ * exactly. Anything else (an `undefined` property, a `Date`, a `Map`, a class
+ * instance, a hole) is either dropped or flattened by `JSON.stringify` while the
+ * redactor sees it, so two different values could share one text.
+ */
+const isJsonData = (value: unknown, depth = 0): boolean => {
+    if (value === null || typeof value === "string" || typeof value === "boolean") {
+        return true;
+    }
+
+    if (typeof value === "number") {
+        return Number.isFinite(value);
+    }
+
+    if (typeof value !== "object" || depth >= JSON_DATA_MAX_DEPTH) {
+        return false;
+    }
+
+    if (Array.isArray(value)) {
+        for (let index = 0; index < value.length; index += 1) {
+            if (!Object.hasOwn(value, index) || !isJsonData(value[index], depth + 1)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    const proto = Object.getPrototypeOf(value) as object | null;
+
+    if (proto !== null && proto !== Object.prototype) {
+        return false;
+    }
+
+    return Object.values(value).every((field) => isJsonData(field, depth + 1));
+};
+
+/**
+ * `JSON.stringify(redactArgs(value, captureRaw))`, remembered per input.
+ *
+ * The redactor walks every key against the rule list and runs its value regexes
+ * over every string, which costs 5–30 µs for an ordinary args object or identity
+ * on the Durable Object's only thread — more than the rest of a cached query.
+ * Its output depends on nothing but its input, and the same inputs recur: one
+ * caller's identity on every request, one channel's query args from every
+ * subscriber. So the redacted text is kept for each input text, but only for
+ * pure JSON data (see {@link isJsonData}), whose text identifies it exactly, and
+ * only for small inputs, so the memo cannot hold large payloads. Oldest entry out.
+ */
+const redactedJson = (value: unknown, captureRaw: boolean): string => {
+    if (captureRaw || !isJsonData(value)) {
+        return JSON.stringify(redactArgs(value, captureRaw));
+    }
+
+    const key = JSON.stringify(value);
+    const remembered = redactedJsonMemo.get(key);
+
+    if (remembered !== undefined) {
+        return remembered;
+    }
+
+    const redacted = JSON.stringify(redactArgs(value));
+
+    if (key.length <= REDACTED_JSON_MEMO_MAX_CHARS) {
+        if (redactedJsonMemo.size >= REDACTED_JSON_MEMO_ENTRIES) {
+            redactedJsonMemo.delete(redactedJsonMemo.keys().next().value as string);
+        }
+
+        redactedJsonMemo.set(key, redacted);
+    }
+
+    return redacted;
+};
+
 /**
  * Append one dispatch to the request log, then — once per
  * {@link REQUEST_LOG_PRUNE_WINDOW_MS} window — trim the log back to the most
@@ -995,9 +1082,9 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
         // `user_id` column above stays raw; it's the non-PII correlation key the
         // `getRequestLog` filters key on.
         // eslint-disable-next-line unicorn/no-null -- anonymous request or no claims attached.
-        entry.identity === undefined ? null : JSON.stringify(redactArgs(entry.identity, captureRaw)),
+        entry.identity === undefined ? null : redactedJson(entry.identity, captureRaw),
         // eslint-disable-next-line unicorn/no-null -- no args were sent on this dispatch.
-        entry.redactedArgs === undefined ? null : JSON.stringify(redactArgs(entry.redactedArgs, captureRaw)),
+        entry.redactedArgs === undefined ? null : redactedJson(entry.redactedArgs, captureRaw),
         entry.outcome,
         // eslint-disable-next-line unicorn/no-null -- success path: no error message. Redacted like args/identity — see the module docstring on `redactArgs`.
         entry.errorMessage === undefined ? null : redactArgs(entry.errorMessage, captureRaw),
