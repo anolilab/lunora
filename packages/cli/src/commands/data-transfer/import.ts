@@ -821,9 +821,10 @@ const refuseFile = (options: ImportCommandOptions, check: ImportPass, refusal: s
 /**
  * Why a check refuses the file, or `undefined` when every row may be written. A check writes nothing, so a row it wrote, a conflict it met, a
  * shard it could not reach or a row it refused each means the file cannot be imported as it stands. A worker that writes during a check
- * ignored the dry-run flag, and the rows it wrote are already in place.
+ * ignored the dry-run flag, and the rows it wrote are already in place. Under `--verify` a storage reference that resolves to no exported blob
+ * refuses too, since the real pass would fail on it only after the blobs and rows are written.
  */
-const checkRefusal = (check: ImportPass): string | undefined => {
+const checkRefusal = (check: ImportPass, verify: boolean): string | undefined => {
     if (check.streamFailure !== undefined) {
         return `the check stopped early: ${failureMessage(check.streamFailure)}`;
     }
@@ -840,7 +841,20 @@ const checkRefusal = (check: ImportPass): string | undefined => {
 
     const refused = errors.filter((error) => error.code !== GLOBAL_DRY_RUN_UNSUPPORTED);
 
-    return refused.length > 0 ? `${String(refused.length)} row(s) would be refused` : undefined;
+    if (refused.length > 0) {
+        return `${String(refused.length)} row(s) would be refused`;
+    }
+
+    const unmigrated = check.remapReport.unmigrated.length;
+
+    return verify && unmigrated > 0 ? `${String(unmigrated)} storage reference(s) resolve to no exported blob` : undefined;
+};
+
+/** The check ran quietly, so a refusal over unresolved storage references names them here: the operator needs to know which blobs the export lacks. */
+const logUnmigratedRefusal = (options: ImportCommandOptions, check: ImportPass): void => {
+    if (options.verify === true && check.remapReport.unmigrated.length > 0) {
+        reportStorageOutcome(options.logger, check.remapReport, true);
+    }
 };
 
 /** Each shard the fan-out never reached. Its rows are in neither `inserted` nor `errors`, so the run has to name them. */
@@ -928,9 +942,11 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     }
 
     const check = await runImportPass(quietOptions(options), source, plan, { ...target, requestUrl: `${requestUrl}?dryRun=true` });
-    const refusal = checkRefusal(check);
+    const refusal = checkRefusal(check, options.verify === true);
 
     if (refusal !== undefined) {
+        logUnmigratedRefusal(options, check);
+
         // Nothing was uploaded, so the refusal reports no storage block.
         return refuseFile(options, check, refusal, undefined);
     }

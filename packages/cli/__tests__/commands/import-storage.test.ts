@@ -490,6 +490,31 @@ describe("lunora import --with-storage", () => {
         expect(logs.error.some((line) => line.includes("resolved to no migrated blob"))).toBe(true);
     });
 
+    it("refuses a file with an unresolved storage reference under --verify before any blob or row is written", async () => {
+        expect.assertions(5);
+
+        const root = writeConvexExport({ kg_a: "bytes" }, { posts: [{ _id: "p1", cover: { $storage: "kg_missing" } }] });
+        const worker = fakeWorker();
+        const { logger, logs } = capturingLogger();
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: worker.fetchImpl,
+            file: root,
+            logger,
+            token: "t",
+            url: "http://localhost:8787",
+            verify: true,
+            withStorage: true,
+        });
+
+        expect(result.code).toBe(1);
+        expect(result.error).toContain("1 storage reference(s) resolve to no exported blob");
+        expect(worker.imported).toHaveLength(0);
+        expect(worker.uploads).toHaveLength(0);
+        expect(logs.warn.some((line) => line.includes("unmigrated storage reference posts.cover: kg_missing"))).toBe(true);
+    });
+
     it("leaves plain strings alone when there is no mapping file", async () => {
         expect.assertions(2);
 
@@ -1142,7 +1167,7 @@ describe("lunora import --with-storage", () => {
             });
 
             expect(result.code).toBe(1);
-            expect(worker.imported[0]?.doc["avatarId"]).toBe("kg_deleted");
+            expect(worker.imported).toHaveLength(0);
             expect(logs.warn.join("\n")).toContain("unmigrated storage reference users.avatarId: kg_deleted");
         });
 
