@@ -37,7 +37,7 @@ import {
 } from "@lunora/codegen";
 // `worker-entry.ts` lexes the entry's exports; the lexer's wasm must be initialised first.
 import { init as initLexer } from "es-module-lexer";
-import type { BindingElement, CallExpression, SourceFile } from "ts-morph";
+import type { BindingElement, CallExpression, Identifier, SourceFile } from "ts-morph";
 import { Node, Project, ts } from "ts-morph";
 
 import type { AgentIR } from "./agent-info";
@@ -213,6 +213,39 @@ const SOURCE_SPECIFIER_EXTENSION = /\.[cm]?[jt]sx?$/u;
 const BARREL_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 
 /** The compiler options of the nearest tsconfig.json, read the way TypeScript reads them. Empty when the project has none. */
+/** Barrel files parsed so far, keyed by path. An entry is reused while the file keeps its modification time. */
+const parsedModules = new Map<string, { mtimeMs: number; source: ts.SourceFile }>();
+
+const parseModule = (modulePath: string): ts.SourceFile => {
+    const { mtimeMs } = statSync(modulePath);
+    const cached = parsedModules.get(modulePath);
+
+    if (cached?.mtimeMs === mtimeMs) {
+        return cached.source;
+    }
+
+    const source = ts.createSourceFile(modulePath, readFileSync(modulePath, "utf8"), ts.ScriptTarget.Latest);
+    parsedModules.set(modulePath, { mtimeMs, source });
+
+    return source;
+};
+
+/** The identifiers of a file, walked once per file: each namespace check reads this list rather than the tree. */
+const identifierCache = new WeakMap<SourceFile, Identifier[]>();
+
+const identifiersOf = (sourceFile: SourceFile): Identifier[] => {
+    const cached = identifierCache.get(sourceFile);
+
+    if (cached !== undefined) {
+        return cached;
+    }
+
+    const identifiers = sourceFile.getDescendantsOfKind(ts.SyntaxKind.Identifier);
+    identifierCache.set(sourceFile, identifiers);
+
+    return identifiers;
+};
+
 const compilerOptionsFor = (fromFile: string): ts.CompilerOptions => {
     const configPath = ts.findConfigFile(dirname(fromFile), (path) => ts.sys.fileExists(path));
 
@@ -489,7 +522,7 @@ const forwardsReplicaExport = (
 
     visited.add(key);
 
-    const source = ts.createSourceFile(modulePath, readFileSync(modulePath, "utf8"), ts.ScriptTarget.Latest);
+    const source = parseModule(modulePath);
     const forwards = forwardedExports(source);
     // A star re-export's copy of a name is hidden by an export of that name in this module or in an outer one.
     const shadowed = new Set([
@@ -536,7 +569,7 @@ const forwardsReplicaExport = (
  * no client, so `ns.EventLogDO` asks for nothing. Any other use (the bare namespace, `ns["…"]`, `typeof ns`) could reach the client.
  */
 const namespaceReachesClient = (sourceFile: SourceFile, localName: string): boolean =>
-    sourceFile.getDescendantsOfKind(ts.SyntaxKind.Identifier).some((identifier) => {
+    identifiersOf(sourceFile).some((identifier) => {
         const parent = identifier.getParent();
 
         // The namespace's own declaration, and a property that only shares its name, are not uses of it.
@@ -625,18 +658,16 @@ const dynamicImportReachesClient = (call: CallExpression): boolean => {
 
 /** Whether a module re-exports the replica package as a namespace under `name`: `export * as name from "@lunora/replica"`. */
 const exportsReplicaNamespace = (modulePath: string, name: string): boolean =>
-    ts
-        .createSourceFile(modulePath, readFileSync(modulePath, "utf8"), ts.ScriptTarget.Latest)
-        .statements.some(
-            (statement) =>
-                ts.isExportDeclaration(statement) &&
-                statement.moduleSpecifier !== undefined &&
-                ts.isStringLiteral(statement.moduleSpecifier) &&
-                statement.moduleSpecifier.text === EVENT_LOG_PACKAGE &&
-                statement.exportClause !== undefined &&
-                ts.isNamespaceExport(statement.exportClause) &&
-                statement.exportClause.name.text === name,
-        );
+    parseModule(modulePath).statements.some(
+        (statement) =>
+            ts.isExportDeclaration(statement) &&
+            statement.moduleSpecifier !== undefined &&
+            ts.isStringLiteral(statement.moduleSpecifier) &&
+            statement.moduleSpecifier.text === EVENT_LOG_PACKAGE &&
+            statement.exportClause !== undefined &&
+            ts.isNamespaceExport(statement.exportClause) &&
+            statement.exportClause.name.text === name,
+    );
 
 /**
  * Whether a file reaches `EventLogDOClient` through a relative module that forwards it from the replica package, through any chain of
