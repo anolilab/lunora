@@ -972,7 +972,48 @@ const redactedJsonMemo = new Map<string, string>();
 const isSmallJsonData = (value: unknown): boolean => {
     let budget = REDACTED_JSON_MEMO_MAX_CHARS;
 
-    const visit = (node: unknown, depth: number): boolean => {
+    // Assigned below: `visitField` and `visitContainer` recurse into it.
+    let visit: (node: unknown, depth: number) => boolean;
+
+    // Read through the descriptor: a getter would run again in the redactor and in
+    // `JSON.stringify`, free to answer differently each time.
+    const visitField = (node: object, key: number | string, depth: number): boolean => {
+        const descriptor = Object.getOwnPropertyDescriptor(node, key);
+
+        return descriptor !== undefined && "value" in descriptor && visit(descriptor.value, depth + 1);
+    };
+
+    const visitContainer = (node: object, depth: number): boolean => {
+        if (Array.isArray(node)) {
+            for (let index = 0; index < node.length; index += 1) {
+                if (!visitField(node, index, depth)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        const proto = Object.getPrototypeOf(node) as object | null;
+
+        if (proto !== null && proto !== Object.prototype) {
+            return false;
+        }
+
+        // `Object.keys`, not `Object.entries`: no field is read before the walk reaches
+        // it, so a large object stops at the budget without running later getters.
+        for (const key of Object.keys(node)) {
+            budget -= key.length;
+
+            if (budget < 0 || !visitField(node, key, depth)) {
+                return false;
+            }
+        }
+
+        return true;
+    };
+
+    visit = (node: unknown, depth: number): boolean => {
         budget -= 1;
 
         if (budget < 0) {
@@ -993,31 +1034,13 @@ const isSmallJsonData = (value: unknown): boolean => {
             return Number.isFinite(node);
         }
 
-        if (typeof node !== "object" || depth >= JSON_DATA_MAX_DEPTH) {
+        // `JSON.stringify` calls a `toJSON` (own, non-enumerable or inherited) that the
+        // redactor never sees, so the text would not name what gets redacted.
+        if (typeof node !== "object" || depth >= JSON_DATA_MAX_DEPTH || typeof (node as { toJSON?: unknown }).toJSON === "function") {
             return false;
         }
 
-        if (Array.isArray(node)) {
-            for (let index = 0; index < node.length; index += 1) {
-                if (!Object.hasOwn(node, index) || !visit(node[index], depth + 1)) {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        const proto = Object.getPrototypeOf(node) as object | null;
-
-        if (proto !== null && proto !== Object.prototype) {
-            return false;
-        }
-
-        return Object.entries(node).every(([key, field]) => {
-            budget -= key.length;
-
-            return budget >= 0 && visit(field, depth + 1);
-        });
+        return visitContainer(node, depth);
     };
 
     return visit(value, 0);
