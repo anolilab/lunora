@@ -175,13 +175,9 @@ const needsWireEncoding = (value: unknown, depth = 0): boolean => {
         return true;
     }
 
-    if (value === null) {
-        return false;
-    }
-
     const kind = typeof value;
 
-    if (kind === "string" || kind === "boolean") {
+    if (value === null || kind === "string" || kind === "boolean") {
         return false;
     }
 
@@ -194,6 +190,12 @@ const needsWireEncoding = (value: unknown, depth = 0): boolean => {
 
     if (kind !== "object") {
         // bigint, undefined, function, symbol.
+        return true;
+    }
+
+    // `JSON.stringify` calls a `toJSON` — own (even non-enumerable) or inherited —
+    // where `encodeWire` copies only the enumerable fields, so the two disagree.
+    if (typeof (value as { toJSON?: unknown }).toJSON === "function") {
         return true;
     }
 

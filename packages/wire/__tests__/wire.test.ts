@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decodeWire, encodeWire, stableStringify, stableWireKey } from "../src";
+import { decodeWire, encodeWire, needsWireEncoding, stableStringify, stableWireKey } from "../src";
 
 describe("@lunora/wire", () => {
     it("round-trips values JSON cannot represent", () => {
@@ -60,5 +60,19 @@ describe("stableStringify values JSON cannot encode", () => {
         expect(() => stableStringify({ cb: () => 1 })).toThrow(FUNCTION_ERROR);
         expect(() => stableStringify([Symbol("a")])).toThrow(SYMBOL_ERROR);
         expect(stableStringify({ a: undefined })).toBe(stableStringify({}));
+    });
+});
+
+describe("needsWireEncoding and toJSON", () => {
+    it("sends a value with a toJSON to the encoder, where JSON.stringify would call it and encodeWire would not", () => {
+        expect.assertions(5);
+
+        const hidden = Object.defineProperty({ visible: 1 }, "toJSON", { enumerable: false, value: () => "replaced" });
+
+        expect(needsWireEncoding({ visible: 1 })).toBe(false);
+        expect(needsWireEncoding(hidden)).toBe(true);
+        expect(needsWireEncoding({ nested: [hidden] })).toBe(true);
+        expect(needsWireEncoding(Object.assign([1, 2], { toJSON: () => "replaced" }))).toBe(true);
+        expect(needsWireEncoding(Object.create({ toJSON: () => "inherited" }) as object)).toBe(true);
     });
 });
