@@ -536,7 +536,7 @@ describe("alarm re-arm breaker", () => {
             const writer = createShardCtxDb({ clock: () => NOW, schema, sql: harness.sql });
             await writer.insert("notes", { _id: "n1", body: "written while tripped" }, { allowExplicitId: true });
 
-            const row = await writer.get("n1");
+            const row = await writer.get("notes", "n1");
 
             expect(row?.["body"]).toBe("written while tripped");
             expect(slot).toBe(recoveryWakeAt(NOW));

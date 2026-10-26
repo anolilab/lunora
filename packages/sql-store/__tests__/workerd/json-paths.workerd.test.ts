@@ -53,7 +53,7 @@ describe("dotted paths on D1", () => {
 
         await writer.patch("b", { "profile.plan": "team" });
 
-        const patched = await writer.get("b");
+        const patched = await writer.get(table, "b");
 
         expect(patched?.["profile"]).toStrictEqual({ plan: "team" });
         await expect(ids({ "profile.plan": "team" })).resolves.toStrictEqual(["b"]);

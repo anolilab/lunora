@@ -27,6 +27,11 @@ export class PrivacyTombstonesDO extends DurableObject<Record<string, unknown>> 
         );
     }
 
+    /** Whether one subject's erasure is on record: a keyed lookup, so a check does not read every tombstone. */
+    public has(subjectKey: string): boolean {
+        return this.ctx.storage.sql.exec("SELECT 1 FROM tombstones WHERE subject_key = ? LIMIT 1", subjectKey).toArray().length > 0;
+    }
+
     /** Every tombstone key on record. */
     public keys(): string[] {
         return this.ctx.storage.sql

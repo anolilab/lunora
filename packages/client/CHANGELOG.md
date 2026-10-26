@@ -1,3 +1,25 @@
+## @lunora/client [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.251...@lunora/client@1.0.0-alpha.252) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.249
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.241
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.161
+
+## @lunora/client [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.250...@lunora/client@1.0.0-alpha.251) (2026-10-26)
+
+### Features
+
+* **studio:** filter a table by a cell value, including NULL ([#1318](https://github.com/anolilab/lunora/issues/1318)) ([e5c3f4b](https://github.com/anolilab/lunora/commit/e5c3f4bff3d4335ba33de46952c0039e9d057f4c))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.248
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.240
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.160
+
 ## @lunora/client [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.249...@lunora/client@1.0.0-alpha.250) (2026-10-26)
 
 

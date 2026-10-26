@@ -3135,12 +3135,89 @@ describe("shardDO admin CDC bigint/bytes egress", () => {
 
             expect(replayed.status).toBe(200);
 
-            const row = await createShardContextDatabase({ schema: moneySchema, sql: target.sql }).get("s1", "sessions");
+            const row = await createShardContextDatabase({ schema: moneySchema, sql: target.sql }).get("sessions", "s1");
 
             expect([row?.["amountMinor"], new Uint8Array(row?.["receipt"] as ArrayBuffer)]).toStrictEqual([10n, new Uint8Array([1, 2, 3])]);
         } finally {
             target.close();
         }
+    });
+});
+
+describe("shardDO admin filters — nested paths and array membership", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let shard: AdminShard;
+    // Every statement the shard issues, so a test can prove a request touched no row.
+    let statements: string[];
+
+    beforeEach(() => {
+        database = createSqliteExec();
+        database.raw(`CREATE TABLE "orders" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+        database.raw(
+            `INSERT INTO "orders" VALUES ('o1', 1, '{"address":{"city":"Berlin"},"tags":["red","blue"],"status":"open"}'), ('o2', 2, '{"address":{"city":"Paris"},"tags":["green"],"status":"closed"}')`,
+        );
+
+        statements = [];
+        const recording: SqlExec = {
+            exec: (query, ...params) => {
+                statements.push(query);
+
+                return database.sql.exec(query, ...params);
+            },
+        };
+
+        shard = new AdminShard(stateFor(recording), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        statements = [];
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const pageIds = async (filters: unknown): Promise<unknown[]> => {
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.readTablePage, { filters, table: "orders" }));
+        const { result } = await response.json<{ result: { rows: Record<string, unknown>[] } }>();
+
+        return result.rows.map((row) => row["id"]);
+    };
+
+    it("filters a nested field through the path the browser sends", async () => {
+        expect.assertions(1);
+
+        await expect(pageIds([{ column: "address", operator: "eq", path: ["city"], value: "Berlin" }])).resolves.toStrictEqual(["o1"]);
+    });
+
+    it("filters array membership through has", async () => {
+        expect.assertions(1);
+
+        await expect(pageIds([{ column: "tags", operator: "has", value: "green" }])).resolves.toStrictEqual(["o2"]);
+    });
+
+    it("refuses an explicit null path on a bulk delete before selecting or deleting any row", async () => {
+        expect.assertions(4);
+
+        // `status` is a top-level field on o1 only. Dropping the null path would
+        // test that parent column and delete o1.
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "status", operator: "eq", path: null, value: "open" }], table: "orders" }),
+        );
+
+        expect(response.status).toBe(400);
+        // Only statements that touch the table: the shard's own bookkeeping reads run on every request.
+        expect(statements.filter((query) => query.includes('"orders"'))).toStrictEqual([]);
+        expect(database.raw(`SELECT COUNT(*) AS c FROM "orders"`)[0]?.["c"]).toBe(2);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+    });
+
+    it("answers 400 to a path that is not a list of field names, rather than testing the parent field", async () => {
+        expect.assertions(2);
+
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "address", operator: "eq", path: "city", value: "Berlin" }], table: "orders" }),
+        );
+
+        expect(response.status).toBe(400);
+        expect(database.raw(`SELECT COUNT(*) AS c FROM "orders"`)[0]?.["c"]).toBe(2);
     });
 });
 

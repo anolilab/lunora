@@ -201,7 +201,7 @@ describe("guardWriter — id-based methods with a pinned table (by-id facade)", 
     // body at arg[1] and pin at arg[2]. Each entry calls with the correct shape.
     const idMethods: ReadonlyArray<{ call: (m: Record<string, (...a: unknown[]) => unknown>, table: string) => unknown; name: string }> = [
         { call: (m, table) => m["delete"]!("any-id", table), name: "delete" },
-        { call: (m, table) => m["get"]!("any-id", table), name: "get" },
+        { call: (m, table) => m["get"]!(table, "any-id"), name: "get" },
         { call: (m, table) => m["lookupById"]!("any-id", table), name: "lookupById" },
         { call: (m, table) => m["patch"]!("any-id", {}, table), name: "patch" },
         { call: (m, table) => m["replace"]!("any-id", {}, table), name: "replace" },
@@ -230,25 +230,25 @@ describe("guardWriter — id-based methods with a pinned table (by-id facade)", 
 });
 
 describe("guardWriter — generic id-based access resolves the owning table", () => {
-    it("denies get(id) for a bare id that resolves to a protected table", async () => {
+    it("denies get(table, id) for a protected table", async () => {
         expect.assertions(2);
 
         const raw = createFakeWriter();
-        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as { get: (id: string) => Promise<unknown> };
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as { get: (table: string, id: string) => Promise<unknown> };
 
-        await expect(guarded.get("post_42")).rejects.toThrow(RlsRequiredError);
+        await expect(guarded.get("posts", "post_42")).rejects.toThrow(RlsRequiredError);
         expect(raw.get).not.toHaveBeenCalled();
     });
 
-    it("allows get(id) for a bare id that resolves to a .public() table", async () => {
+    it("allows get(table, id) for a .public() table", async () => {
         expect.assertions(1);
 
         const raw = createFakeWriter();
-        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as { get: (id: string) => Promise<unknown> };
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as { get: (table: string, id: string) => Promise<unknown> };
 
-        await guarded.get("stat_7");
+        await guarded.get("stats", "stat_7");
 
-        expect(raw.get).toHaveBeenCalledWith("stat_7", undefined);
+        expect(raw.get).toHaveBeenCalledWith("stats", "stat_7");
     });
 
     it("passes an unresolvable bare id through (nothing to leak)", async () => {

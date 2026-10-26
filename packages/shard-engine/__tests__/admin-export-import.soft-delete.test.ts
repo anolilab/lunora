@@ -70,7 +70,7 @@ describe("shard admin export/import — soft-deleted rows", () => {
         // something to bring back on the restored deployment.
         await restored.restore?.("n2", "notes");
 
-        const reloaded = await restored.get("n2", "notes");
+        const reloaded = await restored.get("notes", "n2");
 
         expect(reloaded?.["deletedAt"]).toBeNull();
     });

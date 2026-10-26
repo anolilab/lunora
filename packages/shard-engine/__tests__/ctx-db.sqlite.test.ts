@@ -137,7 +137,7 @@ describe("ctx-db against real SQLite", () => {
                 text: "typed",
             });
 
-            const fetched = await writer.get("m_1");
+            const fetched = await writer.get("messages", "m_1");
 
             expect(fetched).toMatchObject({
                 deletedAt: null,
@@ -152,7 +152,7 @@ describe("ctx-db against real SQLite", () => {
 
             const { writer } = setupWriter();
 
-            await expect(writer.get("nope")).resolves.toBeNull();
+            await expect(writer.get("messages", "nope")).resolves.toBeNull();
         });
 
         it("patch merges, replace overwrites, delete removes — verified by re-read", async () => {
@@ -164,15 +164,15 @@ describe("ctx-db against real SQLite", () => {
 
             await writer.patch("m_1", { text: "edited" });
 
-            await expect(writer.get("m_1")).resolves.toMatchObject({ channelId: "c1", text: "edited" });
+            await expect(writer.get("messages", "m_1")).resolves.toMatchObject({ channelId: "c1", text: "edited" });
 
             await writer.replace("m_1", { authorId: "u2", channelId: "c2", text: "fresh" });
 
-            await expect(writer.get("m_1")).resolves.toMatchObject({ _id: "m_1", authorId: "u2", channelId: "c2", text: "fresh" });
+            await expect(writer.get("messages", "m_1")).resolves.toMatchObject({ _id: "m_1", authorId: "u2", channelId: "c2", text: "fresh" });
 
             await writer.delete("m_1");
 
-            await expect(writer.get("m_1")).resolves.toBeNull();
+            await expect(writer.get("messages", "m_1")).resolves.toBeNull();
         });
     });
 

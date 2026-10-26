@@ -109,7 +109,7 @@ describe("ctx-db OCC guarded write — concurrent writers", () => {
         expectConflict(caught);
 
         // The winner's write survived intact; the loser's patch never landed.
-        const row = await competitor.get("t1");
+        const row = await competitor.get("tasks", "t1");
 
         expect(row).toMatchObject({ title: "winner", weight: 1 });
     });
@@ -140,7 +140,7 @@ describe("ctx-db OCC guarded write — concurrent writers", () => {
 
         // The replace was rejected wholesale — the competitor's patch is the
         // sole surviving write (no partial merge of the replaced document).
-        const row = await competitor.get("t1");
+        const row = await competitor.get("tasks", "t1");
 
         expect(row).toMatchObject({ title: "winner", weight: 1 });
     });
@@ -170,7 +170,7 @@ describe("ctx-db OCC guarded write — concurrent writers", () => {
         expectConflict(caught);
 
         // The delete won — the row is gone, not resurrected by the patch.
-        await expect(competitor.get("t1")).resolves.toBeNull();
+        await expect(competitor.get("tasks", "t1")).resolves.toBeNull();
     });
 
     it("delete vs patch: the row is patched while the delete is parked, so the delete conflicts", async () => {
@@ -201,7 +201,7 @@ describe("ctx-db OCC guarded write — concurrent writers", () => {
         expectConflict(caught);
 
         // The patch survived — the row was NOT deleted out from under it.
-        const row = await competitor.get("t1");
+        const row = await competitor.get("tasks", "t1");
 
         expect(row).toMatchObject({ title: "winner", weight: 1 });
     });
@@ -226,7 +226,7 @@ describe("ctx-db OCC guarded write — concurrent writers", () => {
         // Must resolve, not reject — disjoint rows are not a conflict.
         await expect(writer.patch("t1", { title: "one-updated" })).resolves.toBeUndefined();
 
-        const rows = await Promise.all([competitor.get("t1"), competitor.get("t2")]);
+        const rows = await Promise.all([competitor.get("tasks", "t1"), competitor.get("tasks", "t2")]);
 
         expect(rows).toMatchObject([
             { title: "one-updated", weight: 1 },

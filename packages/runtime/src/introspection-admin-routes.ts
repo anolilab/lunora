@@ -56,14 +56,17 @@ const parseGlobalFilters = (raw: string | undefined): GlobalFilterClause[] | und
         return undefined;
     }
 
+    // `operator` and `path` are forwarded unvalidated on purpose: the D1 compiler
+    // refuses anything but a plain eq, and dropping them here would turn a `has`
+    // or nested clause into an equality on the parent column.
     const clauses = parsed.flatMap((entry) => {
         if (typeof entry !== "object" || entry === null || typeof (entry as { column?: unknown }).column !== "string") {
             return [];
         }
 
-        const { column, value } = entry as { column: string; value?: unknown };
+        const { column, operator, path, value } = entry as { column: string; operator?: string; path?: string[]; value?: unknown };
 
-        return [{ column, value }];
+        return [{ column, value, ...(operator === undefined ? {} : { operator }), ...(path === undefined ? {} : { path }) }];
     });
 
     return clauses.length === 0 ? undefined : clauses;

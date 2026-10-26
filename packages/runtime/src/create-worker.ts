@@ -502,6 +502,8 @@ interface GlobalTablePage {
 /** One eq constraint a facet-value click adds to the global browser's view. Mirrors `@lunora/d1`'s `GlobalFilterClause`. */
 interface GlobalFilterClause {
     column: string;
+    operator?: string;
+    path?: string[];
     value: unknown;
 }
 

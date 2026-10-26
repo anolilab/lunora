@@ -68,7 +68,7 @@ server-side via `ctx.runQuery` / `ctx.runMutation` / `ctx.runAction`, passing an
 `server.ts` re-exports the procedure builders and `v` validators **bound to your
 schema**, so `ctx.db` knows your tables. Author functions by importing from the
 generated `server` (not the base package); then `ctx.db.query("messages")`,
-`ctx.db.insert("messages", …)`, and `ctx.db.get(id)` are all typed against your
+`ctx.db.insert("messages", …)`, and `ctx.db.get("messages", id)` are all typed against your
 real schema with no casts.
 
 ## `dataModel.ts`: `Id` and `Doc`
@@ -76,8 +76,8 @@ real schema with no casts.
 Two types you reach for constantly:
 
 - **`Id<"table">`**: a branded string id. It carries its table name in the type,
-  so `ctx.db.get(id)` resolves to the right document type and you can't pass a
-  `users` id where a `messages` id is expected.
+  so `ctx.db.get("messages", id)` resolves to the right document type, and you
+  can't pass a `users` id where a `messages` id is expected.
 - **`Doc<"table">`**: the full stored document shape for a table, including the
   built-in `_id` and `_creationTime`.
 

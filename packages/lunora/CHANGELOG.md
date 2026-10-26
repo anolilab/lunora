@@ -1,3 +1,34 @@
+## lunorash [1.0.0-alpha.433](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.432...lunorash@1.0.0-alpha.433) (2026-10-26)
+
+### Performance Improvements
+
+* **cli:** cut codegen and ts-morph from the startup path ([#1338](https://github.com/anolilab/lunora/issues/1338)) ([c4d6061](https://github.com/anolilab/lunora/commit/c4d60616455fa86a6d668e247f6223774f352db5))
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.435
+
+## lunorash [1.0.0-alpha.432](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.431...lunorash@1.0.0-alpha.432) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.433
+* **@lunora/client:** upgraded to 1.0.0-alpha.251
+* **@lunora/do:** upgraded to 1.0.0-alpha.248
+* **@lunora/observability:** upgraded to 1.0.0-alpha.172
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.170
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.240
+* **@lunora/server:** upgraded to 1.0.0-alpha.239
+
+## lunorash [1.0.0-alpha.431](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.430...lunorash@1.0.0-alpha.431) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.432
+
 ## lunorash [1.0.0-alpha.430](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.429...lunorash@1.0.0-alpha.430) (2026-10-26)
 
 

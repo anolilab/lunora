@@ -1,9 +1,12 @@
 import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
+import type { TableErasure } from "../src/dataset";
+import { defineDataset } from "../src/dataset";
 import { germany } from "../src/de";
 import { eu } from "../src/eu";
 import type { PrivacyPreset } from "../src/rules";
+import { retain } from "../src/rules";
 import { DAY_MS, NOW, setup } from "./harness";
 
 const voucherYearsOf = (preset: ReturnType<typeof germany>): number | undefined => preset.retention.find((rule) => rule.id === "de.voucher")?.years;
@@ -19,8 +22,8 @@ const codeOf = (run: () => unknown): string => {
 };
 
 describe("the voucher period option", () => {
-    it("keeps 10 years by default, the decided value", () => {
-        expect(voucherYearsOf(germany())).toBe(10);
+    it("defaults to the statutory 8 years", () => {
+        expect(voucherYearsOf(germany())).toBe(8);
     });
 
     it("sets the statutory 8 years when asked, and says so in the note", () => {
@@ -43,6 +46,19 @@ describe("the voucher period option", () => {
 
         expect(rules.find((rule) => rule.id === "de.books")?.years).toBe(10);
         expect(rules.find((rule) => rule.id === "de.correspondence")?.years).toBe(6);
+    });
+});
+
+describe("a retain on a year-end rule", () => {
+    const ledger = (erase: TableErasure) =>
+        defineDataset("ledger", { legalBasis: "contract", origin: "provided", purpose: "Invoices the user issued", tables: { invoices: { erase } } });
+
+    it("refuses a year-end rule kept without a from column, since the period would start at the erasure", () => {
+        expect(codeOf(() => setup({ datasets: [ledger(retain("de.books"))], presets: [germany()] }))).toBe("BAD_REQUEST");
+    });
+
+    it("accepts the same rule once a from column names the record's date", () => {
+        expect(codeOf(() => setup({ datasets: [ledger(retain("de.books", { from: "issuedAt" }))], presets: [germany()] }))).toBe("no-error");
     });
 });
 

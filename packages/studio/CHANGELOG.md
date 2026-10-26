@@ -1,3 +1,30 @@
+## @lunora/studio [1.0.0-alpha.345](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.344...@lunora/studio@1.0.0-alpha.345) (2026-10-26)
+
+### Bug Fixes
+
+* **privacy:** erasure replay, coverage, retention and persistence fixes ([#1286](https://github.com/anolilab/lunora/issues/1286)) ([1ef4e1b](https://github.com/anolilab/lunora/commit/1ef4e1be46596c97f576e125cdf6c11d2d86b324))
+
+## @lunora/studio [1.0.0-alpha.344](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.343...@lunora/studio@1.0.0-alpha.344) (2026-10-26)
+
+### Features
+
+* **studio:** filter a table by a cell value, including NULL ([#1318](https://github.com/anolilab/lunora/issues/1318)) ([e5c3f4b](https://github.com/anolilab/lunora/commit/e5c3f4bff3d4335ba33de46952c0039e9d057f4c))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.258
+* **@lunora/client:** upgraded to 1.0.0-alpha.251
+* **@lunora/react:** upgraded to 1.0.0-alpha.264
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.240
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.160
+
+## @lunora/studio [1.0.0-alpha.343](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.342...@lunora/studio@1.0.0-alpha.343) (2026-10-26)
+
+### Bug Fixes
+
+* **seed:** validator bounds, unique indexes and dangling FKs ([#1284](https://github.com/anolilab/lunora/issues/1284)) ([8ede8ab](https://github.com/anolilab/lunora/commit/8ede8abc2e7434bc71443ad95388315ff4ec7dee))
+
 ## @lunora/studio [1.0.0-alpha.342](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.341...@lunora/studio@1.0.0-alpha.342) (2026-10-26)
 
 ### Features

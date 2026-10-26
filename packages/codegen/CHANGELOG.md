@@ -1,3 +1,45 @@
+## @lunora/codegen [1.0.0-alpha.357](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.356...@lunora/codegen@1.0.0-alpha.357) (2026-10-26)
+
+### Bug Fixes
+
+* **privacy:** erasure replay, coverage, retention and persistence fixes ([#1286](https://github.com/anolilab/lunora/issues/1286)) ([1ef4e1b](https://github.com/anolilab/lunora/commit/1ef4e1be46596c97f576e125cdf6c11d2d86b324))
+
+## @lunora/codegen [1.0.0-alpha.356](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.355...@lunora/codegen@1.0.0-alpha.356) (2026-10-26)
+
+### Features
+
+* **server:** require the table in ctx.db.get(table, id) ([#1342](https://github.com/anolilab/lunora/issues/1342)) ([92cca06](https://github.com/anolilab/lunora/commit/92cca0604d33fc93db2ad49530572e8b99508f3b))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.259
+* **@lunora/agent:** upgraded to 1.0.0-alpha.249
+* **@lunora/client:** upgraded to 1.0.0-alpha.252
+* **@lunora/do:** upgraded to 1.0.0-alpha.249
+* **@lunora/payment:** upgraded to 1.0.0-alpha.242
+* **@lunora/server:** upgraded to 1.0.0-alpha.240
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.161
+
+## @lunora/codegen [1.0.0-alpha.355](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.354...@lunora/codegen@1.0.0-alpha.355) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.258
+* **@lunora/agent:** upgraded to 1.0.0-alpha.248
+* **@lunora/client:** upgraded to 1.0.0-alpha.251
+* **@lunora/do:** upgraded to 1.0.0-alpha.248
+* **@lunora/payment:** upgraded to 1.0.0-alpha.241
+* **@lunora/server:** upgraded to 1.0.0-alpha.239
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.160
+
+## @lunora/codegen [1.0.0-alpha.354](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.353...@lunora/codegen@1.0.0-alpha.354) (2026-10-26)
+
+### Bug Fixes
+
+* **seed:** validator bounds, unique indexes and dangling FKs ([#1284](https://github.com/anolilab/lunora/issues/1284)) ([8ede8ab](https://github.com/anolilab/lunora/commit/8ede8abc2e7434bc71443ad95388315ff4ec7dee))
+
 ## @lunora/codegen [1.0.0-alpha.353](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.352...@lunora/codegen@1.0.0-alpha.353) (2026-10-26)
 
 ### Features

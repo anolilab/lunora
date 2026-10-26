@@ -273,6 +273,7 @@ interface RequestRecord {
     readonly expiresAt?: Date;
     readonly extendedDueAt?: Date;
     readonly id: string;
+    readonly nothingErased?: boolean;
     readonly reason?: string;
     readonly receivedAt: Date;
     readonly status: RequestStatus;
@@ -290,6 +291,7 @@ interface RequestRow {
     readonly erasureGraceUntil?: number;
     readonly expiresAt?: number;
     readonly extendedDueAt?: number;
+    readonly nothingErased?: boolean;
     readonly reason?: string;
     readonly receivedAt: number;
     readonly requestId: string;
@@ -361,11 +363,8 @@ type RetentionStart = "endOfCalendarYear" | "from";
 
 ```ts
 type RetryResult = {
-    readonly kind: "ran";
-    readonly outcome: ExportOutcome;
-} | {
-    readonly kind: "restart";
     readonly requestId: string;
+    readonly type: RequestRecord["type"];
 };
 ```
 
@@ -422,6 +421,7 @@ interface TableSpec {
 ```ts
 interface TombstonePort {
     readonly add: (key: string, erasedAt: Date) => Promise<void>;
+    readonly has: (key: string) => Promise<boolean>;
     readonly keys: () => Promise<ReadonlySet<string>>;
 }
 ```
@@ -430,6 +430,12 @@ interface TombstonePort {
 
 ```ts
 const actionCacheDataset: (table?: string) => Dataset;
+```
+
+### `archiveBlocked` (const)
+
+```ts
+const archiveBlocked: (requests: ReadonlyArray<RequestRecord>) => boolean;
 ```
 
 ### `authDataset` (const)
@@ -576,6 +582,8 @@ const eu: (options?: EuOptions) => PrivacyPreset;
 type PortTransport = (call: {
     readonly method: string;
     readonly payload: string;
+}, options: {
+    readonly dedupId: string;
 }) => Promise<unknown>;
 ```
 

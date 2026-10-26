@@ -69,7 +69,7 @@ export const move = mutation
     .use(rateLimit(limiter, "write", byCaller))
     .input({ id: v.id("tasks"), status: v.union(v.literal("todo"), v.literal("in-progress"), v.literal("done"), v.literal("archived")), index: v.number() })
     .mutation(async ({ args: { id, index, status: column }, ctx }): Promise<void> => {
-        const card = await ctx.db.get(id);
+        const card = await ctx.db.get("tasks", id);
 
         if (!card) {
             return;

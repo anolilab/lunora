@@ -1,3 +1,35 @@
+## @lunora/testing [1.0.0-alpha.305](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.304...@lunora/testing@1.0.0-alpha.305) (2026-10-26)
+
+### Features
+
+* **server:** require the table in ctx.db.get(table, id) ([#1342](https://github.com/anolilab/lunora/issues/1342)) ([92cca06](https://github.com/anolilab/lunora/commit/92cca0604d33fc93db2ad49530572e8b99508f3b))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.249
+* **@lunora/server:** upgraded to 1.0.0-alpha.240
+* **@lunora/observability:** upgraded to 1.0.0-alpha.173
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.171
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.161
+
+## @lunora/testing [1.0.0-alpha.304](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.303...@lunora/testing@1.0.0-alpha.304) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.248
+* **@lunora/server:** upgraded to 1.0.0-alpha.239
+* **@lunora/observability:** upgraded to 1.0.0-alpha.172
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.170
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.160
+
+## @lunora/testing [1.0.0-alpha.303](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.302...@lunora/testing@1.0.0-alpha.303) (2026-10-26)
+
+### Bug Fixes
+
+* **seed:** validator bounds, unique indexes and dangling FKs ([#1284](https://github.com/anolilab/lunora/issues/1284)) ([8ede8ab](https://github.com/anolilab/lunora/commit/8ede8abc2e7434bc71443ad95388315ff4ec7dee))
+
 ## @lunora/testing [1.0.0-alpha.302](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.301...@lunora/testing@1.0.0-alpha.302) (2026-10-26)
 
 

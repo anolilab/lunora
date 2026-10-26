@@ -20,6 +20,8 @@
 import { existsSync } from "node:fs";
 
 import { discoverSchema, schemaFromIr } from "@lunora/codegen";
+import { LunoraError } from "@lunora/errors";
+import type { TablePlan } from "@lunora/seed";
 import { seedPlan } from "@lunora/seed";
 import { Project } from "ts-morph";
 
@@ -146,15 +148,28 @@ const handleSeedRequest = (request: SeedRequest): SeedResponse => {
     }
 
     const schema = schemaFromIr(ir);
-    const plan = seedPlan(schema, {
-        // Pass every sampled parent table as `existingIds` so the generator links
-        // to live rows and never fabricates parents — matching the studio's
-        // "existing rows are not affected, FKs point at what's there" semantics.
-        existingIds: existingIds ?? {},
-        defaultCount: clampCount(count),
-        only: [table],
-        seed: seed ?? 0,
-    });
+    let plan: ReadonlyArray<TablePlan>;
+
+    try {
+        plan = seedPlan(schema, {
+            // Pass every sampled parent table as `existingIds` so the generator links
+            // to live rows and never fabricates parents — matching the studio's
+            // "existing rows are not affected, FKs point at what's there" semantics.
+            existingIds: existingIds ?? {},
+            defaultCount: clampCount(count),
+            only: [table],
+            seed: seed ?? 0,
+        });
+    } catch (error) {
+        // The planner refuses a batch it cannot seed — a required key with no parent
+        // (including a self-reference's first row), or a unique column past its values —
+        // with a BAD_REQUEST that names the column. That is this request's refusal, not a fault.
+        if (error instanceof LunoraError && error.code === "BAD_REQUEST") {
+            return { body: { error: "seed-refused", message: error.message, ok: false }, status: 409 };
+        }
+
+        throw error;
+    }
 
     // `existingIds` covers a parent only when it supplies at least one id; where it
     // does not, `seedPlan` FABRICATES that parent's rows and points the children at

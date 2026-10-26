@@ -70,7 +70,7 @@ describe("d1 ctx-db soft delete", () => {
         expect(ids(await writer.findMany("todos", {}))).toStrictEqual(["t1", "t3"]);
         await expect(writer.count("todos")).resolves.toBe(2);
 
-        const row = await writer.get("t2", "todos");
+        const row = await writer.get("todos", "t2");
 
         expect(row?.["deletedAt"]).toBe(FIXED_CLOCK);
         expect(row?.["title"]).toBe("two");
@@ -108,7 +108,7 @@ describe("d1 ctx-db soft delete", () => {
         await seedTodos(writer);
         await writer.delete("t3", "todos", { hard: true });
 
-        await expect(writer.get("t3", "todos")).resolves.toBeNull();
+        await expect(writer.get("todos", "t3")).resolves.toBeNull();
         expect(ids(await writer.findMany("todos", { includeDeleted: true }))).toStrictEqual(["t1", "t2"]);
     });
 

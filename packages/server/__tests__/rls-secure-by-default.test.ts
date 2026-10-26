@@ -83,7 +83,7 @@ const createRawWriter = (rows: Row[], log: string[]) => {
 
             return { continueCursor: null, isDone: true, page: rowsOfTable(tableName) };
         },
-        async get(id: string) {
+        async get(_table: string, id: string) {
             log.push(`raw.get:${id}`);
 
             return rows.find((row) => row._id === id) ?? null;
@@ -186,10 +186,10 @@ const guard = (raw: RawWriter, protectedTables: Set<string>, tableOfId: (id: str
 
             return raw.findMany(tableName);
         },
-        get: async (id: string) => {
+        get: async (table: string, id: string) => {
             denyById(id);
 
-            return raw.get(id);
+            return raw.get(table, id);
         },
         groupBy: (tableName: string) => {
             deny(tableName);
@@ -355,7 +355,9 @@ describe("rls — secure-by-default routing over a guarded writer", () => {
         const log: string[] = [];
         const raw = createRawWriter([{ _id: "secret_1", table: "secrets" }], log);
         const guarded = guard(raw, protectedTables, tableOfId);
-        const handler = lunora.query.use(rlsForTest<TestContext>(definePolicies([readPosts, insertSecrets]))).query(async ({ ctx }) => ctx.db.get("secret_1"));
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>(definePolicies([readPosts, insertSecrets])))
+            .query(async ({ ctx }) => ctx.db.get("secrets", "secret_1"));
 
         // The by-id path must defer to the guarded `base.get` (fail closed), never
         // return the row it located through the unwrapped writer.

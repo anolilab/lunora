@@ -402,7 +402,7 @@ describe("shardDO.runInTransaction — external write hooks", () => {
         // error writes the row twice.
         const id = await shard.run(async () => db.insert("notes", { body: "kept" }));
 
-        await expect(db.get(id)).resolves.toMatchObject({ body: "kept" });
+        await expect(db.get("notes", id)).resolves.toMatchObject({ body: "kept" });
         expect(reported).toHaveBeenCalledTimes(1);
         expect(reported.mock.calls[0]?.[0]).toContain("after-commit write hook failed");
 

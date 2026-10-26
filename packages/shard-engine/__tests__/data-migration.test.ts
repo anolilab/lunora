@@ -120,7 +120,7 @@ describe("runDataMigration", () => {
                 id: "denormalise-team-name",
                 table: "members",
                 up: async (document, context) => {
-                    const team = await context.db.get(String(document["teamId"]), "teams");
+                    const team = await context.db.get("teams", String(document["teamId"]));
 
                     return team ? { ...document, teamName: team["name"] } : undefined;
                 },
@@ -783,7 +783,7 @@ describe("runDataMigration", () => {
 
             await writer.restore?.("u2", "users");
 
-            const restored = await writer.get("u2", "users");
+            const restored = await writer.get("users", "u2");
 
             expect(restored?.["version"]).toBe(1);
         });

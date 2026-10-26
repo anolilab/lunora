@@ -681,7 +681,7 @@ interface DatabaseWriterLike {
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
-    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
+    get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
     groupBy: (tableName: string, options: GroupByOptions) => Promise<ReadonlyArray<GroupByEntry>>;
     insert: (tableName: string, document: Record<string, unknown>, options?: {
         allowExplicitId?: boolean;
@@ -996,6 +996,7 @@ interface FieldOperators {
 interface FilterClause {
     column: string;
     operator: FilterOperator;
+    path?: string[];
     value?: unknown;
 }
 ```
@@ -1003,7 +1004,7 @@ interface FilterClause {
 ### `FilterOperator` (type)
 
 ```ts
-type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
+type FilterOperator = "contains" | "eq" | "gt" | "gte" | "has" | "lt" | "lte" | "ne";
 ```
 
 ### `FlagEvaluation` (interface)

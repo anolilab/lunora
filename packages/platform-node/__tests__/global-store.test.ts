@@ -65,7 +65,7 @@ describe("createNodeGlobalStore", () => {
 
             expect(typeof id).toBe("string");
 
-            const document = await writer.get(id);
+            const document = await writer.get("notes", id);
 
             // Booleans and numbers come back in their JS forms, not as the
             // INTEGER/REAL SQLite stored them as — the value codec is wired.
@@ -95,7 +95,7 @@ describe("createNodeGlobalStore", () => {
         try {
             await second.migrate(schema);
 
-            const document = await second.writer({ schema }).get(id);
+            const document = await second.writer({ schema }).get("notes", id);
 
             expect(document).toMatchObject({ body: "kept", slug: "keep" });
         } finally {

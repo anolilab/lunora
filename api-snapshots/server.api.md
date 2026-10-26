@@ -266,7 +266,7 @@ interface DatabaseReader {
     findFirst: (tableName: string, args?: {
         where?: Record<string, unknown>;
     }) => Promise<Record<string, unknown> | null>;
-    get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
+    get: <T extends string>(table: T, id: Id<T>) => Promise<Record<string, unknown> | null>;
     normalizeId: <T extends string>(tableName: T, id: string) => Id<T> | null;
     query: (tableName: string) => TableReader;
     related: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
@@ -652,7 +652,7 @@ interface FacadeWriterLike {
     findFirst(tableName: string, args?: unknown): Promise<unknown>;
     findFirstOrThrow(tableName: string, args?: unknown): Promise<unknown>;
     findMany(tableName: string, args?: unknown): Promise<unknown>;
-    get(id: string, expectedTable?: string): Promise<unknown>;
+    get(table: string, id: string): Promise<unknown>;
     groupBy(tableName: string, options: unknown): Promise<unknown>;
     insert(tableName: string, document: Record<string, unknown>): Promise<string>;
     insertMany?(tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: {
@@ -1475,7 +1475,7 @@ interface MigrationReader {
         isDone: boolean;
         page: MigrationDocument[];
     }>;
-    get: (id: string, expectedTable?: string) => Promise<MigrationDocument | null>;
+    get: (table: string, id: string) => Promise<MigrationDocument | null>;
 }
 ```
 
@@ -2895,7 +2895,7 @@ interface TriggerDatabase {
     delete: (id: string) => Promise<void>;
     findFirst: (tableName: string, args?: TriggerQueryArgs) => Promise<Record<string, unknown> | null>;
     findMany: (tableName: string, args?: TriggerQueryArgs) => Promise<TriggerQueryPage>;
-    get: (id: string) => Promise<Record<string, unknown> | null>;
+    get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
     groupBy: (tableName: string, options: TriggerGroupByOptions) => Promise<ReadonlyArray<TriggerGroupByEntry>>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
@@ -6443,7 +6443,7 @@ interface DatabaseWriterLike {
     findFirst: (tableName: string, args?: QueryArgs$1) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs$1) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs$1) => Promise<QueryPage$1>;
-    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
+    get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
     groupBy: (tableName: string, options: GroupByArgs$1) => Promise<ReadonlyArray<{
         key: Record<string, unknown>;
         value: null | number;
@@ -6787,7 +6787,7 @@ interface MaskDatabase {
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
-    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
+    get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
     groupBy: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{
         key: Record<string, unknown>;
         value: null | number;
