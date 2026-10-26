@@ -164,6 +164,8 @@ export const ERROR_CATALOG = {
     SHARD_TIMEOUT: { status: 504, title: "Shard timeout" },
     /** A fan-out shard call answered with a non-2xx status; the status is in the message, the body is not. */
     SHARD_HTTP_ERROR: { status: 502, title: "Shard HTTP error" },
+    /** A shard running an older build cannot check import rows without writing them, so the dry run was refused before sending any. */
+    SHARD_DRY_RUN_UNSUPPORTED: { status: 501, title: "Shard cannot dry-run an import" },
     /** The shard could not write a subscription's attachment to storage, so the subscription was refused. */
     SUBSCRIPTION_PERSIST_FAILED: { status: 500, title: "Subscription persist failed" },
     /** A connection asked for more concurrent subscriptions than the shard allows. */
