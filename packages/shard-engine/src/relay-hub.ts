@@ -669,11 +669,12 @@ class OwnerRelay extends RelayLink {
      */
     private registryCache: { cohort: Map<string, CohortShapeEntry>; proxies: Map<string, ProxyShapeEntry> } | undefined;
 
-    /** The binding this owner last saw or read back, memoized so a cold wake reads `__lunora_relay_binding` at most once. See {@link OwnerRelay.bindingName}. */
-    private recordedBinding: string | undefined;
-
-    /** Whether this wake already read `__lunora_relay_binding` back, whatever it found. */
-    private bindingReadBack = false;
+    /**
+     * The binding this owner last saw or read back, memoized so a cold wake reads
+     * `__lunora_relay_binding` at most once; `undefined` until it is known, and
+     * `{ binding: undefined }` once known to be absent. See {@link OwnerRelay.bindingName}.
+     */
+    private recorded: { binding: string | undefined } | undefined;
 
     /** The owner's current promotion state (plan 075 Phase 4), carried across `relayCount()` calls so hysteresis has memory — a shard hovering near the threshold can't flap. */
     private promotionState: PromotionState = "owned";
@@ -1370,8 +1371,8 @@ class OwnerRelay extends RelayLink {
         const live = this.host.shardBinding();
 
         if (live !== undefined && live !== "") {
-            if (live !== this.recordedBinding) {
-                this.recordedBinding = live;
+            if (live !== this.recorded?.binding) {
+                this.recorded = { binding: live };
                 this.ensureRelayTables();
                 this.host
                     .sql()
@@ -1381,10 +1382,8 @@ class OwnerRelay extends RelayLink {
             return live;
         }
 
-        // `recordedBinding` alone cannot say "already read, nothing there", so a
-        // shard that never recorded one re-read the table on every flush.
-        if (this.recordedBinding !== undefined || this.bindingReadBack) {
-            return this.recordedBinding;
+        if (this.recorded !== undefined) {
+            return this.recorded.binding;
         }
 
         try {
@@ -1392,16 +1391,14 @@ class OwnerRelay extends RelayLink {
             // No table yet means nothing was ever recorded, which is an answer like any row.
             const recorded = sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '__lunora_relay_binding'").toArray().length > 0;
 
-            this.recordedBinding = recorded
-                ? sql.exec<{ binding: string }>("SELECT binding FROM __lunora_relay_binding WHERE id = 1").toArray()[0]?.binding
-                : undefined;
-            // Only after an answer: a read that threw tells nothing, so the next flush tries again.
-            this.bindingReadBack = true;
+            this.recorded = {
+                binding: recorded ? sql.exec<{ binding: string }>("SELECT binding FROM __lunora_relay_binding WHERE id = 1").toArray()[0]?.binding : undefined,
+            };
         } catch {
-            this.recordedBinding = undefined;
+            // A read that threw tells nothing, so it stays unknown and the next flush tries again.
         }
 
-        return this.recordedBinding;
+        return this.recorded?.binding;
     }
 
     /**

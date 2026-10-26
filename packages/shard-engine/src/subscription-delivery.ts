@@ -314,26 +314,12 @@ const collectFramedDeltas = (previousJson: string, nextResult: unknown, table: s
 };
 
 /**
- * {@link collectFramedDeltas} results, per result object, then per table, then
- * per baseline.
- *
- * One write-flush renders frames for every socket watching a query. Sockets that
- * shared one run hand in the SAME result object (the DO dedupes the run and
- * memoises its encode per outcome) and, having been sent the same value last
- * time, the same baseline string. The diff is a pure function of those three
- * inputs, so it is computed once per distinct triple instead of once per socket:
- * the baseline `JSON.parse`, both `_id` indexes and every row fingerprint were
- * repeated N times for N sockets. Only the diff is shared — the frame envelopes,
- * and with them the delta-vs-snapshot size decision, stay per socket.
- *
- * Keyed by the caller's `diffKey` — the run's outcome, which is new on every run —
- * not by the result: a handler may return the same object on every run and edit
- * it in place, and a diff keyed by that object would be served again on a later
- * flush. Weak on the key, so an entry lives exactly as long as that run's outcome.
- * Without a key the diff is computed per call. The inner map is keyed by the
- * baseline string;
- * sockets on one value hold the same string instance, so its hash is computed
- * once and a hit compares by reference.
+ * {@link collectFramedDeltas} results per run outcome (the caller's `diffKey`),
+ * then per table, then per baseline string: sockets that shared one run diff the
+ * same result against the same last-sent text, so the diff is computed once per
+ * distinct triple instead of once per socket. Keyed by the outcome, which is new
+ * on every run, not by the result a handler may return again after editing it in
+ * place — and weakly, so an entry lives exactly as long as that outcome.
  */
 const framedDeltaMemo = new WeakMap<object, Map<string, Map<string, FramedDelta[] | undefined>>>();
 
