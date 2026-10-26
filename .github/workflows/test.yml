@@ -735,7 +735,7 @@
                   "run-signatures-audit": "false"
 
             # `:prod` for the same reason as the Worker size gate: users install the production build.
-            # Only the adapters and their dependencies; the reference apps import nothing else.
+            # The adapters the reference apps import; vis builds their workspace dependencies too.
             - "name": "Build packages (production artifacts)"
               "run": "pnpm exec vis run build:prod --projects client,react,vue,svelte,solid,angular,errors,wire,ratelimit"
 
