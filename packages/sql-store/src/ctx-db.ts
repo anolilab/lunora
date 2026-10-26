@@ -3481,7 +3481,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         },
 
         async get(table, id) {
-            // `hasOwn`, not a lookup: a name such as `constructor` would otherwise resolve to a prototype member.
+            // `hasOwn` keeps a name such as `constructor` from resolving to a prototype member.
             const definition = Object.hasOwn(schema.tables, table) ? schema.tables[table] : undefined;
 
             if (!definition) {

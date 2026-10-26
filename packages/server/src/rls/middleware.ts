@@ -1062,8 +1062,8 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             }
         }
 
-        // Unpinned: the writer has no table to read, so probe the policy tables. Ids
-        // are globally unique, so at most one hits; settle them in parallel. The probe
+        // Unpinned, and the seam did not answer: probe the policy tables. Ids are
+        // globally unique, so at most one hits; settle them in parallel. The probe
         // returns the row too, which is why a `.global()` row in a policy table still
         // gets its policy checked here.
         const probeTables = probeTable === undefined ? [...policyTables.keys()] : [probeTable].filter((table) => policyTables.has(table));
