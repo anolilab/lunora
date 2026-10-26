@@ -2175,3 +2175,62 @@ describe("relay hub", () => {
         });
     });
 });
+
+describe("owner relay binding read-back", () => {
+    /** An owner over a host with no live binding, whose SQL answers through `exec`. */
+    const ownerReading = (exec: (query: string) => unknown[]): { bindingName: () => string | undefined } => {
+        const link = createRelayLink({
+            doName: () => OWNER_KEY,
+            shardBinding: () => "",
+            sql: () => {
+                return {
+                    exec: (query: string) => {
+                        return { toArray: () => exec(query) };
+                    },
+                };
+            },
+        } as unknown as RelayHost);
+
+        if (!(link instanceof OwnerRelay)) {
+            throw new TypeError("expected an owner link for an un-suffixed DO name");
+        }
+
+        // `bindingName` is protected; the read-back is the behaviour under test.
+        return link as unknown as { bindingName: () => string | undefined };
+    };
+
+    it("reads the recorded binding again after a read that failed", () => {
+        expect.assertions(2);
+
+        let failNext = true;
+        const owner = ownerReading((query) => {
+            if (failNext) {
+                failNext = false;
+
+                throw new Error("SQLITE_BUSY");
+            }
+
+            return query.includes("sqlite_master") ? [{ 1: 1 }] : [{ binding: "SHARD" }];
+        });
+
+        expect(owner.bindingName()).toBeUndefined();
+        expect(owner.bindingName()).toBe("SHARD");
+    });
+
+    it("reads once per wake when nothing was ever recorded", () => {
+        expect.assertions(2);
+
+        let reads = 0;
+        const owner = ownerReading(() => {
+            reads += 1;
+
+            return [];
+        });
+
+        owner.bindingName();
+        owner.bindingName();
+
+        expect(owner.bindingName()).toBeUndefined();
+        expect(reads).toBe(1);
+    });
+});

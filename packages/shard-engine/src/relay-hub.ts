@@ -1387,15 +1387,17 @@ class OwnerRelay extends RelayLink {
             return this.recordedBinding;
         }
 
-        this.bindingReadBack = true;
-
         try {
-            const rows = this.host.sql().exec<{ binding: string }>("SELECT binding FROM __lunora_relay_binding WHERE id = 1").toArray();
+            const sql = this.host.sql();
+            // No table yet means nothing was ever recorded, which is an answer like any row.
+            const recorded = sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '__lunora_relay_binding'").toArray().length > 0;
 
-            this.recordedBinding = rows[0]?.binding;
+            this.recordedBinding = recorded
+                ? sql.exec<{ binding: string }>("SELECT binding FROM __lunora_relay_binding WHERE id = 1").toArray()[0]?.binding
+                : undefined;
+            // Only after an answer: a read that threw tells nothing, so the next flush tries again.
+            this.bindingReadBack = true;
         } catch {
-            // No table yet (nothing has ever recorded one) — indistinguishable
-            // from "not known", which is the answer either way.
             this.recordedBinding = undefined;
         }
 
