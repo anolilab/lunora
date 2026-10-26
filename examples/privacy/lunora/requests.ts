@@ -8,9 +8,11 @@ import { dispatchPort } from "@lunora/privacy/workflow";
 import { rateLimit } from "lunorash/ratelimit";
 import { v } from "lunorash/values";
 
-import { internalMutation, mutation, query } from "./_generated/server.js";
+import type { QueryCtx } from "./_generated/server.js";
+import { internalMutation, internalQuery, mutation, query } from "./_generated/server.js";
 import { byCaller, limiter } from "./limits";
 import { privacyConfig, privacyFor } from "./privacy";
+import type { StoredFile } from "./privacy-files";
 import { localPorts } from "./privacy-ports";
 import { identityOf } from "./subject";
 
@@ -76,10 +78,14 @@ export const myRequests = query.query(async ({ ctx }): Promise<RequestSummary[]>
     return requests.map((request) => view(request));
 });
 
-/** A link to a finished export. Refused for anyone but the subject, and once the export has expired. */
-export const downloadUrl = query
+/**
+ * A link to a finished export, minted when the subject asks for it. It is a mutation, not a query: a query's
+ * result stays on the page, and the link it holds expires after fifteen minutes. Refused for anyone but the
+ * subject, and once the export has expired.
+ */
+export const downloadLink = mutation
     .input({ requestId: v.string().max(64) })
-    .query(async ({ args: { requestId }, ctx }) => privacyFor(ctx, await identityOf(ctx)).downloadUrl({ requestId }));
+    .mutation(async ({ args: { requestId }, ctx }) => privacyFor(ctx, await identityOf(ctx)).downloadUrl({ requestId }));
 
 /** The daily deadline sweep. Internal: only the cron calls it. */
 export const privacyTick = internalMutation.mutation(async ({ ctx }) => {
@@ -101,6 +107,31 @@ export const privacySweep = internalMutation.mutation(async ({ ctx }) => {
 
     return { expired: expired.map((request) => request.id), purged };
 });
+
+/** The archive part a `${requestId}/${name}` key names, or `null`. The download route calls it only after the link checks out. */
+export const readExportFile = async (ctx: Pick<QueryCtx, "db">, key: string): Promise<null | StoredFile> => {
+    const [requestId = "", ...rest] = key.split("/");
+    // A link can outlive the export it names. Serve the file only while that export is ready and its window is open.
+    const request =
+        (await ctx.db
+            .query("privacy_requests")
+            .withIndex("byRequestId", (q) => q.eq("requestId", requestId))
+            .first()) ?? null;
+
+    if (request?.status !== "ready" || (request.expiresAt ?? Infinity) <= Date.now()) {
+        return null;
+    }
+
+    const row = await ctx.db
+        .query("exportFiles")
+        .withIndex("byRequestAndName", (q) => q.eq("requestId", requestId).eq("name", rest.join("/")))
+        .first();
+
+    return row === null ? null : { body: row.body, encoding: row.encoding, name: row.name };
+};
+
+/** Internal: the download route reads an archive part through it. Never reachable from a client. */
+export const exportFile = internalQuery.input({ key: v.string().max(256) }).query(async ({ args: { key }, ctx }) => readExportFile(ctx, key));
 
 /** The port the durable workflows call through `ctx.run`. Internal: never reachable from a client. */
 export const privacyPort = internalMutation

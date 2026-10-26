@@ -6,12 +6,13 @@
  * `privacyPort` mutation, which hands them to the package's `dispatchPort`
  * (`@lunora/privacy/workflow`). The wire format and the method table are the package's.
  */
-import type { DataPort, Dataset, PrivacyPorts, RequestStore, StorePort } from "@lunora/privacy";
+import type { ArchivePort, DataPort, Dataset, PrivacyPorts, RequestStore, StorePort } from "@lunora/privacy";
 import { ERASE_BATCH, fromRequestRow, isTerminal, OPEN_STATUSES, toRequestPatch, toRequestRow } from "@lunora/privacy";
 import { LunoraError } from "lunorash/errors";
 
 import type { Doc as Document_ } from "./_generated/dataModel.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
+import { signFileLink } from "./privacy-files";
 import { tombstonesUnreachable } from "./privacy-tombstones";
 
 type RequestRow = Document_<"privacy_requests">;
@@ -19,11 +20,12 @@ type RequestRow = Document_<"privacy_requests">;
 /** A query can read the ports but not write them; a mutation can do both. */
 type LocalContext = MutationCtx | QueryCtx;
 
-const requireTasks = (dataset: Dataset): void => {
-    if (dataset.id !== "tasks") {
-        throw new LunoraError("INTERNAL", `privacy-example has no reader for dataset "${dataset.id}".`);
-    }
-};
+/** A dataset this example does not declare. Refused rather than read as empty. */
+const unknownDataset = (dataset: Dataset): LunoraError => new LunoraError("INTERNAL", `privacy-example has no reader for dataset "${dataset.id}".`);
+
+/** The sign-in tables live in D1, which only the workflow reaches. A mutation that needs them is refused. */
+const signInFromMutation = (): LunoraError =>
+    new LunoraError("UNPROCESSABLE", "The sign-in tables are read by the privacy workflow. Run this export or erasure through its workflow.");
 
 /** The writer for this call. A query has none, so a write from one throws instead of silently dropping. */
 const writerOf = (ctx: LocalContext): MutationCtx["db"] => {
@@ -105,15 +107,20 @@ const requestStore = (ctx: LocalContext): RequestStore => {
     };
 };
 
-const dataPort = (ctx: LocalContext): DataPort => {
-    return {
-        collect: async (dataset, subjectId) => {
-            requireTasks(dataset);
+/** The disposition the package hands the app for one row: its verdict under the dataset's retention rules. */
+type RowDisposition = Parameters<DataPort["eraseBatch"]>[3];
 
-            const rows = await ctx.db
-                .query("tasks")
-                .withIndex("byUser", (q) => q.eq("userId", subjectId))
-                .collect();
+/** The tasks a subject owns, through the index that leads with the user id. */
+const tasksOf = (ctx: LocalContext, subjectId: string) => ctx.db.query("tasks").withIndex("byUser", (q) => q.eq("userId", subjectId));
+
+/** The invoices a subject owns, through the index that leads with the user id. */
+const invoicesOf = (ctx: LocalContext, subjectId: string) => ctx.db.query("invoices").withIndex("byUser", (q) => q.eq("userId", subjectId));
+
+/** The tasks: no retention rule, so every row is deleted. Any other verdict fails loudly rather than guessing. */
+const tasksPort = (ctx: LocalContext, subjectId: string) => {
+    return {
+        collect: async () => {
+            const rows = await tasksOf(ctx, subjectId).collect();
 
             return {
                 tasks: rows.map((row) => {
@@ -121,18 +128,10 @@ const dataPort = (ctx: LocalContext): DataPort => {
                 }),
             };
         },
-        eraseBatch: async (dataset, subjectId, now, disposition) => {
-            requireTasks(dataset);
-
-            const rows = await ctx.db
-                .query("tasks")
-                .withIndex("byUser", (q) => q.eq("userId", subjectId))
-                .take(ERASE_BATCH);
-
+        eraseBatch: async (dataset: Dataset, now: Date, disposition: RowDisposition) => {
+            const rows = await tasksOf(ctx, subjectId).take(ERASE_BATCH);
             const database = writerOf(ctx);
 
-            // Tasks carry no retention rule, so every row is deleted. Any other verdict is a
-            // configuration this example does not write, and it fails loudly rather than guessing.
             await Promise.all(
                 rows.map(async (row) => {
                     if (disposition(dataset, "tasks", { ...row }, now).kind !== "delete") {
@@ -145,15 +144,134 @@ const dataPort = (ctx: LocalContext): DataPort => {
 
             return { hasMore: rows.length === ERASE_BATCH };
         },
-        remaining: async (dataset, subjectId) => {
-            requireTasks(dataset);
-
-            const rows = await ctx.db
-                .query("tasks")
-                .withIndex("byUser", (q) => q.eq("userId", subjectId))
-                .collect();
+        remaining: async () => {
+            const rows = await tasksOf(ctx, subjectId).collect();
 
             return { tasks: rows.length };
+        },
+    };
+};
+
+/**
+ * The invoices. Their `de.voucher` directive keeps each row for its retention period, so erasure
+ * moves a kept row into the package's `privacy_archive` and deletes it from `invoices`. The sweep purges it later.
+ */
+const invoicesPort = (ctx: LocalContext, subjectId: string) => {
+    return {
+        collect: async () => {
+            const rows = await invoicesOf(ctx, subjectId).collect();
+
+            return {
+                invoices: rows.map((row) => {
+                    return { ...row };
+                }),
+            };
+        },
+        eraseBatch: async (dataset: Dataset, now: Date, disposition: RowDisposition) => {
+            const rows = await invoicesOf(ctx, subjectId).take(ERASE_BATCH);
+            const database = writerOf(ctx);
+
+            await Promise.all(
+                rows.map(async (row) => {
+                    const verdict = disposition(dataset, "invoices", { ...row }, now);
+
+                    if (verdict.kind === "keep") {
+                        await database.insert("privacy_archive", {
+                            datasetId: dataset.id,
+                            retainUntil: verdict.until.getTime(),
+                            row: JSON.stringify(row),
+                            subjectId,
+                            table: "invoices",
+                        });
+                    } else if (verdict.kind !== "delete") {
+                        throw new LunoraError("INTERNAL", "privacy-example deletes or keeps an invoice; it does not anonymise one.");
+                    }
+
+                    await database.delete(row._id);
+                }),
+            );
+
+            return { hasMore: rows.length === ERASE_BATCH };
+        },
+        remaining: async () => {
+            const rows = await invoicesOf(ctx, subjectId).collect();
+
+            return { invoices: rows.length };
+        },
+    };
+};
+
+/** Routes one dataset to its tables. A dataset this example does not declare is refused. */
+const dataPort = (ctx: LocalContext): DataPort => {
+    return {
+        collect: async (dataset, subjectId) => {
+            switch (dataset.id) {
+                case "auth":
+                case "signInTokens": {
+                    throw signInFromMutation();
+                }
+                case "billing": {
+                    return invoicesPort(ctx, subjectId).collect();
+                }
+                case "tasks": {
+                    return tasksPort(ctx, subjectId).collect();
+                }
+                default: {
+                    throw unknownDataset(dataset);
+                }
+            }
+        },
+        eraseBatch: async (dataset, subjectId, now, disposition) => {
+            switch (dataset.id) {
+                case "auth":
+                case "signInTokens": {
+                    throw signInFromMutation();
+                }
+                case "billing": {
+                    return invoicesPort(ctx, subjectId).eraseBatch(dataset, now, disposition);
+                }
+                case "tasks": {
+                    return tasksPort(ctx, subjectId).eraseBatch(dataset, now, disposition);
+                }
+                default: {
+                    throw unknownDataset(dataset);
+                }
+            }
+        },
+        remaining: async (dataset, subjectId) => {
+            switch (dataset.id) {
+                case "auth":
+                case "signInTokens": {
+                    throw signInFromMutation();
+                }
+                case "billing": {
+                    return invoicesPort(ctx, subjectId).remaining();
+                }
+                case "tasks": {
+                    return tasksPort(ctx, subjectId).remaining();
+                }
+                default: {
+                    throw unknownDataset(dataset);
+                }
+            }
+        },
+    };
+};
+
+/** The retention archive: the rows erasure kept, purged once their period has ended. */
+const archivePort = (ctx: LocalContext): ArchivePort => {
+    return {
+        purgeBatch: async (before) => {
+            const rows = await ctx.db
+                .query("privacy_archive")
+                .withIndex("byRetainUntil", (range) => range.lt("retainUntil", before.getTime()))
+                .take(ERASE_BATCH);
+
+            const database = writerOf(ctx);
+
+            await Promise.all(rows.map(async (row) => database.delete(row._id)));
+
+            return { hasMore: rows.length === ERASE_BATCH, purged: rows.length };
         },
     };
 };
@@ -170,7 +288,7 @@ const fileRowOf = async (ctx: LocalContext, key: string) => {
 
 /**
  * Export parts and the archive are kept in `exportFiles`. This example has no object
- * storage, so `signedUrl` returns a path that is not served yet; see the README.
+ * storage, so `signedUrl` signs a link the `/privacy/files` route checks; see `privacy-files.ts`.
  */
 const filePort = (ctx: LocalContext): StorePort => {
     return {
@@ -199,7 +317,7 @@ const filePort = (ctx: LocalContext): StorePort => {
 
             return row?.encoding === "text" ? row.body : undefined;
         },
-        signedUrl: (key, ttlSeconds) => Promise.resolve(`/privacy/files/${key}?expires_in=${String(ttlSeconds)}`),
+        signedUrl: async (key, ttlSeconds) => signFileLink(key, ttlSeconds, Date.now()),
         delete: async (key) => {
             const row = await fileRowOf(ctx, key);
 
@@ -225,6 +343,7 @@ const filePort = (ctx: LocalContext): StorePort => {
  */
 export const localPorts = (ctx: LocalContext): PrivacyPorts => {
     return {
+        archive: archivePort(ctx),
         data: dataPort(ctx),
         files: filePort(ctx),
         newId: () => crypto.randomUUID(),

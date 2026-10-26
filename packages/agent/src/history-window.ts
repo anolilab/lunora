@@ -8,7 +8,7 @@ import type { AgentMessageRow } from "./types";
 const DEFAULT_HISTORY_LIMIT = 200;
 
 /**
- * Drop the leading `tool` rows of a newest-first window. Their assistant tool-call
+ * Drop the leading `tool` rows of an oldest-first window. Their assistant tool-call
  * fell outside the window, and a tool result without its call is rejected by the
  * provider (400).
  * @experimental

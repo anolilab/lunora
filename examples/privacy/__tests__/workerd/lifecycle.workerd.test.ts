@@ -14,7 +14,7 @@ import { dispatchPort } from "@lunora/privacy/workflow";
 import { createInProcessRuntime, resolveInProcessIdentity } from "@lunora/server/in-process";
 import type { WorkflowRunContext } from "@lunora/workflow";
 import { env, runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import type { MutationCtx } from "../../lunora/_generated/server.js";
 import { privacyConfig, privacyFor, privacyWorkflows } from "../../lunora/privacy";
@@ -22,12 +22,13 @@ import { localPorts } from "../../lunora/privacy-ports";
 import schema from "../../lunora/schema";
 import type { RunHooks } from "../workflow-context";
 import { workflowContext } from "../workflow-context";
+import { clearSignIn, ensureSignIn, seedSignIn } from "./sign-in";
 
 type Context = WorkflowRunContext<{ requestId: string }>;
 type Runtime = ReturnType<typeof createInProcessRuntime>;
 type Database = ReturnType<Runtime["createWriters"]>["database"];
 
-const DOWNLOAD_PATH = /\/privacy\/files\//u;
+const DOWNLOAD_PATH = /^\/privacy\/files\?/u;
 const SUBJECT = "u1";
 const OTHER = "u2";
 
@@ -48,7 +49,7 @@ const appCtx = (db: Database): MutationCtx => ({ db }) as unknown as MutationCtx
 const contextFor = (db: Database, requestId: string, hooks: RunHooks = {}): Context =>
     workflowContext(
         {
-            env: { PRIVACY_TOMBSTONES: env.PRIVACY_TOMBSTONES },
+            env: { DB: env.DB, PRIVACY_TOMBSTONES: env.PRIVACY_TOMBSTONES },
             params: { requestId },
             run: async (_reference, args) => dispatchPort(privacyConfig, localPorts(appCtx(db)), args.method, args.payload),
         },
@@ -92,6 +93,11 @@ const requestRow = async (db: Database, requestId: string): Promise<undefined | 
 };
 
 describe("privacy example lifecycle (workerd)", () => {
+    beforeEach(async () => {
+        await ensureSignIn(env.DB, env.AUTH_SECRET);
+        await clearSignIn(env.DB);
+    });
+
     it("exports the subject's rows, stores the archive, and links a download", async () => {
         expect.assertions(6);
 
@@ -201,7 +207,7 @@ describe("privacy example lifecycle (workerd)", () => {
             // The restore workflow the operator's `restorePrivacyErasures` starts, with the ids the restored shard holds.
             const reerased = await privacyWorkflows.restoreHandler(
                 workflowContext({
-                    env: { PRIVACY_TOMBSTONES: env.PRIVACY_TOMBSTONES },
+                    env: { DB: env.DB, PRIVACY_TOMBSTONES: env.PRIVACY_TOMBSTONES },
                     params: { restoredSubjectIds: [SUBJECT, OTHER] },
                     run: async (_reference, args) => dispatchPort(privacyConfig, localPorts(appCtx(db)), args.method, args.payload),
                 }),
@@ -210,6 +216,113 @@ describe("privacy example lifecycle (workerd)", () => {
             expect(reerased).toStrictEqual([SUBJECT]);
             await expect(tasksOf(db, SUBJECT)).resolves.toStrictEqual([]);
             await expect(tasksOf(db, OTHER)).resolves.toStrictEqual(["not yours"]);
+        });
+    });
+
+    it("keeps an invoice under its retention period through erasure, then purges it once the period has ended", async () => {
+        expect.assertions(4);
+
+        await withShard(async (db) => {
+            await db.insert("invoices", { amount: 4200, issuedAt: Date.now(), number: "INV-1", userId: SUBJECT });
+
+            const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestErasure();
+
+            await privacyWorkflows.erasureHandler(contextFor(db, request.id));
+
+            await expect(db.query("invoices").collect()).resolves.toStrictEqual([]);
+
+            const kept = await db.query("privacy_archive").collect();
+
+            expect(kept.map((row) => row.table)).toStrictEqual(["invoices"]);
+
+            // The period runs for years from the invoice date, so the sweep keeps the row.
+            await expect(privacyFor(appCtx(db)).admin.sweep()).resolves.toMatchObject({ purged: 0 });
+
+            // A kept row whose period has ended is purged by the sweep.
+            await db.insert("privacy_archive", {
+                datasetId: "billing",
+                retainUntil: Date.now() - 86_400_000,
+                row: "{}",
+                subjectId: SUBJECT,
+                table: "invoices",
+            });
+
+            await expect(privacyFor(appCtx(db)).admin.sweep()).resolves.toMatchObject({ purged: 1 });
+        });
+    });
+
+    it("expires a finished export past its download window and deletes its files", async () => {
+        expect.assertions(3);
+
+        await withShard(async (db) => {
+            await seed(db);
+
+            const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestExport();
+
+            await privacyWorkflows.exportHandler(contextFor(db, request.id));
+
+            // The typed mutation context, so the row id keeps its table type for `patch`.
+            const ctx = appCtx(db);
+            const requests = await ctx.db.query("privacy_requests").collect();
+            const row = requests.find((candidate) => candidate.requestId === request.id);
+
+            if (row === undefined) {
+                throw new Error(`No privacy request row for ${request.id}.`);
+            }
+
+            await ctx.db.patch(row._id, { expiresAt: Date.now() - 1000 });
+
+            const swept = await privacyFor(appCtx(db)).admin.sweep();
+
+            expect(swept.expired.map((expired) => expired.id)).toStrictEqual([request.id]);
+
+            const files = await db.query("exportFiles").collect();
+
+            expect(files.filter((file) => file.requestId === request.id)).toStrictEqual([]);
+
+            await expect(requestRow(db, request.id)).resolves.toMatchObject({ status: "expired" });
+        });
+    });
+
+    it("exports the subject's sign-in rows without the password hash", async () => {
+        expect.assertions(2);
+
+        await withShard(async (db) => {
+            await seed(db);
+            await seedSignIn(env.DB, SUBJECT);
+
+            const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestExport();
+
+            await privacyWorkflows.exportHandler(contextFor(db, request.id));
+
+            const files = await db.query("exportFiles").collect();
+            const part = files.find((row) => row.requestId === request.id && row.name === "parts/auth.json");
+            const stored = JSON.parse((part?.body as string | undefined) ?? "{}") as { tables: Record<string, Record<string, unknown>[]> };
+
+            expect(stored.tables.user?.map((row) => row.id)).toStrictEqual([SUBJECT]);
+            expect(stored.tables.account?.[0]).not.toHaveProperty("password");
+        });
+    });
+
+    it("erases the subject's sign-in rows from D1, and leaves the other subject's", async () => {
+        expect.assertions(3);
+
+        await withShard(async (db) => {
+            await seed(db);
+            await seedSignIn(env.DB, SUBJECT);
+            await seedSignIn(env.DB, OTHER);
+
+            const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestErasure();
+
+            await privacyWorkflows.erasureHandler(contextFor(db, request.id));
+
+            const users = await env.DB.prepare('SELECT "id" FROM "user" ORDER BY "id"').all<{ id: string }>();
+            const sessions = await env.DB.prepare('SELECT "userId" FROM "session" ORDER BY "userId"').all<{ userId: string }>();
+            const accounts = await env.DB.prepare('SELECT "userId" FROM "account" ORDER BY "userId"').all<{ userId: string }>();
+
+            expect(users.results.map((row) => row.id)).toStrictEqual([OTHER]);
+            expect(sessions.results.map((row) => row.userId)).toStrictEqual([OTHER]);
+            expect(accounts.results.map((row) => row.userId)).toStrictEqual([OTHER]);
         });
     });
 });

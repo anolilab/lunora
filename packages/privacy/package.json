@@ -1,6 +1,6 @@
 {
     "name": "@lunora/privacy",
-    "version": "1.0.0-alpha.28",
+    "version": "1.0.0-alpha.29",
     "description": "Reusable data-subject rights for Lunora apps: export, erasure and retention holds (GDPR Art. 15, 17, 20).",
     "keywords": [
         "data-subject-rights",
@@ -74,6 +74,7 @@
         "fflate": "catalog:privacy"
     },
     "devDependencies": {
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "esbuild": "catalog:build",

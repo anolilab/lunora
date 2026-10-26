@@ -10,6 +10,8 @@ import type { PrivacyTestDO } from "./test-worker";
 declare global {
     namespace Cloudflare {
         interface Env {
+            AUTH_SECRET: string;
+            DB: D1Database;
             PRIVACY: DurableObjectNamespace<PrivacyTestDO>;
             PRIVACY_TOMBSTONES: DurableObjectNamespace<PrivacyTombstonesDO>;
         }
