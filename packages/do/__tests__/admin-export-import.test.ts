@@ -378,6 +378,13 @@ class ExportShardImpl extends ShardDO {
     }
 }
 
+class RejectingImportShard extends ExportShardImpl {
+    // eslint-disable-next-line class-methods-use-this -- override stub; simulates a storage failure mid-import
+    protected override async runShardImport(): Promise<never> {
+        throw new Error("storage unavailable");
+    }
+}
+
 describe("shardDO admin export/import dispatch", () => {
     let database: ReturnType<typeof createSqliteExec>;
     let state: ShardDOState;
@@ -443,6 +450,49 @@ describe("shardDO admin export/import dispatch", () => {
 
         expect(body.result.inserted).toEqual({ users: 1 });
         expect(body.result.errors).toEqual([]);
+    });
+
+    it("echoes dryRun on a dry-run importShard and writes nothing, so a client can tell it from a shard that ignores the flag", async () => {
+        expect.assertions(4);
+
+        const shard = new ExportShardImpl(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.importShard, {
+                dryRun: true,
+                rows: [{ doc: { _id: "u2", email: "b@b.com", name: "Bob" }, table: "users" }],
+            }),
+        );
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ result: { dryRun?: boolean; inserted: Record<string, number> } }>();
+
+        expect(body.result.dryRun).toBe(true);
+        expect(body.result.inserted).toEqual({});
+        expect(database.sql.exec("SELECT count(*) AS n FROM users").one()).toEqual({ n: 1 });
+    });
+
+    it("does not echo dryRun on a real importShard", async () => {
+        expect.assertions(1);
+
+        const shard = new ExportShardImpl(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.importShard, { rows: [] }));
+        const body = await response.json<{ result: Record<string, unknown> }>();
+
+        expect(body.result).not.toHaveProperty("dryRun");
+    });
+
+    it("answers a rejected importShard with the structured error envelope", async () => {
+        expect.assertions(2);
+
+        const shard = new RejectingImportShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.importShard, { rows: [] }));
+
+        expect(response.status).toBe(500);
+        await expect(response.json()).resolves.toHaveProperty("error.code", "RPC_FAILED");
     });
 
     it("rejects without an admin token", async () => {

@@ -287,7 +287,12 @@ type GlobalCdcApplyFunction = (request: { changes: ReadonlyArray<Record<string, 
  * `startLine` field is the line of the FIRST global row, retained only as a
  * backward-compatible fallback for importers that haven't adopted per-row lines.
  */
-type GlobalImportFunction = (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => Promise<{
+type GlobalImportFunction = (request: {
+    /** Check the rows and return their shape errors without writing. */
+    dryRun?: boolean;
+    rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>;
+    startLine?: number;
+}) => Promise<{
     conflicts: number;
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     inserted: Record<string, number>;
@@ -1258,6 +1263,14 @@ interface WorkerOptions {
      * rows targeting global tables are reported as hard errors.
      */
     importGlobals?: GlobalImportFunction;
+
+    /**
+     * Set when `importGlobals` honours `dryRun` and writes nothing for it. A dry
+     * run (`?dryRun=true`) that targets global rows is refused unless this is
+     * set, because an importer written before the flag existed would ignore it
+     * and insert the rows.
+     */
+    importGlobalsSupportsDryRun?: boolean;
 
     /**
      * Restrict every Durable Object this worker reaches — shard DOs, the
@@ -3840,7 +3853,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         resolveForwardContext: resolveAdminForwardContext,
         shardDO,
         prepareExportRows: async (headers, tables) => prepareExportRows(options, queryCoordinator, headers, tables, shardDO),
-        streamingImport: (request, headers) => streamingImport(request, options, queryCoordinator, headers, shardDO),
+        streamingImport: (request, headers, dryRun) => streamingImport(request, options, queryCoordinator, headers, shardDO, dryRun),
         syncGlobals: options.syncGlobals,
     });
 

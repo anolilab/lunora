@@ -376,6 +376,24 @@ const uploadWindows = (pending: ReadonlyArray<StorageMetadataRow>): StorageMetad
     return windows;
 };
 
+/** The R2 key a blob lands under. A content hash, so the key is known from the metadata alone. */
+const storageBlobKey = (keyPrefix: string, row: StorageMetadataRow): string => `${keyPrefix}${row.sha256}`;
+
+/**
+ * The `storageId → key` map a migration will produce, read from the metadata
+ * without touching a blob. Lets the row rewrite run before any upload.
+ */
+const readStorageBlobKeys = async (
+    snapshot: ConvexSnapshot,
+    storageTableEntry: ConvexSnapshotTable,
+    keyPrefix: string,
+    logger: Logger,
+): Promise<Map<string, string>> => {
+    const metadataRows = await readStorageMetadata(snapshot, storageTableEntry, logger);
+
+    return new Map(metadataRows.map((row) => [row.id, storageBlobKey(keyPrefix, row)]));
+};
+
 /**
  * Migrate Convex `_storage` blobs: read `_storage/documents.jsonl`, upload each
  * blob with sha256+size verification, and build the `storageId → key` map.
@@ -399,7 +417,7 @@ const migrateStorageBlobs = async (
     const pending: StorageMetadataRow[] = [];
 
     for (const row of metadataRows) {
-        const key = `${keyPrefix}${row.sha256}`;
+        const key = storageBlobKey(keyPrefix, row);
 
         if (existing.get(key)?.size === row.size) {
             storageIdMap.set(row.id, key);
@@ -414,7 +432,7 @@ const migrateStorageBlobs = async (
         try {
             const blobBytes = await readSnapshotStorageBlob(snapshot, row.id);
 
-            storageIdMap.set(row.id, await uploadStorageBlob(context, `${keyPrefix}${row.sha256}`, blobBytes, row, logger));
+            storageIdMap.set(row.id, await uploadStorageBlob(context, storageBlobKey(keyPrefix, row), blobBytes, row, logger));
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
 
@@ -445,4 +463,4 @@ const migrateStorageBlobs = async (
 };
 
 export type { BlobUploadContext, StorageMetadataRow };
-export { bucketQuery, listStorageObjects, MAX_VERIFIED_UPLOAD_BYTES, migrateStorageBlobs, readStorageMetadata, uploadStorageBlob };
+export { bucketQuery, listStorageObjects, MAX_VERIFIED_UPLOAD_BYTES, migrateStorageBlobs, readStorageBlobKeys, readStorageMetadata, uploadStorageBlob };

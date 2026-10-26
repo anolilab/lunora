@@ -278,6 +278,13 @@ const mergeImportResult = (
     totals.conflicts += result.conflicts;
 };
 
+/** Report every global row as an error, because the importer for them is missing or cannot take this request. */
+const refuseGlobalRows = (totals: ImportTotals, rows: ReadonlyArray<{ line: number; table: string }>, code: string, reason: string): void => {
+    for (const row of rows) {
+        totals.errors.push({ code, line: row.line, message: `row targets global table "${row.table}" but ${reason}`, table: row.table });
+    }
+};
+
 /**
  * Stream the inbound NDJSON body, bucket rows per shard, and forward them to
  * the coordinator's import fan-out. Globals are siphoned off and handed to the
@@ -290,6 +297,7 @@ const streamingImport = async (
     coordinator: QueryCoordinator,
     forwardedHeaders: Record<string, string>,
     namespace: ShardNamespaceLike,
+    dryRun: boolean,
 ): Promise<{
     conflicts: number;
     errors: ImportRowError[];
@@ -329,6 +337,7 @@ const streamingImport = async (
         // the live worker (a fail-open leak).
         const result = await coordinator.orchestrateImport(namespace, {
             batches: [...perShard.values()],
+            dryRun,
             headers: forwardedHeaders,
         });
 
@@ -338,24 +347,21 @@ const streamingImport = async (
 
     // Run global imports through the user-supplied helper.
     if (globalRows.length > 0) {
-        if (options.importGlobals) {
+        // A dry run must not reach an importer that has not said it can check without writing: one written before the flag existed would
+        // ignore it and insert the rows.
+        if (!options.importGlobals) {
+            refuseGlobalRows(totals, globalRows, "GLOBAL_NOT_CONFIGURED", "no `importGlobals` is configured");
+        } else if (dryRun && options.importGlobalsSupportsDryRun !== true) {
+            refuseGlobalRows(totals, globalRows, "GLOBAL_DRY_RUN_UNSUPPORTED", "the configured `importGlobals` cannot check rows without writing them");
+        } else {
             // Pass each row's true physical `line` (carried on the row) so error
             // attribution is correct even when global rows are interspersed with
             // shard rows or blank lines. `startLine` is the first global row's
             // line, retained only as a backward-compat fallback.
             const startLine = globalRows[0]?.line ?? 1;
-            const result = await options.importGlobals({ rows: globalRows, startLine });
+            const result = await options.importGlobals({ dryRun, rows: globalRows, startLine });
 
             mergeImportResult(totals, result);
-        } else {
-            for (const globalRow of globalRows) {
-                totals.errors.push({
-                    code: "GLOBAL_NOT_CONFIGURED",
-                    line: globalRow.line,
-                    message: `row targets global table "${globalRow.table}" but no \`importGlobals\` is configured`,
-                    table: globalRow.table,
-                });
-            }
         }
     }
 

@@ -28,7 +28,7 @@ import { readFirestoreExport } from "./sources/firebase";
 import { scanFirebaseDump, scanSupabaseDump } from "./sources/scan";
 import { listLocalObjects, listSupabaseObjects, transferStorageObjects } from "./sources/storage-transfer";
 import { readSupabaseExport } from "./sources/supabase";
-import { migrateStorageBlobs } from "./storage-blobs";
+import { migrateStorageBlobs, readStorageBlobKeys } from "./storage-blobs";
 import type { ImportConvexMapping } from "./storage-mapping";
 import { readImportConvexMapping, scanStorageColumns } from "./storage-mapping";
 import type { StoragePathIndex } from "./storage-path-index";
@@ -525,35 +525,70 @@ const drainIntoBatcher = async (
     }
 };
 
+/** What the document rewrite needs from the storage phase, worked out before any blob moves. */
+interface StoragePlan {
+    mapping?: ImportConvexMapping;
+    /** Convex only: the `storageId → R2 key` map, derived from the metadata, so it is exact before the upload runs. */
+    storageIdMap?: Map<string, string>;
+}
+
 /**
- * Upload every `_storage` blob and build the `storageId → R2 key` map the
- * document rewrite needs. Returns `undefined` after logging when the export
- * cannot support the request.
+ * The storage facts the check needs, read without moving a byte.
+ *
+ * A Convex blob's key is its content hash, so the map is known from the
+ * metadata alone. The check must rewrite with it: an unrewritten
+ * `{ $storage }` reference is an object, and the worker refuses it where the
+ * real pass sends a string. Foreign sources have no such map, because their
+ * keys only exist after the transfer, but their rewrite only swaps one string
+ * for another, so the check's verdict does not depend on it.
  */
-const runStorageMigration = async (
-    context: { baseUrl: string; fetchImpl: StreamingFetchLike; token: string },
-    source: Extract<ImportSource, { kind: "convex" }>,
-    cwd: string,
-    logger: Logger,
-): Promise<undefined | { mapping?: ImportConvexMapping; storageIdMap: Map<string, string> }> => {
-    const mapping = await readImportConvexMapping(cwd, logger);
+const planStoragePhase = async (source: ImportSource, options: ImportCommandOptions, cwd: string): Promise<undefined | StoragePlan> => {
+    if (options.withStorage !== true || source.kind !== "convex") {
+        return {};
+    }
+
+    const mapping = await readImportConvexMapping(cwd, options.logger);
     const storageTableEntry = source.tables.find((entry) => entry.table === CONVEX_STORAGE_TABLE);
 
     if (storageTableEntry === undefined) {
-        logger.error("--with-storage requires a Convex export with a `_storage` metadata table — re-export with `npx convex export --include-file-storage`.");
+        options.logger.error(
+            "--with-storage requires a Convex export with a `_storage` metadata table — re-export with `npx convex export --include-file-storage`.",
+        );
 
         return undefined;
     }
 
-    const storageIdMap = await migrateStorageBlobs(context, source.snapshot, storageTableEntry, mapping?.keyPrefix ?? "", logger);
-
-    logger.info(`storage map: ${String(storageIdMap.size)} blobs mapped`);
-
-    return { mapping, storageIdMap };
+    return { mapping, storageIdMap: await readStorageBlobKeys(source.snapshot, storageTableEntry, mapping?.keyPrefix ?? "", options.logger) };
 };
 
 /**
- * Run whichever storage phase this source has, or none.
+ * Upload every `_storage` blob. The map it returns is the one the plan already
+ * derived, built from the same keys, so the rows the check rewrote and the rows
+ * the real pass rewrites agree. Returns `undefined` when the export has no
+ * `_storage` table, which `planStoragePhase` has already refused and logged.
+ */
+const runStorageMigration = async (
+    context: { baseUrl: string; fetchImpl: StreamingFetchLike; token: string },
+    source: Extract<ImportSource, { kind: "convex" }>,
+    plan: StoragePlan,
+    logger: Logger,
+): Promise<undefined | { mapping?: ImportConvexMapping; storageIdMap: Map<string, string> }> => {
+    const storageTableEntry = source.tables.find((entry) => entry.table === CONVEX_STORAGE_TABLE);
+
+    if (storageTableEntry === undefined) {
+        return undefined;
+    }
+
+    const storageIdMap = await migrateStorageBlobs(context, source.snapshot, storageTableEntry, plan.mapping?.keyPrefix ?? "", logger);
+
+    logger.info(`storage map: ${String(storageIdMap.size)} blobs mapped`);
+
+    return { mapping: plan.mapping, storageIdMap };
+};
+
+/**
+ * Run whichever storage phase this source has, or none. Runs only after the
+ * check has passed the file, so a refused import uploads nothing.
  *
  * Convex carries its blobs inside the export; Supabase and Firebase keep theirs
  * in a bucket that has to be walked. Both end at the same place — a map from the
@@ -564,13 +599,14 @@ const runStoragePhase = async (
     source: ImportSource,
     options: ImportCommandOptions,
     cwd: string,
+    plan: StoragePlan,
 ): Promise<undefined | { mapping?: ImportConvexMapping; storageIdMap?: Map<string, string>; transferredPaths?: Map<string, string> }> => {
     if (options.withStorage !== true) {
         return {};
     }
 
     if (source.kind === "convex") {
-        return runStorageMigration(context, source, cwd, options.logger);
+        return runStorageMigration(context, source, plan, options.logger);
     }
 
     if (source.kind !== "supabase" && source.kind !== "firebase") {
@@ -649,6 +685,215 @@ const scanOnly = async (source: ImportSource, cwd: string, options: ImportComman
     return { body: undefined, code: 0, inserted: 0 };
 };
 
+/** The storage phase's result: the storage mapping and the `storageId → R2 key` map the row rewrite reads. */
+type StoragePhaseResult = NonNullable<Awaited<ReturnType<typeof runStoragePhase>>>;
+
+/** Where a pass POSTs its batches, and how many rows each may carry. */
+interface ImportPassTarget {
+    batchSize: number;
+    fetchImpl: StreamingFetchLike;
+    requestUrl: string;
+    token: string;
+}
+
+/** What one pass over the source produced. Each pass keeps its own counters, so a check never shares a tally with the real pass. */
+interface ImportPass {
+    batcher: ImportBatcher;
+    remapReport: StorageRemapReport;
+    sourceRows: Map<string, number>;
+    streamFailure: unknown;
+    unresolvedPaths: Set<string>;
+}
+
+/**
+ * The code a worker gives a global row it cannot check without writing. A check cannot judge such a row, so the refusal is not a reason to
+ * stop: the real pass writes it, as it did before the check existed.
+ */
+const GLOBAL_DRY_RUN_UNSUPPORTED = "GLOBAL_DRY_RUN_UNSUPPORTED";
+
+const quietLogger: Logger = { error: () => undefined, info: () => undefined, success: () => undefined, warn: () => undefined };
+
+/** The options a check runs with: the same source and flags, and no narration, since the real pass narrates the same rows. */
+const quietOptions = (options: ImportCommandOptions): ImportCommandOptions => {
+    return { ...options, logger: quietLogger };
+};
+
+/**
+ * Read the source once and POST its rows in batches of `target`. The Convex reader tallies what it emits into `sourceRows` as it goes; the
+ * parity check after the run compares that against what the endpoint says it inserted. Only the Convex directory and Supabase CSV readers
+ * stream the source itself; the ZIP and Firestore readers materialise one table at a time.
+ */
+const runImportPass = async (
+    options: ImportCommandOptions,
+    source: ImportSource,
+    storage: StoragePhaseResult,
+    target: ImportPassTarget,
+): Promise<ImportPass> => {
+    const unresolvedPaths = new Set<string>();
+    const remapReport: StorageRemapReport = { ambiguous: [], rewritten: 0, unmigrated: [] };
+    const sourceRows = new Map<string, number>();
+    const stream = openSourceStream(source, options, storage.storageIdMap !== undefined, sourceRows);
+    const batcher = createImportBatcher({
+        batchSize: target.batchSize,
+        fetchImpl: target.fetchImpl,
+        maxBatchBytes: MAX_IMPORT_BATCH_BYTES,
+        requestUrl: target.requestUrl,
+        token: target.token,
+    });
+    const toRow = createSourceRowTransformer({
+        report: remapReport,
+        source,
+        storageColumns: storage.mapping?.storageColumns,
+        storageIdMap: storage.storageIdMap,
+        table: options.table,
+        transferredPaths: storage.transferredPaths,
+        unresolvedPaths,
+    });
+    // Every source is a `for await`-able of text, so one drain loop drives all of
+    // them and the POST size stays bounded by `batchSize`.
+    const streamFailure = await drainIntoBatcher(stream, toRow, batcher, options.logger);
+
+    return { batcher, remapReport, sourceRows, streamFailure, unresolvedPaths };
+};
+
+/** The message of a failure the stream or the batcher raised. A value that is not an Error is named as it is. */
+const failureMessage = (failure: unknown): string => {
+    if (failure instanceof Error) {
+        return failure.message;
+    }
+
+    return typeof failure === "string" ? failure : "an unknown failure";
+};
+
+/**
+ * Whether the check met a row the shard already holds: one the worker reported as written, or an `_id` it found in use. A check writes nothing,
+ * so either means the worker ignored the dry-run flag or already has the row.
+ */
+const checkMetWrites = (check: ImportPass): boolean => {
+    const { conflicts, inserted } = check.batcher.totals;
+
+    return conflicts > 0 || Object.values(inserted).some((count) => count > 0);
+};
+
+/**
+ * The result of a check that refuses the file: the check's own report, the reason it refused, and nothing written. Each shard the check
+ * could not reach and a stream failure are named here, as the real pass names them.
+ */
+const refuseFile = (options: ImportCommandOptions, check: ImportPass, refusal: string, storageIdMap: Map<string, string> | undefined): ImportCommandResult => {
+    const body = buildImportBody(check.batcher.totals, storageIdMap, check.remapReport);
+    const checkWrote = checkMetWrites(check);
+
+    // Pretty mode only: in json the same object is the document's `summary`.
+    if (options.format !== "json") {
+        options.logger.info(JSON.stringify(body, undefined, 2));
+    }
+
+    if (check.streamFailure !== undefined) {
+        const message = failureMessage(check.streamFailure);
+
+        options.logger.error(
+            check.batcher.totals.received === 0
+                ? `import failed before any batch was acknowledged: ${message}`
+                : `import failed while checking the rows: ${message}`,
+        );
+        options.logger.error(
+            checkWrote
+                ? "rows may already be written by the check; check the shard before running the command again"
+                : "no rows were written; re-run the same command once the worker is reachable",
+        );
+    }
+
+    for (const shard of check.batcher.totals.failed) {
+        options.logger.error(
+            `import: shard "${shard.shardKey}" was never reached${shard.timedOut ? " (timed out)" : ""} — no rows were written: ${shard.message}`,
+        );
+    }
+
+    // A worker that wrote during the check has already changed the shard, so the refusal must not say the file was not written.
+    const written = Object.values(check.batcher.totals.inserted).reduce((sum, count) => sum + count, 0);
+    const error = checkWrote
+        ? `import: ${options.file} was refused, and rows may already be written: ${refusal}`
+        : `import: ${options.file} was not written: ${refusal}`;
+
+    return { body, code: 1, data: { file: options.file, inserted: written, summary: body }, error, inserted: written };
+};
+
+/**
+ * Why a check refuses the file, or `undefined` when every row may be written. A check writes nothing, so a row it wrote, a conflict it met, a
+ * shard it could not reach or a row it refused each means the file cannot be imported as it stands. A worker that writes during a check
+ * ignored the dry-run flag, and the rows it wrote are already in place. Under `--verify` a storage reference that resolves to no exported blob
+ * refuses too, since the real pass would fail on it only after the blobs and rows are written.
+ */
+const checkRefusal = (check: ImportPass, verify: boolean): string | undefined => {
+    if (check.streamFailure !== undefined) {
+        return `the check stopped early: ${failureMessage(check.streamFailure)}`;
+    }
+
+    const { errors, failed } = check.batcher.totals;
+
+    if (checkMetWrites(check)) {
+        return "this worker wrote rows during its check, so it cannot check an import before writing, and some rows may already be written";
+    }
+
+    if (failed.length > 0) {
+        return `${String(failed.length)} shard(s) could not be reached to check`;
+    }
+
+    const refused = errors.filter((error) => error.code !== GLOBAL_DRY_RUN_UNSUPPORTED);
+
+    if (refused.length > 0) {
+        return `${String(refused.length)} row(s) would be refused`;
+    }
+
+    const unmigrated = check.remapReport.unmigrated.length;
+
+    return verify && unmigrated > 0 ? `${String(unmigrated)} storage reference(s) resolve to no exported blob` : undefined;
+};
+
+/** The check ran quietly, so a refusal over unresolved storage references names them here: the operator needs to know which blobs the export lacks. */
+const logUnmigratedRefusal = (options: ImportCommandOptions, check: ImportPass): void => {
+    if (options.verify === true && check.remapReport.unmigrated.length > 0) {
+        reportStorageOutcome(options.logger, check.remapReport, true);
+    }
+};
+
+/** Each shard the fan-out never reached. Its rows are in neither `inserted` nor `errors`, so the run has to name them. */
+const logUnreachedShards = (logger: Logger, shards: ImportShardFailure[]): void => {
+    for (const shard of shards) {
+        logger.error(
+            `import: shard "${shard.shardKey}" was never reached${shard.timedOut ? " (timed out)" : ""} — its rows were NOT written: ${shard.message}`,
+        );
+    }
+};
+
+/**
+ * Why the worker cannot check a file before writing it, or `undefined` when it can. A worker built before `?dryRun=true` existed ignores the
+ * flag and writes every row it is sent, and the check would learn that only after the rows are in. So the probe sends no row, which no worker
+ * version can write, and only a worker that honours the flag echoes `dryRun: true` in its answer.
+ */
+const probeDryRunSupport = async (target: ImportPassTarget): Promise<string | undefined> => {
+    try {
+        const response = await target.fetchImpl(`${target.requestUrl}?dryRun=true`, {
+            // A blank line rather than an empty body: a request with no body is refused before any line is read.
+            body: "\n",
+            headers: { authorization: `Bearer ${target.token}`, "content-type": "application/x-ndjson" },
+            method: "POST",
+        });
+
+        if (!response.ok) {
+            return `the worker at ${target.requestUrl} answered HTTP ${String(response.status)} to the check`;
+        }
+
+        const json = (await response.json()) as { dryRun?: unknown };
+
+        return json.dryRun === true
+            ? undefined
+            : `the worker at ${target.requestUrl} predates ?dryRun=true, so it would write the file while checking it; deploy the current runtime and import again`;
+    } catch (error) {
+        return `the worker at ${target.requestUrl} did not answer the check: ${failureMessage(error)}`;
+    }
+};
+
 const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     // Route the human/progress channel once, here: every helper below is handed
@@ -677,20 +922,45 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
 
     const { baseUrl, fetchImpl, requestUrl, token } = request;
     const batchSize = options.batchSize ?? DEFAULT_IMPORT_BATCH_SIZE;
+    const target: ImportPassTarget = { batchSize, fetchImpl, requestUrl, token };
 
-    // Phase 1: move the files first, so no imported document can reference an
-    // object that is not there yet.
-    const storage = await runStoragePhase({ baseUrl, fetchImpl, token }, source, options, cwd);
+    // Before any row or blob is sent: a worker that cannot check must not see the file at all.
+    const unsupported = await probeDryRunSupport(target);
+
+    if (unsupported !== undefined) {
+        return { body: undefined, code: 1, error: `import: ${options.file} was not written: ${unsupported}`, inserted: 0 };
+    }
+
+    // Phase 1: check the whole file, writing nothing, before any blob moves. A
+    // refused file leaves neither a row nor a blob behind. The check runs quietly
+    // and its errors come back in its own totals.
+    const plan = await planStoragePhase(source, options, cwd);
+
+    if (plan === undefined) {
+        // `planStoragePhase` logged which requirement the export does not meet.
+        return { body: undefined, code: 1, error: "import: the storage phase failed — no rows were written", inserted: 0 };
+    }
+
+    const check = await runImportPass(quietOptions(options), source, plan, { ...target, requestUrl: `${requestUrl}?dryRun=true` });
+    const refusal = checkRefusal(check, options.verify === true);
+
+    if (refusal !== undefined) {
+        logUnmigratedRefusal(options, check);
+
+        // Nothing was uploaded, so the refusal reports no storage block.
+        return refuseFile(options, check, refusal, undefined);
+    }
+
+    // Phase 2: move the files, so no imported document can reference an object
+    // that is not there yet.
+    const storage = await runStoragePhase({ baseUrl, fetchImpl, token }, source, options, cwd, plan);
 
     if (storage === undefined) {
         // `runStoragePhase` logged which object it could not move.
         return { body: undefined, code: 1, error: "import: the storage phase failed — no rows were written", inserted: 0 };
     }
 
-    const { mapping, storageIdMap, transferredPaths } = storage;
-    const unresolvedPaths = new Set<string>();
-    const storageColumns = mapping?.storageColumns;
-    const remapReport: StorageRemapReport = { ambiguous: [], rewritten: 0, unmigrated: [] };
+    const { storageIdMap } = storage;
 
     options.logger.info(
         source.kind === "convex"
@@ -698,28 +968,7 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
             : `POST ${requestUrl} -> import ${options.file}`,
     );
 
-    // Every source is a `for await`-able of text, so one drain loop drives all of
-    // them and the POST size stays bounded by `batchSize`. Note that only the
-    // Convex *directory* and Supabase CSV readers stream the source itself; the
-    // ZIP and Firestore readers materialise one table at a time.
-    //
-    // The Convex reader tallies what it emits into `sourceRows` as it goes; the
-    // parity check after the run compares that against what the endpoint says it
-    // inserted.
-    const sourceRows = new Map<string, number>();
-    const stream = openSourceStream(source, options, storageIdMap !== undefined, sourceRows);
-    const batcher = createImportBatcher({ batchSize, fetchImpl, maxBatchBytes: MAX_IMPORT_BATCH_BYTES, requestUrl, token });
-    const toRow = createSourceRowTransformer({
-        report: remapReport,
-        source,
-        storageColumns,
-        storageIdMap,
-        table: options.table,
-        transferredPaths,
-        unresolvedPaths,
-    });
-
-    const streamFailure = await drainIntoBatcher(stream, toRow, batcher, options.logger);
+    const { batcher, remapReport, sourceRows, streamFailure, unresolvedPaths } = await runImportPass(options, source, storage, target);
 
     const { conflicts, errors, failed: failedShards, inserted, received, warnings } = batcher.totals;
 
@@ -737,11 +986,7 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     // unwritten, and its rows land in neither `inserted` nor `errors`. The
     // endpoint says so with 207 Multi-Status, whose `Response.ok` is `true` —
     // so without this the run reported a clean success over missing data.
-    for (const shard of failedShards) {
-        options.logger.error(
-            `import: shard "${shard.shardKey}" was never reached${shard.timedOut ? " (timed out)" : ""} — its rows were NOT written: ${shard.message}`,
-        );
-    }
+    logUnreachedShards(options.logger, failedShards);
 
     const failed =
         streamFailure !== undefined || errors.length > 0 || failedShards.length > 0 || parityMismatch > 0 || unmigratedFailure || unresolvedPathFailure;
