@@ -1,4 +1,14 @@
 import type { FunctionReference, LunoraClient } from "@lunora/client";
+import { resolveHint } from "@lunora/errors";
+
+/** An error's own `hint` as lines, the shape `resolveHint` takes: a string is one line, an array keeps its string entries. */
+const ownHint = (hint: unknown): ReadonlyArray<string> | undefined => {
+    if (typeof hint === "string") {
+        return [hint];
+    }
+
+    return Array.isArray(hint) ? hint.filter((line): line is string => typeof line === "string") : undefined;
+};
 
 /** Error codes no retry will fix: an admin or session rejection a poller must stop on rather than back off from. */
 const TERMINAL_POLL_CODES: ReadonlySet<string> = new Set(["ADMIN_FORBIDDEN", "FORBIDDEN", "UNAUTHORIZED"]);
@@ -79,22 +89,29 @@ export const isTerminalPollError = (error: unknown): boolean => {
 };
 
 /**
- * Extract an actionable hint (Markdown) carried on a thrown value — a
- * `LunoraClientError` reconstructed from the server envelope exposes `hint` as a
- * string or an array of lines. Returns `undefined` when the error carries none.
+ * Extract an actionable hint (Markdown) for a thrown value. An explicit `hint` on
+ * the error (a `LunoraClientError` reconstructed from the server envelope carries
+ * it as a string or an array of lines) wins; otherwise the central catalog is
+ * matched by its `code` and message, as the CLI renderer does. Returns
+ * `undefined` when neither has one.
  */
 export const errorHint = (error: unknown): string | undefined => {
-    if (error === null || typeof error !== "object" || !("hint" in error)) {
+    if (error === null || typeof error !== "object") {
         return undefined;
     }
 
-    const { hint } = error as { hint?: unknown };
+    const { code, hint, message } = error as { code?: unknown; hint?: unknown; message?: unknown };
+    const resolved = resolveHint({
+        code: typeof code === "string" ? code : undefined,
+        hint: ownHint(hint),
+        message: typeof message === "string" ? message : undefined,
+    });
 
-    if (typeof hint === "string") {
-        return hint;
+    if (resolved === undefined) {
+        return undefined;
     }
 
-    return Array.isArray(hint) ? hint.filter((line): line is string => typeof line === "string").join("\n") : undefined;
+    return typeof resolved === "string" ? resolved : resolved.join("\n");
 };
 
 /**

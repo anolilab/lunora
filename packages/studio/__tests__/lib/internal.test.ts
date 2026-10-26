@@ -239,6 +239,21 @@ describe("errorHint", () => {
         expect(errorHint("a string error")).toBeUndefined();
         expect(errorHint({ hint: 42 })).toBeUndefined();
     });
+
+    it("falls back to the catalog hint for the error's code when the error carries none", () => {
+        expect.assertions(2);
+
+        // `DELIVERY_FENCED` has an authored catalog hint; a client-side error that only
+        // carries the code must still show it, as the CLI renderer does.
+        expect(errorHint({ code: "DELIVERY_FENCED" })).toContain("Retry with the same transport key");
+        expect(errorHint({ code: "NOT_FOUND" })).toBeUndefined();
+    });
+
+    it("keeps an explicit hint ahead of the catalog's", () => {
+        expect.assertions(1);
+
+        expect(errorHint({ code: "DELIVERY_FENCED", hint: "Use the other key." })).toBe("Use the other key.");
+    });
 });
 
 describe("formatTimestamp", () => {
