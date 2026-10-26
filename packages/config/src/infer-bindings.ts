@@ -447,7 +447,7 @@ const schemaFacts = (projectRoot: string, schemaDirectory: string, cache?: Disco
  * watch session scans on every codegen pass, and re-parsing every candidate file
  * each time was most of the scan; a file is re-parsed only when its text changed,
  * so nothing stale is ever read. Only the latest project is kept: a host scans one,
- * and one that alternates re-parses, as every scan did before this cache.
+ * and one that alternates re-parses on each switch, no worse than not caching.
  */
 let lastScan: { project: Project; root: string } | undefined;
 
