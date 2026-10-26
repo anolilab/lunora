@@ -15,7 +15,7 @@ import { Node, SyntaxKind, ts, VariableDeclarationKind } from "ts-morph";
 
 import type { CallSiteScope, FunctionIR } from "../ir";
 import { isBindingName } from "../reserved-words";
-import { isWriteTarget, unwrapExpression } from "./ast";
+import { descendantsOfKind, isWriteTarget, unwrapExpression } from "./ast";
 
 type TopLevelDeclaration = FunctionDeclaration | VariableDeclaration;
 
@@ -362,7 +362,7 @@ const helperReferencesOf = (
     const { bySymbol, nameNodes, spellings } = helperNamesOf(helpers);
     const references = new Map<ts.Node, Owner[]>();
 
-    for (const identifier of sourceFile.getDescendantsOfKind(SyntaxKind.Identifier)) {
+    for (const identifier of descendantsOfKind(sourceFile, SyntaxKind.Identifier)) {
         if (!spellings.has(identifier.getText()) || nameNodes.has(identifier.compilerNode) || isTypePosition(identifier)) {
             continue;
         }

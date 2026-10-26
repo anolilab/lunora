@@ -58,7 +58,7 @@ describe("d1 ctx-db auto-provisions .global() tables", () => {
 
         expect(page.page.map((document) => document["name"])).toStrictEqual(["general"]);
 
-        const fetched = await db.get(id);
+        const fetched = await db.get("channels", id);
 
         expect(fetched?.["name"]).toBe("general");
 

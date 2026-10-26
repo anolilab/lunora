@@ -174,7 +174,7 @@ describe("ctx-db + reactiveCache integration", () => {
         const u1 = await writer.insert("users", { name: "alice" });
 
         reads.length = 0;
-        await writer.get(u1);
+        await writer.get("users", u1);
 
         expect(reads).toEqual([{ idOrScan: u1, table: "users" }]);
     });
@@ -812,7 +812,7 @@ describe("shardDO + reactiveCache: range-precise cached-query invalidation (plan
     // Regression for the missed-invalidation gap: a query that reads the SAME
     // table through BOTH a provable range (`.withIndex(...).eq(...)`, which
     // reports through `onReadRange` and deps nothing on its own) AND a by-id
-    // read (`writer.get(id)`, which reports through `onRead` and marks the
+    // read (`writer.get(table, id)`, which reports through `onRead` and marks the
     // table unnarrowable). Before the fix, `ReadFootprint.ranges()` drops the
     // table's slice entirely once it is marked unnarrowable, so the cache
     // entry ends up with deps `{messages:<seededId>}` and an EMPTY range set —
@@ -834,7 +834,7 @@ describe("shardDO + reactiveCache: range-precise cached-query invalidation (plan
                 .query("messages")
                 .withIndex("by_channel", (q) => q.eq("channelId", "A"))
                 .collect();
-            const byId = await writer.get(seeded);
+            const byId = await writer.get("messages", seeded);
 
             return { byId, ranged };
         });

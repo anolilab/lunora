@@ -688,6 +688,14 @@ const diffFieldShape = (tableName: string, name: string, oldField: FieldSnapshot
         );
     }
 
+    // A baseline that recorded `v.object(shared)` with no fields predates the resolution of spread shapes. Filling the fields in is only
+    // safe when none of them is required: a stored `{}` still passes an object whose new fields are all optional.
+    const addedFields = Object.values(field.fields ?? {});
+
+    if (deep && old.kind === "object" && Object.keys(old.fields ?? {}).length === 0 && addedFields.length > 0 && addedFields.every((added) => added.optional)) {
+        return safeFieldChange(tableName, "widenedFieldShape", `field ${tableName}.${name} now records its optional object shape — stored values stay valid`);
+    }
+
     return breakingFieldChange(
         tableName,
         "changedFieldShape",

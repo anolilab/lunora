@@ -3135,7 +3135,7 @@ describe("shardDO admin CDC bigint/bytes egress", () => {
 
             expect(replayed.status).toBe(200);
 
-            const row = await createShardContextDatabase({ schema: moneySchema, sql: target.sql }).get("s1", "sessions");
+            const row = await createShardContextDatabase({ schema: moneySchema, sql: target.sql }).get("sessions", "s1");
 
             expect([row?.["amountMinor"], new Uint8Array(row?.["receipt"] as ArrayBuffer)]).toStrictEqual([10n, new Uint8Array([1, 2, 3])]);
         } finally {

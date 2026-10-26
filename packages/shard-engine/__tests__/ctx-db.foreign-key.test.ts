@@ -122,7 +122,7 @@ describe("ctx.db enforces v.id foreign keys on the same shard", () => {
         // A spread rewrite sets the reference to the value it already held.
         await expect(writer.replace(order, { customerId: customer, note: "edited" })).resolves.toBeUndefined();
         await expect(writer.patch(order, { customerId: customer, note: "again" })).resolves.toBeUndefined();
-        await expect(writer.get(order)).resolves.toMatchObject({ customerId: customer, note: "again" });
+        await expect(writer.get("orders", order)).resolves.toMatchObject({ customerId: customer, note: "again" });
 
         // Changing it to a row that does not exist is still refused.
         await expect(writer.replace(order, { customerId: "ghost", note: "x" })).rejects.toThrow(/orders\.customerId/u);
@@ -156,7 +156,7 @@ describe("ctx.db enforces v.id foreign keys on the same shard", () => {
         const clientId = "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f";
 
         await expect(writer.insert("nodes", { parentId: clientId }, { clientId })).resolves.toBe(clientId);
-        await expect(writer.get(clientId)).resolves.toMatchObject({ parentId: clientId });
+        await expect(writer.get("nodes", clientId)).resolves.toMatchObject({ parentId: clientId });
     });
 
     it("does not let a row's own id stand in for a parent in another table", async () => {

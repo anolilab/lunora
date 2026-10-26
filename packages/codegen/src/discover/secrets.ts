@@ -5,7 +5,7 @@ import { Node, Project, SyntaxKind } from "ts-morph";
 
 import type { SecretLiteralIR } from "../ir";
 import { isHeuristicSecretKind, isSecretishName, redact, secretKindOf } from "../secret-rules";
-import { isTestPath, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
+import { descendantsOfKind, isTestPath, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
 
 /**
  * The constant string value of a node, folding `+` concatenations of string
@@ -98,9 +98,9 @@ const secretsInSourceFile = (sourceFile: SourceFile, relativePath: string): Secr
     const nodes: TsNode[] = [
         // Top-level `+` concatenations are folded; their string-literal operands are
         // skipped below so a secret split across literals is reported once, at the root.
-        ...sourceFile.getDescendantsOfKind(SyntaxKind.BinaryExpression),
-        ...sourceFile.getDescendantsOfKind(SyntaxKind.StringLiteral),
-        ...sourceFile.getDescendantsOfKind(SyntaxKind.NoSubstitutionTemplateLiteral),
+        ...descendantsOfKind(sourceFile, SyntaxKind.BinaryExpression),
+        ...descendantsOfKind(sourceFile, SyntaxKind.StringLiteral),
+        ...descendantsOfKind(sourceFile, SyntaxKind.NoSubstitutionTemplateLiteral),
     ];
 
     // Dedupe by (line, kind): a secret split across literals AND carrying a

@@ -36,8 +36,8 @@ import { mutation, v } from "@/lunora/_generated/server";
 export const transfer = mutation
     .input({ from: v.id("accounts"), to: v.id("accounts"), amount: v.number() })
     .mutation(async ({ ctx, args: { from, to, amount } }) => {
-        const source = await ctx.db.get(from);
-        const target = await ctx.db.get(to);
+        const source = await ctx.db.get("accounts", from);
+        const target = await ctx.db.get("accounts", to);
 
         if (!source || !target || source.balance < amount) {
             throw new Error("insufficient funds");

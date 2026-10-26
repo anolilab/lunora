@@ -257,7 +257,7 @@ const locateExistingId = async (writer: DatabaseWriterLike, table: string, expli
             return located === null ? undefined : located.tableName;
         }
 
-        return (await writer.get(explicitId, table)) === null ? undefined : table;
+        return (await writer.get(table, explicitId)) === null ? undefined : table;
     } catch {
         // An unknown-table failure here is surfaced when the insert runs against
         // the real schema.
@@ -360,8 +360,9 @@ const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, a
     for (const row of args.rows) {
         line += 1;
 
-        // A dry run never reaches the writer: it reports the shape errors and nothing else, so the caller can refuse a file before the first
-        // real chunk lands.
+        // A dry run never reaches the writer: it reports the shape errors and
+        // nothing else, so the caller can refuse a file before the first real
+        // chunk lands.
         if (args.dryRun === true) {
             const shapeError = rowShapeError(schema, row, line);
 

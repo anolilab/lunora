@@ -125,7 +125,7 @@ carries. A `.global()` row is the exception: its table lives in D1, out of reach
 of that lookup, so pass `{ table, id }` for those.
 
 ```ts
-const ticket = await ctx.db.get(ticketId);
+const ticket = await ctx.db.get("tickets", ticketId);
 const { nodes } = await ctx.db.related(ticket, { depth: 1, direction: "out" });
 ```
 

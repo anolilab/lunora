@@ -116,7 +116,7 @@ describe("facade over the real writer — upsert / exists / skipDuplicates", () 
  * shard-local probe and has to fall through to the `globalDb` writer. The
  * facade pins its bound table on every one of those calls, so this is the only
  * shape that exercises the pinned-and-global combination — the generic
- * `writer.get(id)` form takes a different branch.
+ * `writer.get(table, id)` form takes a different branch.
  */
 const globalSchema: SchemaLike = {
     tables: {
@@ -188,8 +188,8 @@ const buildGlobalWriter = () => {
             };
         },
 
-        async get(id: string, expectedTable?: string) {
-            return locate(id, expectedTable)?.document ?? null;
+        async get(table: string, id: string) {
+            return locate(id, table)?.document ?? null;
         },
 
         async insert(table: string, document: Record<string, unknown>) {

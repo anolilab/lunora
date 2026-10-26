@@ -196,7 +196,7 @@ describe("applyCdcChanges (replay-PITR engine)", () => {
 
         await applyCdcChanges(writer, [change({ doc: { _id: "m_1", authorId: "u1", channelId: "c1", text: "hi" }, id: "m_1", op: "insert" })]);
 
-        const row = await writer.get("m_1");
+        const row = await writer.get("messages", "m_1");
 
         expect(row).toMatchObject({ text: "hi" });
     });
@@ -213,7 +213,7 @@ describe("applyCdcChanges (replay-PITR engine)", () => {
             change({ doc: { _creationTime: 1_650_000_000_000, _id: "m_1", authorId: "u1", channelId: "c1", text: "replayed" }, id: "m_1", op: "update" }),
         ]);
 
-        const row = await writer.get("m_1");
+        const row = await writer.get("messages", "m_1");
 
         expect(row).toMatchObject({ text: "replayed" });
         expect(row?.["_creationTime"]).toBe(1_650_000_000_000);
@@ -227,7 +227,7 @@ describe("applyCdcChanges (replay-PITR engine)", () => {
         await writer.insert("messages", { _id: "m_1", authorId: "u1", channelId: "c1", text: "doomed" }, { allowExplicitId: true });
         await applyCdcChanges(writer, [change({ id: "m_1", op: "delete" })]);
 
-        const row = await writer.get("m_1");
+        const row = await writer.get("messages", "m_1");
 
         expect(row).toBeNull();
     });
@@ -244,8 +244,8 @@ describe("applyCdcChanges (replay-PITR engine)", () => {
             change({ id: "m_2", op: "delete" }),
         ]);
 
-        await expect(writer.get("m_1")).resolves.toMatchObject({ text: "v2" });
-        await expect(writer.get("m_2")).resolves.toBeNull();
+        await expect(writer.get("messages", "m_1")).resolves.toMatchObject({ text: "v2" });
+        await expect(writer.get("messages", "m_2")).resolves.toBeNull();
     });
 });
 

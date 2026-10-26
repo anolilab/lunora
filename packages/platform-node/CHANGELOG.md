@@ -1,3 +1,18 @@
+## @lunora/platform-node [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.181...@lunora/platform-node@1.0.0-alpha.182) (2026-10-26)
+
+### Features
+
+* **server:** require the table in ctx.db.get(table, id) ([#1342](https://github.com/anolilab/lunora/issues/1342)) ([92cca06](https://github.com/anolilab/lunora/commit/92cca0604d33fc93db2ad49530572e8b99508f3b))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.209
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.241
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.210
+* **@lunora/do:** upgraded to 1.0.0-alpha.249
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.161
+
 ## @lunora/platform-node [1.0.0-alpha.181](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.180...@lunora/platform-node@1.0.0-alpha.181) (2026-10-26)
 
 

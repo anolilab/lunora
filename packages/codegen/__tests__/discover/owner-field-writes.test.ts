@@ -313,7 +313,7 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
 
         // Rows read through `ctx.db` are server-scoped, even when the query filters on args.
         it.each([
-            ["a `then` on a ctx.db read", `ctx.db.get(args.id).then((row) => ${insert("row.userId")}); // @write`],
+            ["a `then` on a ctx.db read", `ctx.db.get("posts", args.id).then((row) => ${insert("row.userId")}); // @write`],
             [
                 "a `for…of` over ctx.db rows",
                 `const rows = await ctx.db.query("posts").collect();\n        for (const row of rows) {\n            await ${insert("row.userId")}; // @write\n        }`,

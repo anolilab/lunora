@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { SchemaIR } from "../ir";
-import { listSecurityScanFiles } from "./ast";
+import { descendantsOfKind, listSecurityScanFiles } from "./ast";
 import { staticPropertyName } from "./property-name";
 
 /**
@@ -33,7 +33,7 @@ const findDoAuthDeclaration = (project: Project, lunoraDirectory: string): CallE
     for (const { filePath } of listSecurityScanFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
-        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+        for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
             const callee = call.getExpression();
             const [argument] = call.getArguments();
 

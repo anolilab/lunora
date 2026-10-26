@@ -1,3 +1,9 @@
+## @lunora/privacy [1.0.0-alpha.32](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.31...@lunora/privacy@1.0.0-alpha.32) (2026-10-26)
+
+### Bug Fixes
+
+* **privacy:** erasure replay, coverage, retention and persistence fixes ([#1286](https://github.com/anolilab/lunora/issues/1286)) ([1ef4e1b](https://github.com/anolilab/lunora/commit/1ef4e1be46596c97f576e125cdf6c11d2d86b324))
+
 ## @lunora/privacy [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.30...@lunora/privacy@1.0.0-alpha.31) (2026-10-26)
 
 

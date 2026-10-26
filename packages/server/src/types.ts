@@ -1014,7 +1014,13 @@ interface DatabaseReader {
      * backend, where `query(table).withIndex(...)` is not available.
      */
     findFirst: (tableName: string, args?: { where?: Record<string, unknown> }) => Promise<Record<string, unknown> | null>;
-    get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
+
+    /**
+     * Read one row of `table` by id, or `null` when absent. The table is required
+     * because row ids are opaque: naming it lets a `.global()` table be read in a
+     * single lookup instead of probing every table.
+     */
+    get: <T extends string>(table: T, id: Id<T>) => Promise<Record<string, unknown> | null>;
 
     /**
      * Validate an untrusted `id` string against the structural shape of an id
@@ -1930,7 +1936,7 @@ interface TriggerDatabase {
     delete: (id: string) => Promise<void>;
     findFirst: (tableName: string, args?: TriggerQueryArgs) => Promise<Record<string, unknown> | null>;
     findMany: (tableName: string, args?: TriggerQueryArgs) => Promise<TriggerQueryPage>;
-    get: (id: string) => Promise<Record<string, unknown> | null>;
+    get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
     groupBy: (tableName: string, options: TriggerGroupByOptions) => Promise<ReadonlyArray<TriggerGroupByEntry>>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;

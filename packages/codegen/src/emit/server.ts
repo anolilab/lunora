@@ -580,11 +580,11 @@ type TypedTableQuery = (<T extends TableName>(
     ((table: string) => TableReader);
 
 /**
- * The point read \`ctx.db.get(id)\`, bound to this schema: an \`Id<"table">\`
- * carries its table name, so the resolved document is typed \`Doc<table>\` (or
- * \`null\` when absent) with no \`as Doc<...>\` cast. Mirrors {@link TypedTableQuery}.
+ * The point read \`ctx.db.get(table, id)\`, bound to this schema: the table literal
+ * fixes \`T\`, so the id must be an \`Id<T>\` and the resolved document is typed
+ * \`Doc<T>\` (or \`null\` when absent) with no \`as Doc<...>\` cast. Mirrors {@link TypedTableQuery}.
  */
-type TypedTableGet = <T extends TableName>(id: IdOfTable<T>) => Promise<Doc<T> | null>;
+type TypedTableGet = <T extends TableName>(table: T, id: IdOfTable<T>) => Promise<Doc<T> | null>;
 
 /**
  * Resolves the \`asId\` table argument: a literal in {@link TableName} passes through, a

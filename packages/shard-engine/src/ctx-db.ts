@@ -3687,18 +3687,25 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return { params: statement.params, plan: steps.map((step) => String(step["detail"])), sql: statement.text };
         },
 
-        async get(id, expectedTable) {
-            const located = locateRowById(id, expectedTable);
+        async get(table, id) {
+            // Both arguments are `string`, so the compiler cannot tell a swapped
+            // `(id, table)` call from a valid one. An id never names a schema table,
+            // so rejecting an unknown table here turns a swap into an error.
+            if (!Object.hasOwn(schema.tables, table)) {
+                throw new LunoraError("BAD_REQUEST", `ctx.db.get(table, id): "${table}" is not a table in this schema`);
+            }
+
+            const located = locateRowById(id, table);
 
             if (!located) {
                 // A global row's id never lives in this DO; fall back to the
                 // D1 writer when this call is allowed to reach one — see
-                // `globalFallbackFor`, which also re-applies the facade's pin
+                // `globalFallbackFor`, which also re-applies the table pin
                 // over there.
-                const global = globalFallbackFor(expectedTable);
+                const global = globalFallbackFor(table);
 
                 if (global) {
-                    return global.get(id, expectedTable);
+                    return global.get(table, id);
                 }
 
                 // eslint-disable-next-line unicorn/no-null -- DatabaseWriterLike.get is `Promise<Record | null>`: null is the documented "no such row" result

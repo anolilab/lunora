@@ -103,7 +103,7 @@ const runRankScenarios = (factory: () => SqlHarness): void => {
                 await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 50 }, { allowExplicitId: true });
                 await writer.insert("messages", { _id: "m2", archived: false, channelId: "c1", score: 100 }, { allowExplicitId: true });
 
-                const doc = await writer.get("m2");
+                const doc = await writer.get("messages", "m2");
 
                 await expect(writer.rank("messages", "leaderboard", { row: doc! })).resolves.toEqual({ position: 1, total: 2 });
             });
@@ -523,7 +523,7 @@ const runRankScenarios = (factory: () => SqlHarness): void => {
                     // eslint-disable-next-line no-await-in-loop -- sequential reads against one DB; assertions accumulate
                     const ranked = await writer.rank("messages", "leaderboard", { row: id });
                     // eslint-disable-next-line no-await-in-loop -- ditto
-                    const doc = await writer.get(id);
+                    const doc = await writer.get("messages", id);
                     const key = rankKeyFromDoc(byScoreDesc, doc!);
 
                     // eslint-disable-next-line no-await-in-loop -- ditto

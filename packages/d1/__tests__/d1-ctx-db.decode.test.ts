@@ -114,7 +114,7 @@ describe("d1 ctx-db — non-scalar column round-trip", () => {
             { allowExplicitId: true },
         );
 
-        const reloaded = await writer.get("d1");
+        const reloaded = await writer.get("docs", "d1");
 
         expect(reloaded).not.toBeNull();
         // Non-scalar fields must come back as real JS values, not JSON strings.
@@ -160,7 +160,7 @@ describe("d1 ctx-db — non-scalar column round-trip", () => {
 
         await writer.insert("docs", { _id: "d3", active: true, big: 0n, count: 0, meta: {}, name: "", settings: {}, tags: [] }, { allowExplicitId: true });
 
-        const reloaded = await writer.get("d3");
+        const reloaded = await writer.get("docs", "d3");
 
         expect(reloaded?.["meta"]).toEqual({});
         expect(reloaded?.["tags"]).toEqual([]);
@@ -218,7 +218,7 @@ describe("d1 ctx-db — optional non-scalar column round-trip", () => {
 
         await writer.insert("opt", { _id: "o1", active: true, big: 9_007_199_254_740_993n, meta: { x: 1 }, tags: ["a", "b"] }, { allowExplicitId: true });
 
-        const reloaded = await writer.get("o1");
+        const reloaded = await writer.get("opt", "o1");
 
         // Without unwrapping `optional`, these would come back as the raw JSON
         // string / decimal string / 1 respectively.
@@ -253,11 +253,11 @@ describe("d1 ctx-db — explicit-id tableName cache", () => {
         );
         await writer.delete("shared");
 
-        await expect(writer.get("shared")).resolves.toBeNull();
+        await expect(writer.get("docs", "shared")).resolves.toBeNull();
 
         await writer.insert("other", { _id: "shared", label: "second" }, { allowExplicitId: true });
 
-        const reloaded = await writer.get("shared");
+        const reloaded = await writer.get("other", "shared");
 
         expect(reloaded).not.toBeNull();
         expect(reloaded?.["label"]).toBe("second");
@@ -312,7 +312,7 @@ describe("d1 ctx-db — a scalar in an untyped column", () => {
 
         await database.insert("events", { _id: "e1", anything: 42, either: true, external: 1.5 }, { allowExplicitId: true });
 
-        const row = await database.get("e1");
+        const row = await database.get("events", "e1");
 
         expect(row?.["anything"]).toBe(42);
         expect(row?.["either"]).toBe(true);
@@ -326,7 +326,7 @@ describe("d1 ctx-db — a scalar in an untyped column", () => {
 
         await database.insert("events", { _id: "e2", anything: "42", either: { a: 1 }, external: 9_007_199_254_740_993n }, { allowExplicitId: true });
 
-        const row = await database.get("e2");
+        const row = await database.get("events", "e2");
 
         // A numeric-looking STRING must stay a string — that ambiguity is what
         // makes a self-describing form necessary in the first place.
@@ -343,10 +343,10 @@ describe("d1 ctx-db — a scalar in an untyped column", () => {
         await database.insert("events", { _id: "e3", anything: "start", either: 1, external: "x" }, { allowExplicitId: true });
         await database.patch("e3", { anything: 7 });
 
-        await expect(database.get("e3").then((row) => row?.["anything"])).resolves.toBe(7);
+        await expect(database.get("events", "e3").then((row) => row?.["anything"])).resolves.toBe(7);
 
         await database.replace("e3", { anything: false, either: 2, external: "y" });
 
-        await expect(database.get("e3").then((row) => row?.["anything"])).resolves.toBe(false);
+        await expect(database.get("events", "e3").then((row) => row?.["anything"])).resolves.toBe(false);
     });
 });

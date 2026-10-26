@@ -6,6 +6,7 @@
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 
+import type { DiscoveryCache } from "../discovery-cache";
 import join from "../path";
 import type { SchemaInfo } from "../schema-info";
 import { discoverSchemaInfo } from "../schema-info";
@@ -27,6 +28,9 @@ import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 import { validateWranglerConfig } from "./wrangler-validator";
 
 interface WranglerProjectValidationOptions {
+    /** Memoises the schema discovery, shared with binding inference. */
+    cache?: DiscoveryCache;
+
     /**
      * Cloudflare environment to validate against `env.<name>` in
      * wrangler.jsonc. See {@link mergeWranglerEnvironment} for which keys
@@ -427,7 +431,7 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
 
     // Surface a parse failure as a warning rather than swallowing it — codegen
     // reports the actionable error elsewhere, but a complete miss is hard to debug.
-    const { error: schemaError, info: schemaInfo } = discoverSchemaInfo(options.projectRoot, schemaDirectory);
+    const { error: schemaError, info: schemaInfo } = discoverSchemaInfo(options.projectRoot, schemaDirectory, options.cache);
     const report = validateWranglerConfig(wrangler, schemaInfo, options.environment);
 
     if (schemaError !== undefined) {

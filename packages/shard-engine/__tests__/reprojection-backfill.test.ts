@@ -306,7 +306,7 @@ describe("reprojection backfill", () => {
 
             await run(writer);
 
-            const row = await writer.get("legacy-b", "paymentSessions");
+            const row = await writer.get("paymentSessions", "legacy-b");
 
             expect(new Uint8Array(row?.["receipt"] as ArrayBuffer)).toStrictEqual(payload);
             expect(storedDoc("legacy-b")["receipt"]).toBe("AQID/w==");
@@ -436,11 +436,11 @@ describe("reprojection backfill", () => {
                 }),
             );
 
-            const before = await writer.get("legacy-rich", "paymentSessions");
+            const before = await writer.get("paymentSessions", "legacy-rich");
 
             await run(writer);
 
-            const after = await writer.get("legacy-rich", "paymentSessions");
+            const after = await writer.get("paymentSessions", "legacy-rich");
 
             expect(after).toStrictEqual(before);
             // …and the projected columns really did move to the queryable form.

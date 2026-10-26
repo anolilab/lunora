@@ -59,7 +59,10 @@ describe("the request lifecycle on workerd", () => {
 
         await expect(harness.privacy.runExport(opened.id)).resolves.toMatchObject({ status: "ready" });
 
-        const extracted = unzipSync(harness.files.files.get("r1/export.zip") as Uint8Array);
+        // The archive sits under its run's prefix, so find it by its name rather than a fixed key.
+        const keys = await harness.files.list(opened.id);
+        const archiveKey = keys.find((key) => key.endsWith("/export.zip")) ?? "";
+        const extracted = unzipSync(harness.files.files.get(archiveKey) as Uint8Array);
 
         expect(Object.keys(extracted)).toStrictEqual(expect.arrayContaining(["manifest.json", "data/tasks/tasks.json"]));
     });

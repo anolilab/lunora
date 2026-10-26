@@ -3,7 +3,7 @@ import { Node, Project, SyntaxKind, ts } from "ts-morph";
 
 import type { CapabilityKey } from "../capabilities";
 import { CAPABILITIES } from "../capabilities";
-import { bindingKeyName, listLunoraSourceFiles } from "./ast";
+import { bindingKeyName, descendantsOfKind, listLunoraSourceFiles } from "./ast";
 import type { SandboxUsage } from "./sandbox";
 import { noSandboxUsage, scanImportDeclaration } from "./sandbox";
 
@@ -36,7 +36,7 @@ const CONTEXT_PROPERTY = "ctx";
  * collector can know, so it is not recorded.
  */
 const collectLiteralKeyReads = (sourceFile: SourceFile, reachesContext: (receiver: Node) => boolean, names: Set<string>): void => {
-    for (const access of sourceFile.getDescendantsOfKind(SyntaxKind.ElementAccessExpression)) {
+    for (const access of descendantsOfKind(sourceFile, SyntaxKind.ElementAccessExpression)) {
         const key = access.getArgumentExpression();
 
         if (reachesContext(access.getExpression()) && key !== undefined && (Node.isStringLiteral(key) || Node.isNoSubstitutionTemplateLiteral(key))) {
@@ -72,8 +72,8 @@ const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
     // A plain `ctx` parameter (`async (ctx) => …`) is a context, but it is not a binding pattern, so the walk below cannot see it. Count the
     // bare spelling only where the file binds one as a parameter, or aliases a parameter to it (`(context) => { const ctx = context; … }`);
     // a `const ctx = {}` that is no handler's context must not read as one.
-    const parameterNames = new Set(sourceFile.getDescendantsOfKind(SyntaxKind.Parameter).map((parameter) => parameter.getName()));
-    const aliasesParameter = sourceFile.getDescendantsOfKind(SyntaxKind.VariableDeclaration).some((declaration) => {
+    const parameterNames = new Set(descendantsOfKind(sourceFile, SyntaxKind.Parameter).map((parameter) => parameter.getName()));
+    const aliasesParameter = descendantsOfKind(sourceFile, SyntaxKind.VariableDeclaration).some((declaration) => {
         const initializer = declaration.getInitializer();
 
         return declaration.getName() === CONTEXT_PROPERTY && Node.isIdentifier(initializer) && parameterNames.has(initializer.getText());
@@ -100,7 +100,7 @@ const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
     // Anchor on the `ctx` PROPERTY of a binding pattern, wherever it appears —
     // a handler parameter or a `const { ctx } = …`. A rename introduces another
     // context name to follow; a nested pattern is the read itself.
-    for (const element of sourceFile.getDescendantsOfKind(SyntaxKind.BindingElement)) {
+    for (const element of descendantsOfKind(sourceFile, SyntaxKind.BindingElement)) {
         if (bindingKeyName(element) !== CONTEXT_PROPERTY) {
             continue;
         }
@@ -116,7 +116,7 @@ const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
 
     const reachesContext = (receiver: Node): boolean => Node.isIdentifier(receiver) && contextNames.has(receiver.getText());
 
-    for (const access of sourceFile.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
+    for (const access of descendantsOfKind(sourceFile, SyntaxKind.PropertyAccessExpression)) {
         if (reachesContext(access.getExpression())) {
             names.add(access.getName());
         }
@@ -124,7 +124,7 @@ const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
 
     collectLiteralKeyReads(sourceFile, reachesContext, names);
 
-    for (const declaration of sourceFile.getDescendantsOfKind(SyntaxKind.VariableDeclaration)) {
+    for (const declaration of descendantsOfKind(sourceFile, SyntaxKind.VariableDeclaration)) {
         const initializer = declaration.getInitializer();
 
         if (initializer !== undefined && reachesContext(initializer)) {
@@ -203,7 +203,7 @@ const namesOnlyBindingFreeExports = (declaration: ExportDeclaration | ImportDecl
 const dynamicImportSpecifiers = (sourceFile: SourceFile): Set<string> => {
     const specifiers = new Set<string>();
 
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
         const [argument] = call.getArguments();
 
         if (call.getExpression().getKind() === SyntaxKind.ImportKeyword && (Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument))) {
@@ -530,14 +530,14 @@ const readsNamespaceMember = (file: SourceFile, namespace: string, names: Readon
         .some((access) => readsMember(access.getExpression().getText(), access.getName()));
 
     // `ns["name"]` reads the same member as `ns.name`; a computed key that is not a literal cannot be resolved.
-    const viaElement = file.getDescendantsOfKind(SyntaxKind.ElementAccessExpression).some((access) => {
+    const viaElement = descendantsOfKind(file, SyntaxKind.ElementAccessExpression).some((access) => {
         const key = access.getArgumentExpression();
 
         return Node.isStringLiteral(key) && readsMember(access.getExpression().getText(), key.getLiteralValue());
     });
 
     // `const { name } = ns` and `const { name: local } = ns` bind the member off the namespace.
-    const viaDestructuring = file.getDescendantsOfKind(SyntaxKind.VariableDeclaration).some((declaration) => {
+    const viaDestructuring = descendantsOfKind(file, SyntaxKind.VariableDeclaration).some((declaration) => {
         const initializer = declaration.getInitializer();
         const binding = declaration.getNameNode();
 
