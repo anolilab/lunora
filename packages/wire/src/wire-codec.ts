@@ -195,7 +195,8 @@ const needsWireEncoding = (value: unknown, depth = 0): boolean => {
 
     // `JSON.stringify` calls a `toJSON` — own (even non-enumerable) or inherited —
     // where `encodeWire` copies only the enumerable fields, so the two disagree.
-    if (typeof (value as { toJSON?: unknown }).toJSON === "function") {
+    // `in`, not a read: a `toJSON` getter must not run here.
+    if ("toJSON" in (value as object)) {
         return true;
     }
 

@@ -1035,8 +1035,9 @@ const isSmallJsonData = (value: unknown): boolean => {
         }
 
         // `JSON.stringify` calls a `toJSON` (own, non-enumerable or inherited) that the
-        // redactor never sees, so the text would not name what gets redacted.
-        if (typeof node !== "object" || depth >= JSON_DATA_MAX_DEPTH || typeof (node as { toJSON?: unknown }).toJSON === "function") {
+        // redactor never sees, so the text would not name what gets redacted. `in`, not
+        // a read, so a `toJSON` getter does not run.
+        if (typeof node !== "object" || depth >= JSON_DATA_MAX_DEPTH || "toJSON" in node) {
             return false;
         }
 

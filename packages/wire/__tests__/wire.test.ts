@@ -75,4 +75,18 @@ describe("needsWireEncoding and toJSON", () => {
         expect(needsWireEncoding(Object.assign([1, 2], { toJSON: () => "replaced" }))).toBe(true);
         expect(needsWireEncoding(Object.create({ toJSON: () => "inherited" }) as object)).toBe(true);
     });
+
+    it("does not run a toJSON getter, which encodeWire would never read", () => {
+        expect.assertions(2);
+
+        const value = Object.defineProperty({ visible: 1 }, "toJSON", {
+            enumerable: false,
+            get: () => {
+                throw new Error("read");
+            },
+        });
+
+        expect(needsWireEncoding(value)).toBe(true);
+        expect(encodeWire(value)).toStrictEqual({ visible: 1 });
+    });
 });
