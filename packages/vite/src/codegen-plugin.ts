@@ -452,6 +452,9 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
         // all of them.
         if (hook.ran) {
             hookSettledAt = Date.now();
+            // The hook may have edited sources the startup scans cached, and the
+            // binding reconcile that follows must read them as they are now.
+            discovery?.clear();
         }
 
         return hook.error;

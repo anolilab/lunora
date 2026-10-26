@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createCodegenProject, findTsconfig, PROJECT_CONFIG_FILENAMES, runCodegen } from "@lunora/codegen";
-import { runPostCodegenHook } from "@lunora/config";
+import type { DiscoveryCache } from "@lunora/config";
+import { createDiscoveryCache, runPostCodegenHook } from "@lunora/config";
 import { consumeStudioWrite } from "@lunora/config/studio-host";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
@@ -1578,6 +1579,51 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
 
             expect(runCodegen).toHaveBeenCalledTimes(1);
             expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    describe("startup discovery cache", () => {
+        it("drops the scans a postcodegen hook may have invalidated before reconciling bindings", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const events: string[] = [];
+            const cache = createDiscoveryCache();
+            const discovery: DiscoveryCache = {
+                clear: () => {
+                    events.push("clear");
+                    cache.clear();
+                },
+                memo: (key, compute) => {
+                    events.push("memo");
+
+                    return cache.memo(key, compute);
+                },
+            };
+
+            vi.mocked(runPostCodegenHook).mockImplementationOnce(async () => {
+                events.push("hook");
+
+                return { ran: true };
+            });
+
+            const plugin = codegenPlugin(makeOptions(workdir), discovery);
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
+            await (plugin.configResolved as (this: unknown) => Promise<void>).call(undefined);
+            await (plugin.buildStart as (this: object) => Promise<void>).call({
+                environment: { name: "client" },
+                error: (message: string): never => {
+                    throw new Error(message);
+                },
+            });
+
+            const afterHook = events.slice(events.indexOf("hook") + 1);
+
+            // The reconcile consults the cache after the hook, and only once it has been cleared.
+            expect(afterHook).toContain("memo");
+            expect(afterHook.indexOf("clear")).toBeLessThan(afterHook.indexOf("memo"));
         });
     });
 
