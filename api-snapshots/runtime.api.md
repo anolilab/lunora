@@ -590,10 +590,10 @@ interface DynamicShardRegistry extends ShardRegistry {
 ```ts
 interface DynamicShardRegistryOptions {
     cacheTtlMs?: number;
+    env?: unknown;
     instanceName?: string;
     jurisdiction?: DurableObjectJurisdiction;
-    namespace: ShardNamespaceLike;
-    secret?: string;
+    namespace: ShardNamespaceLike | ShardRegistryRpc;
 }
 ```
 
@@ -2073,6 +2073,17 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 interface ShardRegistry {
     invalidate?: (table?: string) => void;
     listShardKeys: (table: string) => Promise<ReadonlyArray<string>> | ReadonlyArray<string>;
+}
+```
+
+### `ShardRegistryRpc` (interface)
+
+```ts
+interface ShardRegistryRpc {
+    listShardKeys: (table: string) => Promise<string[]>;
+    register: (table: string, shardKey: string) => Promise<void>;
+    snapshot: () => Promise<Record<string, string[]>>;
+    unregister: (table: string, shardKey: string) => Promise<void>;
 }
 ```
 

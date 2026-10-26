@@ -4254,6 +4254,9 @@ importers:
       '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime
+      '@lunora/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
       '@lunora/server':
         specifier: workspace:*
         version: link:../server

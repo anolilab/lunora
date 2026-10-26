@@ -758,7 +758,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const liveContent = emitLive(liveStreams, useUmbrella);
     const cronsContent = emitCrons(crons);
     const schedulerContent = emitScheduler(studioFeatures.scheduler);
-    const shardRegistryContent = emitShardRegistry(schema.tables, useUmbrella);
+    const shardRegistryContent = emitShardRegistry(schema.tables, useUmbrella, schema.jurisdiction);
     const durableObjectsContent = readMergeDurableObjects(options.projectRoot) ? emitDurableObjects(useUmbrella) : "";
     const vectorsContent = emitVectors(schema.vectorIndexes);
     const drizzleFiles = emitDrizzleSchema(schema, useUmbrella);

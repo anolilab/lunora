@@ -80,6 +80,7 @@ const buildRuntimeImports = (options: ResolvedAppOptions): string[] => {
         "Route",
         "ScheduledControllerLike",
         "ShardNamespaceLike",
+        ...(hasShardedTables(options) ? ["ShardRegistryRpc"] : []),
         "WorkerOptions",
         // The queue consumer's fourth argument — the trigger's own trace, forwarded
         // so a handler's `ctx.run` dispatches join it.

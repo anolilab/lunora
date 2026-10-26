@@ -1,3 +1,24 @@
+## @lunora/codegen [1.0.0-alpha.352](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.351...@lunora/codegen@1.0.0-alpha.352) (2026-10-25)
+
+### Bug Fixes
+
+* **config:** celld audit fixes ([#1283](https://github.com/anolilab/lunora/issues/1283)) ([6fd7854](https://github.com/anolilab/lunora/commit/6fd78547928d41d3569ba71cf94683dac7f49b94))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.256
+* **@lunora/agent:** upgraded to 1.0.0-alpha.246
+* **@lunora/platform:** upgraded to 1.0.0-alpha.75
+* **@lunora/queue:** upgraded to 1.0.0-alpha.127
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.150
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.134
+* **@lunora/client:** upgraded to 1.0.0-alpha.249
+* **@lunora/do:** upgraded to 1.0.0-alpha.246
+* **@lunora/payment:** upgraded to 1.0.0-alpha.239
+* **@lunora/server:** upgraded to 1.0.0-alpha.237
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.158
+
 ## @lunora/codegen [1.0.0-alpha.351](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.350...@lunora/codegen@1.0.0-alpha.351) (2026-10-25)
 
 ### Bug Fixes
