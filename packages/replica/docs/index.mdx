@@ -249,6 +249,7 @@ one member, `ctx.events`, which is the client itself — so `append` takes the
 same **array** of input events as `client.append`.
 
 ```ts
+import { env } from "cloudflare:workers";
 import { EventLogDOClient, eventsContext } from "@lunora/replica";
 
 import { action, v } from "@/lunora/_generated/server";
