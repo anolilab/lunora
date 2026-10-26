@@ -644,6 +644,18 @@ const expireReadyExports = async (ports: PrivacyPorts, requestId: string): Promi
 };
 
 /**
+ * Fail an erasure. Once rows may be gone, a ready export of the subject holds data the erasure removed, so it expires here.
+ * Completion does that for an erasure that finishes, and a failed erasure never completes.
+ */
+const failErasure = async (scope: RunScope, steps: StepRunner, requestId: string, detail: string, rowsMayBeGone: boolean): Promise<RequestStatus> => {
+    if (rowsMayBeGone) {
+        await steps.do("expire", async () => expireReadyExports(scope.ports, requestId));
+    }
+
+    return failStep(scope, steps, requestId, detail);
+};
+
+/**
  * Erase the subject's data: wait out the grace, then erase each dataset in erasure order, then the
  * stored files, then verify. The request completes only when verify finds nothing left but rows a
  * rule still keeps; otherwise it is `failed` and names the leftover tables.
@@ -661,6 +673,10 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
 
         await steps.sleepUntil("grace", record.erasureGraceUntil);
     }
+
+    // Set once the tombstone is written: from then on a row drain may leave rows gone, so a crash expires the subject's ready exports.
+    // Cleared before the files step, where a failed archive delete must keep its export ready until the retry (see the run tests).
+    let erasing = false;
 
     try {
         const tombstones = requireTombstones(scope);
@@ -681,6 +697,8 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
             return { leftover: [], status: tombstoned.status };
         }
 
+        erasing = true;
+
         for (const dataset of erasureOrder(scope.datasets)) {
             // One drain per dataset, in erasure order. Each drain is idempotent, so a retry resumes it.
             // eslint-disable-next-line no-await-in-loop -- drains run one after another by design
@@ -690,6 +708,8 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
                 return { leftover: [], status: erased.status };
             }
         }
+
+        erasing = false;
 
         const filesErased = await step("erase:files", async (request) => eraseSubjectFiles(scope.ports, scope.datasets, request.subjectId));
 
@@ -705,18 +725,14 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
         }
 
         if (!verdict.complete) {
-            // Rows are gone by now, so a ready export of the subject holds data the erasure removed. Completion expires those, but
-            // a failed erasure never completes.
-            await steps.do("expire", async () => expireReadyExports(scope.ports, requestId));
-
-            return { leftover: verdict.leftover, status: await failStep(scope, steps, requestId, verdict.leftover.join(",")) };
+            return { leftover: verdict.leftover, status: await failErasure(scope, steps, requestId, verdict.leftover.join(","), true) };
         }
 
         const completed = await step("complete", async (request) => completeErasure(scope.ports, requestId, request.subjectId, keyOf(request)));
 
         return { leftover: [], status: completed.status === "processing" ? "completed" : completed.status };
     } catch (error) {
-        return { leftover: [], status: await failStep(scope, steps, requestId, failureDetail(error)) };
+        return { leftover: [], status: await failErasure(scope, steps, requestId, failureDetail(error), erasing) };
     }
 };
 

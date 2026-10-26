@@ -140,6 +140,34 @@ describe("retention during erasure", () => {
         expect(store.rows.get(exported.id)?.status).toBe("expired");
     });
 
+    it("expires a ready export when an erasure crashes after writing its tombstone", async () => {
+        const { port } = rowData({ archive: false });
+        let crashing = false;
+        // The tombstone is the first step, so the erasure has written it when its first drain throws. Rows may already be gone.
+        const failing = {
+            ...port,
+            eraseBatch: async (...args: Parameters<DataPort["eraseBatch"]>) => {
+                if (crashing) {
+                    throw new Error("storage unavailable");
+                }
+
+                return port.eraseBatch(...args);
+            },
+        };
+        const { privacy, store } = build(failing);
+        const exported = await privacy.requestExport();
+
+        await expect(privacy.runExport(exported.id)).resolves.toMatchObject({ status: "ready" });
+
+        const erasure = await privacy.requestErasure();
+
+        store.rows.set(erasure.id, { ...store.rows.get(erasure.id)!, status: "received" });
+        crashing = true;
+
+        await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "failed" });
+        expect(store.rows.get(exported.id)?.status).toBe("expired");
+    });
+
     it("marks a dataset with a retained table as restricted in the manifest", async () => {
         const { port } = rowData();
         const { files, privacy } = build(port, [billing, tasks]);
