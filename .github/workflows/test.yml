@@ -775,7 +775,7 @@
             # `build:prod` for studio AND its dependencies (vis walks `^build:prod`): a
             # development `@lunora/react` makes the standalone bundle ship React's dev build.
             - "name": "Build @lunora/studio (production artifacts)"
-              "run": 'pnpm exec vis run build:prod --query "project=studio"'
+              "run": "pnpm exec vis run build:prod --query 'project=studio'"
 
             - "name": "Weigh the studio first load"
               "run": "pnpm run studio-size:check"
