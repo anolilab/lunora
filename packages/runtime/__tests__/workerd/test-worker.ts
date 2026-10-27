@@ -62,6 +62,17 @@ class TestShardDO extends DurableObject<Env> {
     public override async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
 
+        // A WebSocket upgrade: accept it and report the identity and subprotocol
+        // the worker forwarded, as the socket's first frame.
+        if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+            const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
+
+            server.accept();
+            server.send(JSON.stringify({ protocol: request.headers.get("sec-websocket-protocol"), userId: request.headers.get("x-lunora-userid") }));
+
+            return new Response(null, { status: 101, webSocket: client });
+        }
+
         // Surface the inbound headers the runtime is supposed to propagate
         // so tests can verify the forwarding contract.
         const forwarded = {
@@ -111,6 +122,12 @@ const buildTestWorker = (env: Env): ReturnType<typeof createWorker> =>
         backupCron: BACKUP_CRON,
         backupStore: env.BACKUPS,
         queryCoordinator: backupCoordinator,
+        // `Bearer user:<id>` → `{ userId: id }`, reading only `Authorization` like a JWT resolver.
+        resolveIdentity: (request) => {
+            const userId = /^Bearer user:(.+)$/u.exec(request.headers.get("authorization") ?? "")?.[1];
+
+            return userId === undefined ? null : { userId };
+        },
         routes: {
             "/boom-lunora": throwsLunoraRoute,
             "/boom-generic": throwsGenericRoute,

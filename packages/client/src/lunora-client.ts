@@ -6,6 +6,7 @@ import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { encodeExpectedSubjectHeader, EXPECT_SUBJECT_HEADER } from "../../../shared/identity-header";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { onSessionChanged } from "../../../shared/session-change";
+import { encodeBearerProtocol, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
 import { fetchArchitecture, fetchOpenApi, fetchOpenRpc, getCronJobs, listFunctions, runCronJob } from "./admin/functions";
 import { facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "./admin/global-tables";
 import type { AdminHost } from "./admin/host";
@@ -2433,6 +2434,7 @@ class LunoraClient {
         let stableTimer: ReturnType<typeof setTimeout> | undefined;
 
         const channel = this.openSupplementarySocket(this.supplementaryUrl(path), {
+            offerBearer: true,
             onClose: () => {
                 clearTimeout(stableTimer);
                 notify(handlers.onClose);
@@ -2740,9 +2742,35 @@ class LunoraClient {
      * constructor to inject the auth-headers factory's credential onto the
      * upgrade request (`createLunoraClient`'s `withAuthWebSocket`), which a raw
      * `new globalThis.WebSocket(url)` would silently bypass.
+     *
+     * A socket to this client's own WebSocket host over the same transport
+     * security, constructed without its own subprotocols, offers this client's
+     * bearer the way the client's sockets do (see `authTokenOnUpgrade`), read at
+     * construction so it is the token current when the socket opens. Any other
+     * host, or a plaintext `ws:` socket beside a `wss:` endpoint, gets its
+     * arguments untouched: the bearer is a Lunora credential.
      */
     public getWebSocketImpl(): typeof WebSocket | undefined {
-        return this.WebSocketImpl;
+        const { WebSocketImpl } = this;
+
+        if (WebSocketImpl === undefined) {
+            return undefined;
+        }
+
+        const isSecure = (url: URL): boolean => url.protocol === "wss:" || url.protocol === "https:";
+        const own = parseSocketUrl(this.wsUrl);
+        const isOwnEndpoint = (url: string | URL): boolean => {
+            const target = parseSocketUrl(String(url));
+
+            return target.host === own.host && isSecure(target) === isSecure(own);
+        };
+        // React Native's constructor takes a third `{ headers }` argument, forwarded as given.
+        const Construct = WebSocketImpl as unknown as new (url: string | URL, protocols?: string | string[], ...rest: unknown[]) => WebSocket;
+
+        return new Proxy(WebSocketImpl, {
+            construct: (_target, [url, protocols, ...rest]: [string | URL, (string | string[])?, ...unknown[]]) =>
+                new Construct(url, protocols ?? (isOwnEndpoint(url) ? this.upgradeProtocols() : undefined), ...rest),
+        });
     }
 
     /**
@@ -4565,6 +4593,16 @@ class LunoraClient {
         }
 
         return previousToken === null ? "none" : "warm";
+    }
+
+    /**
+     * The subprotocols a socket the worker authenticates offers on its upgrade.
+     * With {@link LunoraClientOptions.authTokenOnUpgrade} and a bearer set, the
+     * bearer rides `Sec-WebSocket-Protocol` (see `shared/ws-bearer-protocol.ts`),
+     * the one handshake header a browser can set, and never the URL.
+     */
+    private upgradeProtocols(): string[] | undefined {
+        return this.authTokenOnUpgrade && this.authToken ? [LUNORA_WS_PROTOCOL, encodeBearerProtocol(this.authToken)] : undefined;
     }
 
     private applyUpgradeBearer(reconnect: "cold" | "none" | "warm"): void {
@@ -6426,7 +6464,7 @@ class LunoraClient {
      */
     private openSupplementarySocket(
         base: string,
-        handlers: { onClose?: () => void; onMessage: (event: MessageEvent) => void; onOpen?: () => void; shardKey?: string },
+        handlers: { offerBearer?: boolean; onClose?: () => void; onMessage: (event: MessageEvent) => void; onOpen?: () => void; shardKey?: string },
     ): { close: () => void; resetBackoff: () => void; socket: () => WebSocket | undefined } {
         // The callers all check this before calling, but the helper stays
         // self-contained: a no-op channel is the honest answer. A closed client
@@ -6467,6 +6505,9 @@ class LunoraClient {
                 },
                 onMessage: handlers.onMessage,
                 ...(handlers.onOpen === undefined ? {} : { onOpen: handlers.onOpen }),
+                // Only an upgrade the worker answers through its shard-socket handler selects `lunora`; the scheduled-jobs
+                // socket's 101 selects none, and a browser aborts a handshake whose offer went unanswered.
+                ...(handlers.offerBearer === true ? { protocols: this.upgradeProtocols() } : {}),
             });
         };
 
@@ -7342,6 +7383,7 @@ class LunoraClient {
 
                 this.flushOfflineQueue(shardKey).catch(() => undefined);
             },
+            protocols: this.upgradeProtocols(),
         });
     }
 

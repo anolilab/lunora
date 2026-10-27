@@ -83,6 +83,7 @@ import { trustedClientIp } from "./trusted-client-ip";
 import { buildVectorAdminRoutes } from "./vector-admin-routes";
 import type { WorkflowsRestClient } from "./workflows-admin-routes";
 import { buildWorkflowsAdminRoutes } from "./workflows-admin-routes";
+import { bearerUpgrade, identityRequestForUpgrade, selectLunoraProtocol, withoutBearerProtocol } from "./ws-bearer-protocol";
 
 /**
  * Wire-format RPC envelope. Posted to `POST /_lunora/rpc`.
@@ -4425,7 +4426,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // forwarded to the DO so the socket carries a verified userId (the basis
         // for trusted `onConnect`/`onDisconnect` lifecycle hooks). Mirrors the
         // RPC path's `resolveForwardContext` → `authorize*` ordering.
-        const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
+        // A browser offers its bearer as a `lunora.bearer.*` subprotocol (it cannot set
+        // `Authorization` on an upgrade); only the identity lookup sees it as a header.
+        // The clone is a new `Request`, so the in-flight execution context recorded
+        // for the original is passed explicitly (`context.access`, `waitUntil`).
+        const upgrade = bearerUpgrade(request);
+        const { headers: forwardedHeaders, identity } = await forwardContext(
+            identityRequestForUpgrade(request, upgrade),
+            env,
+            publicResolveIdentity,
+            executionContextByRequest.get(request),
+        );
 
         // The same admin exemption the RPC path applies to `__lunora_admin__:*`
         // (see `authorizeRpcEnvelope`), and the one
@@ -4454,13 +4465,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // an anonymous caller could forge `x-lunora-userid` and, because the
         // resolved-anonymous path never overwrites it, spoof a verified identity on
         // the socket. Only an authenticated `resolveForwardContext` result may set them.
-        const upgradeHeaders = buildUpgradeHeaders(request, forwardedHeaders);
+        const upgradeHeaders = withoutBearerProtocol(buildUpgradeHeaders(request, forwardedHeaders), upgrade);
 
         // Relay tier (plan 075 Phase 2): when the shard is promoted, route this NEW
         // connection to one of its relays so the owner sheds connection + fan-out
         // load — invisible to the client (same socket, same whispers). Tell the DO
         // its namespace binding so it can address siblings for the hub.
         const binding = resolveShardBindingName(env, options.shardDO);
+        let target = shardKey;
+        let regionHint: RegionHint | undefined;
 
         if (binding !== undefined) {
             upgradeHeaders.set("x-lunora-shard-binding", binding);
@@ -4484,13 +4497,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // own region, and a multi-region one spreads them across the
                 // regions actually generating load.
                 // eslint-disable-next-line sonarjs/pseudo-random -- load distribution across relays, not a security-sensitive value
-                const target = relayName(shardKey, Math.floor(Math.random() * relayCount));
-
-                return forwardToShard(shardDO, target, new Request(request, { headers: upgradeHeaders }), regionHintFromRequest(request));
+                target = relayName(shardKey, Math.floor(Math.random() * relayCount));
+                regionHint = regionHintFromRequest(request);
             }
         }
 
-        return forwardToShard(shardDO, shardKey, new Request(request, { headers: upgradeHeaders }));
+        return selectLunoraProtocol(upgrade, await forwardToShard(shardDO, target, new Request(request, { headers: upgradeHeaders }), regionHint));
     };
 
     /**
@@ -4544,8 +4556,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // Resolve the caller's identity once and forward it to the voice DO so the
         // session's `agents:*` thread writes are attributed to the caller (RLS /
-        // ownership). Same shape/authorization ordering as the RPC/WS paths.
-        const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
+        // ownership). Same shape/authorization ordering as the RPC/WS paths, and the
+        // same `lunora.bearer.*` handling as `handleWebSocketUpgrade`.
+        const upgrade = bearerUpgrade(request);
+        const { headers: forwardedHeaders, identity } = await forwardContext(
+            identityRequestForUpgrade(request, upgrade),
+            env,
+            publicResolveIdentity,
+            executionContextByRequest.get(request),
+        );
 
         // Deliberately NOT `assertShardAuthorized`, and the difference is the
         // `else`: that helper default-denies only a NON-default shard, because its
@@ -4573,9 +4592,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             guardUnauthenticatedShardAccess("shard");
         }
 
-        const upgradeHeaders = buildUpgradeHeaders(request, forwardedHeaders);
+        const upgradeHeaders = withoutBearerProtocol(buildUpgradeHeaders(request, forwardedHeaders), upgrade);
 
-        return forwardToShard(namespace, threadKey, new Request(request, { headers: upgradeHeaders }));
+        return selectLunoraProtocol(upgrade, await forwardToShard(namespace, threadKey, new Request(request, { headers: upgradeHeaders })));
     };
 
     /**

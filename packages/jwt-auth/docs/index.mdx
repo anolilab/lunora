@@ -1,0 +1,115 @@
+---
+title: "@lunora/jwt-auth"
+description: Bring your own auth — verify JWTs from Clerk, WorkOS AuthKit, Auth0, Supabase or any OIDC issuer against their JWKS and feed the identity into ctx.auth and RLS via a resolveIdentity adapter.
+---
+
+`@lunora/jwt-auth` turns an external identity provider's JWT into a Lunora
+identity. The provider owns users and sessions. The Worker verifies each
+request's token against the provider's JWKS. The verified user becomes
+`ctx.auth` for every query, mutation and action, and feeds RLS and live
+subscriptions.
+
+```sh
+pnpm add @lunora/jwt-auth
+```
+
+It is **experimental**: the API may change before it graduates. The guide is
+[External auth](/docs/concepts/external-auth). This page is the API reference.
+
+## `jwtIdentityResolver(options)`
+
+Returns a `resolveIdentity`-compatible function.
+
+| Option           | Default                   | Meaning                                                                                                                                                                                          |
+| ---------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `issuer`         | —                         | Expected `iss` (string or list). Without `jwksUrl`, the JWKS is discovered from the first issuer's `/.well-known/openid-configuration`; that issuer must be https and the document must name it. |
+| `jwksUrl`        | —                         | The provider's JWKS (https). One of `issuer` / `jwksUrl` / `keySet` is required.                                                                                                                 |
+| `audience`       | none                      | Expected `aud`. Set it whenever the provider issues one.                                                                                                                                         |
+| `algorithms`     | every asymmetric JOSE alg | Allowed signing algorithms.                                                                                                                                                                      |
+| `requiredClaims` | `["exp"]`                 | Claims the token must carry.                                                                                                                                                                     |
+| `token`          | `bearerToken`             | `(request) => string \| null \| undefined`. See `headerToken(name)`, `cookieToken(name)` and `firstToken(...sources)`.                                                                           |
+| `claims`         | none                      | `(payload) => Record \| null`: extra identity claims. `null` refuses the token. A returned `userId` overrides `sub`.                                                                             |
+| `clockTolerance` | `0`                       | Seconds of skew allowed on `exp` / `nbf` (and on `iat`, beyond its own 60 s floor). The forwarded `exp` includes it.                                                                             |
+| `onError`        | —                         | Observes a present-but-invalid token. Never fires for a missing one.                                                                                                                             |
+| `keySet`         | remote JWKS               | A public key (`importSPKI`, `importJWK`) or key-set getter (`createLocalJWKSet`). No HMAC secrets.                                                                                               |
+
+The identity is `{ userId: sub, exp: exp + clockTolerance, ...claims(payload) }`.
+These cases resolve to `null` (anonymous):
+
+- no token;
+- a token that fails verification;
+- a token with no `sub`;
+- a token that `claims` refuses.
+
+A correctly signed token whose only fault is a past `exp` keeps its identity.
+The runtime then answers `TOKEN_EXPIRED`. Missing configuration throws when the
+resolver is created.
+
+One remote key set is cached per JWKS URL per isolate. An unknown `kid` refetches
+it once, which handles key rotation. A token whose `iat` lies more than 60 s
+(or `clockTolerance`, if larger) in the future is refused (`jose` checks `iat`
+only with `maxTokenAge`).
+
+With the default token source the resolver reads only `Authorization`, so
+`memoizeIdentity`'s default `Authorization`/`Cookie` cache key is safe. A
+custom `token` that reads another header needs a cache key that includes it.
+
+## `jwtVerifier(options)` and `verifyJwt(token, options)`
+
+The verify step the resolver is built on, shared with
+`@lunora/cloudflare-access`. `jwtVerifier` takes the same options except
+`claims` and returns `(request) => Promise<{ payload, expired } | undefined>`:
+`undefined` for no token or a failed verification, `expired: true` for a
+genuine token whose only fault is a past `exp`. `verifyJwt` verifies one
+token and throws `jose`'s error on any failure.
+
+## Presets
+
+```ts
+import { auth0, clerk, supabase, workos } from "@lunora/jwt-auth";
+
+clerk({ publishableKey: env.CLERK_PUBLISHABLE_KEY, authorizedParties: env.CLERK_AUTHORIZED_PARTIES }); // "https://a.example,https://b.example" or an array
+workos({ clientId: env.WORKOS_CLIENT_ID });
+auth0({ domain: "acme.us.auth0.com", audience: "https://api.example.com" });
+supabase({ projectUrl: "https://<ref>.supabase.co" });
+```
+
+| Preset     | Verifies                                                                                                                                                                                                                                       | Identity claims                                                                                                                            |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `clerk`    | RS256, `iss` = Frontend API; `azp` ∈ `authorizedParties` (required, non-empty; an `azp`-less token passes); refuses `sts: "pending"`; 5 s clock skew. Bearer, then the `__session` cookie.                                                     | `orgId`, `orgSlug`, `orgRole` (`org:admin`), `orgPermissions` (`org:<feature>:<perm>`, decoded from v2 `fea`/`o.per`/`o.fpm`), `sessionId` |
+| `workos`   | RS256, `iss` = `https://api.workos.com`, `…/` or `…/user_management/<clientId>` (or the same on `authDomain`); JWKS from that host; user access tokens only (`sid`, `auth_time`, no `sub_type`, user `sub_profile`); `client_id` = `clientId`. | `orgId`, `role`, `orgRoles`, `permissions`, `entitlements`, `featureFlags`, `sessionId`, `impersonator`                                    |
+| `auth0`    | RS256, `iss` = `https://<domain>/`, `aud` = `audience`. Refuses machine and agent tokens (`gty`, `@clients` subject, non-user `sub_profile`) unless `allowClientCredentials`.                                                                  | `orgId`, `permissions`, `scopes`                                                                                                           |
+| `supabase` | ES256/RS256, `iss` = `<project>/auth/v1`, `aud` = `authenticated`. Refuses anonymous sign-ins unless `allowAnonymousUsers`.                                                                                                                    | `email`, `role`, `aal`, `isAnonymous`, `sessionId`                                                                                         |
+
+Every preset also takes `claims`, `clockTolerance`, `onError`, `keySet` and
+`token`. Its own claims mapping runs first, and yours is merged over it.
+
+No preset fills `roles`, the app-wide claim RLS role checks read. Clerk and
+WorkOS roles belong to the active organization (any Clerk user can create one
+and be its admin), so check them together with `orgId`, or map app roles
+deliberately with `claims`.
+
+For Clerk, verify with no network call by importing the PEM **JWKS Public
+Key** from the dashboard with `importSPKI(pem, "RS256")` and passing it as
+`keySet`. Keep using the session token, not a JWT template: template tokens
+lack the session-bound claims (`sid`, `v`, `fea`) the preset reads.
+
+Sources: Clerk
+[manual JWT verification](https://clerk.com/docs/guides/sessions/manual-jwt-verification),
+[session tokens](https://clerk.com/docs/guides/sessions/session-tokens) and
+`@clerk/shared`'s `jwtPayloadParser.ts`.
+WorkOS [sessions](https://workos.com/docs/authkit/sessions),
+[session tokens](https://workos.com/docs/reference/authkit/session-tokens) and
+workos-node's `verifyAccessToken`.
+Auth0
+[validate access tokens](https://auth0.com/docs/secure/tokens/access-tokens/validate-access-tokens)
+and [access token profiles](https://auth0.com/docs/secure/tokens/access-tokens/access-token-profiles).
+Supabase [signing keys](https://supabase.com/docs/guides/auth/signing-keys),
+[JWT fields](https://supabase.com/docs/guides/auth/jwt-fields) and
+[anonymous sign-ins](https://supabase.com/docs/guides/auth/auth-anonymous).
+
+## Platform
+
+The resolver uses only `fetch`, WebCrypto (through `jose`) and module-level
+caches. It runs wherever the Worker runs and needs no binding, so it adds no
+`PlatformCapabilities` entry.

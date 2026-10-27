@@ -217,6 +217,7 @@ overrides:
   "@lunora/fingerprint": "workspace:*"
   "@lunora/flags": "workspace:*"
   "@lunora/hyperdrive": "workspace:*"
+  "@lunora/jwt-auth": "workspace:*"
   "@lunora/mail": "workspace:*"
   "@lunora/mcp": "workspace:*"
   "@lunora/notify": "workspace:*"
@@ -868,6 +869,10 @@ catalogs:
     vitest: 4.1.11
     zod: 4.6.6
   auth:
+    # External identity providers' React SDKs, used by examples/clerk-auth and
+    # examples/workos-auth. authkit-react is pre-1.0, so a minor can break: exact.
+    "@clerk/react": 6.18.0
+    "@workos-inc/authkit-react": 0.16.3
     # EXACT-pinned (no caret). The whole better-auth family versions in lockstep —
     # the plugin packages peer on an exact `better-auth`/`@better-auth/core`
     # version — so a caret on one member and not another resolves a split tree.

@@ -16530,12 +16530,10 @@ abstract class ShardDO {
         // bytes against the attachment's 16 KiB ceiling.
         const ip = request.headers.get("x-lunora-client-ip") ?? undefined;
 
-        // A route that requires a verified session refuses an anonymous upgrade
-        // here, after the worker resolved identity and BEFORE the pair is even
-        // allocated — so nothing unauthenticated is ever registered. The default
-        // route allows anonymous sockets, exactly like every other surface.
-        if (route?.auth === true && userId === undefined) {
-            return new Response("Unauthorized", { status: 401 });
+        const routeRefusal = route === undefined ? undefined : this.refuseRouteUpgrade(route, userId, expiresAt);
+
+        if (routeRefusal !== undefined) {
+            return routeRefusal;
         }
 
         // Resolve the admin flag BEFORE accepting the socket: the (async)
@@ -16628,6 +16626,31 @@ abstract class ShardDO {
         } catch {
             return false;
         }
+    }
+
+    /**
+     * A route upgrade refused before anything it would run is registered. A route that requires a verified session
+     * refuses an anonymous caller with a plain 401 (the default route allows anonymous sockets, like every other
+     * surface). A credential that had already lapsed (an expired-but-genuine JWT forwarded to signal a refresh) would
+     * otherwise run the route's `onOpen` as its user, since that fires straight from the upgrade, before any frame the
+     * per-frame expiry check sees. A browser cannot read a failed handshake's status, so that socket is accepted and
+     * closed at once with the `TOKEN_EXPIRED` / 4001 every other expired socket gets, which is what makes the client
+     * refresh its token.
+     */
+    private refuseRouteUpgrade(route: { auth: boolean }, userId: string | undefined, expiresAt: number | undefined): Response | undefined {
+        if (route.auth && userId === undefined) {
+            return new Response("Unauthorized", { status: 401 });
+        }
+
+        if (userId === undefined || !isIdentityExpired(expiresAt)) {
+            return undefined;
+        }
+
+        const { client, server } = this.socketHost.newPair();
+
+        dropExpiredCredentialSocket(this.socketHost.accept(server, { ...(expiresAt === undefined ? {} : { expiresAt }), subs: {} } satisfies SocketAttachment));
+
+        return this.socketHost.upgradeResponse(client);
     }
 
     /**

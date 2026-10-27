@@ -4,7 +4,7 @@
  * with injected prompts + the local registry root (no network). Proves the
  * offer actually applies the chosen registry item into the new project.
  */
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -78,5 +78,48 @@ describe("lunora init — interactive offer", () => {
         expect(result.code).toBe(0);
         expect(existsSync(join(workdir, "app2", "lunora", "auth", "index.ts"))).toBe(false);
         expect(lines.join("\n")).toMatch(/lunora add/);
+    });
+
+    // Every template: the resolver must land where that template's worker reads it, or init must say it could not.
+    it.each([
+        ["analog", "lunora/server.ts"],
+        ["astro", "src/server.ts"],
+        ["expo", undefined],
+        ["next", "lunora/server.ts"],
+        ["nuxt", "lunora/server.ts"],
+        ["rspack-react", "src/server.ts"],
+        ["solid-v2", "src/server.ts"],
+        ["standalone", "src/server.ts"],
+        ["sveltekit", "lunora/app.ts"],
+        ["tanstack-start-react", "lunora.config.ts"],
+        ["tanstack-start-react-rspack", "src/app.ts"],
+        ["tanstack-start-solid", "lunora.config.ts"],
+        ["vinext", "lunora.config.ts"],
+        ["vinext-pages", "lunora.config.ts"],
+    ] as const)("wires --auth=clerk into the %s template (%s)", async (template, wiredFile) => {
+        expect.assertions(4);
+
+        const { lines, logger } = makeLogger();
+        const result = await runInitCommand({
+            auth: "clerk",
+            cwd: workdir,
+            from: templatesRoot,
+            logger,
+            name: template,
+            registryFrom: registryRoot,
+            templateType: template,
+            yes: true,
+        });
+        const app = join(workdir, template);
+
+        expect(result.code).toBe(0);
+        expect(existsSync(join(app, "lunora", "identity", "clerk.ts"))).toBe(true);
+        expect(readFileSync(join(app, ".dev.vars.example"), "utf8")).toContain("CLERK_AUTHORIZED_PARTIES=");
+
+        // Wired into the file the template's worker reads, or (expo builds its worker with createWorker) a warning saying what to add.
+        const evidence =
+            wiredFile === undefined ? lines.filter((line) => line.startsWith("warn: auth:")).join("\n") : readFileSync(join(app, wiredFile), "utf8");
+
+        expect(evidence).toContain("resolveIdentity: clerkIdentity(env)");
     });
 });

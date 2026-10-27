@@ -379,6 +379,7 @@ interface IndexSnapshot {
 interface InitCommandOptions {
     add?: string;
     allowUnsafeSource?: boolean;
+    auth?: string;
     ci?: CiProvider;
     cwd?: string;
     dryRun?: boolean;
@@ -394,7 +395,7 @@ interface InitCommandOptions {
     name?: string;
     overlayBaseFrom?: string;
     packageManagerProbe?: PackageManagerProbe;
-    prompt?: Pick<OfferDeps, "multiSelect" | "select" | "text">;
+    prompt?: Partial<Pick<OfferDeps, "selectAuth">> & Pick<OfferDeps, "multiSelect" | "select" | "text">;
     ref?: string;
     registryFrom?: string;
     registrySource?: string;
@@ -940,6 +941,12 @@ public API and is gated as one. Listed once per package, sorted by name.
 type ApiSpec = NonNullable<CodegenOptions["apiSpec"]>;
 ```
 
+### `AuthChoice` (type)
+
+```ts
+type AuthChoice = ExternalAuthProvider | "lunora" | "none";
+```
+
 ### `AuthUiItem` (type)
 
 ```ts
@@ -1091,10 +1098,17 @@ interface ExportCommandData {
 }
 ```
 
+### `ExternalAuthProvider` (type)
+
+```ts
+type ExternalAuthProvider = "auth0" | "clerk" | "workos";
+```
+
 ### `FeatureApply` (interface)
 
 ```ts
 interface FeatureApply {
+    externalAuth?: ExternalAuthProvider;
     label: string;
     names: ReadonlyArray<string>;
     transformManifest?: OfferTransformManifest;
@@ -1260,6 +1274,7 @@ type LongLivedSpawner = (descriptor: LongLivedDescriptor, onLine: (line: string,
 ```ts
 interface OfferDeps {
     applyAll: (plans: ReadonlyArray<FeatureApply>) => Promise<boolean>;
+    auth?: AuthChoice;
     interactive: boolean;
     logger: Logger;
     multiSelect: (message: string, options: ReadonlyArray<{
@@ -1279,6 +1294,13 @@ interface OfferDeps {
     }>, settings?: {
         default?: FeatureItem;
     }) => Promise<FeatureItem | undefined>;
+    selectAuth: (message: string, options: ReadonlyArray<{
+        description?: string;
+        label: string;
+        value: AuthChoice;
+    }>, settings?: {
+        default?: AuthChoice;
+    }) => Promise<AuthChoice | undefined>;
     text: (message: string, settings?: {
         default?: string;
         placeholder?: string;

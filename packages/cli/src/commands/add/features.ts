@@ -22,8 +22,8 @@ type FeatureItem = "auth" | "auth-auth0" | "auth-clerk" | AuthUiItem | "mail";
 /** The auth-provider choices offered for `add auth` / the init auth prompt. Each value is a registry item name. */
 const AUTH_PROVIDER_OPTIONS: ReadonlyArray<SelectOption<FeatureItem>> = [
     { description: "Email + password on better-auth (default)", label: "Email & password", value: "auth" },
-    { description: "Clerk-hosted auth", label: "Clerk", value: "auth-clerk" },
-    { description: "Auth0 (OIDC)", label: "Auth0", value: "auth-auth0" },
+    { description: "Clerk as an OAuth login; Lunora (better-auth) owns the session", label: "Clerk", value: "auth-clerk" },
+    { description: "Auth0 as an OIDC login; Lunora (better-auth) owns the session", label: "Auth0", value: "auth-auth0" },
 ];
 
 /** Default auth item when the provider prompt is skipped (non-interactive / `--yes`). */

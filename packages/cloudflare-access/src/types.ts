@@ -1,4 +1,4 @@
-import type { JWTPayload, JWTVerifyGetKey, KeyObject } from "jose";
+import type { CryptoKey, JWTPayload, JWTVerifyGetKey, KeyObject } from "jose";
 
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import type { AccessRoleMap } from "./identity-groups";
@@ -82,7 +82,7 @@ export interface ResolvedAccessIdentity extends ResolvedIdentityLike {
  * or a single public key (handy for tests that mint their own RS256 tokens).
  * When omitted, a cached remote JWKS is built from `teamDomain`.
  */
-export type AccessKeySet = CryptoKey | JWTVerifyGetKey | KeyObject | Uint8Array;
+export type AccessKeySet = CryptoKey | JWTVerifyGetKey | KeyObject;
 
 /** Options for `verifyAccessJwt`. */
 export interface VerifyAccessJwtOptions {
@@ -180,7 +180,9 @@ export interface CreateAccessResolverOptions extends AccessJwtFallbackOptions {
      * `userId` and the runtime can answer `TOKEN_EXPIRED` for it.
      *
      * It is merged OVER the `roles` claim {@link CreateAccessResolverOptions.roles}
-     * mints, so returning `roles` here replaces the mapped set outright.
+     * mints, so returning `roles` here replaces the mapped set outright. `exp`
+     * and `expiresAtMs` are ignored: only the verified token's `exp` sets the
+     * identity's expiry.
      */
     mapClaims?: (claims: AccessClaims) => Record<string, unknown>;
 

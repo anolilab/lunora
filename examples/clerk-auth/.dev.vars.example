@@ -1,0 +1,7 @@
+# Copy to `.dev.vars` (gitignored) before `pnpm dev`. Read by the Worker.
+# Your Clerk publishable key (Dashboard → API keys). Not a secret; it names the
+# Frontend API that issues and signs session tokens.
+CLERK_PUBLISHABLE_KEY=pk_test_replace-me
+# Comma-separated origins your frontend runs on (checked against the token azp).
+# Use the port `pnpm dev` prints: a linked git worktree runs on a shifted one.
+CLERK_AUTHORIZED_PARTIES=http://localhost:5173
