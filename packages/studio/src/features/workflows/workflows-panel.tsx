@@ -80,7 +80,7 @@ interface SendEventFormProps {
 
 /** Deliver `{ type, payload }` to a waiting instance of the selected workflow over the `sendWorkflowEvent` admin RPC. */
 const SendEventForm = ({ eventTypes, exportName, onSent }: SendEventFormProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [idInput, setIdInput] = useState("");
