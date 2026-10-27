@@ -539,12 +539,16 @@ const pageOrderKey = async (exec: SqlContextExec, dialect: SqlDialect, schema: S
     // a keyless external table is ordered by every column: ordering by one
     // column alone leaves ties in an undefined order, and OFFSET pages would
     // then overlap or skip rows. Rows equal in every column are indistinguishable.
-    return dialect.name === "sqlite"
-        ? sql.raw("rowid")
-        : sql.join(
-              columns.map((name) => sql.identifier(name)),
-              sql`, `,
-          );
+    // Postgres has no ordering for some types (native `json`), so its columns are
+    // compared as text: the order only has to be stable, not meaningful.
+    if (dialect.name === "sqlite") {
+        return sql.raw("rowid");
+    }
+
+    return sql.join(
+        columns.map((name) => (dialect.name === "postgres" ? sql`${sql.identifier(name)}::text` : sql.identifier(name))),
+        sql`, `,
+    );
 };
 
 /**

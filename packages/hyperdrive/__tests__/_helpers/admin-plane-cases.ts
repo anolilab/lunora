@@ -263,6 +263,17 @@ const keylessTablePagingCase = (target: AdminPlaneTarget) => async (): Promise<v
     expect(pages.flatMap((page) => page.rows.map((row) => row["n"]))).toStrictEqual([1, 2, 3]);
 };
 
+const keylessJsonTablePagingCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
+    // Postgres has no ordering for native `json`, so the every-column fallback must still page such a table.
+    await target.query("CREATE TABLE ext_events (kind VARCHAR(8), meta JSON)");
+    await target.query(`INSERT INTO ext_events (kind, meta) VALUES ('b', '{"n":2}'), ('a', '{"n":1}')`);
+
+    const introspector = createHyperdriveGlobalIntrospector(target.engine, target.exec, schema);
+    const page = await introspector.readTablePage({ limit: 10, offset: 0, table: "ext_events" });
+
+    expect(page.rows.map((row) => row["kind"])).toStrictEqual(["a", "b"]);
+};
+
 const cdcCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
     // No changelog yet is "nothing has changed", not an error, and the cursor stays put.
     await expect(readHyperdriveGlobalCdc(target.engine, target.exec, { sinceSeq: 7 })).resolves.toStrictEqual({ changes: [], cursor: 7 });
@@ -296,6 +307,7 @@ const adminPlaneCases = (target: AdminPlaneTarget): [string, () => Promise<void>
     ["pages, filters and facets a schema table for the studio browser", introspectorCase(target)],
     ["shows external tables keyed by their own primary key, with secrets masked and foreign keys named", externalTablesCase(target)],
     ["pages a keyless external table in a stable order even when its first column ties", keylessTablePagingCase(target)],
+    ["pages a keyless external table that has a native json column", keylessJsonTablePagingCase(target)],
     ["reads and replays the global changelog", cdcCase(target)],
 ];
 
