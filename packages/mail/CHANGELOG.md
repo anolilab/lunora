@@ -1,3 +1,14 @@
+## @lunora/mail [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.126...@lunora/mail@1.0.0-alpha.127) (2026-10-27)
+
+### Build System
+
+* **deps:** Bump postal-mime from 3.0.1 to 4.0.8 ([#1328](https://github.com/anolilab/lunora/issues/1328)) ([343ef6a](https://github.com/anolilab/lunora/commit/343ef6ad63cd9bddee47193dfee64f5c3eb8c5c1))
+
+
+### Dependencies
+
+* **postal-mime:** 3.0.1 → 4.0.8
+
 ## @lunora/mail [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.125...@lunora/mail@1.0.0-alpha.126) (2026-10-27)
 
 
