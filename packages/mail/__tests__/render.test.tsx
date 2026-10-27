@@ -29,6 +29,23 @@ describe("renderEmail", () => {
         expect(result.text).not.toContain("<h1>");
     });
 
+    it("renders the element once for both the HTML and the plain text", async () => {
+        expect.assertions(3);
+
+        let renders = 0;
+        const Counted = () => {
+            renders += 1;
+
+            return <p>render {String(renders)}</p>;
+        };
+
+        const result = await renderEmail(<Counted />);
+
+        expect(renders).toBe(1);
+        expect(result.html).toContain("render <!-- -->1");
+        expect(result.text).toBe("render 1");
+    });
+
     it("createMailer.send() renders react templates before handing off to transport", async () => {
         expect.assertions(3);
 
