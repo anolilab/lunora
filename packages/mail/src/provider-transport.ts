@@ -66,6 +66,15 @@ const reasonOf = (rawError: unknown): string => {
 /** A provider error code that is an HTTP status, as `@visulima/email` writes it (`"429"`). */
 const THREE_DIGIT_STATUS = /^\d{3}$/;
 
+/** The HTTP status a provider error's `code` carries, as a number: the number itself, or a three-digit string. */
+const httpStatusOf = (code: unknown): number | undefined => {
+    if (typeof code === "number") {
+        return code;
+    }
+
+    return typeof code === "string" && THREE_DIGIT_STATUS.test(code) ? Number(code) : undefined;
+};
+
 /**
  * Whether a provider's failed send is worth repeating. `@visulima/email` puts an
  * HTTP status on the error as a numeric `code`, so 408, 429 and 5xx are
@@ -80,10 +89,9 @@ const isRetryableProviderError = (rawError: unknown): boolean => {
     }
 
     const code = "code" in rawError ? rawError.code : undefined;
+    const status = httpStatusOf(code);
 
-    if (typeof code === "string" && THREE_DIGIT_STATUS.test(code)) {
-        const status = Number(code);
-
+    if (status !== undefined && status >= 100 && status <= 599) {
         return status === 408 || status === 429 || status >= 500;
     }
 

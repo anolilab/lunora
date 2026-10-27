@@ -124,6 +124,12 @@ describe("resend transport error mapping", () => {
             expect(error).toBeInstanceOf(MailSendError);
         });
 
+        it("refuses a 422 that carries its status as a number, not a string", async () => {
+            expect.assertions(1);
+
+            expect(isRetryableMailError(await failure(Object.assign(new Error("Request failed with status 422"), { code: 422 })))).toBe(false);
+        });
+
         it("retries a 500 from the API", async () => {
             expect.assertions(1);
 
