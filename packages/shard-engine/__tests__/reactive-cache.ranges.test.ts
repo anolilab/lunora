@@ -145,7 +145,7 @@ describe("range-precise reactive invalidation", () => {
         await readChannel("A");
         await readChannel("B");
 
-        await writer.patch(moved, { channelId: "B" });
+        await writer.patch("messages", moved, { channelId: "B" });
 
         // The row left A and entered B; a subscriber on either side sees a
         // different result, so neither cached entry may survive. Only the

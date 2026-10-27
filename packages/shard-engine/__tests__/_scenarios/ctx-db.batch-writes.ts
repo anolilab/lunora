@@ -174,7 +174,7 @@ const runBatchWriteScenarios = (factory: () => SqlHarness): void => {
                 const { writer } = setupWriter();
                 const ids = (await writer.insertMany("messages", [row(1), row(2), row(3)])) as string[];
 
-                const result = await writer.deleteMany(ids);
+                const result = await writer.deleteMany("messages", ids);
 
                 expect(result).toStrictEqual({ deleted: 3 });
                 await expect(writer.findMany("messages", {}).then((p) => p.page)).resolves.toHaveLength(0);
@@ -186,7 +186,66 @@ const runBatchWriteScenarios = (factory: () => SqlHarness): void => {
                 const { writer } = setupWriter();
                 const ids = Array.from({ length: 501 }, (_, index) => `m${String(index)}`);
 
-                await expect(writer.deleteMany(ids)).rejects.toThrow(/exceeds the limit of 500/);
+                await expect(writer.deleteMany("messages", ids)).rejects.toThrow(/exceeds the limit of 500/);
+            });
+
+            it.each([-1, 1.5, Number.NaN])("deleteWhere rejects limit %s before reading", async (limit) => {
+                expect.assertions(2);
+
+                const { writer } = setupWriter();
+                const findMany = vi.spyOn(writer, "findMany");
+
+                await expect(writer.deleteWhere("messages", { channelId: "c1" }, { limit })).rejects.toMatchObject({
+                    code: "BATCH_LIMIT_EXCEEDED",
+                    message: "deleteWhere: batch limit must be a non-negative integer",
+                });
+                expect(findMany).not.toHaveBeenCalled();
+
+                findMany.mockRestore();
+            });
+
+            it("deleteWhere stops reading one row past the cap before refusing an over-cap match", async () => {
+                expect.assertions(3);
+
+                const { writer } = setupWriter();
+
+                await writer.insertMany(
+                    "messages",
+                    Array.from({ length: 600 }, (_, index) => row(index)),
+                    { limit: 1000 },
+                );
+
+                const findMany = vi.spyOn(writer, "findMany");
+
+                await expect(writer.deleteWhere("messages", { channelId: "c1" })).rejects.toThrow(/batch of 600 exceeds the limit of 500/);
+
+                const fetched = await (findMany.mock.results[0]?.value as ReturnType<BatchWriter["findMany"]>);
+
+                expect(fetched.page.length).toBeLessThanOrEqual(501);
+
+                findMany.mockRestore();
+
+                // Nothing was deleted — the cap is checked before any write.
+                await expect(writer.findMany("messages", { limit: 1000 }).then((page) => page.page)).resolves.toHaveLength(600);
+            });
+
+            it("an Infinity limit lifts the cap on deleteWhere and deleteMany", async () => {
+                expect.assertions(3);
+
+                const { writer } = setupWriter();
+
+                await writer.insertMany(
+                    "messages",
+                    Array.from({ length: 600 }, (_, index) => row(index)),
+                    { limit: 1000 },
+                );
+
+                await expect(writer.deleteWhere("messages", { channelId: "c1" }, { limit: Number.POSITIVE_INFINITY })).resolves.toStrictEqual({ deleted: 600 });
+                await expect(writer.findMany("messages", { limit: 1000 }).then((page) => page.page)).resolves.toHaveLength(0);
+
+                const ids = Array.from({ length: 501 }, (_, index) => `m${String(index)}`);
+
+                await expect(writer.deleteMany("messages", ids, { limit: Number.POSITIVE_INFINITY })).resolves.toStrictEqual({ deleted: 501 });
             });
 
             it("deleteWhere removes every row matching the predicate", async () => {
@@ -244,6 +303,7 @@ const runBatchWriteScenarios = (factory: () => SqlHarness): void => {
                 const ids = (await writer.insertMany("messages", [row(1), row(2)])) as string[];
 
                 const result = await writer.patchMany(
+                    "messages",
                     ids.map((id, index) => {
                         return { id, patch: { text: `patched-${String(index)}` } };
                     }),
@@ -264,7 +324,31 @@ const runBatchWriteScenarios = (factory: () => SqlHarness): void => {
                     return { id: `m${String(index)}`, patch: { text: "x" } };
                 });
 
-                await expect(writer.patchMany(patches)).rejects.toThrow(/exceeds the limit of 500/);
+                await expect(writer.patchMany("messages", patches)).rejects.toThrow(/exceeds the limit of 500/);
+            });
+
+            it("patchWhere stops reading one row past the cap before refusing an over-cap match", async () => {
+                expect.assertions(2);
+
+                const { writer } = setupWriter();
+
+                await writer.insertMany(
+                    "messages",
+                    Array.from({ length: 600 }, (_, index) => row(index)),
+                    { limit: 1000 },
+                );
+
+                const findMany = vi.spyOn(writer, "findMany");
+
+                await expect(writer.patchWhere("messages", { patch: { channelId: "patched" }, where: { channelId: "c1" } })).rejects.toThrow(
+                    /batch of 600 exceeds the limit of 500/,
+                );
+
+                const fetched = await (findMany.mock.results[0]?.value as ReturnType<BatchWriter["findMany"]>);
+
+                expect(fetched.page.length).toBeLessThanOrEqual(501);
+
+                findMany.mockRestore();
             });
 
             it("patchWhere applies the same patch to every row matching the predicate", async () => {

@@ -208,7 +208,7 @@ export const setText = defineMutator({
     args: { id: v.id("nodes"), text: v.string(), userId: v.optional(v.string()) },
     owner: "userId",
     // `args.userId` IS the verified identity here — nothing was trusted from the client.
-    server: (ctx, { id, text }) => ctx.db.patch(id, { text }),
+    server: (ctx, { id, text }) => ctx.db.patch("nodes", id, { text }),
 });
 ```
 
@@ -238,14 +238,14 @@ write endpoint that ties no write to its caller.
 ### Write only the columns you change
 
 The blessed pattern for a mutator's `server` impl is to write **just the columns
-it changes** with `ctx.db.patch(id, { field })`, never to read a row and write
-the whole object back with `ctx.db.replace(id, document)`:
+it changes** with `ctx.db.patch(table, id, { field })`, never to read a row and write
+the whole object back with `ctx.db.replace(table, id, document)`:
 
 ```ts title="lunora/mutators.ts"
 export const renameChannel = defineMutator({
     args: { id: v.id("channels"), name: v.string() },
     // ✅ Merges at the column level — a concurrent topic edit survives.
-    server: (ctx, { id, name }) => ctx.db.patch(id, { name }),
+    server: (ctx, { id, name }) => ctx.db.patch("channels", id, { name }),
 });
 ```
 

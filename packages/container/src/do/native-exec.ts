@@ -47,6 +47,10 @@ const collect = async (exec: ContainerExec, body: ExecRequestBody, startEnv: Rea
     const exitCode = process.exitCode.finally(() => {
         exited = true;
     });
+
+    // The overflow/timeout returns never await it; same guard as `spawn.ts`.
+    exitCode.catch(() => undefined);
+
     const stop = (): void => {
         readers.abort();
 

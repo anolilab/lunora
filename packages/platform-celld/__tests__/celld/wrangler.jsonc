@@ -13,12 +13,19 @@
             { "name": "ECHO", "class_name": "EchoCell" },
             { "name": "VECTORS", "class_name": "VectorCell" },
             { "name": "LIVE_SHARD", "class_name": "TckShard" },
+            { "name": "SCHEDULER", "class_name": "TckScheduler" },
+            { "name": "SHARD_REGISTRY", "class_name": "ShardRegistryDO" },
         ],
     },
     "migrations": [
         { "tag": "v1", "new_sqlite_classes": ["TckCell", "EchoCell", "VectorCell"] },
         { "tag": "v2", "new_sqlite_classes": ["TckShard"] },
+        { "tag": "v3", "new_sqlite_classes": ["TckScheduler", "ShardRegistryDO"] },
     ],
+    // SchedulerDO refuses a schedule without an origin to dispatch to. The TCK
+    // records deliveries instead of sending them (TckScheduler), so it is never called.
+    // `ShardRegistryDO` refuses any request not signed with LUNORA_RELAY_SECRET (the registry check).
+    "vars": { "LUNORA_ORIGIN_URL": "http://127.0.0.1:1", "LUNORA_RELAY_SECRET": "tck-relay-secret" },
     // The binding-backed checks (tck-bindings.ts). The queue's consumer is this
     // same worker, which also exports `fetch` — the topology a Lunora app has.
     "d1_databases": [{ "binding": "DB", "database_name": "tck", "database_id": "tck" }],

@@ -76,6 +76,12 @@ describe(toolchainExecArgs, () => {
 });
 
 describe(projectCelldConfig, () => {
+    it("refuses to give an id-less binding a fleet-wide id when the Worker has no name", () => {
+        expect.assertions(1);
+
+        expect(() => projectCelldConfig({ kv_namespaces: [{ binding: "CACHE" }] })).toThrow(/needs the Worker's `name`/u);
+    });
+
     it("turns an exports workflow into a workflows[] binding named after the class", () => {
         expect.assertions(2);
 
@@ -160,6 +166,58 @@ describe(projectCelldConfig, () => {
 
         expect(projectCelldConfig({ send_email: [], vectorize: [] }).dropped).toStrictEqual([]);
     });
+
+    // celld takes a D1 id as the fleet-wide identity: every project left with the
+    // Cloudflare placeholder would share one database.
+    it("gives a D1 database still on the Cloudflare placeholder its name as the id", () => {
+        expect.assertions(1);
+
+        const { config } = projectCelldConfig({
+            d1_databases: [
+                { binding: "DB", database_id: "<replace-with-d1-create-id>", database_name: "app" },
+                { binding: "OTHER", database_id: "real-id", database_name: "other" },
+            ],
+        });
+
+        expect(config["d1_databases"]).toStrictEqual([
+            { binding: "DB", database_id: "app", database_name: "app" },
+            { binding: "OTHER", database_id: "real-id", database_name: "other" },
+        ]);
+    });
+
+    it("gives a placeholder D1 database with no name an id of its own, per worker and binding", () => {
+        expect.assertions(1);
+
+        const { config } = projectCelldConfig({
+            d1_databases: [{ binding: "DB", database_id: "<replace-with-d1-create-id>" }],
+            name: "app",
+        });
+
+        expect(config["d1_databases"]).toStrictEqual([{ binding: "DB", database_id: "app-DB" }]);
+    });
+
+    it("keeps KV bindings that differ only by case apart", () => {
+        expect.assertions(1);
+
+        const { config } = projectCelldConfig({ kv_namespaces: [{ binding: "CACHE" }, { binding: "cache" }], name: "app" });
+
+        expect(config["kv_namespaces"]).toStrictEqual([
+            { binding: "CACHE", id: "app-CACHE" },
+            { binding: "cache", id: "app-cache" },
+        ]);
+    });
+
+    it("gives each id-less KV namespace its own id, keeping the ids it already has", () => {
+        expect.assertions(1);
+
+        const { config } = projectCelldConfig({ kv_namespaces: [{ binding: "KV" }, { binding: "CACHE" }, { binding: "OWN", id: "sessions" }], name: "app" });
+
+        expect(config["kv_namespaces"]).toStrictEqual([
+            { binding: "KV", id: "app-KV" },
+            { binding: "CACHE", id: "app-CACHE" },
+            { binding: "OWN", id: "sessions" },
+        ]);
+    });
 });
 
 describe("celld config projection on disk", () => {
@@ -193,7 +251,7 @@ describe("celld config projection on disk", () => {
 
     // `wrangler dev --var WORKER_ENV:development` on Cloudflare; without it the
     // runtime treats the dev worker as production (live mail, no capture).
-    it("marks the dev projection as development, without overriding a configured value", () => {
+    it("marks the dev projection as development, over a configured value as wrangler's --var does", () => {
         expect.assertions(2);
 
         writeFileSync(join(root, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", vars: { API: "x" } }), "utf8");
@@ -204,7 +262,19 @@ describe("celld config projection on disk", () => {
         writeFileSync(join(root, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", vars: { WORKER_ENV: "staging" } }), "utf8");
         resolveDeployDriver("celld").projectConfig?.(root, "dev").write();
 
-        expect(JSON.parse(readFileSync(join(root, ".celld.wrangler.json"), "utf8"))).toMatchObject({ vars: { WORKER_ENV: "staging" } });
+        expect(JSON.parse(readFileSync(join(root, ".celld.wrangler.json"), "utf8"))).toMatchObject({ vars: { WORKER_ENV: "development" } });
+    });
+
+    // The app projection carries nothing the committed wrangler config does not, so
+    // an unwritable `.gitignore` (here a directory: EISDIR even as root) must not stop it.
+    it("still writes the app projection when .gitignore cannot be updated", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(root, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts" }), "utf8");
+        mkdirSync(join(root, ".gitignore"));
+        resolveDeployDriver("celld").projectConfig?.(root, "deploy").write();
+
+        expect(existsSync(join(root, ".celld.wrangler.json"))).toBe(true);
     });
 
     it("refuses a source entry outside the project, which celld would resolve against the wrong root", () => {
@@ -267,6 +337,16 @@ describe("celld config projection on disk", () => {
         // Only what the project configured, plus what the projection did to the build.
         expect(projected?.dropped).toStrictEqual(["observability", "no_bundle (celld re-bundles the build output)", "client/.assetsignore (matched no files)"]);
         expect(existsSync(join(root, "dist", "client", ".assetsignore"))).toBe(false);
+    });
+
+    // The build output is no place for a `.gitignore`, and is ignored already.
+    it("writes no .gitignore into a Vite build's output", () => {
+        expect.assertions(1);
+
+        writeViteBuild();
+        resolveDeployDriver("celld").projectConfig?.(root, "deploy").write();
+
+        expect(existsSync(join(root, "dist", ".gitignore"))).toBe(false);
     });
 
     // celld resolves `migrations_dir` against the projection's directory — the
@@ -390,6 +470,34 @@ describe(planCelldServiceConfig, () => {
 
         expect(projected.configPath).toBe(join(root, ".celld.service...-parser.wrangler.json"));
         expect(JSON.parse(readFileSync(projected.configPath, "utf8")).vars).toStrictEqual({ MODE: "local", TOKEN: "secret", WORKER_ENV: "development" });
+    });
+
+    it("keeps a WORKER_ENV the service's .dev.vars sets explicitly", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(root, "services", "parser", ".dev.vars"), `WORKER_ENV=staging\n`);
+
+        const projected = planCelldServiceConfig(root, join(root, "services", "parser", "wrangler.jsonc"));
+
+        projected.write();
+
+        expect(JSON.parse(readFileSync(projected.configPath, "utf8")).vars).toStrictEqual({ WORKER_ENV: "staging" });
+    });
+
+    // The projection inlines the service's `.dev.vars`: with no ignore in place it
+    // must not reach the disk at all.
+    it("writes no service projection when .gitignore cannot be updated", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "services", "parser", ".dev.vars"), `TOKEN=secret\n`);
+        mkdirSync(join(root, ".gitignore"));
+
+        const projected = planCelldServiceConfig(root, join(root, "services", "parser", "wrangler.jsonc"));
+
+        expect(() => {
+            projected.write();
+        }).toThrow(/EISDIR/u);
+        expect(existsSync(projected.configPath)).toBe(false);
     });
 
     it("refuses a service outside the app's folder, which celld cannot resolve from there", () => {

@@ -33,6 +33,7 @@ const fakeDatabase = () => {
         findMany: vi.fn<(table: string) => Promise<{ rows: unknown[] }>>(async () => {
             return { rows: [] };
         }),
+        get: vi.fn<(table: string, id: string) => Promise<null>>(async () => null),
         insert: vi.fn<(table: string, document: Record<string, unknown>) => Promise<string>>(async () => "id-1"),
         normalizeId: (_table: string, id: string) => id,
         query: (table: string) => {
@@ -121,6 +122,25 @@ describe("instrumentDatabase", () => {
         // CLIENT so a collector renders the datastore as a dependency edge.
         expect(spans[0]?.kind).toBe("client");
         expect(spans[0]?.name).toBe("db.findMany orders");
+        expect(spans[0]?.attributes?.["db.collection.name"]).toBe("orders");
+    });
+
+    it("names a by-id call with its table, never its row id", async () => {
+        expect.assertions(2);
+
+        const database = fakeDatabase();
+        const tally = createDatabaseTally();
+        const spans: SpanEvent[] = [];
+        const instrumented = instrumentDatabase(
+            database,
+            deps("spans", tally, (recorded) => {
+                spans.push(recorded);
+            }),
+        );
+
+        await instrumented.get("orders", "row_42");
+
+        expect(spans[0]?.name).toBe("db.get orders");
         expect(spans[0]?.attributes?.["db.collection.name"]).toBe("orders");
     });
 

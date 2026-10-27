@@ -10,7 +10,7 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { authClient } from "./src/auth-client";
 import { Chat } from "./src/Chat";
 import { Login } from "./src/Login";
-import { lunoraClient, setSessionBearer } from "./src/lunora";
+import { lunoraClient } from "./src/lunora";
 
 const styles = StyleSheet.create({
     centered: { alignItems: "center", flex: 1, justifyContent: "center" },
@@ -25,10 +25,9 @@ const Root = (): ReactElement => {
     const { data: session, isPending } = authClient.useSession();
 
     // Bridge the better-auth Expo session into the Lunora client as a bearer
-    // token — HTTP `Authorization` (`setAuthToken`) and the socket upgrade's
-    // `Authorization` (`setSessionBearer`, so the server knows the user at
-    // connect) — re-synced whenever the session changes (sign-in/out). The
-    // session is not the shared `LUNORA_WS_BEARER`, so it never goes in `connect`.
+    // token (`setAuthToken`), re-synced whenever the session changes. It rides
+    // HTTP RPC as `Authorization`, and on native `createLunoraClient` sends it
+    // as the WebSocket upgrade's `Authorization` header too — never in the URL.
     //
     // The user id goes with it as the STABLE subject. Without it the offline
     // queue keys identity on the token bytes, so a routine session-token refresh
@@ -56,7 +55,6 @@ const Root = (): ReactElement => {
                 return;
             }
 
-            setSessionBearer(token);
             lunoraClient.setAuthToken(token, session?.user.id ?? null);
         })();
 

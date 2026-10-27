@@ -1,4 +1,4 @@
-import type { CallExpression, Identifier, PropertyAccessExpression } from "ts-morph";
+import type { CallExpression, Identifier, PropertyAccessExpression, ts } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { isServerSurfaceModule } from "../../module-specifiers";
@@ -294,7 +294,7 @@ const registrationOfFactory = (name: string): ProcedureClassification | undefine
     return lifecycle ? { kind: lifecycleKind(lifecycle), lifecycle, visibility: "internal" } : undefined;
 };
 
-const classifyProcedureCall = (call: CallExpression, lazyFunctions = false): ProcedureClassification | undefined => {
+const classifyUncached = (call: CallExpression, lazyFunctions: boolean): ProcedureClassification | undefined => {
     const callee = call.getExpression();
 
     if (Node.isPropertyAccessExpression(callee)) {
@@ -333,6 +333,38 @@ const classifyProcedureCall = (call: CallExpression, lazyFunctions = false): Pro
     }
 
     return registrationOfFactory(exportedName);
+};
+
+/**
+ * {@link classifyUncached}'s answers, per type checker, then per call node and `lazyFunctions`
+ * flag. Some fifteen feeders classify the same exported initializers every pass, and the
+ * answer reads types and symbols across files, so it is only reused while the program is the
+ * same one: an edit to ANY file builds a new program and checker, which starts empty. The
+ * outer levels are weak, so a dropped program frees its answers.
+ */
+const CLASSIFIED = new WeakMap<ts.TypeChecker, WeakMap<ts.Node, Map<boolean, Readonly<ProcedureClassification> | undefined>>>();
+
+const classifyProcedureCall = (call: CallExpression, lazyFunctions = false): Readonly<ProcedureClassification> | undefined => {
+    const checker = call.getProject().getTypeChecker().compilerObject;
+    let byNode = CLASSIFIED.get(checker);
+
+    if (byNode === undefined) {
+        byNode = new WeakMap();
+        CLASSIFIED.set(checker, byNode);
+    }
+
+    let byFlag = byNode.get(call.compilerNode);
+
+    if (byFlag === undefined) {
+        byFlag = new Map();
+        byNode.set(call.compilerNode, byFlag);
+    }
+
+    if (!byFlag.has(lazyFunctions)) {
+        byFlag.set(lazyFunctions, classifyUncached(call, lazyFunctions));
+    }
+
+    return byFlag.get(lazyFunctions);
 };
 
 export { classifyProcedureCall };

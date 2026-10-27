@@ -21,7 +21,7 @@ const nodeProject = {
         environment: "node",
         exclude: ["**/node_modules/**", "**/dist/**", "__tests__/workerd/**"],
         include: ["__tests__/**/*.test.ts"],
-        env: { PRIVACY_TOMBSTONE_SECRET: "example-test-secret" },
+        env: { PRIVACY_FILE_SECRET: "example-test-file-secret", PRIVACY_TOMBSTONE_SECRET: "example-test-secret" },
         name: "node",
     },
 };

@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { CallEdgeIR, RowEffectIR, TableWriteIR } from "../ir";
 import { sanitizeNamespace } from "../paths";
-import { collectNodeRows, lunoraRelativePath } from "./ast";
+import { collectNodeRows, descendantsOfKind, lunoraRelativePath } from "./ast";
 
 /**
  * A top-level function or variable under `lunora/`: the unit a row write is
@@ -99,8 +99,7 @@ const directEffectsOf = (units: ReadonlyArray<Unit>, tableWrites: ReadonlyArray<
 
 /** The units a unit calls through an identifier that resolves to a unit in `lunora/`. */
 const importCalleesOf = (unit: Unit, unitsById: ReadonlyMap<string, Unit>, lunoraDirectory: string): Unit[] =>
-    unit.node
-        .getDescendantsOfKind(SyntaxKind.CallExpression)
+    descendantsOfKind(unit.node, SyntaxKind.CallExpression)
         .map((call) => calleeUnitOf(call, unitsById, lunoraDirectory))
         .filter((callee): callee is Unit => callee !== undefined);
 

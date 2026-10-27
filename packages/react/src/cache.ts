@@ -5,10 +5,16 @@ import { keyHash } from "./query-key";
 
 /**
  * Per-key bookkeeping: a single WS subscription is shared across every hook
- * that observes the same `queryKey`. The `refCount` field tracks the consumers
- * so we close the underlying subscription on the last `detach()`.
+ * that observes the same `queryKey`, and closed on the last `detach()`.
  */
 interface RegistryEntry {
+    /**
+     * Every QueryClient attached to this key, counted by attach. A push lands in
+     * each of them, and a client leaves the map when its count reaches zero, so
+     * an empty map is the last detach.
+     */
+    clients: Map<QueryClient, number>;
+
     /**
      * Per-consumer error sinks. One shared subscription serves every hook on the
      * key, so a server-pushed subscription error fans out to whichever consumers
@@ -16,8 +22,6 @@ interface RegistryEntry {
      * the subscription opened still hears about it.
      */
     errorCallbacks: Set<SubscriptionErrorCallback>;
-
-    refCount: number;
     /** WS unsubscribe handle, set on first successful attach. */
     unsubscribe: Unsubscribe | undefined;
 }
@@ -50,13 +54,109 @@ const blankQuery = (query: Query | undefined): void => {
     query.setState({ ...query.state, data: undefined, dataUpdatedAt: 0, error: null, fetchStatus: "idle", status: "pending" });
 };
 
-/** A push-count sample held open across a `queryFn`'s fetch. */
-interface SnapshotSample {
-    /** The hashed query key the sample was opened on. */
-    readonly key: string;
-    /** The key's push count when the sample opened. */
-    readonly pushes: number;
+/**
+ * What the subscription has delivered since it opened or last blanked.
+ *
+ * `pushed` carries the last defined push, which lets a client whose own cache
+ * lost the entry be re-seeded without waiting for a push that may never come.
+ * `errored` means it errored before its first defined value: a `queryFn` that
+ * runs after that error (the hydration gate held it) has no settle left to wait
+ * for, so it goes straight to HTTP.
+ */
+type LiveState = { readonly status: "errored" | "idle" } | { readonly status: "pushed"; readonly value: unknown };
+
+const IDLE: LiveState = { status: "idle" };
+
+/**
+ * A key's live state plus the `queryFn`s waiting for its first value. Created
+ * on demand from either side: `useQuery` can attach (and even receive its first
+ * push) before its `queryFn` runs while the hydration gate holds the fetch, and
+ * the paginated core runs its `queryFn` before it attaches.
+ */
+interface LiveValue {
+    state: LiveState;
+    /** Settled with `true` on the first defined push, `false` when the subscription errors before one. */
+    readonly waiters: Set<(pushed: boolean) => void>;
 }
+
+/** Settle every `queryFn` waiting on `live`'s first value. */
+const settle = (live: LiveValue, pushed: boolean): void => {
+    for (const waiter of live.waiters) {
+        waiter(pushed);
+    }
+
+    live.waiters.clear();
+};
+
+interface LiveValueOptions<T> {
+    /** The HTTP query, run when nothing can push or the push does not come. */
+    fetch: () => Promise<T>;
+
+    /** The shard the subscription lives on, whose socket decides whether a push can come. */
+    shardKey?: string;
+
+    /**
+     * Whether to wait for the subscription's first push before fetching. `false`
+     * where no subscription will attach in time, as for a suspended component,
+     * which never commits the effect that attaches one.
+     */
+    waitForPush?: boolean;
+}
+
+/**
+ * How long a `queryFn` waits for the subscription's first push before it fetches
+ * over HTTP instead. Bounds the wait when the client cannot tell that nothing
+ * will push, such as a socket that accepts the upgrade and then stays silent.
+ */
+const PUSH_WAIT_TIMEOUT_MS = 10_000;
+
+/**
+ * Wait for `live`'s next settle: `true` on a defined push, `false` when the
+ * subscription errored first, nothing pushed within {@link PUSH_WAIT_TIMEOUT_MS},
+ * or `watch` calls its `giveUp` (a push can no longer come). Rejects when
+ * `signal` aborts, including one aborted before the call.
+ */
+const nextPush = async (live: LiveValue, signal: AbortSignal, watch: (giveUp: () => void) => Unsubscribe): Promise<boolean> =>
+    new Promise<boolean>((resolve, reject) => {
+        if (signal.aborted) {
+            reject(signal.reason as Error);
+
+            return;
+        }
+
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let unwatch: Unsubscribe | undefined;
+        const finish = (): void => {
+            clearTimeout(timer);
+            unwatch?.();
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the waiter and the abort listener each remove the other
+            live.waiters.delete(waiter);
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the waiter and the abort listener each remove the other
+            signal.removeEventListener("abort", onAbort);
+        };
+        const onAbort = (): void => {
+            finish();
+            reject(signal.reason as Error);
+        };
+        const waiter = (pushed: boolean): void => {
+            finish();
+            resolve(pushed);
+        };
+
+        timer = setTimeout(() => {
+            waiter(false);
+        }, PUSH_WAIT_TIMEOUT_MS);
+        live.waiters.add(waiter);
+        signal.addEventListener("abort", onAbort, { once: true });
+        unwatch = watch(() => {
+            waiter(false);
+        });
+
+        // `watch` may give up synchronously, before its unsubscribe existed to release.
+        if (!live.waiters.has(waiter)) {
+            unwatch();
+        }
+    });
 
 /**
  * Per-client subscription dedup layer that sits *next to* TanStack Query.
@@ -81,24 +181,8 @@ interface SnapshotSample {
 class LunoraSubscriptionRegistry {
     private readonly entries = new Map<string, RegistryEntry>();
 
-    /**
-     * How many subscription frames each key has written to the TanStack cache.
-     *
-     * Deliberately NOT a field of {@link RegistryEntry}: the entry is deleted on
-     * the last `detach()`, and a `queryFn` that sampled the count before its
-     * fetch is still in flight then (nothing propagates TanStack's abort signal
-     * into `client.query`). With the counter inside the entry, the sample after
-     * the fetch read `0` again — the same value it started from — so a push that
-     * had landed in between was invisible and the older snapshot was written
-     * over it. Monotonic per key and per client, so it can only ever be read as
-     * "unchanged" when it genuinely is — which is also why nothing prunes it: a
-     * counter that resets is a counter that can repeat a sampled value. One
-     * number per query key this client ever subscribed to.
-     */
-    private readonly pushes = new Map<string, number>();
-
-    /** Open snapshot samples per key — the lifetime bound on the push counter. */
-    private readonly samples = new Map<string, number>();
+    /** Live state per key (see `liveValue`). */
+    private readonly live = new Map<string, LiveValue>();
 
     /** Query clients cleared on each identity change (see `clearOnIdentityChange`). */
     private readonly identityWatched = new Set<QueryClient>();
@@ -122,62 +206,97 @@ class LunoraSubscriptionRegistry {
     }
 
     /**
-     * How many subscription frames this key has written to the TanStack cache.
+     * The `queryFn` every hook here shares: resolve from the subscription that
+     * feeds `queryKey` instead of running the query a second time over HTTP.
+     * The server seeds a subscription with a full snapshot as its first frame,
+     * so a mount pays for one execution, not an HTTP snapshot plus that seed —
+     * and since the value IS the newest push, no older snapshot can land on top
+     * of it.
      *
-     * A hook fires a one-shot HTTP snapshot alongside the subscription, and
-     * TanStack applies a resolved `queryFn` result unconditionally — a manual
-     * `setQueryData` mid-flight does not cancel it. So a push that lands while
-     * the snapshot is in the air is silently reverted to pre-push data, and with
-     * `staleTime: Infinity` and push-driven freshness it stays reverted until
-     * the next write. A `queryFn` opens a sample before its fetch and closes it
-     * after, and the registry reports whether anything pushed in between.
+     * Returns the value already pushed when the subscription is live, else
+     * waits for its first defined push. `fetch` (the HTTP query) runs instead
+     * when nothing can push — no `WebSocket` implementation, server
+     * rendering, where no effect ever attaches, or a `crossTabSync` tab that
+     * is not the leader and so has no socket — or when the subscription
+     * errors before its first value; a push that lands while that fallback is
+     * in flight wins over its result.
      *
-     * The count is kept per key rather than on the entry because the entry is
-     * deleted on the last `detach()` while a fetch that sampled it may still be
-     * in flight — nothing propagates TanStack's abort signal into
-     * `client.query`. With the counter inside the entry, the closing read saw
-     * `0` again, the same value it opened with, so a push that had landed in
-     * between was invisible and the older snapshot was written over it.
-     *
-     * The count is pruned when the last open sample closes on a key nothing is
-     * subscribed to. Pruning only then is what keeps it honest: while a sample
-     * is open the count must stay monotonic, because a counter that resets is a
-     * counter that can repeat a value a reader already saw. Without that prune
-     * this map held one entry per query key the client had EVER subscribed to,
-     * which a high-cardinality search or filter key grows without bound.
+     * `signal` is TanStack's abort signal. Reading it makes TanStack cancel
+     * (and revert) the fetch when the last observer unmounts rather than leave
+     * it hanging on a push that may never come, so a remount waits afresh.
      */
-    public openSnapshotSample(queryKey: QueryKey): SnapshotSample {
+    public async liveValue<T>(queryClient: QueryClient, queryKey: QueryKey, signal: AbortSignal, options: LiveValueOptions<T>): Promise<T> {
+        const { fetch, shardKey, waitForPush = true } = options;
+
+        if (!("window" in globalThis) || this.client.getWebSocketImpl() === undefined) {
+            return fetch();
+        }
+
         const key = keyHash(queryKey);
+        const live = this.liveFor(key);
+        // Read back, not handed through the waiter: a frame processed before this
+        // continuation runs is newer still. And a push alone is not enough — an
+        // identity change blanks the entry directly (`clearQueries`) ahead of the
+        // client's own blank push, so a blank entry waits for the next push.
+        const current = live.state.status === "pushed" ? (queryClient.getQueryData<T>(queryKey) ?? (live.state.value as T | undefined)) : undefined;
 
-        this.samples.set(key, (this.samples.get(key) ?? 0) + 1);
-
-        return { key, pushes: this.pushes.get(key) ?? 0 };
-    }
-
-    /**
-     * Close a sample opened by {@link openSnapshotSample}. `true` when nothing
-     * pushed to the key while it was open — i.e. the caller's snapshot is still
-     * the newest thing and may be written.
-     */
-    public closeSnapshotSample(sample: SnapshotSample): boolean {
-        const open = (this.samples.get(sample.key) ?? 1) - 1;
-        const quiet = (this.pushes.get(sample.key) ?? 0) === sample.pushes;
-
-        if (open > 0) {
-            this.samples.set(sample.key, open);
-
-            return quiet;
+        if (current !== undefined) {
+            return current;
         }
 
-        this.samples.delete(sample.key);
+        // ponytail: a cross-tab follower cannot tell whether the leader holds this
+        // query, so it pays one HTTP snapshot per mount, as does a lone tab still
+        // inside its first `leaderTimeout`; a relayed push still wins below.
+        // A socket that has already failed to open will not push either: on a blocked
+        // network, waiting would hold every newly mounted key empty for the full bound.
+        if (waitForPush && live.state.status !== "errored" && !this.client.isCrossTabFollower() && this.client.expectsPush({ shardKey })) {
+            let pushed: boolean;
 
-        // Nothing can sample this key again until something re-subscribes, and a
-        // fresh subscription starts from `0` either way.
-        if (!this.entries.has(sample.key)) {
-            this.pushes.delete(sample.key);
+            try {
+                pushed = await nextPush(live, signal, (giveUp) =>
+                    this.client.onConnectionStatus(() => {
+                        if (!this.client.expectsPush({ shardKey })) {
+                            giveUp();
+                        }
+                    }),
+                );
+            } finally {
+                // A wait for a key nothing subscribes to (it unmounted, or never
+                // attached) would otherwise leave its state behind for good.
+                this.forgetIdleLive(key);
+            }
+
+            if (pushed) {
+                return this.liveValue(queryClient, queryKey, signal, options);
+            }
         }
 
-        return quiet;
+        // Every push replaces `live.state`, so a different object afterwards means one landed during the fetch.
+        const stateBeforeFetch = live.state;
+        let snapshot: T;
+
+        try {
+            snapshot = await fetch();
+        } finally {
+            // A render that suspended on this fetch may never commit, so no subscription attaches to
+            // take the state over; dynamic keys would pile up here.
+            this.forgetIdleLive(key);
+        }
+
+        // A push that landed during the fetch wins, `null` included: `??` would read a pushed null as missing.
+        // It reaches `queryClient`'s cache only when `queryClient` is attached; a suspended fetch is not yet,
+        // so the push fed to the clients that are is read from `live`.
+        if (live.state !== stateBeforeFetch && live.state.status === "pushed") {
+            const cached = queryClient.getQueryData<T>(queryKey);
+
+            if (cached !== undefined) {
+                return cached;
+            }
+
+            return live.state.value as T;
+        }
+
+        return snapshot;
     }
 
     /**
@@ -277,7 +396,8 @@ class LunoraSubscriptionRegistry {
         let entry = this.entries.get(key);
 
         if (!entry) {
-            entry = { errorCallbacks: new Set(), refCount: 0, unsubscribe: undefined };
+            // Seeded before subscribing so a synchronous replay reaches this client; the count below is taken once, after.
+            entry = { clients: new Map([[queryClient, 0]]), errorCallbacks: new Set(), unsubscribe: undefined };
             this.entries.set(key, entry);
 
             const opened = entry;
@@ -287,18 +407,36 @@ class LunoraSubscriptionRegistry {
                     function_,
                     args,
                     (value) => {
-                        this.pushes.set(key, (this.pushes.get(key) ?? 0) + 1);
+                        const live = this.liveFor(key);
 
                         if (value === undefined) {
-                            blankQuery(queryClient.getQueryCache().find({ exact: true, queryKey }));
+                            // A blank is not a value: a refetch after a user switch must
+                            // wait for the new identity's first push, not read this one.
+                            live.state = IDLE;
+
+                            for (const client of opened.clients.keys()) {
+                                blankQuery(client.getQueryCache().find({ exact: true, queryKey }));
+                            }
 
                             return;
                         }
 
-                        queryClient.setQueryData(queryKey, value);
+                        for (const client of opened.clients.keys()) {
+                            client.setQueryData(queryKey, value);
+                        }
+
+                        live.state = { status: "pushed", value };
+                        settle(live, true);
                     },
                     {
                         onError: (error) => {
+                            const live = this.liveFor(key);
+
+                            if (live.state.status !== "pushed") {
+                                live.state = { status: "errored" };
+                                settle(live, false);
+                            }
+
                             for (const callback of opened.errorCallbacks) {
                                 callback(error);
                             }
@@ -310,12 +448,21 @@ class LunoraSubscriptionRegistry {
                 // Leave no half-registered entry behind for the next attach of
                 // this key to join, then let the programming error surface.
                 this.entries.delete(key);
+                this.dropLive(key);
 
                 throw error;
             }
         }
 
-        entry.refCount += 1;
+        entry.clients.set(queryClient, (entry.clients.get(queryClient) ?? 0) + 1);
+
+        // A client joining an entry that already holds a value gets it now: the push
+        // that produced it went only to the clients attached at the time.
+        const joinedLive = this.live.get(key);
+
+        if (joinedLive?.state.status === "pushed") {
+            queryClient.setQueryData(queryKey, joinedLive.state.value);
+        }
 
         const { onError } = options;
 
@@ -345,17 +492,61 @@ class LunoraSubscriptionRegistry {
                 return;
             }
 
-            current.refCount -= 1;
+            const attachments = (current.clients.get(queryClient) ?? 1) - 1;
+
+            if (attachments > 0) {
+                current.clients.set(queryClient, attachments);
+            } else {
+                current.clients.delete(queryClient);
+            }
 
             if (onError) {
                 current.errorCallbacks.delete(onError);
             }
 
-            if (current.refCount <= 0) {
+            if (current.clients.size === 0) {
                 current.unsubscribe?.();
                 this.entries.delete(key);
+                this.dropLive(key);
             }
         };
+    }
+
+    private liveFor(key: string): LiveValue {
+        let live = this.live.get(key);
+
+        if (!live) {
+            live = { state: IDLE, waiters: new Set() };
+            this.live.set(key, live);
+        }
+
+        return live;
+    }
+
+    /** Forget `key`'s live state once nothing subscribes to it and nothing waits on it. */
+    private forgetIdleLive(key: string): void {
+        if (!this.entries.has(key) && this.live.get(key)?.waiters.size === 0) {
+            this.live.delete(key);
+        }
+    }
+
+    /**
+     * Forget a key nothing subscribes to any more. A fetch still waiting on its
+     * first push keeps the state alive: the wait ends on a push, its signal or
+     * its timeout, and then forgets the state itself (see `forgetIdleLive`).
+     */
+    private dropLive(key: string): void {
+        const live = this.live.get(key);
+
+        if (live === undefined) {
+            return;
+        }
+
+        if (live.waiters.size === 0) {
+            this.live.delete(key);
+        } else {
+            live.state = IDLE;
+        }
     }
 }
 

@@ -661,6 +661,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 ## `@lunora/agent/naming`
 
+### `AGENT_RUNTIME_FUNCTIONS` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `agentClassName` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._

@@ -1,3 +1,140 @@
+## @lunora/vite [1.0.0-alpha.391](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.390...@lunora/vite@1.0.0-alpha.391) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.417
+
+## @lunora/vite [1.0.0-alpha.390](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.389...@lunora/vite@1.0.0-alpha.390) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.416
+* **@lunora/studio:** upgraded to 1.0.0-alpha.348
+
+## @lunora/vite [1.0.0-alpha.389](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.388...@lunora/vite@1.0.0-alpha.389) (2026-10-26)
+
+### Bug Fixes
+
+* **vite:** stop test:bench rebuilding its dependencies mid-run ([#1354](https://github.com/anolilab/lunora/issues/1354)) ([b88cfdf](https://github.com/anolilab/lunora/commit/b88cfdff4321603236daf07dc35fdfad3abf0d8b))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.361
+* **@lunora/config:** upgraded to 1.0.0-alpha.415
+* **@lunora/studio:** upgraded to 1.0.0-alpha.347
+
+## @lunora/vite [1.0.0-alpha.388](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.387...@lunora/vite@1.0.0-alpha.388) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.360
+* **@lunora/config:** upgraded to 1.0.0-alpha.414
+
+## @lunora/vite [1.0.0-alpha.387](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.386...@lunora/vite@1.0.0-alpha.387) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.359
+* **@lunora/config:** upgraded to 1.0.0-alpha.413
+
+## @lunora/vite [1.0.0-alpha.386](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.385...@lunora/vite@1.0.0-alpha.386) (2026-10-26)
+
+### Performance Improvements
+
+* **vite:** stop repeating startup work per build pass and per save ([#1339](https://github.com/anolilab/lunora/issues/1339)) ([aaef949](https://github.com/anolilab/lunora/commit/aaef9498c186af4533789dc826d4ce84ee805691))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.358
+* **@lunora/config:** upgraded to 1.0.0-alpha.412
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/studio:** upgraded to 1.0.0-alpha.346
+
+## @lunora/vite [1.0.0-alpha.385](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.384...@lunora/vite@1.0.0-alpha.385) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.357
+* **@lunora/config:** upgraded to 1.0.0-alpha.411
+* **@lunora/studio:** upgraded to 1.0.0-alpha.345
+
+## @lunora/vite [1.0.0-alpha.384](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.383...@lunora/vite@1.0.0-alpha.384) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.410
+
+## @lunora/vite [1.0.0-alpha.383](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.382...@lunora/vite@1.0.0-alpha.383) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.355
+* **@lunora/config:** upgraded to 1.0.0-alpha.409
+* **@lunora/studio:** upgraded to 1.0.0-alpha.344
+
+## @lunora/vite [1.0.0-alpha.382](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.381...@lunora/vite@1.0.0-alpha.382) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.354
+* **@lunora/config:** upgraded to 1.0.0-alpha.408
+* **@lunora/studio:** upgraded to 1.0.0-alpha.343
+
+## @lunora/vite [1.0.0-alpha.381](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.380...@lunora/vite@1.0.0-alpha.381) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.353
+* **@lunora/config:** upgraded to 1.0.0-alpha.407
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/studio:** upgraded to 1.0.0-alpha.342
+
+## @lunora/vite [1.0.0-alpha.380](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.379...@lunora/vite@1.0.0-alpha.380) (2026-10-25)
+
+### Bug Fixes
+
+* **config:** celld audit fixes ([#1283](https://github.com/anolilab/lunora/issues/1283)) ([6fd7854](https://github.com/anolilab/lunora/commit/6fd78547928d41d3569ba71cf94683dac7f49b94))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.352
+* **@lunora/config:** upgraded to 1.0.0-alpha.406
+* **@lunora/studio:** upgraded to 1.0.0-alpha.341
+
+## @lunora/vite [1.0.0-alpha.379](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.378...@lunora/vite@1.0.0-alpha.379) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.405
+* **@lunora/studio:** upgraded to 1.0.0-alpha.340
+
+## @lunora/vite [1.0.0-alpha.378](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.377...@lunora/vite@1.0.0-alpha.378) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.351
+* **@lunora/config:** upgraded to 1.0.0-alpha.404
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/studio:** upgraded to 1.0.0-alpha.339
+
 ## @lunora/vite [1.0.0-alpha.377](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.376...@lunora/vite@1.0.0-alpha.377) (2026-10-24)
 
 

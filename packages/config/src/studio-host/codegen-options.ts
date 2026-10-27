@@ -14,6 +14,7 @@ import {
 
 import { wranglerCodegenInputs } from "../cloudflare/wrangler-codegen-inputs";
 import { CODEGEN_ENV, isCodegenDisabled } from "../codegen-env";
+import { recordStudioWrite } from "./studio-writes";
 
 /** The request fields a studio endpoint carries that shape its codegen run. */
 interface StudioCodegenRequest {
@@ -97,9 +98,20 @@ const studioCodegenProject = (lunoraDirectory: string): CodegenProject => {
     return cachedProject.project;
 };
 
+/** The source file a studio endpoint just wrote, and the text it wrote there. */
+interface StudioSourceWrite {
+    readonly path: string;
+    readonly text: string;
+}
+
 /**
- * Regenerate after a studio endpoint wrote the project's source, honouring the
- * codegen switch. Returns the diagnostics to surface in the response body.
+ * Regenerate after a studio endpoint wrote `written`, honouring the codegen
+ * switch. Returns the diagnostics to surface in the response body.
+ *
+ * Only a run that emitted records the write, which tells the dev watcher it may
+ * skip codegen for the write's own event. A run that was switched off, failed,
+ * or reported a diagnostic leaves the event to the watcher, which retries and
+ * shows the failure where a source save would.
  *
  * The gate is here, not in each endpoint, because every studio endpoint that
  * writes source regenerates through this one function — and the two that existed
@@ -113,7 +125,7 @@ const studioCodegenProject = (lunoraDirectory: string): CodegenProject => {
  * Codegen diagnostics surface in the response rather than failing the write: the
  * file is already on disk. Any other error is the caller's to turn into a `500`.
  */
-const runStudioCodegen = (request: StudioCodegenRequest): ReadonlyArray<string> => {
+const runStudioCodegen = (request: StudioCodegenRequest, written: StudioSourceWrite): ReadonlyArray<string> => {
     if (isCodegenDisabled(process.env[CODEGEN_ENV])) {
         return [`codegen is off (${CODEGEN_ENV}=0 / \`lunora dev --no-codegen\`) — the source was written but \`_generated/\` was NOT regenerated`];
     }
@@ -134,8 +146,10 @@ const runStudioCodegen = (request: StudioCodegenRequest): ReadonlyArray<string> 
         throw error;
     }
 
+    recordStudioWrite(written.path, written.text);
+
     return [];
 };
 
-export type { StudioCodegenRequest };
+export type { StudioCodegenRequest, StudioSourceWrite };
 export { runStudioCodegen, studioCodegenOptions };

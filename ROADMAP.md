@@ -55,7 +55,7 @@ deliberate, and mostly a set of go/no-go decisions:
       `bindings`, `hyperdrive`, `cloudflare-access`, `queue`, `workflow`, `flags`,
       `fingerprint`, `dispatch`, `payment`, `x402`.
     - **Experimental (excluded from the 1.0 promise, iterating on their own track):**
-      `agent`, `replica`, `react-native`, `angular`, `ai`, `browser`, `container`,
+      `agent`, `replica`, `react-native`, `angular`, `ai`, `browser`, `container`, `jwt-auth`,
       `platform-celld`, `platform-node`, `privacy`, `rspack`.
 - **Cut the beta channel.** Feature-freeze the Core + Stable-adapter tiers and
   promote `alpha → beta`; the experimental tier keeps iterating on `alpha`.

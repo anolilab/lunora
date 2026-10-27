@@ -268,6 +268,7 @@ interface RunShardFindRelatedArgs {
 
 ```ts
 interface RunShardImportArgs {
+    dryRun?: boolean;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -602,9 +603,11 @@ abstract class ShardDO {
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void;
     protected ctxDbTuning(): {
         cache?: ReactiveCache;
+        companionMemo: CompanionMemo;
         maxRelationKeys?: number;
         relationExistsPushDown?: "always" | "auto" | "never";
     };
+    protected invalidateCompanionMemo(): void;
     protected isCacheableQuery(_functionPath: string): boolean;
     protected transactionLimits(): Partial<TransactionLimits>;
     protected transactionHeadroom(): TransactionHeadroomTracker;
@@ -700,6 +703,17 @@ class ShardRegistryDO {
     protected state: ShardRegistryDOState;
     constructor(state: ShardRegistryDOState, env: unknown);
     fetch(request: Request): Promise<Response>;
+}
+```
+
+### `ShardRegistryRpc` (interface)
+
+```ts
+interface ShardRegistryRpc {
+    listShardKeys: (table: string) => Promise<string[]>;
+    register: (table: string, shardKey: string) => Promise<void>;
+    snapshot: () => Promise<Record<string, string[]>>;
+    unregister: (table: string, shardKey: string) => Promise<void>;
 }
 ```
 
@@ -877,6 +891,12 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 ### `exportShardRows` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `hostedShardRegistry` (const)
+
+```ts
+const hostedShardRegistry: (env: unknown, jurisdiction?: string) => ShardRegistryRpc;
+```
 
 ### `importShardRows` (const)
 

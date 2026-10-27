@@ -53,11 +53,13 @@ const ensureAuthReady = (env: Env): Promise<ReturnType<typeof buildAuth>> => {
  *    Expo plugin's routes and the app-scheme trusted origin live here too.
  * 2. Everything else → Lunora's RPC + WebSocket surface.
  *
- * `resolveIdentity` reads the session as a **bearer** token in the `Authorization`
- * header. HTTP RPC sends it there, and so does the WebSocket upgrade (the client's
- * `getAuthHeaders` sets it on the socket). No credential is read from the query
- * string, so better-auth's `bearer` plugin resolves both via `getSession`. A cookie
- * credential cannot work here:
+ * `resolveIdentity` reads the session as a **bearer** token: the native client
+ * sends it in the `Authorization` header on HTTP RPC and on the WebSocket
+ * upgrade alike, so better-auth's `bearer` plugin resolves both via
+ * `getSession`. Nothing is read from the URL — a query-string credential lands
+ * in access logs. Under `react-native-web` the browser socket cannot carry a
+ * header; the cookie session authenticates it there. A cookie credential cannot
+ * work on native:
  * the CSRF guard rejects a cookie-bearing state-changing request with no trusted
  * `Origin`, and a native request sends none.
  *
@@ -79,9 +81,6 @@ export default {
             worker = createWorker({
                 openApiSpec,
                 resolveIdentity: async (identityRequest) => {
-                    // HTTP RPC and the WS upgrade both carry `Authorization: Bearer <token>`
-                    // (the client's `getAuthHeaders` puts it on the socket). The session never
-                    // rides the URL, so nothing here reads a query-string credential.
                     const session = await auth.api.getSession({ headers: identityRequest.headers });
 
                     return session?.user?.id ? { userId: session.user.id } : null;

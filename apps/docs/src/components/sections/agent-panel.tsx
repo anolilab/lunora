@@ -86,7 +86,7 @@ const SERVER_CODE = [
     "export const toggle = mutation",
     "  .input({ id: v.id('todos'), done: v.boolean() })",
     "  .mutation(async ({ ctx, args }) =>",
-    "    ctx.db.patch(args.id, { done: args.done }),",
+    '    ctx.db.patch("todos", args.id, { done: args.done }),',
     "  );",
 ];
 

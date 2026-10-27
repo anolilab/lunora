@@ -451,7 +451,7 @@ const retireApprovalMarker = async (database: QueueDatabase, threadKey: string, 
         .first();
 
     if (marker?.["status"] === "awaiting_approval") {
-        await database.delete(marker["_id"] as never);
+        await database.delete(MESSAGES_TABLE, marker["_id"] as never);
     }
 };
 
@@ -683,7 +683,7 @@ const applyConcurrencyPolicy = async (
     // — omit the column rather than writing an explicit `undefined`, which the
     // store rejects. `error` IS being cleared, so it is written as `null`, the
     // one value a patch can clear a column with.
-    await database.patch(args.existingId as never, {
+    await database.patch(THREADS_TABLE, args.existingId as never, {
         // eslint-disable-next-line unicorn/no-null -- `null` is how `ctx.db.patch` clears a nullable column; `undefined` is rejected (shard-engine's `assertNoExplicitUndefined`)
         error: null,
         status: "running",
@@ -869,7 +869,7 @@ export const agentComponent = (): AgentComponent => {
                 // correct, since (re)starting means the run IS active again. The
                 // instance id is (re)stamped so cancel/replace can target it.
                 // `error` is cleared with `null` — see the column's doc comment.
-                await context.db.patch(existing["_id"] as never, {
+                await context.db.patch(THREADS_TABLE, existing["_id"] as never, {
                     // eslint-disable-next-line unicorn/no-null -- `null` is how `ctx.db.patch` clears a nullable column; `undefined` is rejected (shard-engine's `assertNoExplicitUndefined`)
                     error: null,
                     status: "running",
@@ -952,7 +952,7 @@ export const agentComponent = (): AgentComponent => {
                 ...(args.toolCalls === undefined ? {} : { toolCalls: args.toolCalls }),
                 ...(args.toolName === undefined ? {} : { toolName: args.toolName }),
             });
-            await context.db.patch(thread["_id"] as never, { messageCount: seq + 1, updatedAt: now });
+            await context.db.patch(THREADS_TABLE, thread["_id"] as never, { messageCount: seq + 1, updatedAt: now });
 
             return { seq };
         });
@@ -994,7 +994,7 @@ export const agentComponent = (): AgentComponent => {
                 return;
             }
 
-            await context.db.delete(existing["_id"] as never);
+            await context.db.delete(MESSAGES_TABLE, existing["_id"] as never);
         });
 
     const agentPatchThread = mutation
@@ -1035,7 +1035,7 @@ export const agentComponent = (): AgentComponent => {
                 return;
             }
 
-            await context.db.patch(thread["_id"] as never, {
+            await context.db.patch(THREADS_TABLE, thread["_id"] as never, {
                 updatedAt: Date.now(),
                 ...(args.error === undefined ? {} : { error: args.error }),
                 ...(args.status === undefined ? {} : { status: args.status }),
@@ -1164,7 +1164,7 @@ export const agentComponent = (): AgentComponent => {
                     .first();
 
                 if (parked) {
-                    await context.db.delete(parked["_id"] as never);
+                    await context.db.delete(RUN_QUEUE_TABLE, parked["_id"] as never);
                 }
 
                 return {};
@@ -1194,7 +1194,7 @@ export const agentComponent = (): AgentComponent => {
             const next = queued[0];
 
             if (!next) {
-                await context.db.patch(thread["_id"] as never, {
+                await context.db.patch(THREADS_TABLE, thread["_id"] as never, {
                     completedInstanceId: args.instanceId,
                     status: args.status,
                     updatedAt: now,
@@ -1207,7 +1207,7 @@ export const agentComponent = (): AgentComponent => {
 
             const nextInstanceId = next["instanceId"] as string;
 
-            await context.db.delete(next["_id"] as never);
+            await context.db.delete(RUN_QUEUE_TABLE, next["_id"] as never);
             // Ownership transfers here, before the waking event is sent: the
             // dequeued run is already the owner when it resumes, so it can append
             // on the shared seq counter the moment it wakes.
@@ -1224,7 +1224,7 @@ export const agentComponent = (): AgentComponent => {
             // trace — the thread goes straight from one run to the next and
             // nothing records that the first one failed. The incoming run clears
             // it through its own bootstrap.
-            await context.db.patch(thread["_id"] as never, {
+            await context.db.patch(THREADS_TABLE, thread["_id"] as never, {
                 completedInstanceId: args.instanceId,
                 instanceId: nextInstanceId,
                 status: "running",
@@ -1259,7 +1259,7 @@ export const agentComponent = (): AgentComponent => {
                 return;
             }
 
-            await context.db.patch(thread["_id"] as never, { state: args.state, updatedAt: Date.now() });
+            await context.db.patch(THREADS_TABLE, thread["_id"] as never, { state: args.state, updatedAt: Date.now() });
         });
 
     /**
@@ -1613,9 +1613,9 @@ export const agentComponent = (): AgentComponent => {
 
                 assertStillOwned(request);
 
-                await context.db.patch(request["_id"] as never, { ref, status: "supplied", updatedAt: Date.now() });
+                await context.db.patch(REQUESTS_TABLE, request["_id"] as never, { ref, status: "supplied", updatedAt: Date.now() });
                 // Retire the marker in this same mutation, so the UI stops offering the form.
-                await context.db.delete(marker["_id"] as never);
+                await context.db.delete(MESSAGES_TABLE, marker["_id"] as never);
             } catch (error: unknown) {
                 // The row did not move to `supplied`, so nothing will consume the value. A discard that fails must not
                 // replace the error that says why the supply was refused: the stored value then waits for its TTL.
@@ -1657,8 +1657,8 @@ export const agentComponent = (): AgentComponent => {
             const handle = secretWaitHandle(context, thread);
             const request = await openSecretRequestOrThrow(context.db, args.threadKey, slot, Date.now());
 
-            await context.db.patch(request["_id"] as never, { status: "declined", updatedAt: Date.now() });
-            await context.db.delete(marker["_id"] as never);
+            await context.db.patch(REQUESTS_TABLE, request["_id"] as never, { status: "declined", updatedAt: Date.now() });
+            await context.db.delete(MESSAGES_TABLE, marker["_id"] as never);
 
             try {
                 await handle.sendEvent(handle.instanceId, { payload: {}, type: `agent-secret:${slot}` });
@@ -1723,7 +1723,7 @@ export const agentComponent = (): AgentComponent => {
                     await agentSecrets?.discard(existing["ref"]);
                 }
 
-                await context.db.patch(existing["_id"] as never, {
+                await context.db.patch(REQUESTS_TABLE, existing["_id"] as never, {
                     consumerTool: args.consumerTool,
                     createdAt: now,
                     expiresAt: args.expiresAt,
@@ -1763,7 +1763,7 @@ export const agentComponent = (): AgentComponent => {
                 const { status } = request;
 
                 if (status === "pending") {
-                    await context.db.patch(request["_id"] as never, { status: "expired", updatedAt: Date.now() });
+                    await context.db.patch(REQUESTS_TABLE, request["_id"] as never, { status: "expired", updatedAt: Date.now() });
 
                     return { status: "expired" };
                 }
@@ -1823,7 +1823,7 @@ export const agentComponent = (): AgentComponent => {
             }
 
             if (request["status"] === "supplied") {
-                await context.db.patch(request["_id"] as never, { status: "consumed", updatedAt: Date.now() });
+                await context.db.patch(REQUESTS_TABLE, request["_id"] as never, { status: "consumed", updatedAt: Date.now() });
             }
         }),
     );
@@ -1941,7 +1941,7 @@ export const agentComponent = (): AgentComponent => {
                 return { revoked: false };
             }
 
-            await context.db.delete(grant["_id"] as never);
+            await context.db.delete(GRANTS_TABLE, grant["_id"] as never);
 
             return { revoked: true };
         });

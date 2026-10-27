@@ -489,6 +489,7 @@ const CellDetailDialog = ({
     bucket,
     column,
     onClose,
+    onFilter,
     resolveUrl,
     value,
 }: {
@@ -496,6 +497,8 @@ const CellDetailDialog = ({
     readonly bucket?: string;
     readonly column: string;
     readonly onClose: () => void;
+    /** Add an equality filter on this cell's value. Absent when the value cannot be filtered on (an object, a blob). */
+    readonly onFilter?: () => void;
     /** Resolve a viewable URL for a storage key. Absent for every ordinary column. */
     readonly resolveUrl?: (key: string, bucket?: string) => Promise<string>;
     readonly value: unknown;
@@ -522,6 +525,11 @@ const CellDetailDialog = ({
             <div className="flex items-center justify-between">
                 <h2 className="truncate font-mono text-sm font-semibold text-foreground">{column}</h2>
                 <div className="flex items-center gap-1.5">
+                    {onFilter !== undefined && (
+                        <button className={CONTROL_BTN} data-testid="grid-cell-filter" onClick={onFilter} type="button">
+                            {t("Filter by this value")}
+                        </button>
+                    )}
                     <button className={CONTROL_BTN} data-testid="grid-cell-copy" onClick={onCopy} type="button">
                         {copied ? t("Copied") : t("Copy")}
                     </button>

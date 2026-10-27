@@ -131,11 +131,15 @@ const waitUntilServing = async (url: string, captured: CapturedProcess, deadline
     }
 };
 
-/** Start `celld dev` on `projectDirectory` from a clean local state, and resolve once it serves. */
-const startCelldDev = async (projectDirectory: string, deadlineMs = 90_000): Promise<CelldDev> => {
+/**
+ * Start `celld dev` on `project` — a directory, or a wrangler config in one — and
+ * resolve once it serves. From a clean local state unless `clean` is `false`,
+ * which keeps what an earlier node recorded there (a service's deployment).
+ */
+const startCelldDev = async (project: string, deadlineMs = 90_000, options: { clean?: boolean } = {}): Promise<CelldDev> => {
     const port = await freePort();
     const url = `http://127.0.0.1:${String(port)}`;
-    const captured = spawnCaptured(["dev", projectDirectory, "--port", String(port), "--clean", "--no-watch"]);
+    const captured = spawnCaptured(["dev", project, "--port", String(port), ...(options.clean === false ? [] : ["--clean"]), "--no-watch"]);
 
     await waitUntilServing(url, captured, deadlineMs);
 

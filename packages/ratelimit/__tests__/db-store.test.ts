@@ -35,7 +35,7 @@ const createFakeDatabase = (): RateLimitDatabase & { findMany: NonNullable<RateL
     const matches = (document: Record<string, unknown>, where: Record<string, unknown> = {}): boolean =>
         Object.entries(where).every(([field, value]) => matchesField(document[field], value));
 
-    const remove = async <T extends string>(id: Id<T>): Promise<void> => {
+    const remove = async <T extends string>(_table: T, id: Id<T>): Promise<void> => {
         rows.delete(id);
     };
 

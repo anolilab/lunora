@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { ALLOW_FORWARDED_ENV } from "@lunora/config/studio-host";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { startStudioServer } from "../../src/util/studio-server";
+import { proxyHttp, startStudioServer } from "../../src/util/studio-server";
 
 /** Bind a throwaway TCP server to the system-assigned port and return both. */
 const bindPort = (): Promise<{ port: number; server: ReturnType<typeof createServer> }> =>
@@ -304,6 +304,32 @@ describe("startStudioServer", () => {
             expect(response.body).toContain("<!doctype html>");
         } finally {
             await studio.close();
+        }
+    });
+
+    it("serves the new admin token after `.dev.vars` changes mid-session", async () => {
+        expect.assertions(2);
+
+        const cwd = mkdtempSync(join(tmpdir(), "lunora-studio-token-"));
+        const port = await getFreePort();
+        const studio = await startStudioServer({ cwd, port, workerOrigin: "http://localhost:8787" });
+
+        try {
+            // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+            writeFileSync(join(cwd, ".dev.vars"), "LUNORA_ADMIN_TOKEN=tokenA\n");
+
+            const first = await requestStudio(port, "/", `127.0.0.1:${String(port)}`);
+
+            // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+            writeFileSync(join(cwd, ".dev.vars"), "LUNORA_ADMIN_TOKEN=tokenB\n");
+
+            const second = await requestStudio(port, "/", `127.0.0.1:${String(port)}`);
+
+            expect(first.body).toContain("tokenA");
+            expect(second.body).toContain("tokenB");
+        } finally {
+            await studio.close();
+            rmSync(cwd, { force: true, recursive: true });
         }
     });
 
@@ -680,4 +706,83 @@ export default defineSchema({
             }
         },
     );
+});
+
+describe("proxyHttp timeout", () => {
+    it("bounds time-to-headers only: a body that goes quiet past the timeout still arrives whole", async () => {
+        expect.assertions(2);
+
+        let finishSlowBody: () => void = () => {};
+        const upstream = createHttpServer((request, response) => {
+            // /hang never answers, so its 504 marks the moment a full timeout has elapsed.
+            if (request.url === "/hang") {
+                return;
+            }
+
+            response.writeHead(200);
+            response.write("first,");
+            finishSlowBody = () => {
+                response.end("second");
+            };
+        });
+        const { port: upstreamPort, server: upstreamBinder } = await bindPort();
+
+        await closeServer(upstreamBinder);
+        await new Promise<void>((resolve) => {
+            upstream.listen(upstreamPort, "127.0.0.1", resolve);
+        });
+
+        const proxy = createHttpServer((request, response) => {
+            proxyHttp(request, response, new URL(`http://127.0.0.1:${String(upstreamPort)}`), 50);
+        });
+
+        await new Promise<void>((resolve) => {
+            proxy.listen(0, "127.0.0.1", resolve);
+        });
+
+        try {
+            const address = proxy.address() as { port: number };
+            let received = "";
+            let firstChunk: () => void = () => {};
+            const firstChunkArrived = new Promise<void>((resolve) => {
+                firstChunk = resolve;
+            });
+            const slowBody = new Promise<string>((resolve, reject) => {
+                const request = httpRequest({ headers: { host: "127.0.0.1" }, hostname: "127.0.0.1", path: "/slow", port: address.port }, (response) => {
+                    response.setEncoding("utf8");
+                    response.on("data", (chunk: string) => {
+                        received += chunk;
+                        firstChunk();
+                    });
+                    response.on("end", () => {
+                        resolve(received);
+                    });
+                    // A proxy that cuts the body short surfaces here, not on the request.
+                    response.on("error", reject);
+                });
+
+                request.on("error", reject);
+                request.end();
+            });
+
+            // Headers and the first chunk are through, so the slow request's timeout is past its disarm point.
+            await firstChunkArrived;
+
+            // A request armed after the slow one with the same timeout can only time out once the slow one's
+            // would have, so its 504 is the milestone that a whole timeout passed with the body quiet.
+            const hung = await requestStudio(address.port, "/hang", "127.0.0.1");
+
+            expect(hung.statusCode).toBe(504);
+
+            finishSlowBody();
+
+            await expect(slowBody).resolves.toBe("first,second");
+        } finally {
+            // The /hang exchange can leave a socket open; `close()` alone would wait on it forever.
+            proxy.closeAllConnections();
+            upstream.closeAllConnections();
+            await closeServer(proxy);
+            await closeServer(upstream);
+        }
+    });
 });

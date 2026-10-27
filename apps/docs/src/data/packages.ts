@@ -484,6 +484,16 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Add-ons"]!,
         category: "Add-ons",
+        description: "Bring your own auth: verify Clerk, WorkOS, Auth0, Supabase or any OIDC JWT against its JWKS and feed the identity into ctx.auth / RLS.",
+        docsPath: "/docs/packages/jwt-auth",
+        features: ["Clerk, WorkOS, Auth0, Supabase presets", "Any OIDC issuer via discovery", "Feeds ctx.auth & RLS"],
+        name: "JWT Auth",
+        npmName: "@lunora/jwt-auth",
+        slug: "jwt-auth",
+    },
+    {
+        accentColor: categoryColors["Add-ons"]!,
+        category: "Add-ons",
         description: "Resend adapter, TSX templates, queue-backed sends.",
         docsPath: "/docs/packages/mail",
         features: ["Resend adapter", "TSX email templates", "Queue-backed sends"],

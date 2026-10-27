@@ -49,7 +49,12 @@ const importRecorder = () => {
     const imported: { doc: Record<string, unknown>; table: string }[] = [];
 
     return {
-        handle: (body: string | Uint8Array | undefined) => {
+        handle: (body: string | Uint8Array | undefined, dryRun = false) => {
+            // A check writes nothing and records nothing: it only answers whether the rows would be refused.
+            if (dryRun) {
+                return jsonResponse({ conflicts: 0, dryRun: true, errors: [], inserted: {}, received: 0 });
+            }
+
             const inserted: Record<string, number> = {};
 
             for (const line of (typeof body === "string" ? body : new TextDecoder().decode(body)).split("\n").filter((entry) => entry.trim().length > 0)) {
@@ -72,8 +77,8 @@ const sink = (): Sink => {
     return {
         fetchImpl: async (input, init) =>
             new URL(input).pathname === "/_lunora/admin/import"
-                ? recorder.handle(init?.body)
-                : jsonResponse({ conflicts: 0, errors: [], inserted: {}, received: 0 }),
+                ? recorder.handle(init?.body, new URL(input).searchParams.get("dryRun") === "true")
+                : jsonResponse({ conflicts: 0, dryRun: new URL(input).searchParams.get("dryRun") === "true", errors: [], inserted: {}, received: 0 }),
         imported: recorder.imported,
     };
 };
@@ -536,7 +541,7 @@ describe("storage transfer with a resumable checkpoint", () => {
             const method = init?.method ?? "GET";
 
             if (url.pathname === "/_lunora/admin/import") {
-                return recorder.handle(init?.body);
+                return recorder.handle(init?.body, url.searchParams.get("dryRun") === "true");
             }
 
             if (url.pathname === "/_lunora/admin/storage" && method === "GET") {
@@ -1057,7 +1062,7 @@ describe("the live Supabase storage path", () => {
             }
 
             if (url.pathname === "/_lunora/admin/import") {
-                return jsonResponse({ conflicts: 0, errors: [], inserted: {}, received: 0 });
+                return jsonResponse({ conflicts: 0, dryRun: url.searchParams.get("dryRun") === "true", errors: [], inserted: {}, received: 0 });
             }
 
             throw new Error(`unexpected ${method} ${input}`);
@@ -1150,7 +1155,7 @@ describe("the live Supabase storage path", () => {
                           status: 401,
                           text: async () => "Invalid JWT",
                       }
-                    : jsonResponse({ conflicts: 0, errors: [], inserted: {}, received: 0 }),
+                    : jsonResponse({ conflicts: 0, dryRun: new URL(input).searchParams.get("dryRun") === "true", errors: [], inserted: {}, received: 0 }),
             file: root,
             from: "supabase",
             logger,

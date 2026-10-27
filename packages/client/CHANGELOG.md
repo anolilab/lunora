@@ -1,3 +1,101 @@
+## @lunora/client [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.254...@lunora/client@1.0.0-alpha.255) (2026-10-27)
+
+### Features
+
+* first-class external auth (Clerk, WorkOS, any OIDC JWT) ([#1356](https://github.com/anolilab/lunora/issues/1356)) ([8833879](https://github.com/anolilab/lunora/commit/883387960f8352f70d07edfa3e0c0c5d560ef7bc))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.252
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.244
+
+## @lunora/client [1.0.0-alpha.254](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.253...@lunora/client@1.0.0-alpha.254) (2026-10-26)
+
+### Code Refactoring
+
+* **client:** host the framework-neutral auth and query-options cores ([#1358](https://github.com/anolilab/lunora/issues/1358)) ([861397a](https://github.com/anolilab/lunora/commit/861397afe2b363999bbcd1400d6a0190715c6fee))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.251
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.243
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.163
+
+## @lunora/client [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.252...@lunora/client@1.0.0-alpha.253) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/do:** upgraded to 1.0.0-alpha.250
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.242
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.162
+
+## @lunora/client [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.251...@lunora/client@1.0.0-alpha.252) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.249
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.241
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.161
+
+## @lunora/client [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.250...@lunora/client@1.0.0-alpha.251) (2026-10-26)
+
+### Features
+
+* **studio:** filter a table by a cell value, including NULL ([#1318](https://github.com/anolilab/lunora/issues/1318)) ([e5c3f4b](https://github.com/anolilab/lunora/commit/e5c3f4bff3d4335ba33de46952c0039e9d057f4c))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.248
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.240
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.160
+
+## @lunora/client [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.249...@lunora/client@1.0.0-alpha.250) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/do:** upgraded to 1.0.0-alpha.247
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.239
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.159
+
+## @lunora/client [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.248...@lunora/client@1.0.0-alpha.249) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.246
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.238
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.158
+
+## @lunora/client [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.247...@lunora/client@1.0.0-alpha.248) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.245
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.237
+
+## @lunora/client [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.246...@lunora/client@1.0.0-alpha.247) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/do:** upgraded to 1.0.0-alpha.244
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.236
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.157
+
 ## @lunora/client [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.245...@lunora/client@1.0.0-alpha.246) (2026-10-24)
 
 ### Features

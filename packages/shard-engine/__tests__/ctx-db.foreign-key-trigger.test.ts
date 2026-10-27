@@ -51,8 +51,8 @@ describe("foreign keys are checked after the before trigger", () => {
 
         const id = await writer.insert("orders", { customerId: "from-trigger", note: "x" });
 
-        await expect(writer.get(id)).resolves.toMatchObject({ customerId: "from-trigger" });
-        await expect(writer.get("from-trigger")).resolves.toMatchObject({ name: "made by trigger" });
+        await expect(writer.get("orders", id)).resolves.toMatchObject({ customerId: "from-trigger" });
+        await expect(writer.get("customers", "from-trigger")).resolves.toMatchObject({ name: "made by trigger" });
     });
 
     it("patch succeeds when a before trigger creates the new parent", async () => {
@@ -61,7 +61,7 @@ describe("foreign keys are checked after the before trigger", () => {
         const customer = await writer.insert("customers", { name: "ada" });
         const order = await writer.insert("orders", { customerId: customer, note: "x" });
 
-        await expect(writer.patch(order, { customerId: "from-trigger-patch" })).resolves.toBeUndefined();
+        await expect(writer.patch("orders", order, { customerId: "from-trigger-patch" })).resolves.toBeUndefined();
     });
 
     it("replace succeeds when a before trigger creates the new parent", async () => {
@@ -70,7 +70,7 @@ describe("foreign keys are checked after the before trigger", () => {
         const customer = await writer.insert("customers", { name: "ada" });
         const order = await writer.insert("orders", { customerId: customer, note: "y" });
 
-        await expect(writer.replace(order, { customerId: "from-trigger-replace", note: "z" })).resolves.toBeUndefined();
+        await expect(writer.replace("orders", order, { customerId: "from-trigger-replace", note: "z" })).resolves.toBeUndefined();
     });
 
     it("a parent no trigger creates is still refused", async () => {

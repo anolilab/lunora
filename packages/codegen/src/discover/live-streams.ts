@@ -5,7 +5,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { isLiveIdentifier, isReservedLiveTopicName } from "../../../../shared/live-stream";
 import { diagnosticAt } from "../diagnostics";
 import type { LiveStreamIR, LiveTopicIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { descendantsOfKind, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { addressableExportNameOf } from "./attribution";
 import { callsServerFactory } from "./callee";
 import { propertyKeyName } from "./property-name";
@@ -160,8 +160,7 @@ const ownerOf = (call: CallExpression): MorphNode | undefined => {
 
 /** Every `defineLiveStream` call in one source file, each bound to the named export it must be. */
 const streamsIn = (sourceFile: SourceFile, lunoraDirectory: string): LiveStreamIR[] =>
-    sourceFile
-        .getDescendantsOfKind(SyntaxKind.CallExpression)
+    descendantsOfKind(sourceFile, SyntaxKind.CallExpression)
         .filter((call) => callsServerFactory(call, "defineLiveStream"))
         .map((call) => {
             const declaration = ownerOf(call);

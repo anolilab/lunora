@@ -31,7 +31,7 @@ import type {
 } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { bindingKeyName, findObjectProperty, isConstDeclaration, memberAccessOf, unwrapExpression, walkChain } from "./ast";
+import { bindingKeyName, descendantsOfKind, findObjectProperty, isConstDeclaration, memberAccessOf, unwrapExpression, walkChain } from "./ast";
 import { declarationOf, isReassignedBinding, isValueIdentifier } from "./attribution";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 import { isDefineMutatorCallee } from "./mutators";
@@ -288,7 +288,7 @@ const contextSurfaceNodesIn = (scope: TsNode, property: string): ReadonlyArray<T
 const destructuredSurfacesIn = (scope: TsNode): [string, TsNode][] => {
     const surfaceByElement = new Map<ts.Node, string>();
 
-    for (const element of scope.getDescendantsOfKind(SyntaxKind.BindingElement)) {
+    for (const element of descendantsOfKind(scope, SyntaxKind.BindingElement)) {
         const path = Node.isIdentifier(element.getNameNode()) ? bindingContextPath(element, "discover", MAX_CONTEXT_HOPS) : undefined;
 
         if (path?.length === 1 && path[0] !== undefined) {
@@ -298,7 +298,7 @@ const destructuredSurfacesIn = (scope: TsNode): [string, TsNode][] => {
 
     const spellings = new Set([...surfaceByElement.keys()].map((node) => (node as ts.BindingElement).name.getText()));
 
-    return scope.getDescendantsOfKind(SyntaxKind.Identifier).flatMap((identifier): [string, TsNode][] => {
+    return descendantsOfKind(scope, SyntaxKind.Identifier).flatMap((identifier): [string, TsNode][] => {
         const isCandidate = spellings.has(identifier.getText()) && !Node.isBindingElement(identifier.getParent());
         const declaration = isCandidate ? declarationOf(identifier) : undefined;
         const member = declaration === undefined ? undefined : surfaceByElement.get(declaration.compilerNode);

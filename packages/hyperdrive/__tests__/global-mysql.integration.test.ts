@@ -180,17 +180,17 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
 
                 const id = await writer.insert("todos", { archived: false, priority: "low", projectId: "p9", seq: 7 });
 
-                await writer.patch(id, { priority: "high" });
+                await writer.patch("todos", id, { priority: "high" });
                 const patched = await writer.findFirst("todos", { where: { _id: id } });
 
                 expect(patched?.["priority"]).toBe("high");
 
-                await writer.replace(id, { archived: true, priority: "mid", projectId: "p9", seq: 8 });
+                await writer.replace("todos", id, { archived: true, priority: "mid", projectId: "p9", seq: 8 });
                 const replaced = await writer.findFirst("todos", { where: { _id: id } });
 
                 expect(replaced?.["seq"]).toBe(8);
 
-                await writer.delete(id);
+                await writer.delete("todos", id);
 
                 await expect(writer.findFirst("todos", { where: { _id: id } })).resolves.toBeNull();
 
@@ -213,7 +213,7 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
 
                 // Re-writing identical values changes 0 rows; without CLIENT_FOUND_ROWS the
                 // affected-rows OCC guard would see 0 and throw. With it, it sees the matched row.
-                await expect(writer.patch(id, { priority: "low" })).resolves.not.toThrow();
+                await expect(writer.patch("todos", id, { priority: "low" })).resolves.not.toThrow();
             },
             TEST_TIMEOUT,
         );
@@ -590,7 +590,7 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
                     .withSearchIndex("by_body", (q) => q.search("body", "hello").eq("channel", "other"))
                     .collect();
 
-                await writer.patch("n2", { body: "totally rewritten" });
+                await writer.patch("notes", "n2", { body: "totally rewritten" });
 
                 const fresh = await writer
                     .query("notes")

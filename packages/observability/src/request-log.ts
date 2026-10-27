@@ -45,10 +45,18 @@ import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields, stringifyFieldValue } from "../../../shared/log-fields";
 import type { IssueSeverity, IssueStatus } from "./issue-state";
 import { readIssueStates } from "./issue-state";
+import { pruneOncePerWindow } from "./prune-marker";
 import { runSql } from "./run-sql";
 
 /** Reserved append-only table backing the studio Logs tab. Auto-hidden from the data browser by the `__lunora` prefix. */
 const REQUEST_LOG_TABLE = "__lunora_reqlog__";
+
+/**
+ * Window for the retention trim: it runs on the first append per minute per
+ * storage handle (the metrics recorders' {@link pruneOncePerWindow} gate), not on
+ * every dispatch, so the table can overshoot `retention` by one minute of appends.
+ */
+const REQUEST_LOG_PRUNE_WINDOW_MS = 60_000;
 
 /** Most recent entries kept; older rows are trimmed after each append so the log stays bounded. */
 const REQUEST_LOG_RETENTION = 1000;
@@ -939,7 +947,8 @@ const cacheHitColumn = (cacheHit: boolean | undefined): null | number => {
 };
 
 /**
- * Append one dispatch to the request log, then trim the log back to the most
+ * Append one dispatch to the request log, then — once per
+ * {@link REQUEST_LOG_PRUNE_WINDOW_MS} window — trim the log back to the most
  * recent `retention` rows (default {@link REQUEST_LOG_RETENTION}). Creates the
  * table first so callers needn't. Args/identity/error message are redacted here
  * so a raw value never reaches the durable table — callers pass the unredacted
@@ -1014,8 +1023,11 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
     );
 
     // Bounded retention: drop every row older than the most recent `retention`
-    // by `seq`, mirroring `trimCdcChanges`/audit trim.
-    runSql(sql, `DELETE FROM "${REQUEST_LOG_TABLE}" WHERE seq <= (SELECT MAX(seq) - ? FROM "${REQUEST_LOG_TABLE}")`, retention);
+    // by `seq`, mirroring `trimCdcChanges`/audit trim. Windowed, so the bound
+    // holds up to one window's worth of appends past `retention`.
+    pruneOncePerWindow(sql, Math.floor(entry.ts / REQUEST_LOG_PRUNE_WINDOW_MS), "request-log", () => {
+        runSql(sql, `DELETE FROM "${REQUEST_LOG_TABLE}" WHERE seq <= (SELECT MAX(seq) - ? FROM "${REQUEST_LOG_TABLE}")`, retention);
+    });
 };
 
 /**

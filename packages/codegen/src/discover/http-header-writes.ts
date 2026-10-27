@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { isRequestInputDerived, referencesRequestInput, singleHopInitializer } from "../argument-taint";
 import type { CallSiteScope, HttpHeaderWriteIR } from "../ir";
-import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
+import { descendantsOfKind, findObjectProperty, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
 import { callSiteScopeOf } from "./attribution";
 import { calleeName } from "./callee";
 import type { InspectableHandler } from "./functions/handler";
@@ -260,7 +260,7 @@ const headerWritesFromCall = (call: CallExpression, relativePath: string): HttpH
 const headerWritesInSourceFile = (sourceFile: SourceFile, relativePath: string): HttpHeaderWriteIR[] => {
     const rows: HttpHeaderWriteIR[] = [];
 
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
         rows.push(...headerWritesFromCall(call, relativePath));
     }
 

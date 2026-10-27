@@ -988,7 +988,7 @@ describe("applyWebhookAction on a value the store cannot hold", () => {
 
         const store = new MemoryPaymentStore();
 
-        store.upsertPaymentSession = (): Promise<void> => Promise.reject(new LunoraPaymentError("VALIDATION_ERROR", "amount is not a safe integer"));
+        store.upsertPaymentSession = (): Promise<boolean> => Promise.reject(new LunoraPaymentError("VALIDATION_ERROR", "amount is not a safe integer"));
 
         const result = await applyWebhookAction(store, { ...captureEvent("e1"), provider: "creem", referenceId: "org_1", sessionId: "ch_huge" });
 
@@ -1001,7 +1001,7 @@ describe("applyWebhookAction on a value the store cannot hold", () => {
 
         const store = new MemoryPaymentStore();
 
-        store.upsertPaymentSession = (): Promise<void> => Promise.reject(new Error("database unavailable"));
+        store.upsertPaymentSession = (): Promise<boolean> => Promise.reject(new Error("database unavailable"));
 
         await expect(applyWebhookAction(store, { ...captureEvent("e2"), provider: "creem", referenceId: "org_1", sessionId: "ch_down" })).rejects.toThrow(
             "database unavailable",

@@ -91,10 +91,10 @@ const INSTRUMENTED_METHODS = new Set([
 
 /**
  * Methods whose FIRST argument is the table name. Used only to give a span a
- * low-cardinality name (`db.findMany messages`); the id-first methods
- * (`get`/`patch`/`delete`) deliberately do NOT put the id in the name, because a
- * span name containing a row id makes every call its own group in a collector
- * and destroys the aggregate views the span exists to feed.
+ * low-cardinality name (`db.findMany messages`). A by-id call takes the table
+ * first too, so its span is named by table; the row id is never in the name,
+ * because a span name containing a row id makes every call its own group in a
+ * collector and destroys the aggregate views the span exists to feed.
  *
  * Local on purpose, and NOT `@lunora/shard-engine`'s `LOOP_GATED_METHODS`: that
  * one records how the RLS guard wraps a method, so it omits `deleteWhere` and
@@ -106,21 +106,28 @@ const INSTRUMENTED_METHODS = new Set([
 const TABLE_FIRST_METHODS = new Set([
     "aggregate",
     "count",
+    "delete",
+    "deleteMany",
     "deleteWhere",
     "explain",
     "findFirst",
     "findFirstOrThrow",
     "findMany",
+    "get",
     "groupBy",
     "insert",
     "insertMany",
     "insertManyUnsafe",
+    "patch",
     "patchIf",
+    "patchMany",
     "patchWhere",
     "rank",
     "rankBefore",
     "rankPage",
     "rankPageRows",
+    "replace",
+    "restore",
 ]);
 
 /** Table name from a call's arguments, when the method takes it first. */

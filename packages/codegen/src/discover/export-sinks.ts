@@ -2,7 +2,7 @@ import type { AdvisorExportSink } from "@lunora/advisor";
 import type { CallExpression, ObjectLiteralExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listSecurityScanFiles, propertyKeyName } from "./ast";
+import { descendantsOfKind, listSecurityScanFiles, propertyKeyName } from "./ast";
 
 /** The three CDC export-sink factories the runtime ships (plan 170). */
 const SINK_FACTORIES = new Set<AdvisorExportSink["factory"]>(["defineExportSink", "r2Sink", "webhookExportSink"]);
@@ -80,7 +80,7 @@ const discoverExportSinks = (project: Project, lunoraDirectory: string): Advisor
     for (const { displayPath, filePath } of listSecurityScanFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
-        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+        for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
             const factory = sinkFactoryOf(call);
 
             if (factory === undefined) {

@@ -67,7 +67,7 @@ export const save = mutation
         const { userId } = ctx.auth;
 
         if (id) {
-            const existing = await ctx.db.get(id);
+            const existing = await ctx.db.get("drafts", id);
 
             // Same response for "gone" and "someone else's", so the endpoint
             // can't be used to probe which draft ids exist.
@@ -75,7 +75,7 @@ export const save = mutation
                 throw new LunoraError("NOT_FOUND", "draft not found");
             }
 
-            await ctx.db.patch(id, { title, body, updatedAt: Date.now() });
+            await ctx.db.patch("drafts", id, { title, body, updatedAt: Date.now() });
 
             return id;
         }

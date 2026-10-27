@@ -13,8 +13,8 @@ export const profiles = sqliteTable("profiles", {
     gamesPlayed: real("gamesPlayed").notNull(),
     gamesWon: real("gamesWon").notNull(),
 }, (t) => ({
-    by_rating: index("by_rating").on(t.rating),
     by_user: uniqueIndex("by_user").on(t.userId),
+    by_rating: index("by_rating").on(t.rating),
 }));
 
 export const lobbies = sqliteTable("lobbies", {
@@ -28,10 +28,10 @@ export const lobbies = sqliteTable("lobbies", {
     createdAt: real("createdAt").notNull(),
     gameId: text("gameId").references((): AnySQLiteColumn => games._id),
 }, (t) => ({
-    by_open_public: index("by_open_public").on(t.isPrivate, t.isOpen, t.createdAt),
-    by_invite_code: index("by_invite_code").on(t.inviteCode),
-    by_guest: index("by_guest").on(t.guestId),
     by_host: uniqueIndex("by_host").on(t.hostId),
+    by_guest: index("by_guest").on(t.guestId),
+    by_invite_code: index("by_invite_code").on(t.inviteCode),
+    by_open_public: index("by_open_public").on(t.isPrivate, t.isOpen, t.createdAt),
 }));
 
 export const games = sqliteTable("games", {
@@ -48,9 +48,9 @@ export const games = sqliteTable("games", {
     endedAt: real("endedAt"),
     drawOfferedBy: text("drawOfferedBy", { mode: "json" }).$type<string | null>(),
 }, (t) => ({
-    by_black: index("by_black").on(t.blackId),
-    by_white: index("by_white").on(t.whiteId),
     by_status: index("by_status").on(t.status),
+    by_white: index("by_white").on(t.whiteId),
+    by_black: index("by_black").on(t.blackId),
 }));
 
 export const moves = sqliteTable("moves", {

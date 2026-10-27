@@ -589,9 +589,12 @@ describe("offline lifecycle (e2e)", () => {
         // tick later, once the app's own token read resolves. Signed-out is the
         // normal state of EVERY reload up to that point — not a different user.
         const client = new LunoraClient({
+            // The React Native transport: its upgrade carries the bearer.
+            authTokenOnUpgrade: true,
             fetch: fetchMock,
             persistence: createAsyncStoragePersistence({ storage }),
             queryCache: createIndexedDbQueryCache({ indexedDB }),
+            reconnect: { initialDelayMs: 0, jitter: false, maxDelayMs: 0 },
             url: "https://app.example",
             WebSocket: createMockWebSocket(),
         });
@@ -615,7 +618,11 @@ describe("offline lifecycle (e2e)", () => {
         await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toHaveLength(1);
 
         // --- The app's session resolves — as the SAME user -------------------
+        // A bearer landing on an anonymous socket reconnects it, so the bearer
+        // rides the next upgrade; the held write replays once that socket opens.
         client.setAuthToken("token-a", "user-a");
+        await flushMicrotasks();
+        latestSocket().open();
         await settleIndexedDb();
 
         expect(fetchMock).toHaveBeenCalledTimes(1);

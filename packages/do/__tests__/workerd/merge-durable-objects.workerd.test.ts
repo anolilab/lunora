@@ -4,10 +4,22 @@
  * merged instance the name it was addressed by — on a request, and on an alarm
  * wake after eviction, where there is no request to route by.
  */
+import { RELAY_SIGNATURE_HEADER, signSiblingBody } from "@lunora/shard-engine";
 import { env, evictAllDurableObjects } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
+import { shardRegistryFrame } from "../../../../shared/shard-registry-frame";
 import { roleNamespace } from "../../src/merge-durable-objects";
+
+/** The secret `TestShardRegistryRole` in test-worker.ts gives the registry it hosts. */
+const REGISTRY_SECRET = "workerd-test-relay-secret";
+
+const signedRequest = async (method: "GET" | "POST", url: string, body = ""): Promise<Request> =>
+    new Request(url, {
+        body: method === "POST" ? body : undefined,
+        headers: { [RELAY_SIGNATURE_HEADER]: await signSiblingBody(REGISTRY_SECRET, shardRegistryFrame(method, url, body)) },
+        method,
+    });
 
 const text = async (response: Response): Promise<string> => await response.text();
 
@@ -43,13 +55,15 @@ describe("mergeDurableObjects (workerd)", () => {
         // `blockConcurrencyWhile` over storage, which must work through the merge.
         const registry = roleNamespace(env.MERGED, "shardRegistry").getByName("__lunora_shard_registry__");
         const registered = await registry.fetch(
-            new Request("https://do.internal/register", { body: JSON.stringify({ shardKey: "user-42", table: "posts" }), method: "POST" }),
+            await signedRequest("POST", "https://do.internal/register", JSON.stringify({ shardKey: "user-42", table: "posts" })),
         );
 
         await registered.arrayBuffer();
 
         expect(registered.ok).toBe(true);
-        await expect(registry.fetch("https://do.internal/list?table=posts").then(async (response) => await response.json())).resolves.toStrictEqual({
+        await expect(
+            registry.fetch(await signedRequest("GET", "https://do.internal/list?table=posts")).then(async (response) => await response.json()),
+        ).resolves.toStrictEqual({
             shardKeys: ["user-42"],
         });
     });

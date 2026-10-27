@@ -21,7 +21,7 @@ interface FunctionReference {
 const LUNORA_TABLE_REFS = ((): (() => Record<string, Record<string, string>>) => { let cached: Record<string, Record<string, string>> | undefined; return () => (cached ??= JSON.parse("{\"votes\":{\"feedbackId\":\"feedback\"},\"comments\":{\"feedbackId\":\"feedback\"}}") as Record<string, Record<string, string>>); })();
 
 /** Declared indexes per table (secondary, search, geo, rank, vector) for the schema viewer. */
-const LUNORA_TABLE_INDEXES = ((): (() => Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>) => { let cached: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> | undefined; return () => (cached ??= JSON.parse("{\"feedback\":[{\"fields\":[\"upvoteCount\"],\"name\":\"by_upvotes\",\"type\":\"index\"},{\"fields\":[\"status\"],\"name\":\"by_status\",\"type\":\"index\"}],\"votes\":[{\"fields\":[\"voterEmail\"],\"name\":\"by_voter\",\"type\":\"index\"},{\"fields\":[\"feedbackId\",\"voterEmail\"],\"name\":\"by_feedback_and_voter\",\"type\":\"index\",\"unique\":true}],\"comments\":[{\"fields\":[\"feedbackId\"],\"name\":\"by_feedback\",\"type\":\"index\"}],\"summaries\":[{\"fields\":[\"generatedAt\"],\"name\":\"by_generated\",\"type\":\"index\"}],\"ratelimit_buckets\":[{\"fields\":[\"key\"],\"name\":\"by_key\",\"type\":\"index\"}]}") as Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>); })();
+const LUNORA_TABLE_INDEXES = ((): (() => Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>) => { let cached: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> | undefined; return () => (cached ??= JSON.parse("{\"feedback\":[{\"fields\":[\"status\"],\"name\":\"by_status\",\"type\":\"index\"},{\"fields\":[\"upvoteCount\"],\"name\":\"by_upvotes\",\"type\":\"index\"}],\"votes\":[{\"fields\":[\"feedbackId\",\"voterEmail\"],\"name\":\"by_feedback_and_voter\",\"type\":\"index\",\"unique\":true},{\"fields\":[\"voterEmail\"],\"name\":\"by_voter\",\"type\":\"index\"}],\"comments\":[{\"fields\":[\"feedbackId\"],\"name\":\"by_feedback\",\"type\":\"index\"}],\"summaries\":[{\"fields\":[\"generatedAt\"],\"name\":\"by_generated\",\"type\":\"index\"}],\"ratelimit_buckets\":[{\"fields\":[\"key\"],\"name\":\"by_key\",\"type\":\"index\"}]}") as Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>); })();
 
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via `__lunora_admin__:describeTable`. */
 const LUNORA_TABLE_COLUMNS = ((): (() => Record<
@@ -801,18 +801,18 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // A single-row `writeRow` delete never carries it, so it keeps the
             // table's declared `.softDelete()` behaviour.
             if (args.op === "delete") {
-                await writer.delete(args.id ?? "", args.table, { hard: args.hard === true });
+                await writer.delete(args.table, args.id ?? "", { hard: args.hard === true });
 
                 return { id: args.id ?? null, op: "delete" };
             }
 
             if (args.op === "replace") {
-                await writer.replace(args.id ?? "", args.doc ?? {}, args.table);
+                await writer.replace(args.table, args.id ?? "", args.doc ?? {});
 
                 return { id: args.id ?? null, op: "replace" };
             }
 
-            await writer.patch(args.id ?? "", args.doc ?? {}, args.table);
+            await writer.patch(args.table, args.id ?? "", args.doc ?? {});
 
             return { id: args.id ?? null, op: "patch" };
         }
@@ -851,7 +851,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         }
 
         protected override async runShardImport(args: RunShardImportArgs): Promise<ImportShardResult> {
-            this.ensureMigrated();
+            // A dry run checks row shapes and never writes. Migrating first would write the schema ledger and create tables on a cold shard.
+            if (args.dryRun !== true) {
+                this.ensureMigrated();
+            }
 
             const writer = this.adminWriter();
 
@@ -952,6 +955,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             }
 
             this.blockedUniqueIndexes = runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, deferBlockedUniqueIndexes: true, schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT });
+            this.invalidateCompanionMemo();
             this.migrated = this.blockedUniqueIndexes.length === 0;
             this.migrationRetryAt = now + BLOCKED_MIGRATION_RETRY_MS;
         }

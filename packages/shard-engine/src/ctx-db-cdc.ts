@@ -765,7 +765,7 @@ const bumpCdcEpoch = (sql: SqlExec): string => {
  */
 const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Promise<void> => {
     if (change.op === "delete") {
-        await writer.delete(change.id, change.table);
+        await writer.delete(change.table, change.id);
 
         return;
     }
@@ -788,13 +788,13 @@ const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Pr
 
         delete fields["_id"];
 
-        await writer.replace(change.id, fields, change.table, { allowExplicitId: true });
+        await writer.replace(change.table, change.id, fields, { allowExplicitId: true });
     };
 
     // A row stored under a NUL-bearing id predates the guard on explicit ids, and
     // `insert` refuses that id before it can report a conflict. Rewrite such a row
     // in place instead, so replaying its history does not stop the whole changelog.
-    if (change.id.includes("\0") && (await writer.get(change.id, change.table)) !== null) {
+    if (change.id.includes("\0") && (await writer.get(change.table, change.id)) !== null) {
         await replaceExisting();
 
         return;

@@ -1,7 +1,7 @@
 import type { BindingElement, Identifier, Node as TsNode } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { bindingKeyName } from "./discover/ast";
+import { bindingKeyName, descendantsOfKind } from "./discover/ast";
 import { declarationOf, isReassignedBinding } from "./discover/attribution";
 import { isHandlerArgsParameter, referencesContext } from "./discover/context-root";
 
@@ -217,7 +217,7 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
     let nearest: TsNode | undefined;
     let nearestPosition = -1;
 
-    for (const variable of enclosingFunction.getDescendantsOfKind(SyntaxKind.VariableDeclaration)) {
+    for (const variable of descendantsOfKind(enclosingFunction, SyntaxKind.VariableDeclaration)) {
         if (variable.getName() !== name) {
             continue;
         }

@@ -1,0 +1,48 @@
+{
+    "migrationIds": [],
+    "tables": {
+        "notes": {
+            "commitOrdered": false,
+            "fields": {
+                "createdAt": {
+                    "kind": "number",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "orgId": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": true,
+                    "unique": false
+                },
+                "ownerId": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "text": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                }
+            },
+            "indexes": {
+                "by_org": {
+                    "fields": ["orgId", "createdAt"],
+                    "unique": false
+                },
+                "by_owner": {
+                    "fields": ["ownerId", "createdAt"],
+                    "unique": false
+                }
+            },
+            "memory": false,
+            "relations": {},
+            "shardMode": "root"
+        }
+    },
+    "version": 1
+}

@@ -538,7 +538,7 @@ describe("admin auth query-key hygiene (plan 264)", () => {
             .map((query) => query.queryKey);
 
         expect(keys).toHaveLength(1);
-        // `["lunora-react-admin-auth", "anon", "users", {...}, limit]` — the
+        // `["lunora-admin-auth-list", "anon", "users", {...}, limit]` — the
         // identity segment is index 1.
         expect(keys[0]?.[1]).toBe("anon");
     });

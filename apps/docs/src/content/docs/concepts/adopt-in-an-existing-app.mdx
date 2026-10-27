@@ -52,6 +52,20 @@ export default createWorker({
 });
 ```
 
+If that authority is a hosted identity provider that issues JWTs (Clerk, WorkOS
+AuthKit, Auth0, Supabase, or any OIDC issuer), you don't need to write this
+function. `@lunora/jwt-auth` verifies the token against the provider's JWKS and
+returns the identity, org and role claims included:
+
+```ts
+import { clerk } from "@lunora/jwt-auth";
+
+resolveIdentity: clerk({ publishableKey: env.CLERK_PUBLISHABLE_KEY, authorizedParties: ["https://app.example.com"] }),
+```
+
+[External auth](/docs/concepts/external-auth) covers the presets, client token
+refresh, and authenticating live-query sockets with a bearer.
+
 ### Memoize it
 
 `resolveIdentity` is called **once per RPC and once per fan-out leg**, so a

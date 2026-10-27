@@ -87,7 +87,7 @@ describe("ctx-db shape membership", () => {
         expect([...members.keys()].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["m1", "m3"]);
 
         // A row that moved out of the set (patched to c2) is no longer a member.
-        await writer.patch("m1", { channelId: "c2" });
+        await writer.patch("messages", "m1", { channelId: "c2" });
         const after = selectShapeMembers(harness.sql, "messages", { channelId: "c1" }, ["m1", "m3"]);
 
         expect([...after.keys()]).toStrictEqual(["m3"]);
@@ -106,7 +106,7 @@ describe("ctx-db shape membership", () => {
         expect(selectShapeMembers(harness.sql, "messages", { channelId: "c1" }, ["m1"]).get("m1")).toMatchObject({ _id: "m1", text: "a" });
 
         // And it is the CURRENT value, not the one the op that changed it carried.
-        await writer.patch("m1", { text: "b" });
+        await writer.patch("messages", "m1", { text: "b" });
 
         expect(selectShapeMembers(harness.sql, "messages", { channelId: "c1" }, ["m1"]).get("m1")).toMatchObject({ text: "b" });
     });
@@ -150,9 +150,9 @@ describe("ctx-db shape membership", () => {
         // - `m0` is hard-deleted and re-inserted OUT of the shape.
         // - `m1` is hard-deleted and re-inserted back INTO it.
         // - 20 brand-new rows land in another channel and were never replicated.
-        await writer.delete("m0");
+        await writer.delete("messages", "m0");
         await writer.insert("messages", { _id: "m0", authorId: "u1", channelId: "c2", text: "t0" }, { allowExplicitId: true });
-        await writer.delete("m1");
+        await writer.delete("messages", "m1");
         await writer.insert("messages", { _id: "m1", authorId: "u1", channelId: "c1", text: "t1-again" }, { allowExplicitId: true });
 
         for (let index = 0; index < 20; index += 1) {

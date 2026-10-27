@@ -33,7 +33,7 @@ describe("ctx.now in the harness", () => {
         vi.setSystemTime(5000);
 
         const id = await t.mutation(stamp, {});
-        const row = await t.run(async (ctx) => await ctx.db.get(id));
+        const row = await t.run(async (ctx) => await ctx.db.get("stamps", id));
 
         expect(row).toMatchObject({ at: 5000 });
 
@@ -74,6 +74,6 @@ describe("ctx.now in the harness", () => {
 
         const id = await t.mutation(stamp, {});
 
-        await expect(t.run(async (ctx) => await ctx.db.get(id))).resolves.toMatchObject({ at: 42 });
+        await expect(t.run(async (ctx) => await ctx.db.get("stamps", id))).resolves.toMatchObject({ at: 42 });
     });
 });

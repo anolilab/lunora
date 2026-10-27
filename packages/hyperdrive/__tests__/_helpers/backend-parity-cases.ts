@@ -57,7 +57,14 @@ const nullCase = (target: BackendParityTarget) => async (): Promise<void> => {
     const writer = await target.setup(nullablesSchema(v.union(v.string(), v.null())));
     const id = await writer.insert("nullables", { anything: null, literalNull: null, note: null, nullableMember: null, onlyNull: null, title: "t" });
 
-    await expect(writer.get(id)).resolves.toMatchObject({ anything: null, literalNull: null, note: null, nullableMember: null, onlyNull: null, title: "t" });
+    await expect(writer.get("nullables", id)).resolves.toMatchObject({
+        anything: null,
+        literalNull: null,
+        note: null,
+        nullableMember: null,
+        onlyNull: null,
+        title: "t",
+    });
 };
 
 const relaxCase = (target: BackendParityTarget) => async (): Promise<void> => {
@@ -73,7 +80,7 @@ const relaxCase = (target: BackendParityTarget) => async (): Promise<void> => {
     const writer = await target.setup(nullablesSchema(v.union(v.string(), v.null())));
     const id = await writer.insert("nullables", { anything: 1, literalNull: null, note: null, nullableMember: 1, onlyNull: null, title: "t" });
 
-    await expect(writer.get(id)).resolves.toMatchObject({ note: null });
+    await expect(writer.get("nullables", id)).resolves.toMatchObject({ note: null });
 };
 
 /** The declaration information_schema holds for `nullables.note`. */
@@ -185,7 +192,7 @@ const nulCase = (target: BackendParityTarget) => async (): Promise<void> => {
 
         const id = await writer.insert("wide", { label: "ok", n: 1 });
 
-        await expect(writer.patch(id, { label: "a\u0000b" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        await expect(writer.patch("wide", id, { label: "a\u0000b" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
 
         return;
     }
@@ -195,13 +202,13 @@ const nulCase = (target: BackendParityTarget) => async (): Promise<void> => {
     const id = "w1";
 
     await target.query("INSERT INTO `wide` (`id`, `_creationTime`, `label`, `n`) VALUES ('w1', 1, CONCAT('a', CHAR(0), 'b'), 1)");
-    await writer.patch(id, { n: 2 });
+    await writer.patch("wide", id, { n: 2 });
 
-    const stored = await writer.get(id);
+    const stored = await writer.get("wide", id);
 
     expect(stored).toMatchObject({ label: "a\u0000b", n: 2 });
 
-    await writer.delete(id);
+    await writer.delete("wide", id);
 
     await expect(writer.insert("wide", stored as never, { allowExplicitId: true })).resolves.toBe(id);
 };

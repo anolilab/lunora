@@ -34,7 +34,7 @@ class UnrelatedCdcShard extends TestShard {
 
 const clientState = (): SubscriptionState => {
     return {
-        acked: true,
+        ack: "acked",
         args: {},
         argsKey: "{}",
         callbacks: new Set(),

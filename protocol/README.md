@@ -835,6 +835,26 @@ A `defineWebSocket` route socket has no `connect` frame, so it cannot present
 `Authorization` header or an admin ticket; a route that a browser reaches with
 the session credential alone is refused (`403`).
 
+### 6.1 User identity on the upgrade
+
+The channels above admit the **socket**. The **user** a socket acts as comes from
+the worker's `resolveIdentity` on the upgrade request, once, and holds for the
+socket's life (a past `exp` closes it with `4001`). A browser sends its session
+cookie automatically. A client whose session is a bearer (an external IdP's JWT,
+or a cross-origin API) presents it in one of two ways:
+
+- **`Authorization: Bearer <session token>`**, for clients that can set headers
+  on an upgrade (React Native, server SDKs).
+- **`Sec-WebSocket-Protocol: lunora, lunora.bearer.<base64url(token)>`**, for
+  browsers. The token is UTF-8, base64url-encoded without padding. The worker
+  passes it to `resolveIdentity` as `Authorization: Bearer <token>` (a real
+  `Authorization` header wins), forwards only `lunora` to the shard, and answers
+  the handshake selecting `lunora`. A client that offers `lunora` MUST accept
+  `lunora` as the selected subprotocol.
+
+This bearer is a user credential only. It never satisfies the `LUNORA_WS_BEARER`
+or admin checks above, which read the forwarded upgrade and the `connect` frame.
+
 A client SHOULD accept an **async token provider** (`() -> token`) for both
 credentials, resolved fresh on every (re)connect. The TS contract is
 `WsTokenProvider` (`packages/client/src/types.ts`): `wsToken` takes the session

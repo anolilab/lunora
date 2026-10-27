@@ -94,7 +94,8 @@ client.close();
 ## Related
 
 - [`@lunora/react`](https://www.npmjs.com/package/@lunora/react) — React hooks built on this client.
-- `@lunora/client/query` — the shared live-query state machine every UI adapter builds on (subpath of this package).
+- `@lunora/client/query` — the shared live-query state machine every UI adapter builds on, plus the TanStack Query key contract and `lunoraQueryOptions` factory (subpath of this package).
+- `@lunora/client/auth` — the identity store and auth-gate contract, plus the framework-neutral core of the admin/organization list hooks (subpath of this package).
 - `@lunora/client/ssr` — server-side preloading over this client's HTTP transport (subpath of this package).
 
 ## Supported Node.js Versions

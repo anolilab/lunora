@@ -3,14 +3,16 @@
  * reminder that `.dev.vars` is not pushed, and minting + pushing the ones that
  * are missing on the target.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import type { DeployDriver, DiscoveryCache } from "@lunora/config";
 import {
     DEV_VARS_FILE,
+    ensureGitignoreEntries,
     generateSecretValue,
     inferLunoraBindings,
-    isMintableSecretKey,
+    isPlaceholderValue,
+    mintableSecretKeysFor,
     parseDevVariableEntries,
     requiredSecrets,
     resolveSchemaDirectory,
@@ -69,12 +71,16 @@ const warnDevVariablesNotPushed = (cwd: string, logger: Logger, driver: DeployDr
         hasSecretStore
             ? `Note: \`lunora deploy\` does not push secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s); ` +
                   `if you changed them, run \`lunora env push --yes\` to update the deployed secrets.`
-            : `Note: ${driver.name} deploys read no secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s) that only the dev server sees; put the values the deployed worker needs in wrangler \`vars\`.`,
+            : `Note: ${driver.name} deploys read no secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s) that only the dev server sees; ` +
+                  `a key the app reads from env must be a \`vars\` entry in the deployed config, one it loads from a secret manager at runtime need not.`,
     );
 };
 
-/** The secret keys this project requires on the deployed worker: its packages' + any secret-typed local var. */
-const resolveRequiredSecretKeys = async (cwd: string, cache: DiscoveryCache | undefined): Promise<string[]> => {
+/** The secret keys this project requires on the deployed worker, by source: its packages', and the secret-typed local vars. */
+const resolveRequiredSecretKeys = async (
+    cwd: string,
+    cache: DiscoveryCache | undefined,
+): Promise<{ fromLocal: string[]; fromPackages: string[]; mintableKeys: ReadonlySet<string> }> => {
     let packages: ReadonlyArray<string> = [];
 
     try {
@@ -83,7 +89,7 @@ const resolveRequiredSecretKeys = async (cwd: string, cache: DiscoveryCache | un
         // Scan failure → fall back to the core secrets + whatever is declared locally.
     }
 
-    const fromPackages = requiredSecrets(packages).map((entry) => entry.key);
+    const fromPackages = [...new Set(requiredSecrets(packages).map((entry) => entry.key))];
 
     let fromLocal: string[] = [];
 
@@ -101,7 +107,7 @@ const resolveRequiredSecretKeys = async (cwd: string, cache: DiscoveryCache | un
         // Unreadable .dev.vars → packages-only.
     }
 
-    return [...new Set([...fromPackages, ...fromLocal])];
+    return { fromLocal: fromLocal.filter((key) => !fromPackages.includes(key)), fromPackages, mintableKeys: mintableSecretKeysFor(packages) };
 };
 
 /**
@@ -227,9 +233,6 @@ const SAFE_ENV_NAME = /^[\w-]+$/u;
  */
 const DEV_VARS_IGNORE_PATTERNS = [".dev.vars", ".dev.vars.*", "!.dev.vars.example"];
 
-/** Split a `.gitignore` on either line ending, so a CRLF file's patterns still match. */
-const GITIGNORE_LINE = /\r?\n/u;
-
 /**
  * Make sure the project's `.gitignore` covers the `.dev.vars`-shaped file this
  * deploy is about to write a freshly minted PRODUCTION secret into.
@@ -240,38 +243,20 @@ const GITIGNORE_LINE = /\r?\n/u;
  * scaffolded project ships the bare pattern only, and a project not scaffolded
  * by `lunora init` ships whatever its author wrote — so the guard belongs here,
  * at the one place a secret value ever reaches the disk, rather than in each
- * template. Appends only what is missing, and is a no-op once present.
+ * template. The append itself is {@link ensureGitignoreEntries}, shared with the
+ * celld projections; it is a no-op once present.
  *
  * Best-effort: a `.gitignore` that cannot be written (read-only checkout, no
  * git at all) must not cost the user the only recoverable copy of a write-only
  * secret, so it warns and lets the write proceed.
  */
 const ensureDevVariablesIgnored = (cwd: string, logger: Logger): void => {
-    const gitignorePath = join(cwd, ".gitignore");
-
     try {
-        const existing = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf8") : "";
-        const lines = new Set(existing.split(GITIGNORE_LINE).map((line) => line.trim()));
-        const missing = DEV_VARS_IGNORE_PATTERNS.filter((pattern) => !lines.has(pattern));
+        const missing = ensureGitignoreEntries(cwd, DEV_VARS_IGNORE_PATTERNS);
 
-        if (missing.length === 0) {
-            return;
+        if (missing.length > 0) {
+            logger.info(`.gitignore: added ${missing.join(", ")} so the recorded secret cannot be committed`);
         }
-
-        // An appended pattern lands BELOW whatever the file already had, and git
-        // takes the last match — so appending `.dev.vars.*` under a `.gitignore`
-        // that already carried `!.dev.vars.example` silently re-ignored the
-        // example file the templates ship. Re-state the negations after the
-        // additions instead of reasoning about where the existing ones sit; a
-        // repeated negation line is inert, a stranded one is not.
-        const additions = missing.some((pattern) => !pattern.startsWith("!"))
-            ? [...missing.filter((pattern) => !pattern.startsWith("!")), ...DEV_VARS_IGNORE_PATTERNS.filter((pattern) => pattern.startsWith("!"))]
-            : missing;
-
-        const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
-
-        writeFileSync(gitignorePath, `${existing}${prefix}\n# Lunora — never commit a minted secret\n${additions.join("\n")}\n`, "utf8");
-        logger.info(`.gitignore: added ${missing.join(", ")} so the recorded secret cannot be committed`);
     } catch (error) {
         logger.warn(
             `could not update .gitignore (${error instanceof Error ? error.message : String(error)}) — add \`${DEV_VARS_IGNORE_PATTERNS.join("` and `")}\` by hand before committing.`,
@@ -344,6 +329,70 @@ interface MissingSecretsOutcome {
     mintedSecretsFile?: string;
 }
 
+/** An angle-bracket template such as `<your-value>`: a placeholder the operator has not replaced. */
+const ANGLE_TEMPLATE = /^<[^>]+>$/u;
+
+/**
+ * The secrets check for a target with no secret store: its only channel is the
+ * `vars` of the config projection the deploy ships (for a Vite virtual entry,
+ * the build's config, not the project's), sent as plain strings. An absent,
+ * non-string, empty or placeholder value is a credential the worker cannot use.
+ *
+ * Only the packages' secrets abort the deploy: Lunora reads those from env, so
+ * nothing but `vars` can supply them. A key that is required only because
+ * `.dev.vars` names it may be one the app loads from a secret manager at
+ * runtime, which this check cannot see, so it is a warning.
+ */
+const checkVariablesForSecrets = async (cwd: string, options: DeployCommandOptions, driver: DeployDriver): Promise<MissingSecretsOutcome> => {
+    let deployed: Readonly<Record<string, unknown>>;
+
+    try {
+        deployed = driver.projectConfig?.(cwd, "deploy").vars ?? {};
+    } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+    }
+
+    const isUnset = (key: string): boolean => {
+        const value = deployed[key];
+
+        if (typeof value !== "string") {
+            return true;
+        }
+
+        const trimmed = value.trim();
+
+        if (trimmed === "" || ANGLE_TEMPLATE.test(trimmed)) {
+            return true;
+        }
+
+        // The token heuristic is for secret-shaped keys: a real URL such as `https://todo.acme.com` is a value.
+        return isSecretKeyName(key) && isPlaceholderValue(value);
+    };
+    const describe = (key: string): string => (Object.hasOwn(deployed, key) ? `${key} (empty or a placeholder)` : key);
+    const { fromLocal, fromPackages } = await resolveRequiredSecretKeys(cwd, options.discoveryCache);
+    const localUnset = fromLocal.filter((key) => isUnset(key));
+
+    if (localUnset.length > 0) {
+        options.logger.warn(
+            `${DEV_VARS_FILE} key(s) not set in the wrangler vars: ${localUnset.map((key) => describe(key)).join(", ")}. ` +
+                `${driver.name} has no secret store: a key the app reads from env must be a \`vars\` entry; one it loads from a secret manager at runtime need not.`,
+        );
+    }
+
+    const missing = fromPackages.filter((key) => isUnset(key));
+
+    if (missing.length === 0) {
+        return {};
+    }
+
+    return {
+        error:
+            `missing required secret(s) in the wrangler vars: ${missing.map((key) => describe(key)).join(", ")}. ` +
+            `${driver.name} has no secret store and Lunora reads these from env, so each must be a real \`vars\` value in the config the deploy ships — ` +
+            `write it there from your secret manager at deploy time rather than committing it. Add them, then re-deploy.`,
+    };
+};
+
 /**
  * Before a live deploy, detect required secrets that are NOT yet set on the
  * target worker and resolve them. INTERACTIVE: offer to generate + push the
@@ -364,13 +413,19 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
         return {};
     }
 
+    // A host with no secret store (celld) takes its secrets as `vars`, so the check
+    // is against the projection's `vars`, not a remote list.
+    if (driver.toolchain?.secretList === undefined) {
+        return checkVariablesForSecrets(cwd, options, driver);
+    }
+
     const { logger } = options;
     const environmentFlag = options.env === undefined ? "" : ` --env ${options.env}`;
 
     let remote: ListRemoteSecretsResult;
 
     try {
-        remote = await (options.secretLister ?? listRemoteSecrets)({ cwd, env: options.env, temporary: options.temporary });
+        remote = await (options.secretLister ?? listRemoteSecrets)({ cwd, env: options.env, target: driver.id, temporary: options.temporary });
     } catch {
         return {};
     }
@@ -381,8 +436,8 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     }
 
     const remoteNames = new Set(remote.names);
-    const required = await resolveRequiredSecretKeys(cwd, options.discoveryCache);
-    const missing = required.filter((key) => !remoteNames.has(key));
+    const { fromLocal, fromPackages, mintableKeys } = await resolveRequiredSecretKeys(cwd, options.discoveryCache);
+    const missing = [...fromPackages, ...fromLocal].filter((key) => !remoteNames.has(key));
 
     if (missing.length === 0) {
         return {};
@@ -399,11 +454,11 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
         };
     }
 
-    for (const key of missing.filter((name) => !isMintableSecretKey(name))) {
+    for (const key of missing.filter((name) => !mintableKeys.has(name))) {
         logger.warn(`required secret ${key} is not set on the target — set it with: wrangler secret put ${key}${environmentFlag}`);
     }
 
-    const mintable = missing.filter((key) => isMintableSecretKey(key));
+    const mintable = missing.filter((key) => mintableKeys.has(key));
 
     if (mintable.length === 0) {
         return {};

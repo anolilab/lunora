@@ -115,7 +115,7 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
                 applied: true,
                 doc: expect.objectContaining({ _id: "t1", seq: 10 }),
             });
-            await expect(writer.get("t1")).resolves.toMatchObject({ seq: 10 });
+            await expect(writer.get("todos", "t1")).resolves.toMatchObject({ seq: 10 });
         });
 
         it("lets exactly one of ten concurrent compare-and-set patches win", async () => {
@@ -130,7 +130,7 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             );
 
             expect(results.filter((result) => result?.applied)).toHaveLength(1);
-            await expect(writer.get("t2")).resolves.toMatchObject({ seq: 3 });
+            await expect(writer.get("todos", "t2")).resolves.toMatchObject({ seq: 3 });
         });
     });
 
@@ -202,18 +202,18 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
 
             const id = await writer.insert("todos", { archived: false, priority: "low", projectId: "p9", seq: 7 });
 
-            await writer.patch(id, { priority: "high" });
+            await writer.patch("todos", id, { priority: "high" });
             const patched = await writer.findFirst("todos", { where: { _id: id } });
 
             expect(patched?.["priority"]).toBe("high");
 
-            await writer.replace(id, { archived: true, priority: "mid", projectId: "p9", seq: 8 });
+            await writer.replace("todos", id, { archived: true, priority: "mid", projectId: "p9", seq: 8 });
             const replaced = await writer.findFirst("todos", { where: { _id: id } });
 
             expect(replaced?.["archived"]).toBe(true);
             expect(replaced?.["seq"]).toBe(8);
 
-            await writer.delete(id);
+            await writer.delete("todos", id);
 
             await expect(writer.findFirst("todos", { where: { _id: id } })).resolves.toBeNull();
         });
@@ -516,8 +516,8 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             const writer = await setupNotes();
 
             await seedNotes(writer);
-            await writer.patch("n1", { body: "totally rewritten" });
-            await writer.delete("n4");
+            await writer.patch("notes", "n1", { body: "totally rewritten" });
+            await writer.delete("notes", "n4");
 
             const stale = await writer
                 .query("notes")
@@ -849,8 +849,8 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
                 .withSearchIndex("by_body", (q) => q.search("body", "hello").eq("channel", "other"))
                 .collect();
 
-            await writer.patch("n1", { body: "totally rewritten" });
-            await writer.delete("n2");
+            await writer.patch("notes", "n1", { body: "totally rewritten" });
+            await writer.delete("notes", "n2");
 
             const stale = await writer
                 .query("notes")
@@ -960,7 +960,7 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             ).resolves.toStrictEqual([expect.objectContaining({ _id: "n1" })]);
 
             // Plain reads and writes keep working through the switch.
-            await expect(native.get("n1")).resolves.toMatchObject({ title: "one" });
+            await expect(native.get("notes", "n1")).resolves.toMatchObject({ title: "one" });
             await expect(native.insert("notes", { body: "after the flip", channel: "general", title: "two" })).resolves.toBeDefined();
         });
 

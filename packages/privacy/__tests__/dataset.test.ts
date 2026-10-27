@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
-import { defineDataset, erasureOrder, retainedTables } from "../src/dataset";
+import { defineDataset, erasureOrder, PortTableMissingError, requireTables, retainedTables } from "../src/dataset";
 import { retain } from "../src/rules";
 
 const base = {
@@ -39,6 +39,31 @@ describe(defineDataset, () => {
 
     it("refuses a dataset with no tables", () => {
         expect(codeOf(() => defineDataset("tasks", { ...base, tables: {} }))).toBe("BAD_REQUEST");
+    });
+});
+
+describe(requireTables, () => {
+    const dataset = defineDataset("tasks", base);
+
+    it("accepts a result with an entry for every table", () => {
+        expect(() => {
+            requireTables({ goals: [], tasks: [] }, dataset, "remaining");
+        }).not.toThrow();
+    });
+
+    it("names the missing table and its dataset", () => {
+        expect(() => {
+            requireTables({ goals: [] }, dataset, "remaining");
+        }).toThrow(new PortTableMissingError("remaining", "tasks", "tasks"));
+    });
+
+    it("does not count an inherited property as an entry", () => {
+        // A dataset table named like an Object.prototype member must not pass through the prototype.
+        const named = defineDataset("labels", { ...base, tables: { toString: {} } });
+
+        expect(() => {
+            requireTables({}, named, "remaining");
+        }).toThrow(PortTableMissingError);
     });
 });
 

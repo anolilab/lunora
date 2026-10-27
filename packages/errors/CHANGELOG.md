@@ -1,3 +1,21 @@
+## @lunora/errors [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.71...@lunora/errors@1.0.0-alpha.72) (2026-10-26)
+
+### Bug Fixes
+
+* **errors:** register SHARD_DRY_RUN_UNSUPPORTED in the catalog ([#1348](https://github.com/anolilab/lunora/issues/1348)) ([df9fb5b](https://github.com/anolilab/lunora/commit/df9fb5ba45a32fb178fc8fbc74604090c030c5f6))
+
+## @lunora/errors [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.70...@lunora/errors@1.0.0-alpha.71) (2026-10-26)
+
+### Features
+
+* **studio:** import a CSV file into a table ([#1321](https://github.com/anolilab/lunora/issues/1321)) ([360930a](https://github.com/anolilab/lunora/commit/360930a9edc00a56f90c5cdf6a9d3218e428aeea))
+
+## @lunora/errors [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.69...@lunora/errors@1.0.0-alpha.70) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
 ## @lunora/errors [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.68...@lunora/errors@1.0.0-alpha.69) (2026-10-24)
 
 ### Features

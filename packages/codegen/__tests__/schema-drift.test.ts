@@ -625,6 +625,24 @@ describe("schema-drift", () => {
             expect([hashMoved, serializationMoved]).toStrictEqual([true, true]);
         });
 
+        it("reports only a safe refresh when a baseline object recorded no fields, before its spread shape was resolved", () => {
+            expect.assertions(2);
+
+            const { changes } = compare({ profile: { kind: "object", shape: {} } }, { profile: { kind: "object", shape: { name: optionalString } } });
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ remediation: "none", severity: "safe", type: "widenedFieldShape" });
+        });
+
+        it("keeps a breaking change when a literal empty object gains a required field", () => {
+            expect.assertions(2);
+
+            const { changes } = compare({ profile: { kind: "object", shape: {} } }, { profile: { kind: "object", shape: { name: { kind: "string" } } } });
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
+        });
+
         it("sees a `v.from()` schema whose inferred output type changed", () => {
             expect.assertions(4);
 

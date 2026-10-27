@@ -1,7 +1,7 @@
 import type { CallExpression, Project, PropertyAccessExpression } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listLunoraSourceFiles } from "./ast";
+import { descendantsOfKind, listLunoraSourceFiles } from "./ast";
 import { isContextSurface } from "./context-root";
 
 /** The four typed flag reads `ctx.flags.<type>(…)` / `ctx.flags.details.<type>(…)` expose. */
@@ -77,7 +77,7 @@ const discoverFlagKeys = (project: Project, lunoraDirectory: string): FlagKey[] 
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
-        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+        for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
             const candidate = flagKeyFromCall(call);
 
             if (candidate && !found.has(candidate.key)) {

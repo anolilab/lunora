@@ -36,9 +36,10 @@ const IDENTITY_FIELDS = new Set<string>([
 
 /**
  * `ctx.db` write surfaces whose document / partial (the object whose identity
- * columns this feeder inspects) is the SECOND argument: `insert(table, doc)`,
- * `replace(id, doc)`, `patch(id, partial)`, and `insertManyUnsafe(table, rows)`
- * (`rows` an array of documents). The document argument is always `arg[1]`.
+ * columns this feeder inspects) is the argument after the table: `insert(table, doc)`
+ * and `insertManyUnsafe(table, rows)` (`rows` an array of documents) take it at
+ * `arg[1]`, while `patch(table, id, partial)` and `replace(table, id, doc)` take it at
+ * `arg[2]`, after the id.
  */
 const IDENTITY_WRITE_METHODS = new Set<string>(["insert", "insertManyUnsafe", "patch", "replace"]);
 
@@ -222,7 +223,9 @@ const identityWritesInObjectLiteral = (
 /** Identity columns written from `args` by a single `ctx.db` write call. */
 const ownerFieldWritesInCall = (call: CallExpression, relativePath: string, ownerFieldOf: (exportName: string) => string | undefined): OwnerFieldWriteIR[] => {
     const method = contextDatabaseWriteMethod(call.getExpression());
-    const documentArgument = method === undefined ? undefined : call.getArguments()[1];
+    // `patch` and `replace` take the table and the id before the document; `insert` takes the table before it.
+    const documentIndex = method === "patch" || method === "replace" ? 2 : 1;
+    const documentArgument = method === undefined ? undefined : call.getArguments()[documentIndex];
 
     if (method === undefined || documentArgument === undefined) {
         return [];

@@ -251,6 +251,13 @@ class AdminShard extends ShardDO {
     }
 }
 
+/** Exposes the companions the shard's ctx-db memo holds as verified. */
+class CompanionMemoShard extends AdminShard {
+    public verifiedCompanions(): Set<string> {
+        return this.ctxDbTuning().companionMemo.verified;
+    }
+}
+
 /**
  * Mirrors the codegen subclass that overrides `workflowsMetadata()` with the
  * project's discovered workflow declarations — shared by every test that needs
@@ -1231,17 +1238,22 @@ describe("shardDO admin introspection", () => {
     });
 
     it("forgets every companion rebuild marker on rebuildCompanions", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         // A marker as a migrated shard holds it; the base class never migrates one.
         database.raw(`CREATE TABLE "__lunora_companion_state" ("companion" TEXT PRIMARY KEY, "signature" TEXT NOT NULL)`);
         database.raw(`INSERT INTO "__lunora_companion_state" VALUES ('todos__agg_byProject', 'sig')`);
 
-        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new CompanionMemoShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // Verified by an earlier write: left in the memo, the next write would skip the rebuild.
+        shard.verifiedCompanions().add("todos__agg_byProject");
+
         const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.rebuildCompanions, {}, ADMIN_TOKEN));
 
         await expect(response.json()).resolves.toEqual({ result: { ok: true } });
         expect(database.raw(`SELECT * FROM "__lunora_companion_state"`)).toHaveLength(0);
+        expect(shard.verifiedCompanions().size).toBe(0);
     });
 
     it("starts a workflow instance through the declared workflow on ctx.exports", async () => {
@@ -2629,18 +2641,18 @@ class EditableShard extends ShardDO {
         }
 
         if (args.op === "delete") {
-            await writer.delete(args.id ?? "");
+            await writer.delete(args.table, args.id ?? "");
 
             return { id: args.id ?? null, op: "delete" };
         }
 
         if (args.op === "replace") {
-            await writer.replace(args.id ?? "", args.doc ?? {});
+            await writer.replace(args.table, args.id ?? "", args.doc ?? {});
 
             return { id: args.id ?? null, op: "replace" };
         }
 
-        await writer.patch(args.id ?? "", args.doc ?? {});
+        await writer.patch(args.table, args.id ?? "", args.doc ?? {});
 
         return { id: args.id ?? null, op: "patch" };
     }
@@ -3028,7 +3040,7 @@ describe("shardDO admin cdcSync", () => {
         const writer = createShardContextDatabase({ cdc: true, schema: usersSchema, sql: database.sql });
 
         await writer.insert("users", { _id: "u_1", name: "Ada", version: 1 }, { allowExplicitId: true });
-        await writer.patch("u_1", { name: "Ada Lovelace" });
+        await writer.patch("users", "u_1", { name: "Ada Lovelace" });
 
         const shard = new AdminShard(stateFor(database.sql), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(cdcRequest({ sinceSeq: 0 }));
@@ -3123,12 +3135,89 @@ describe("shardDO admin CDC bigint/bytes egress", () => {
 
             expect(replayed.status).toBe(200);
 
-            const row = await createShardContextDatabase({ schema: moneySchema, sql: target.sql }).get("s1", "sessions");
+            const row = await createShardContextDatabase({ schema: moneySchema, sql: target.sql }).get("sessions", "s1");
 
             expect([row?.["amountMinor"], new Uint8Array(row?.["receipt"] as ArrayBuffer)]).toStrictEqual([10n, new Uint8Array([1, 2, 3])]);
         } finally {
             target.close();
         }
+    });
+});
+
+describe("shardDO admin filters — nested paths and array membership", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let shard: AdminShard;
+    // Every statement the shard issues, so a test can prove a request touched no row.
+    let statements: string[];
+
+    beforeEach(() => {
+        database = createSqliteExec();
+        database.raw(`CREATE TABLE "orders" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+        database.raw(
+            `INSERT INTO "orders" VALUES ('o1', 1, '{"address":{"city":"Berlin"},"tags":["red","blue"],"status":"open"}'), ('o2', 2, '{"address":{"city":"Paris"},"tags":["green"],"status":"closed"}')`,
+        );
+
+        statements = [];
+        const recording: SqlExec = {
+            exec: (query, ...params) => {
+                statements.push(query);
+
+                return database.sql.exec(query, ...params);
+            },
+        };
+
+        shard = new AdminShard(stateFor(recording), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        statements = [];
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const pageIds = async (filters: unknown): Promise<unknown[]> => {
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.readTablePage, { filters, table: "orders" }));
+        const { result } = await response.json<{ result: { rows: Record<string, unknown>[] } }>();
+
+        return result.rows.map((row) => row["id"]);
+    };
+
+    it("filters a nested field through the path the browser sends", async () => {
+        expect.assertions(1);
+
+        await expect(pageIds([{ column: "address", operator: "eq", path: ["city"], value: "Berlin" }])).resolves.toStrictEqual(["o1"]);
+    });
+
+    it("filters array membership through has", async () => {
+        expect.assertions(1);
+
+        await expect(pageIds([{ column: "tags", operator: "has", value: "green" }])).resolves.toStrictEqual(["o2"]);
+    });
+
+    it("refuses an explicit null path on a bulk delete before selecting or deleting any row", async () => {
+        expect.assertions(4);
+
+        // `status` is a top-level field on o1 only. Dropping the null path would
+        // test that parent column and delete o1.
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "status", operator: "eq", path: null, value: "open" }], table: "orders" }),
+        );
+
+        expect(response.status).toBe(400);
+        // Only statements that touch the table: the shard's own bookkeeping reads run on every request.
+        expect(statements.filter((query) => query.includes('"orders"'))).toStrictEqual([]);
+        expect(database.raw(`SELECT COUNT(*) AS c FROM "orders"`)[0]?.["c"]).toBe(2);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+    });
+
+    it("answers 400 to a path that is not a list of field names, rather than testing the parent field", async () => {
+        expect.assertions(2);
+
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "address", operator: "eq", path: "city", value: "Berlin" }], table: "orders" }),
+        );
+
+        expect(response.status).toBe(400);
+        expect(database.raw(`SELECT COUNT(*) AS c FROM "orders"`)[0]?.["c"]).toBe(2);
     });
 });
 
@@ -3150,7 +3239,7 @@ class MoneyBulkShard extends MoneyApplyShard {
     }
 
     protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
-        await createShardContextDatabase({ schema: moneySchema, sql: this.sql as SqlExec }).delete(args.id ?? "", args.table, { hard: true });
+        await createShardContextDatabase({ schema: moneySchema, sql: this.sql as SqlExec }).delete(args.table, args.id ?? "", { hard: true });
 
         return { id: args.id ?? null, op: args.op };
     }
@@ -3429,9 +3518,9 @@ class BulkOpsShard extends ShardDO {
             // Codegen's exact forwarding — the harness has to carry it or the bulk
             // arm's `hard: true` is invisible here, which is how the non-converging
             // soft-delete drain shipped.
-            await writer.delete(args.id ?? "", args.table, { hard: args.hard === true });
+            await writer.delete(args.table, args.id ?? "", { hard: args.hard === true });
         } else if (args.op === "patch") {
-            await writer.patch(args.id ?? "", args.doc ?? {}, args.table);
+            await writer.patch(args.table, args.id ?? "", args.doc ?? {});
         } else {
             throw new Error(`unexpected op in the bulk harness: ${args.op}`);
         }

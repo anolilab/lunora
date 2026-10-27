@@ -21,6 +21,7 @@ const fakeHost = (overrides: Partial<TabLeadershipHost> = {}, mirror: Partial<Le
         ackAndAdvanceCursor: vi.fn<(state: SubscriptionState, cursor: number | undefined, epoch: string | undefined) => void>(),
         activeShapes: vi.fn<() => ShapeSubscriptionState[]>(() => []),
         activeSubscriptions: vi.fn<() => SubscriptionState[]>(() => []),
+        awaitLeaderAnswers: vi.fn<() => void>(),
         broadcastStatus: vi.fn<(status: ConnectionStatus, identity: string | null) => void>(),
         clientIdentifier: vi.fn<() => string>(() => "client-a"),
         closeConnections: vi.fn<() => void>(),
@@ -34,6 +35,7 @@ const fakeHost = (overrides: Partial<TabLeadershipHost> = {}, mirror: Partial<Le
         leader,
         queueResubscribe: vi.fn<(state: SubscriptionState) => void>(),
         queuedShardKeys: vi.fn<() => Iterable<string | undefined>>(() => []),
+        settleAwaitedAnswer: vi.fn<(state: SubscriptionState, readable: boolean) => void>(),
         subscription: vi.fn<(key: string) => SubscriptionState | undefined>(() => undefined),
         ...overrides,
     };
@@ -46,7 +48,7 @@ const subscription = (id: string, shardKey: string | undefined): SubscriptionSta
 /** A subscription in its just-opened state, with every field set so no cast is needed. */
 const liveSubscription = (overrides: Partial<SubscriptionState> = {}): SubscriptionState => {
     return {
-        acked: false,
+        ack: "idle",
         args: {},
         argsKey: "{}",
         callbacks: new Set<SubscriptionCallback>(),
@@ -166,14 +168,14 @@ describe("onStopBeingLeader", () => {
     it("forgets the answers its own socket gave, for shapes and acked queries", () => {
         expect.assertions(3);
 
-        const state = liveSubscription({ acked: true });
+        const state = liveSubscription({ ack: "acked" });
         const shape = { answered: true } as unknown as ShapeSubscriptionState;
         const { host } = fakeHost({ activeShapes: () => [shape], activeSubscriptions: () => [state] });
 
         onStopBeingLeader(host);
 
         expect(shape.answered).toBe(false);
-        expect(state.acked).toBe(false);
+        expect(state.ack).toBe("idle");
         expect(state.valueReceived).toBe(false);
     });
 });
@@ -209,6 +211,28 @@ describe("onLeaderStatus", () => {
         expect(host.flushOfflineQueues).toHaveBeenCalledTimes(1);
 
         expect(host.emitConnectionStatus).toHaveBeenCalledTimes(3);
+    });
+
+    it("un-answers the relayed values before that flush, so a snapshot-guarded write waits for the next relay", () => {
+        expect.assertions(2);
+
+        const calls: string[] = [];
+        const { host } = fakeHost(
+            {
+                awaitLeaderAnswers: vi.fn<() => void>(() => calls.push("await")),
+                flushOfflineQueues: vi.fn<() => void>(() => calls.push("flush")),
+            },
+            { status: "offline" },
+        );
+
+        onLeaderStatus(host, "connected", undefined);
+        onLeaderStatus(host, "connected", undefined);
+
+        expect(calls).toStrictEqual(["await", "flush"]);
+
+        onLeaderStatus(host, "offline", undefined);
+
+        expect(host.awaitLeaderAnswers).toHaveBeenCalledTimes(1);
     });
 
     it("drops a status stamped for another identity, changing nothing", () => {
@@ -312,6 +336,22 @@ describe("onFollowerSubscriptionData", () => {
         expect(state.serverEpoch).toBe("e0");
     });
 
+    it("settles the answer a write may be held on, after the value it is judged against is committed", () => {
+        expect.assertions(2);
+
+        const state = liveSubscription({ serverBase: "before" });
+        const committedAtSettle: unknown[] = [];
+        const { host } = fakeHost({
+            settleAwaitedAnswer: vi.fn<(settled: SubscriptionState, readable: boolean) => void>((settled) => committedAtSettle.push(settled.serverBase)),
+            subscription: () => state,
+        });
+
+        onFollowerSubscriptionData(host, "s1", "after", 5, "e1", "subj:a");
+
+        expect(host.settleAwaitedAnswer).toHaveBeenCalledWith(state, true);
+        expect(committedAtSettle).toStrictEqual(["after"]);
+    });
+
     it("drops a frame stamped for another identity, changing nothing", () => {
         expect.assertions(2);
 
@@ -346,6 +386,17 @@ describe("onFollowerSubscriptionError", () => {
         onFollowerSubscriptionError(host, "s1", { code: "FORBIDDEN", message: "no" }, "subj:a");
 
         expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "no" }]);
+    });
+
+    it("settles a held write's wait as unreadable, as a refusal on this tab's own socket would", () => {
+        expect.assertions(1);
+
+        const state = liveSubscription();
+        const { host } = fakeHost({ subscription: () => state });
+
+        onFollowerSubscriptionError(host, "s1", { code: "FORBIDDEN", message: "no" }, "subj:a");
+
+        expect(host.settleAwaitedAnswer).toHaveBeenCalledWith(state, false);
     });
 
     it("drops an error stamped for another identity", () => {

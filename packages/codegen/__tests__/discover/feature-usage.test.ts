@@ -464,7 +464,7 @@ describe("discover/feature-usage", () => {
 
         expect(mayReadCapabilityContext("export const f = ({ ctx }) => ctx.kv.get('a');")).toBe(true);
         expect(mayReadCapabilityContext("export const kv = 1;")).toBe(false);
-        expect(mayReadCapabilityContext("export const f = ({ ctx }) => ctx.db.get('a');")).toBe(false);
+        expect(mayReadCapabilityContext("export const f = ({ ctx }) => ctx.db.get('posts', 'a');")).toBe(false);
     });
 
     it("does not flag mail on an unrelated `mail` property read (import-only feature)", () => {

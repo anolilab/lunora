@@ -171,4 +171,75 @@ describe("agentHarness", () => {
 
         await expect(harness.run({ input: "go", threadKey: "t1" })).rejects.toThrow(/scripted generate exhausted/u);
     });
+
+    describe("human-in-the-loop approvals", () => {
+        const gatedAgent = (): ReturnType<typeof defineAgent> =>
+            defineAgent({
+                model: "test-model",
+                tools: {
+                    refund: defineAgentTool({
+                        description: "Refund an order.",
+                        execute: async (input, { run }) => run({ __lunoraRef: "billing:refund" }, { id: (input as { id: string }).id }),
+                        inputSchema: anySchema,
+                        needsApproval: true,
+                    }),
+                },
+            });
+
+        const refundHarness = (): ReturnType<typeof agentHarness> =>
+            agentHarness(gatedAgent(), {
+                functions: {
+                    "billing:refund": () => {
+                        return { refunded: true };
+                    },
+                },
+                script: [toolCallTurn("c1", "refund", { id: "o_9" }), finalTurn("Done.")],
+            });
+
+        const hasPendingMarker = (harness: ReturnType<typeof agentHarness>): boolean =>
+            harness.messages("t1").some((message) => message.status === "awaiting_approval");
+
+        it("pauses on the approval, then runs the tool once the approval is delivered", async () => {
+            expect.hasAssertions();
+
+            const harness = refundHarness();
+            const running = harness.run({ input: "refund o_9", threadKey: "t1" }, { instanceId: "run-1" });
+
+            await harness.awaitWait("run-1", "approval:c1");
+
+            expect(hasPendingMarker(harness)).toBe(true);
+
+            harness.deliver("run-1", "approval:c1", { decision: "approve" });
+
+            await expect(running).resolves.toMatchObject({ text: "Done." });
+            expect(harness.dispatches.map((dispatch) => dispatch.path)).toContain("billing:refund");
+            expect(hasPendingMarker(harness)).toBe(false);
+        });
+
+        it("resolves an approval delivered before the run reaches it", async () => {
+            expect.hasAssertions();
+
+            const harness = refundHarness();
+
+            harness.deliver("run-1", "approval:c1", { decision: "reject", note: "not today" });
+
+            await expect(harness.run({ input: "refund o_9", threadKey: "t1" }, { instanceId: "run-1" })).resolves.toMatchObject({ text: "Done." });
+            expect(harness.dispatches.map((dispatch) => dispatch.path)).not.toContain("billing:refund");
+            expect(hasPendingMarker(harness)).toBe(false);
+        });
+
+        it("ends a never-answered approval as a rejection once its wait expires, instead of hanging", async () => {
+            expect.hasAssertions();
+
+            const harness = refundHarness();
+            const running = harness.run({ input: "refund o_9", threadKey: "t1" }, { instanceId: "run-1" });
+
+            await harness.awaitWait("run-1", "approval:c1");
+            harness.expire("run-1", "approval:c1");
+
+            await expect(running).resolves.toMatchObject({ text: "Done." });
+            expect(harness.dispatches.map((dispatch) => dispatch.path)).not.toContain("billing:refund");
+            expect(hasPendingMarker(harness)).toBe(false);
+        });
+    });
 });

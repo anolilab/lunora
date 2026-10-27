@@ -7,6 +7,7 @@ import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { APPROVAL_TIMEOUT_MAX_MS, definedColumns, SECRET_WAIT_GRACE_MS } from "./component-shared";
 import { resolveAgentModel, usageOfFailedTurn } from "./generate";
+import { readHistoryWindow } from "./history-window";
 import { firstEpisodicSource, firstGraphSource, memoryStepName, resolveInjectedSources } from "./memory";
 import { buildModelMessages } from "./model-messages";
 import { agentClassName } from "./naming";
@@ -1057,7 +1058,10 @@ const generateTurn = async (turnContext: TurnContext, turn: number, steps: Reado
         const { history, summary } =
             agent.compaction !== undefined && turnContext.compact !== undefined
                 ? await compactIncrementally(turnContext)
-                : await compactHistory(turnContext, (await run(listMessages, { key: threadKey })) as AgentMessageRow[]);
+                : await compactHistory(
+                      turnContext,
+                      await readHistoryWindow(async (limit) => (await run(listMessages, { key: threadKey, limit })) as AgentMessageRow[]),
+                  );
 
         let prepared: PreparedTurn = {
             activeTools: agent.activeTools,

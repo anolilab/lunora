@@ -1,3 +1,85 @@
+## @lunora/server [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.241...@lunora/server@1.0.0-alpha.242) (2026-10-26)
+
+### Features
+
+* **server:** require the table for ctx.db by-id reads and writes ([#1344](https://github.com/anolilab/lunora/issues/1344)) ([97244c5](https://github.com/anolilab/lunora/commit/97244c5eae27fb0c9ab19a71e7e0b50b02b13782))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.163
+* **@lunora/observability:** upgraded to 1.0.0-alpha.175
+
+## @lunora/server [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.240...@lunora/server@1.0.0-alpha.241) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.152
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.162
+* **@lunora/values:** upgraded to 1.0.0-alpha.82
+* **@lunora/observability:** upgraded to 1.0.0-alpha.174
+* **@lunora/storage:** upgraded to 1.0.0-alpha.155
+
+## @lunora/server [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.239...@lunora/server@1.0.0-alpha.240) (2026-10-26)
+
+### Features
+
+* **server:** require the table in ctx.db.get(table, id) ([#1342](https://github.com/anolilab/lunora/issues/1342)) ([92cca06](https://github.com/anolilab/lunora/commit/92cca0604d33fc93db2ad49530572e8b99508f3b))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.161
+* **@lunora/observability:** upgraded to 1.0.0-alpha.173
+
+## @lunora/server [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.238...@lunora/server@1.0.0-alpha.239) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.160
+* **@lunora/observability:** upgraded to 1.0.0-alpha.172
+
+## @lunora/server [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.237...@lunora/server@1.0.0-alpha.238) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.151
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.159
+* **@lunora/values:** upgraded to 1.0.0-alpha.81
+* **@lunora/observability:** upgraded to 1.0.0-alpha.171
+* **@lunora/storage:** upgraded to 1.0.0-alpha.154
+
+## @lunora/server [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.236...@lunora/server@1.0.0-alpha.237) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.150
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.158
+* **@lunora/observability:** upgraded to 1.0.0-alpha.170
+* **@lunora/storage:** upgraded to 1.0.0-alpha.153
+
+## @lunora/server [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.235...@lunora/server@1.0.0-alpha.236) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.149
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.157
+* **@lunora/values:** upgraded to 1.0.0-alpha.80
+* **@lunora/observability:** upgraded to 1.0.0-alpha.168
+* **@lunora/storage:** upgraded to 1.0.0-alpha.152
+
 ## @lunora/server [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.234...@lunora/server@1.0.0-alpha.235) (2026-10-24)
 
 

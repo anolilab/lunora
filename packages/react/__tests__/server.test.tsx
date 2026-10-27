@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
 import { lunoraQueryKey } from "../src/query-key";
-import { lunoraQueryOptions } from "../src/query-options";
 import {
     createServerClient,
     deserializePreloaded,
@@ -14,6 +13,7 @@ import {
     fetchMutation,
     fetchQuery,
     getServerSession,
+    lunoraQueryOptions,
     prefetchQuery,
     preloadedQueryResult,
     preloadQuery,

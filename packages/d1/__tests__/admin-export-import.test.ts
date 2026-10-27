@@ -217,6 +217,22 @@ describe("d1 admin export/import globals", () => {
             expect(result.conflicts).toBe(0);
         });
 
+        it("a dry run reports the shape error and writes none of the rows, the good one included", async () => {
+            expect.assertions(3);
+
+            const result = await importGlobalRows(writer, schema, {
+                dryRun: true,
+                rows: [
+                    { doc: { _id: "s1", name: "theme", value: "dark" }, table: "settings" },
+                    { doc: { _id: "s2", name: 42, value: "en" }, table: "settings" },
+                ],
+            });
+
+            expect(result.errors).toHaveLength(1);
+            expect(result.errors[0]).toMatchObject({ code: "VALIDATION_ERROR", line: 2, table: "settings" });
+            await expect(writer.get("settings", "s1")).resolves.toBeNull();
+        });
+
         it("reports a row with no usable `table` as BAD_ROW rather than skipping it", async () => {
             expect.assertions(3);
 
@@ -343,7 +359,7 @@ describe("d1 admin export/import globals", () => {
             expect(result.conflicts).toBe(1);
             expect(result.inserted).toEqual({ settings: 1 });
 
-            const reloaded = await writer.get("s1");
+            const reloaded = await writer.get("settings", "s1");
 
             expect(reloaded).toMatchObject({ value: "dark" });
         });
@@ -414,7 +430,7 @@ describe("d1 admin export/import globals", () => {
 
             expect(result.errors).toEqual([]);
 
-            const reload = await freshWriter.get("l1");
+            const reload = await freshWriter.get("ledger", "l1");
 
             expect(reload?.["cents"]).toBe(9_007_199_254_740_993n);
             expect([...new Uint8Array(reload?.["blob"] as ArrayBuffer)]).toStrictEqual([7, 8, 9]);
@@ -458,7 +474,7 @@ describe("d1 admin export/import globals", () => {
             expect(result.inserted).toEqual({ settings: 2 });
             expect(result.errors).toEqual([]);
 
-            const reload = await freshWriter.get("s1");
+            const reload = await freshWriter.get("settings", "s1");
 
             expect(reload).toMatchObject({ name: "theme", value: "dark" });
 
@@ -506,7 +522,7 @@ describe("d1 admin export/import globals", () => {
 
             expect(result.errors).toEqual([]);
             expect(result.inserted).toEqual({ settings: 1 });
-            await expect(freshWriter.get("s1")).resolves.toMatchObject({ name: "theme", value: "dark" });
+            await expect(freshWriter.get("settings", "s1")).resolves.toMatchObject({ name: "theme", value: "dark" });
 
             fresh.close();
         });
@@ -523,7 +539,7 @@ describe("d1 admin export/import globals", () => {
             expect(result.errors).toEqual([]);
             expect(result.inserted).toEqual({ settings: 1 });
             // Restored as the absence it was, not as a null.
-            await expect(writer.get("s1")).resolves.not.toHaveProperty("nickname");
+            await expect(writer.get("settings", "s1")).resolves.not.toHaveProperty("nickname");
         });
 
         it("keeps a nullable column's null through the round trip", async () => {
@@ -558,7 +574,7 @@ describe("d1 admin export/import globals", () => {
 
             expect(result.errors).toEqual([]);
 
-            const restored = await freshWriter.get("s1");
+            const restored = await freshWriter.get("settings", "s1");
 
             expect(restored?.["note"]).toBeNull();
 

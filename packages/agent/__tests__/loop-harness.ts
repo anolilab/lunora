@@ -375,13 +375,23 @@ export const collectConditions = (build: (q: unknown) => unknown): [string, unkn
 export const makeIndexQuery = (
     candidates: FakeRow[],
     build: (q: unknown) => unknown,
-): { collect: () => Promise<FakeRow[]>; first: () => Promise<FakeRow | null> } => {
+): {
+    collect: () => Promise<FakeRow[]>;
+    first: () => Promise<FakeRow | null>;
+    order: (direction: "asc" | "desc") => { take: (limit: number) => Promise<FakeRow[]> };
+} => {
     const conditions = collectConditions(build);
     const matches = (): FakeRow[] => candidates.filter((row) => conditions.every(([field, value]) => row[field] === value));
 
     return {
         collect: async () => matches(),
         first: async () => matches()[0] ?? null,
+        // Index order is ascending; `order("desc").take(n)` is the bounded newest-tail read.
+        order: (direction) => {
+            return {
+                take: async (limit: number) => (direction === "desc" ? matches().toReversed() : matches()).slice(0, limit),
+            };
+        },
     };
 };
 
@@ -428,13 +438,11 @@ export const fakeDatabase = (): { database: Record<string, unknown>; rows: Map<s
     };
 
     const database = {
-        delete: async (id: string) => {
-            for (const [table, tableContent] of rows) {
-                rows.set(
-                    table,
-                    tableContent.filter((row) => row["_id"] !== id),
-                );
-            }
+        delete: async (table: string, id: string) => {
+            rows.set(
+                table,
+                tableRows(table).filter((row) => row["_id"] !== id),
+            );
         },
         insert: async (table: string, document: Record<string, unknown>) => {
             const id = `id-${String(nextId)}`;
@@ -444,15 +452,13 @@ export const fakeDatabase = (): { database: Record<string, unknown>; rows: Map<s
 
             return id;
         },
-        patch: async (id: string, patch: Record<string, unknown>) => {
+        patch: async (table: string, id: string, patch: Record<string, unknown>) => {
             assertNoExplicitUndefined(patch);
 
-            for (const tableContent of rows.values()) {
-                const row = tableContent.find((candidate) => candidate["_id"] === id);
+            const row = tableRows(table).find((candidate) => candidate["_id"] === id);
 
-                if (row) {
-                    Object.assign(row, patch);
-                }
+            if (row) {
+                Object.assign(row, patch);
             }
         },
         query: (table: string) => {

@@ -42,7 +42,7 @@ describe("upsert pattern (findFirst by unique target + patch/insert)", () => {
         const id = existing?.["_id"];
 
         await (typeof id === "string"
-            ? writer.patch(id, { name: `n${String(counter)}` })
+            ? writer.patch("users", id, { name: `n${String(counter)}` })
             : writer.insert("users", { email: EMAIL, name: `n${String(counter)}` }));
     });
 });

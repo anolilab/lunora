@@ -33,7 +33,8 @@ interface DataPort {
 
 /**
  * Where a request's files are kept between steps and in the end. `put` must key a request's
- * files under `${requestId}/`, so listing that prefix finds every file the request wrote.
+ * files under `${requestId}/` and keep the file's name in the key, so listing that prefix finds
+ * every file the request wrote and an export run finds its own by the id its names start with.
  */
 interface StorePort {
     /** Remove one stored object. Removing a key that is not there is not an error. */
@@ -77,4 +78,14 @@ interface PrivacyPorts {
     readonly tombstones?: TombstonePort;
 }
 
+/** The error a port call gets when the mutation side binds no such port. */
+const unboundPortMessage = (port: string): string => `The privacy port "${port}" is not bound for this call.`;
+
+/**
+ * Whether an error is the "not bound" answer for one port. A workflow's `remotePorts` always defines every port, so a call to
+ * a port the app left out comes back as this error; the caller decides what an absent port means.
+ */
+const isUnboundPort = (error: unknown, port: string): boolean => error instanceof Error && error.message.includes(unboundPortMessage(port));
+
 export type { ArchivePort, DataPort, PrivacyPorts, StorePort };
+export { isUnboundPort, unboundPortMessage };

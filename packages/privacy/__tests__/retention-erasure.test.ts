@@ -5,7 +5,8 @@ import { defineDataset } from "../src/dataset";
 import { germany } from "../src/de";
 import type { DataPort } from "../src/ports";
 import { retain } from "../src/rules";
-import { setup } from "./harness";
+import type { TombstonePort } from "../src/tombstones";
+import { exportFileOf, memoryRequests, memoryTombstones, NOW, setup } from "./harness";
 
 type Row = Readonly<Record<string, unknown>>;
 
@@ -105,6 +106,146 @@ describe("retention during erasure", () => {
         await expect(privacy.runErasure(erasure.id)).resolves.toStrictEqual({ leftover: ["invoices", "notes"], status: "failed" });
     });
 
+    it("expires an export that turned ready after the erasure removed its files, when the erasure then fails", async () => {
+        const { port } = rowData({ archive: false, ignoreDelete: true });
+        const store = memoryRequests();
+        let claiming: string | undefined;
+        // The first verify read happens after the erasure's files step, so an export that claims ready there is ready after its
+        // files were removed. The erasure then fails at verify, and only that failure can expire the export.
+        const racing = {
+            ...port,
+            remaining: async (...args: Parameters<DataPort["remaining"]>) => {
+                if (claiming !== undefined) {
+                    store.rows.set(claiming, {
+                        ...store.rows.get(claiming)!,
+                        expiresAt: new Date(NOW.getTime() + 60_000),
+                        status: "ready",
+                        storageKey: `${claiming}/run/export.zip`,
+                    });
+                    claiming = undefined;
+                }
+
+                return port.remaining(...args);
+            },
+        };
+        const { privacy } = setup({ data: racing, datasets: [billing], presets: [germany()], store });
+        const exported = await privacy.requestExport();
+
+        claiming = exported.id;
+
+        const erasure = await privacy.requestErasure();
+
+        store.rows.set(erasure.id, { ...store.rows.get(erasure.id)!, status: "received" });
+
+        await expect(privacy.runErasure(erasure.id)).resolves.toStrictEqual({ leftover: ["invoices", "notes"], status: "failed" });
+        expect(store.rows.get(exported.id)?.status).toBe("expired");
+    });
+
+    it("expires a ready export when an erasure crashes after writing its tombstone", async () => {
+        const { port } = rowData({ archive: false });
+        let crashing = false;
+        // The tombstone is the first step, so the erasure has written it when its first drain throws. Rows may already be gone.
+        const failing = {
+            ...port,
+            eraseBatch: async (...args: Parameters<DataPort["eraseBatch"]>) => {
+                if (crashing) {
+                    throw new Error("storage unavailable");
+                }
+
+                return port.eraseBatch(...args);
+            },
+        };
+        const { privacy, store } = build(failing);
+        const exported = await privacy.requestExport();
+
+        await expect(privacy.runExport(exported.id)).resolves.toMatchObject({ status: "ready" });
+
+        const erasure = await privacy.requestErasure();
+
+        store.rows.set(erasure.id, { ...store.rows.get(erasure.id)!, status: "received" });
+        crashing = true;
+
+        await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "failed" });
+        expect(store.rows.get(exported.id)?.status).toBe("expired");
+    });
+
+    it("blocks a new export of a subject whose erasure failed after writing its tombstone", async () => {
+        const { port } = rowData({ archive: false });
+        let crashing = false;
+        // The tombstone is written first, so a drain that throws here leaves rows gone: the failure may have erased data.
+        const failing = {
+            ...port,
+            eraseBatch: async (...args: Parameters<DataPort["eraseBatch"]>) => {
+                if (crashing) {
+                    throw new Error("storage unavailable");
+                }
+
+                return port.eraseBatch(...args);
+            },
+        };
+        const { privacy, store } = build(failing);
+        const erasure = await privacy.requestErasure();
+
+        store.rows.set(erasure.id, { ...store.rows.get(erasure.id)!, status: "received" });
+        crashing = true;
+
+        await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "failed" });
+        expect(store.rows.get(erasure.id)?.nothingErased).toBe(false);
+
+        const exported = await privacy.requestExport();
+
+        await expect(privacy.runExport(exported.id)).resolves.toStrictEqual({ status: "failed" });
+    });
+
+    it("keeps a failed erasure blocking exports when its retry fails before the tombstone", async () => {
+        const { port } = rowData({ archive: false });
+        const memory = memoryTombstones();
+        let crashing = false;
+        let refusing = false;
+        const failingData = {
+            ...port,
+            eraseBatch: async (...args: Parameters<DataPort["eraseBatch"]>) => {
+                if (crashing) {
+                    throw new Error("storage unavailable");
+                }
+
+                return port.eraseBatch(...args);
+            },
+        };
+        const tombstones: TombstonePort = {
+            add: async (key, at) => {
+                if (refusing) {
+                    throw new Error("tombstone store unavailable");
+                }
+
+                return memory.add(key, at);
+            },
+            has: memory.has,
+            keys: memory.keys,
+        };
+        const { operator, privacy, store } = setup({ data: failingData, datasets: [billing], presets: [germany()], tombstones });
+        const erasure = await privacy.requestErasure();
+
+        store.rows.set(erasure.id, { ...store.rows.get(erasure.id)!, status: "received" });
+        crashing = true;
+
+        await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "failed" });
+        expect(store.rows.get(erasure.id)?.nothingErased).toBe(false);
+
+        // The retry fails at its own tombstone, after the first attempt had already drained rows.
+        crashing = false;
+        refusing = true;
+
+        await operator.admin.retry(erasure.id);
+
+        await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "failed" });
+        expect(store.rows.get(erasure.id)?.nothingErased).toBe(false);
+
+        const exported = await privacy.requestExport();
+
+        await expect(privacy.runExport(exported.id)).resolves.toStrictEqual({ status: "failed" });
+    });
+
     it("marks a dataset with a retained table as restricted in the manifest", async () => {
         const { port } = rowData();
         const { files, privacy } = build(port, [billing, tasks]);
@@ -112,7 +253,7 @@ describe("retention during erasure", () => {
 
         await privacy.runExport(opened.id);
 
-        const archive = unzipSync(files.files.get(`${opened.id}/export.zip`) as Uint8Array);
+        const archive = unzipSync(files.files.get(exportFileOf(files, opened.id, "export.zip")) as Uint8Array);
         const manifest = JSON.parse(new TextDecoder().decode(archive["manifest.json"])) as { datasets: { id: string; restricted: boolean }[] };
 
         expect(manifest.datasets.map(({ id, restricted }) => [id, restricted])).toStrictEqual([

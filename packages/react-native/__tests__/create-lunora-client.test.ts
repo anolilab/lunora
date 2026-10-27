@@ -1,6 +1,7 @@
 import { LunoraClient } from "@lunora/client";
 import { describe, expect, it, vi } from "vitest";
 
+import { encodeBearerProtocol, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
 import { createLunoraClient, withAuthHeaders, withAuthWebSocket, withoutAmbientCookies } from "../src/create-lunora-client";
 
 const makeFetchSpy = () =>
@@ -208,6 +209,26 @@ describe("withAuthWebSocket", () => {
         expect(calls[0]!.options).toBeUndefined();
     });
 
+    it("drops the browser bearer subprotocol when the bearer rides Authorization", () => {
+        expect.assertions(3);
+
+        const { calls, FakeWebSocket } = makeFakeWebSocket();
+        let headers: Record<string, string> | undefined = { Authorization: "Bearer tok" };
+        const Wrapped = withAuthWebSocket(FakeWebSocket, () => headers);
+
+        // The handshake stays exactly what it was before the subprotocol existed.
+        const native = new Wrapped("wss://api.example.com/_lunora/ws", [LUNORA_WS_PROTOCOL, encodeBearerProtocol("tok")]);
+
+        headers = undefined;
+
+        const headerless = new Wrapped("wss://api.example.com/_lunora/ws", [LUNORA_WS_PROTOCOL, encodeBearerProtocol("tok")]);
+
+        expect([native, headerless].every((socket) => socket instanceof Wrapped)).toBe(true);
+        expect(calls[0]!.protocols).toBeUndefined();
+        // Without an Authorization header the offer is the socket's only credential, so it stays.
+        expect(calls[1]!.protocols).toStrictEqual([LUNORA_WS_PROTOCOL, encodeBearerProtocol("tok")]);
+    });
+
     it("re-reads the factory per socket so a reconnect picks up a new token", () => {
         expect.assertions(4);
 
@@ -335,5 +356,167 @@ describe("createLunoraClient", () => {
         client.close();
 
         expect(reads).not.toContain("lunora:query-cache");
+    });
+});
+
+// The session bearer reaches the live socket as the upgrade's `Authorization`
+// header on native, never as `?token=` in the URL (where it lands in logs).
+describe("createLunoraClient — socket credential", () => {
+    const upgrades: { closed: boolean; options?: unknown; protocols?: string | string[]; url: string }[] = [];
+
+    class RecordingWebSocket {
+        public readyState = 0;
+
+        private readonly listeners: unknown[] = [];
+
+        private readonly record: { closed: boolean; options?: unknown; protocols?: string | string[]; url: string };
+
+        public constructor(url: string, protocols?: string | string[], options?: unknown) {
+            this.record = { closed: false, options, protocols, url };
+            upgrades.push(this.record);
+        }
+
+        public addEventListener(_type: string, listener: unknown): void {
+            this.listeners.push(listener);
+        }
+
+        public close(): void {
+            this.readyState = 3;
+            this.record.closed = true;
+        }
+    }
+
+    const withGlobalWebSocket = (run: () => void): void => {
+        const original = globalThis.WebSocket;
+
+        upgrades.length = 0;
+        globalThis.WebSocket = RecordingWebSocket as unknown as typeof WebSocket;
+
+        try {
+            run();
+        } finally {
+            globalThis.WebSocket = original;
+        }
+    };
+
+    const ref = { __lunoraRef: "todos:list" };
+
+    it("sends the setAuthToken bearer on the native upgrade header, not in the URL", () => {
+        expect.assertions(2);
+
+        withGlobalWebSocket(() => {
+            const client = createLunoraClient({ url: "https://api.example.com" });
+
+            client.setAuthToken("tok-a"); // secret-scanner:allow -- test fixture, not a real credential
+            client.subscribe(ref, {}, () => undefined);
+            client.close();
+        });
+
+        expect(upgrades[0]!.options).toStrictEqual({ headers: { Authorization: "Bearer tok-a" } }); // secret-scanner:allow -- test fixture, not a real credential
+        expect(upgrades[0]!.url).not.toContain("token=");
+    });
+
+    it("closes the anonymous native socket on sign-in, so the next upgrade presents the bearer", () => {
+        expect.assertions(1);
+
+        withGlobalWebSocket(() => {
+            const client = createLunoraClient({ url: "https://api.example.com" });
+
+            client.subscribe(ref, {}, () => undefined);
+            client.setAuthToken("tok-a"); // secret-scanner:allow -- test fixture, not a real credential
+
+            expect(upgrades[0]!.closed).toBe(true);
+
+            client.close();
+        });
+    });
+
+    it("lets the client's bearer win over a same-named getAuthHeaders key", () => {
+        expect.assertions(1);
+
+        withGlobalWebSocket(() => {
+            const client = createLunoraClient({
+                getAuthHeaders: () => {
+                    return { authorization: "Bearer from-factory", "X-App": "demo" }; // secret-scanner:allow -- test fixture, not a real credential
+                },
+                url: "https://api.example.com",
+            });
+
+            client.setAuthToken("tok-a"); // secret-scanner:allow -- test fixture, not a real credential
+            client.subscribe(ref, {}, () => undefined);
+            client.close();
+        });
+
+        expect(upgrades[0]!.options).toStrictEqual({ headers: { Authorization: "Bearer tok-a", "X-App": "demo" } }); // secret-scanner:allow -- test fixture, not a real credential
+    });
+
+    it("leaves the browser socket unwrapped under react-native-web", () => {
+        expect.assertions(1);
+
+        Object.defineProperty(globalThis, "document", { configurable: true, value: {}, writable: true });
+
+        try {
+            withGlobalWebSocket(() => {
+                const client = createLunoraClient({ url: "https://api.example.com" });
+
+                client.setAuthToken("tok-a"); // secret-scanner:allow -- test fixture, not a real credential
+                client.subscribe(ref, {}, () => undefined);
+                client.close();
+            });
+        } finally {
+            delete (globalThis as { document?: unknown }).document;
+        }
+
+        // The browser socket takes no headers; the cookie session authenticates it.
+        expect(upgrades[0]!.options).toBeUndefined();
+    });
+
+    it("keeps the bearer subprotocol under react-native-web even when getAuthHeaders sends Authorization", () => {
+        expect.assertions(1);
+
+        Object.defineProperty(globalThis, "document", { configurable: true, value: {}, writable: true });
+
+        try {
+            withGlobalWebSocket(() => {
+                const client = createLunoraClient({
+                    authTokenOnUpgrade: true,
+                    getAuthHeaders: () => {
+                        return { Authorization: "Bearer tok-a" }; // secret-scanner:allow -- test fixture, not a real credential
+                    },
+                    url: "https://api.example.com",
+                });
+
+                client.setAuthToken("tok-a"); // secret-scanner:allow -- test fixture, not a real credential
+                client.subscribe(ref, {}, () => undefined);
+                client.close();
+            });
+        } finally {
+            delete (globalThis as { document?: unknown }).document;
+        }
+
+        // The browser drops the third constructor argument, so the subprotocol is the socket's only credential.
+        expect(upgrades[0]!.protocols).toStrictEqual([LUNORA_WS_PROTOCOL, encodeBearerProtocol("tok-a")]);
+    });
+
+    it("keeps the browser socket open on sign-in under react-native-web", () => {
+        expect.assertions(1);
+
+        Object.defineProperty(globalThis, "document", { configurable: true, value: {}, writable: true });
+
+        try {
+            withGlobalWebSocket(() => {
+                const client = createLunoraClient({ url: "https://api.example.com" });
+
+                client.subscribe(ref, {}, () => undefined);
+                client.setAuthToken("tok-a"); // secret-scanner:allow -- test fixture, not a real credential
+
+                // The upgrade cannot carry the bearer, so a reconnect would only blank the views.
+                expect(upgrades[0]!.closed).toBe(false);
+
+                client.close();
+            });
+        } finally {
+            delete (globalThis as { document?: unknown }).document;
+        }
     });
 });

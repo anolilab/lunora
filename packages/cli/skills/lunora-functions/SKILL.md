@@ -169,7 +169,7 @@ Templates also map `#lunora/*` to `./lunora/*` in `package.json` `imports`, so
 Reads:
 
 ```ts
-await ctx.db.get(id);                                  // one row by id (or null)
+await ctx.db.get("table", id);                        // one row by id (or null)
 ctx.db.query("t").withIndex("by_x", (q) => q.eq("x", v)); // indexed query
   .order("asc" | "desc")  // by the active index (or _creationTime)
   .filter((doc) => …)     // JS predicate, applied after the index range
@@ -184,9 +184,9 @@ Writes (mutations, and autocommitting in actions):
 
 ```ts
 await ctx.db.insert("t", { ...fields }); // returns the new Id
-await ctx.db.patch(id, { field: next }); // shallow-merge update
-await ctx.db.replace(id, { ...allFields }); // full overwrite
-await ctx.db.delete(id);
+await ctx.db.patch(table, id, { field: next }); // shallow-merge update
+await ctx.db.replace(table, id, { ...allFields }); // full overwrite
+await ctx.db.delete(table, id);
 ```
 
 Prefer `withIndex` over `.filter`: a `.filter(...)` without a covering index
