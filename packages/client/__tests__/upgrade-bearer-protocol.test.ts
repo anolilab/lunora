@@ -106,6 +106,30 @@ describe("lunoraClient — bearer on the WebSocket upgrade", () => {
         ]);
     });
 
+    it("never offers the getWebSocketImpl bearer over plaintext beside a secure endpoint", () => {
+        expect.assertions(2);
+
+        const opened: Opened[] = [];
+        const client = new LunoraClient({
+            authTokenOnUpgrade: true,
+            fetch: async () => Response.json(null),
+            heartbeatIntervalMs: 0,
+            persistence: false,
+            url: "https://app.test:8443",
+            WebSocket: recordingWebSocket(opened),
+        });
+
+        client.setAuthToken("tok");
+
+        const WebSocketImpl = client.getWebSocketImpl() as typeof WebSocket;
+        const sockets = [new WebSocketImpl("ws://app.test:8443/_lunora/voice/support"), new WebSocketImpl("wss://app.test:8443/_lunora/voice/support")];
+
+        client.close();
+
+        expect(sockets).toHaveLength(2);
+        expect(opened.map((entry) => decodeBearerProtocol(entry.protocols?.[1] ?? ""))).toStrictEqual([undefined, "tok"]);
+    });
+
     it("offers the bearer on a defineWebSocket route, which the worker's upgrade handler answers", () => {
         expect.assertions(2);
 

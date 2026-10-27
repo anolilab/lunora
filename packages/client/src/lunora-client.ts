@@ -2743,11 +2743,12 @@ class LunoraClient {
      * upgrade request (`createLunoraClient`'s `withAuthWebSocket`), which a raw
      * `new globalThis.WebSocket(url)` would silently bypass.
      *
-     * A socket to this client's own WebSocket host, constructed without its own
-     * subprotocols, offers this client's bearer the way the client's sockets do
-     * (see `authTokenOnUpgrade`), read at construction so it is the token current
-     * when the socket opens. Any other host gets its arguments untouched: the
-     * bearer is a Lunora credential.
+     * A socket to this client's own WebSocket host over the same transport
+     * security, constructed without its own subprotocols, offers this client's
+     * bearer the way the client's sockets do (see `authTokenOnUpgrade`), read at
+     * construction so it is the token current when the socket opens. Any other
+     * host, or a plaintext `ws:` socket beside a `wss:` endpoint, gets its
+     * arguments untouched: the bearer is a Lunora credential.
      */
     public getWebSocketImpl(): typeof WebSocket | undefined {
         const { WebSocketImpl } = this;
@@ -2756,13 +2757,19 @@ class LunoraClient {
             return undefined;
         }
 
-        const ownHost = parseSocketUrl(this.wsUrl).host;
+        const isSecure = (url: URL): boolean => url.protocol === "wss:" || url.protocol === "https:";
+        const own = parseSocketUrl(this.wsUrl);
+        const isOwnEndpoint = (url: string | URL): boolean => {
+            const target = parseSocketUrl(String(url));
+
+            return target.host === own.host && isSecure(target) === isSecure(own);
+        };
         // React Native's constructor takes a third `{ headers }` argument, forwarded as given.
         const Construct = WebSocketImpl as unknown as new (url: string | URL, protocols?: string | string[], ...rest: unknown[]) => WebSocket;
 
         return new Proxy(WebSocketImpl, {
             construct: (_target, [url, protocols, ...rest]: [string | URL, (string | string[])?, ...unknown[]]) =>
-                new Construct(url, protocols ?? (parseSocketUrl(String(url)).host === ownHost ? this.upgradeProtocols() : undefined), ...rest),
+                new Construct(url, protocols ?? (isOwnEndpoint(url) ? this.upgradeProtocols() : undefined), ...rest),
         });
     }
 
