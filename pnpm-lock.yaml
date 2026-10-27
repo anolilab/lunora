@@ -882,8 +882,8 @@ catalogs:
       specifier: 4.0.3
       version: 4.0.3
     happy-dom:
-      specifier: 20.14.5
-      version: 20.14.5
+      specifier: 21.0.4
+      version: 21.0.4
     lucide-react:
       specifier: 1.52.0
       version: 1.52.0
@@ -1134,7 +1134,7 @@ importers:
         version: 10.1.3(@commitlint/cli@21.2.3(@types/node@26.6.4)(typescript@6.0.3))(@types/node@26.6.4)(typescript@6.0.3)
       '@anolilab/eslint-config':
         specifier: catalog:lint
-        version: 28.0.1(a1f297157a54ec0562d550b69c443b10)
+        version: 28.0.1(9187335ff9a2083c3286f78fdcdaee26)
       '@anolilab/multi-semantic-release':
         specifier: catalog:prod
         version: 4.4.23(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(semantic-release@25.0.9(supports-color@10.2.2)(typescript@6.0.3))(smol-toml@1.9.0)(supports-color@10.2.2)
@@ -1254,7 +1254,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   apps/docs:
     dependencies:
@@ -1531,7 +1531,7 @@ importers:
         version: 3.34.0
       happy-dom:
         specifier: catalog:web
-        version: 20.14.5
+        version: 21.0.4
       prettier:
         specifier: catalog:web
         version: 3.9.9
@@ -1549,7 +1549,7 @@ importers:
         version: 0.4.1(@eslint/css@2.0.0)
       vitest:
         specifier: catalog:web
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   apps/playground:
     dependencies:
@@ -1649,7 +1649,7 @@ importers:
         version: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -1710,7 +1710,7 @@ importers:
         version: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   examples/auth-playground:
     dependencies:
@@ -1728,7 +1728,7 @@ importers:
         version: link:../../packages/vite
       better-auth:
         specifier: catalog:auth
-        version: 1.7.7(f3d5e7ca0649f1d02bdd6caaa96eac52)
+        version: 1.7.7(73b34a6709b31782075310ff68746b6a)
       lunorash:
         specifier: workspace:*
         version: link:../../packages/lunora
@@ -1789,7 +1789,7 @@ importers:
         version: link:../../packages/vite
       better-auth:
         specifier: catalog:auth
-        version: 1.7.7(f3d5e7ca0649f1d02bdd6caaa96eac52)
+        version: 1.7.7(73b34a6709b31782075310ff68746b6a)
       lunorash:
         specifier: workspace:*
         version: link:../../packages/lunora
@@ -1844,7 +1844,7 @@ importers:
         version: link:../../packages/vite
       better-auth:
         specifier: catalog:auth
-        version: 1.7.7(f3d5e7ca0649f1d02bdd6caaa96eac52)
+        version: 1.7.7(73b34a6709b31782075310ff68746b6a)
       lunorash:
         specifier: workspace:*
         version: link:../../packages/lunora
@@ -1878,7 +1878,7 @@ importers:
         version: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -1887,7 +1887,7 @@ importers:
     dependencies:
       '@better-auth/expo':
         specifier: catalog:auth
-        version: 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(better-auth@1.7.7(306481453ab91bbbf529acfe693f9fc1))(expo-constants@57.0.20(expo@57.0.26)(react-native@0.86.3(@babel/core@8.0.9)(@types/react@19.3.0)(react@19.3.0)(supports-color@10.2.2))(supports-color@10.2.2))(expo-linking@57.0.11(expo@57.0.26)(react-native@0.86.3(@babel/core@8.0.9)(@types/react@19.3.0)(react@19.3.0)(supports-color@10.2.2))(react@19.3.0)(supports-color@10.2.2))(expo-network@57.0.2(expo@57.0.26)(react@19.3.0))(expo-secure-store@57.0.4(expo@57.0.26))(expo-web-browser@57.0.3(expo@57.0.26)(react-native@0.86.3(@babel/core@8.0.9)(@types/react@19.3.0)(react@19.3.0)(supports-color@10.2.2)))
+        version: 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(better-auth@1.7.7(a430c404ad3074e1454d1e66d61faafd))(expo-constants@57.0.20(expo@57.0.26)(react-native@0.86.3(@babel/core@8.0.9)(@types/react@19.3.0)(react@19.3.0)(supports-color@10.2.2))(supports-color@10.2.2))(expo-linking@57.0.11(expo@57.0.26)(react-native@0.86.3(@babel/core@8.0.9)(@types/react@19.3.0)(react@19.3.0)(supports-color@10.2.2))(react@19.3.0)(supports-color@10.2.2))(expo-network@57.0.2(expo@57.0.26)(react@19.3.0))(expo-secure-store@57.0.4(expo@57.0.26))(expo-web-browser@57.0.3(expo@57.0.26)(react-native@0.86.3(@babel/core@8.0.9)(@types/react@19.3.0)(react@19.3.0)(supports-color@10.2.2)))
       '@lunora/auth':
         specifier: workspace:*
         version: link:../../packages/auth
@@ -2058,7 +2058,7 @@ importers:
         version: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -2214,7 +2214,7 @@ importers:
         version: link:../../packages/workflow
       better-auth:
         specifier: catalog:auth
-        version: 1.7.7(f3d5e7ca0649f1d02bdd6caaa96eac52)
+        version: 1.7.7(73b34a6709b31782075310ff68746b6a)
       lunorash:
         specifier: workspace:*
         version: link:../../packages/lunora
@@ -2254,7 +2254,7 @@ importers:
         version: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -2410,7 +2410,7 @@ importers:
         version: link:../../packages/vite
       better-auth:
         specifier: catalog:auth
-        version: 1.7.7(f3d5e7ca0649f1d02bdd6caaa96eac52)
+        version: 1.7.7(73b34a6709b31782075310ff68746b6a)
       lunorash:
         specifier: workspace:*
         version: link:../../packages/lunora
@@ -2524,7 +2524,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/agent:
     dependencies:
@@ -2597,7 +2597,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -2655,7 +2655,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/angular:
     dependencies:
@@ -2701,7 +2701,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       zone.js:
         specifier: catalog:angular
         version: 0.16.3
@@ -2738,7 +2738,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/auth:
     dependencies:
@@ -2835,7 +2835,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -2950,7 +2950,7 @@ importers:
         version: 2.11.14(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11))(solid-js@1.9.15)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       vue:
         specifier: catalog:frontend
         version: 3.5.43(typescript@6.0.3)
@@ -2996,7 +2996,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/browser:
     dependencies:
@@ -3033,7 +3033,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -3169,7 +3169,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/client:
     dependencies:
@@ -3227,7 +3227,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -3267,7 +3267,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/codegen:
     dependencies:
@@ -3355,7 +3355,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/config:
     dependencies:
@@ -3434,7 +3434,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/container:
     dependencies:
@@ -3477,7 +3477,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -3538,7 +3538,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -3581,7 +3581,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/dispatch:
     dependencies:
@@ -3612,7 +3612,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/do:
     dependencies:
@@ -3673,7 +3673,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -3703,7 +3703,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/fingerprint:
     devDependencies:
@@ -3730,7 +3730,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/flags:
     dependencies:
@@ -3773,7 +3773,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/hyperdrive:
     dependencies:
@@ -3840,7 +3840,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/lunora:
     dependencies:
@@ -3901,7 +3901,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/mail:
     dependencies:
@@ -3950,7 +3950,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/mcp:
     dependencies:
@@ -4002,7 +4002,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/notify:
     dependencies:
@@ -4036,7 +4036,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/nuxt:
     dependencies:
@@ -4076,7 +4076,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/observability:
     dependencies:
@@ -4125,7 +4125,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -4189,7 +4189,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -4219,7 +4219,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/platform-celld:
     dependencies:
@@ -4295,7 +4295,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/platform-cloudflare:
     dependencies:
@@ -4332,7 +4332,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/platform-node:
     dependencies:
@@ -4414,7 +4414,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/privacy:
     dependencies:
@@ -4454,7 +4454,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/queue:
     dependencies:
@@ -4500,7 +4500,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -4552,7 +4552,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -4634,7 +4634,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/react-native:
     dependencies:
@@ -4692,7 +4692,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/replica:
     dependencies:
@@ -4759,7 +4759,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -4805,7 +4805,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/runtime:
     dependencies:
@@ -4866,7 +4866,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -4918,7 +4918,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -4952,7 +4952,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/seed:
     dependencies:
@@ -4992,7 +4992,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/server:
     dependencies:
@@ -5059,7 +5059,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -5117,7 +5117,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -5181,7 +5181,7 @@ importers:
         version: 2.11.14(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11))(solid-js@1.9.15)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/sql-store:
     dependencies:
@@ -5233,7 +5233,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -5285,7 +5285,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -5439,7 +5439,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/svelte:
     dependencies:
@@ -5485,7 +5485,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/testing:
     dependencies:
@@ -5558,7 +5558,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/values:
     dependencies:
@@ -5592,7 +5592,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/vite:
     dependencies:
@@ -5647,7 +5647,7 @@ importers:
         version: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/vue:
     dependencies:
@@ -5690,7 +5690,7 @@ importers:
         version: 8.0.0(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(rolldown@1.2.15)(rollup@4.65.0)(terser@5.51.2)(vue@3.5.43(typescript@6.0.3))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))(yaml@2.9.1)
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       vue:
         specifier: catalog:frontend
         version: 3.5.43(typescript@6.0.3)
@@ -5711,7 +5711,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/workflow:
     dependencies:
@@ -5757,7 +5757,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -5818,7 +5818,7 @@ importers:
         version: 2.57.2(typescript@6.0.3)(zod@3.25.76)
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -5842,13 +5842,13 @@ importers:
         version: 2.0.0-rc.0(solid-js@2.0.0-rc.0)
       '@testing-library/jest-dom':
         specifier: catalog:frontend
-        version: 7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))
+        version: 7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
       better-auth:
         specifier: catalog:auth
-        version: 1.7.7(bb64f6832f3fe894da2140e99b1c78e3)
+        version: 1.7.7(87cfd8ed6af0630cb9fe58abfecd496c)
       jsdom:
         specifier: catalog:frontend
         version: 30.1.2(@noble/hashes@2.2.0)
@@ -5860,10 +5860,10 @@ importers:
         version: 6.0.3
       vite-plugin-solid:
         specifier: catalog:solid2
-        version: 3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   tests/e2e:
     devDependencies:
@@ -5899,7 +5899,7 @@ importers:
         version: 2.0.0-rc.0(solid-js@2.0.0-rc.0)
       '@testing-library/jest-dom':
         specifier: catalog:frontend
-        version: 7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))
+        version: 7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
@@ -5914,10 +5914,10 @@ importers:
         version: 6.0.3
       vite-plugin-solid:
         specifier: catalog:solid2
-        version: 3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   tests/vis-templates:
     devDependencies:
@@ -5962,7 +5962,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
 packages:
 
@@ -19764,8 +19764,8 @@ packages:
     engines: {node: '>=0.4.7'}
     hasBin: true
 
-  happy-dom@20.14.5:
-    resolution: {integrity: sha512-x/RzkpWO40bTjIoT30iQtt64FLLmH/iRcUCN2X//bLx7H3ifkdfPXyqsro/OYtqzIAhiLMMA7mmiOR9C3NOKjQ==}
+  happy-dom@21.0.4:
+    resolution: {integrity: sha512-tFm+GaLBgo6o0awHnvHaNoraVo27qJ+2tZEtZ+cIa08hXbeitrxAJajLI05hsUy/2/YTKcUjQYzHe5mCcraLBw==}
     engines: {node: '>=20.0.0'}
 
   harfbuzzjs@0.10.0:
@@ -26070,7 +26070,7 @@ snapshots:
       - vitest
       - yaml
 
-  '@anolilab/eslint-config@28.0.1(a1f297157a54ec0562d550b69c443b10)':
+  '@anolilab/eslint-config@28.0.1(9187335ff9a2083c3286f78fdcdaee26)':
     dependencies:
       '@e18e/eslint-plugin': 0.4.1(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(oxlint@1.81.0)
       '@eslint-community/eslint-plugin-eslint-comments': 4.7.2(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))
@@ -26086,7 +26086,7 @@ snapshots:
       '@visulima/fs': 4.1.0(yaml@2.9.1)
       '@visulima/package': 4.1.7(@types/node@26.6.4)
       '@visulima/tsconfig': 2.1.3(yaml@2.9.1)
-      '@vitest/eslint-plugin': 1.6.19(@typescript-eslint/eslint-plugin@8.66.0(@typescript-eslint/parser@8.59.1(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)))
+      '@vitest/eslint-plugin': 1.6.19(@typescript-eslint/eslint-plugin@8.66.0(@typescript-eslint/parser@8.59.1(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)))
       confusing-browser-globals: 1.0.11
       eslint: 10.12.0(jiti@2.7.0)(supports-color@10.2.2)
       eslint-config-flat-gitignore: 2.3.0(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))
@@ -27560,7 +27560,7 @@ snapshots:
       jose: 6.2.12
       kysely: 0.29.6
       nanostores: 1.3.0
-      zod: 4.6.5
+      zod: 4.6.6
     optionalDependencies:
       '@opentelemetry/api': 1.9.1
 
@@ -27574,7 +27574,7 @@ snapshots:
       jose: 6.2.12
       kysely: 0.29.6
       nanostores: 1.3.0
-      zod: 4.6.5
+      zod: 4.6.6
     optionalDependencies:
       '@opentelemetry/api': 1.9.1
 
@@ -27599,7 +27599,7 @@ snapshots:
     optionalDependencies:
       drizzle-orm: 1.0.0-rc.5(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)(valibot@1.4.2(typescript@6.0.3))(zod@4.6.6)
 
-  '@better-auth/expo@1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(better-auth@1.7.7(306481453ab91bbbf529acfe693f9fc1))(expo-constants@57.0.20(expo@57.0.26)(react-native@0.86.3(@babel/core@8.0.9)(@types/react@19.3.0)(react@19.3.0)(supports-color@10.2.2))(supports-color@10.2.2))(expo-linking@57.0.11(expo@57.0.26)(react-native@0.86.3(@babel/core@8.0.9)(@types/react@19.3.0)(react@19.3.0)(supports-color@10.2.2))(react@19.3.0)(supports-color@10.2.2))(expo-network@57.0.2(expo@57.0.26)(react@19.3.0))(expo-secure-store@57.0.4(expo@57.0.26))(expo-web-browser@57.0.3(expo@57.0.26)(react-native@0.86.3(@babel/core@8.0.9)(@types/react@19.3.0)(react@19.3.0)(supports-color@10.2.2)))':
+  '@better-auth/expo@1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(better-auth@1.7.7(a430c404ad3074e1454d1e66d61faafd))(expo-constants@57.0.20(expo@57.0.26)(react-native@0.86.3(@babel/core@8.0.9)(@types/react@19.3.0)(react@19.3.0)(supports-color@10.2.2))(supports-color@10.2.2))(expo-linking@57.0.11(expo@57.0.26)(react-native@0.86.3(@babel/core@8.0.9)(@types/react@19.3.0)(react@19.3.0)(supports-color@10.2.2))(react@19.3.0)(supports-color@10.2.2))(expo-network@57.0.2(expo@57.0.26)(react@19.3.0))(expo-secure-store@57.0.4(expo@57.0.26))(expo-web-browser@57.0.3(expo@57.0.26)(react-native@0.86.3(@babel/core@8.0.9)(@types/react@19.3.0)(react@19.3.0)(supports-color@10.2.2)))':
     dependencies:
       '@better-auth/core': 1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0)
       '@better-fetch/fetch': 1.3.2
@@ -27934,7 +27934,7 @@ snapshots:
       cjs-module-lexer: 1.2.3
       esbuild: 0.28.2
       miniflare: 5.20261006.1-alpha(@types/node@26.6.4)
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
       zod: 4.6.5
     transitivePeerDependencies:
@@ -27976,7 +27976,7 @@ snapshots:
       '@codspeed/core': 5.7.1(supports-color@10.2.2)
       tinybench: 6.1.4
       vite: 7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
     transitivePeerDependencies:
       - debug
       - supports-color
@@ -27986,7 +27986,7 @@ snapshots:
       '@codspeed/core': 5.7.1(supports-color@10.2.2)
       tinybench: 6.1.4
       vite: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
     transitivePeerDependencies:
       - debug
       - supports-color
@@ -34624,7 +34624,7 @@ snapshots:
       '@testing-library/dom': 10.4.2
       solid-js: 2.0.0-rc.0
 
-  '@solidjs/vite-plugin@3.0.0-next.28(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))':
+  '@solidjs/vite-plugin@3.0.0-next.28(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))':
     dependencies:
       '@ampproject/remapping': 2.3.0
       '@babel/core': 7.29.7(supports-color@10.2.2)
@@ -34637,7 +34637,7 @@ snapshots:
       vite: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
       vitefu: 1.1.3(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
     optionalDependencies:
-      '@testing-library/jest-dom': 7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))
+      '@testing-library/jest-dom': 7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))
     transitivePeerDependencies:
       - supports-color
 
@@ -35054,14 +35054,14 @@ snapshots:
       - webpack
     optional: true
 
-  '@tanstack/react-start-rsc@0.1.59(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))':
+  '@tanstack/react-start-rsc@0.1.59(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))':
     dependencies:
       '@tanstack/react-router': 1.170.41(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@tanstack/router-core': 1.171.34
       '@tanstack/router-utils': 1.162.3(supports-color@10.2.2)
       '@tanstack/start-client-core': 1.170.34
       '@tanstack/start-fn-stubs': 1.162.0
-      '@tanstack/start-plugin-core': 1.171.49(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(@tanstack/react-router@1.170.41(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(esbuild@0.28.2)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))
+      '@tanstack/start-plugin-core': 1.171.49(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(@tanstack/react-router@1.170.41(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(esbuild@0.28.2)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))
       '@tanstack/start-storage-context': 1.167.36
       pathe: 2.0.3
       react: 19.3.0
@@ -35209,15 +35209,15 @@ snapshots:
       - webpack
     optional: true
 
-  '@tanstack/react-start@1.168.60(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))':
+  '@tanstack/react-start@1.168.60(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))':
     dependencies:
       '@tanstack/react-router': 1.170.41(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@tanstack/react-start-client': 1.168.39(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      '@tanstack/react-start-rsc': 0.1.59(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))
+      '@tanstack/react-start-rsc': 0.1.59(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))
       '@tanstack/react-start-server': 1.167.46(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@tanstack/router-utils': 1.162.3(supports-color@10.2.2)
       '@tanstack/start-client-core': 1.170.34
-      '@tanstack/start-plugin-core': 1.171.49(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(@tanstack/react-router@1.170.41(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(esbuild@0.28.2)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))
+      '@tanstack/start-plugin-core': 1.171.49(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(@tanstack/react-router@1.170.41(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(esbuild@0.28.2)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))
       '@tanstack/start-server-core': 1.169.39
       pathe: 2.0.3
       react: 19.3.0
@@ -35408,7 +35408,7 @@ snapshots:
       - unloader
     optional: true
 
-  '@tanstack/router-plugin@1.168.42(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(@tanstack/react-router@1.170.41(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(esbuild@0.28.2)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))':
+  '@tanstack/router-plugin@1.168.42(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(@tanstack/react-router@1.170.41(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(esbuild@0.28.2)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))':
     dependencies:
       '@babel/core': 7.29.7(supports-color@10.2.2)
       '@babel/template': 7.29.7
@@ -35423,7 +35423,7 @@ snapshots:
       '@rsbuild/core': 2.2.11(core-js@3.49.0)
       '@tanstack/react-router': 1.170.41(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       vite: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
-      vite-plugin-solid: 3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      vite-plugin-solid: 3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       webpack: 5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3)
     transitivePeerDependencies:
       - '@farmfe/core'
@@ -35591,7 +35591,7 @@ snapshots:
       - webpack
     optional: true
 
-  '@tanstack/start-plugin-core@1.171.49(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(@tanstack/react-router@1.170.41(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(esbuild@0.28.2)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))':
+  '@tanstack/start-plugin-core@1.171.49(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(@tanstack/react-router@1.170.41(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(esbuild@0.28.2)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))':
     dependencies:
       '@babel/code-frame': 7.29.7
       '@babel/core': 7.29.7(supports-color@10.2.2)
@@ -35599,7 +35599,7 @@ snapshots:
       '@jridgewell/remapping': 2.3.5
       '@tanstack/router-core': 1.171.34
       '@tanstack/router-generator': 1.167.40(supports-color@10.2.2)
-      '@tanstack/router-plugin': 1.168.42(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(@tanstack/react-router@1.170.41(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(esbuild@0.28.2)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))
+      '@tanstack/router-plugin': 1.168.42(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(@tanstack/react-router@1.170.41(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(esbuild@0.28.2)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))
       '@tanstack/router-utils': 1.162.3(supports-color@10.2.2)
       '@tanstack/start-server-core': 1.169.39
       exsolve: 1.1.1
@@ -35821,7 +35821,7 @@ snapshots:
       lz-string: 1.5.0
       pretty-format: 27.5.1
 
-  '@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))':
+  '@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))':
     dependencies:
       '@adobe/css-tools': 4.5.0
       '@testing-library/dom': 10.4.2
@@ -35831,7 +35831,7 @@ snapshots:
       picocolors: 1.1.1
       redent: 3.0.0
     optionalDependencies:
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   '@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11)':
     dependencies:
@@ -35843,7 +35843,7 @@ snapshots:
       picocolors: 1.1.1
       redent: 3.0.0
     optionalDependencies:
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   '@testing-library/react@16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
@@ -35866,7 +35866,7 @@ snapshots:
       svelte: 5.57.1(@typescript-eslint/types@8.71.0)
     optionalDependencies:
       vite: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   '@testing-library/vue@8.1.0(@vue/compiler-dom@3.5.43)(@vue/compiler-sfc@3.5.43)(@vue/server-renderer@3.5.43)(vue@3.5.43(typescript@6.0.3))':
     dependencies:
@@ -38052,9 +38052,9 @@ snapshots:
       obug: 2.1.4
       std-env: 4.2.0
       tinyrainbow: 3.1.1
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
-  '@vitest/eslint-plugin@1.6.19(@typescript-eslint/eslint-plugin@8.66.0(@typescript-eslint/parser@8.59.1(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)))':
+  '@vitest/eslint-plugin@1.6.19(@typescript-eslint/eslint-plugin@8.66.0(@typescript-eslint/parser@8.59.1(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)))':
     dependencies:
       '@typescript-eslint/scope-manager': 8.71.0
       '@typescript-eslint/utils': 8.71.0(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)
@@ -38062,7 +38062,7 @@ snapshots:
     optionalDependencies:
       '@typescript-eslint/eslint-plugin': 8.66.0(@typescript-eslint/parser@8.59.1(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)
       typescript: 6.0.3
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
     transitivePeerDependencies:
       - supports-color
 
@@ -38074,7 +38074,7 @@ snapshots:
     optionalDependencies:
       '@typescript-eslint/eslint-plugin': 8.66.0(@typescript-eslint/parser@8.71.0(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)
       typescript: 6.0.3
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
     transitivePeerDependencies:
       - supports-color
 
@@ -38153,7 +38153,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.1
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   '@vitest/utils@4.1.10':
     dependencies:
@@ -39448,7 +39448,73 @@ snapshots:
       react-dom: 19.3.0(react@19.3.0)
       solid-js: 1.9.15
       svelte: 5.57.1(@typescript-eslint/types@8.71.0)
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      vue: 3.5.43(typescript@6.0.3)
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+
+  better-auth@1.7.7(73b34a6709b31782075310ff68746b6a):
+    dependencies:
+      '@better-auth/core': 1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0)
+      '@better-auth/drizzle-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(drizzle-orm@1.0.0-rc.5(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)(valibot@1.4.2(typescript@6.0.3))(zod@4.6.6))
+      '@better-auth/kysely-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(kysely@0.29.6)
+      '@better-auth/memory-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)
+      '@better-auth/mongo-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)
+      '@better-auth/prisma-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)
+      '@better-auth/telemetry': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)
+      '@better-auth/utils': 0.4.2
+      '@better-fetch/fetch': 1.3.2
+      '@noble/ciphers': 2.2.0
+      '@noble/hashes': 2.2.0
+      better-call: 1.4.0(zod@4.6.5)
+      defu: 6.1.7
+      jose: 6.2.12
+      kysely: 0.29.6
+      nanostores: 1.3.0
+      zod: 4.6.5
+    optionalDependencies:
+      '@tanstack/react-start': 1.168.60(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.13(solid-js@1.9.15))(solid-js@1.9.15)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))
+      drizzle-orm: 1.0.0-rc.5(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)(valibot@1.4.2(typescript@6.0.3))(zod@4.6.6)
+      mysql2: 3.24.5(@types/node@26.6.4)
+      pg: 8.23.1
+      react: 19.3.0
+      react-dom: 19.3.0(react@19.3.0)
+      solid-js: 1.9.15
+      svelte: 5.57.1(@typescript-eslint/types@8.71.0)
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      vue: 3.5.43(typescript@6.0.3)
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+
+  better-auth@1.7.7(87cfd8ed6af0630cb9fe58abfecd496c):
+    dependencies:
+      '@better-auth/core': 1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0)
+      '@better-auth/drizzle-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(drizzle-orm@1.0.0-rc.5(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)(valibot@1.4.2(typescript@6.0.3))(zod@4.6.6))
+      '@better-auth/kysely-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(kysely@0.29.6)
+      '@better-auth/memory-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)
+      '@better-auth/mongo-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)
+      '@better-auth/prisma-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)
+      '@better-auth/telemetry': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)
+      '@better-auth/utils': 0.4.2
+      '@better-fetch/fetch': 1.3.2
+      '@noble/ciphers': 2.2.0
+      '@noble/hashes': 2.2.0
+      better-call: 1.4.0(zod@4.6.5)
+      defu: 6.1.7
+      jose: 6.2.12
+      kysely: 0.29.6
+      nanostores: 1.3.0
+      zod: 4.6.5
+    optionalDependencies:
+      '@tanstack/react-start': 1.168.60(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))
+      drizzle-orm: 1.0.0-rc.5(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)(valibot@1.4.2(typescript@6.0.3))(zod@4.6.6)
+      mysql2: 3.24.5(@types/node@26.6.4)
+      pg: 8.23.1
+      react: 19.3.0
+      react-dom: 19.3.0(react@19.3.0)
+      solid-js: 2.0.0-rc.0
+      svelte: 5.57.1(@typescript-eslint/types@8.71.0)
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       vue: 3.5.43(typescript@6.0.3)
     transitivePeerDependencies:
       - '@opentelemetry/api'
@@ -39481,40 +39547,7 @@ snapshots:
       react-dom: 19.3.0(react@19.3.0)
       solid-js: 1.9.15
       svelte: 5.57.1(@typescript-eslint/types@8.71.0)
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
-      vue: 3.5.43(typescript@6.0.3)
-    transitivePeerDependencies:
-      - '@opentelemetry/api'
-
-  better-auth@1.7.7(bb64f6832f3fe894da2140e99b1c78e3):
-    dependencies:
-      '@better-auth/core': 1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0)
-      '@better-auth/drizzle-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(drizzle-orm@1.0.0-rc.5(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)(valibot@1.4.2(typescript@6.0.3))(zod@4.6.6))
-      '@better-auth/kysely-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(kysely@0.29.6)
-      '@better-auth/memory-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)
-      '@better-auth/mongo-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)
-      '@better-auth/prisma-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)
-      '@better-auth/telemetry': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)
-      '@better-auth/utils': 0.4.2
-      '@better-fetch/fetch': 1.3.2
-      '@noble/ciphers': 2.2.0
-      '@noble/hashes': 2.2.0
-      better-call: 1.4.0(zod@4.6.5)
-      defu: 6.1.7
-      jose: 6.2.12
-      kysely: 0.29.6
-      nanostores: 1.3.0
-      zod: 4.6.5
-    optionalDependencies:
-      '@tanstack/react-start': 1.168.60(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))
-      drizzle-orm: 1.0.0-rc.5(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)(valibot@1.4.2(typescript@6.0.3))(zod@4.6.6)
-      mysql2: 3.24.5(@types/node@26.6.4)
-      pg: 8.23.1
-      react: 19.3.0
-      react-dom: 19.3.0(react@19.3.0)
-      solid-js: 2.0.0-rc.0
-      svelte: 5.57.1(@typescript-eslint/types@8.71.0)
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       vue: 3.5.43(typescript@6.0.3)
     transitivePeerDependencies:
       - '@opentelemetry/api'
@@ -39547,40 +39580,7 @@ snapshots:
       react-dom: 19.3.0(react@19.3.0)
       solid-js: 1.9.15
       svelte: 5.57.1(@typescript-eslint/types@8.71.0)
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
-      vue: 3.5.43(typescript@6.0.3)
-    transitivePeerDependencies:
-      - '@opentelemetry/api'
-
-  better-auth@1.7.7(f3d5e7ca0649f1d02bdd6caaa96eac52):
-    dependencies:
-      '@better-auth/core': 1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0)
-      '@better-auth/drizzle-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(drizzle-orm@1.0.0-rc.5(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)(valibot@1.4.2(typescript@6.0.3))(zod@4.6.6))
-      '@better-auth/kysely-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(kysely@0.29.6)
-      '@better-auth/memory-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)
-      '@better-auth/mongo-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)
-      '@better-auth/prisma-adapter': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)
-      '@better-auth/telemetry': 1.7.7(@better-auth/core@1.7.7(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)(@opentelemetry/api@1.9.1)(better-call@1.4.0(zod@4.6.5))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.2)
-      '@better-auth/utils': 0.4.2
-      '@better-fetch/fetch': 1.3.2
-      '@noble/ciphers': 2.2.0
-      '@noble/hashes': 2.2.0
-      better-call: 1.4.0(zod@4.6.5)
-      defu: 6.1.7
-      jose: 6.2.12
-      kysely: 0.29.6
-      nanostores: 1.3.0
-      zod: 4.6.5
-    optionalDependencies:
-      '@tanstack/react-start': 1.168.60(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rolldown@1.2.15)(rollup@4.65.0)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.13(solid-js@1.9.15))(solid-js@1.9.15)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.31))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.31)(uglify-js@3.19.3))
-      drizzle-orm: 1.0.0-rc.5(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)(valibot@1.4.2(typescript@6.0.3))(zod@4.6.6)
-      mysql2: 3.24.5(@types/node@26.6.4)
-      pg: 8.23.1
-      react: 19.3.0
-      react-dom: 19.3.0(react@19.3.0)
-      solid-js: 1.9.15
-      svelte: 5.57.1(@typescript-eslint/types@8.71.0)
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       vue: 3.5.43(typescript@6.0.3)
     transitivePeerDependencies:
       - '@opentelemetry/api'
@@ -43030,7 +43030,7 @@ snapshots:
     optionalDependencies:
       uglify-js: 3.19.3
 
-  happy-dom@20.14.5:
+  happy-dom@21.0.4:
     dependencies:
       '@types/node': 26.6.4
       '@types/whatwg-mimetype': 3.0.2
@@ -50032,9 +50032,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)):
+  vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)):
     dependencies:
-      '@solidjs/vite-plugin': 3.0.0-next.28(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      '@solidjs/vite-plugin': 3.0.0-next.28(@solidjs/web@2.0.0-rc.0(solid-js@2.0.0-rc.0))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))))(solid-js@2.0.0-rc.0)(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
     transitivePeerDependencies:
       - '@solidjs/web'
       - '@testing-library/jest-dom'
@@ -50150,7 +50150,7 @@ snapshots:
     optionalDependencies:
       vite: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
 
-  vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)):
+  vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)):
     dependencies:
       '@vitest/expect': 4.1.11
       '@vitest/mocker': 4.1.11(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
@@ -50176,12 +50176,12 @@ snapshots:
       '@opentelemetry/api': 1.9.1
       '@types/node': 26.6.4
       '@vitest/coverage-v8': 4.1.10(vitest@4.1.11)
-      happy-dom: 20.14.5
+      happy-dom: 21.0.4
       jsdom: 30.1.2(@noble/hashes@2.2.0)
     transitivePeerDependencies:
       - msw
 
-  vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)):
+  vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)):
     dependencies:
       '@vitest/expect': 4.1.11
       '@vitest/mocker': 4.1.11(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
@@ -50207,12 +50207,12 @@ snapshots:
       '@opentelemetry/api': 1.9.1
       '@types/node': 26.6.4
       '@vitest/coverage-v8': 4.1.10(vitest@4.1.11)
-      happy-dom: 20.14.5
+      happy-dom: 21.0.4
       jsdom: 30.1.2(@noble/hashes@2.2.0)
     transitivePeerDependencies:
       - msw
 
-  vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)):
+  vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)):
     dependencies:
       '@vitest/expect': 4.1.11
       '@vitest/mocker': 4.1.11(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
@@ -50238,7 +50238,7 @@ snapshots:
       '@opentelemetry/api': 1.9.1
       '@types/node': 26.6.4
       '@vitest/ui': 4.1.10(vitest@4.1.11)
-      happy-dom: 20.14.5
+      happy-dom: 21.0.4
       jsdom: 30.1.2(@noble/hashes@2.2.0)
     transitivePeerDependencies:
       - msw
