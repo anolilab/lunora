@@ -80,6 +80,26 @@ describe("lunoraClient — bearer on the WebSocket upgrade", () => {
         expect(openWith(false, "tok").protocols).toBeUndefined();
     });
 
+    it("offers the bearer from getWebSocketImpl, for sockets opened outside the client (voice agents)", () => {
+        expect.assertions(3);
+
+        const opened: Opened[] = [];
+        const client = clientWith(true, "tok", opened);
+        const WebSocketImpl = client.getWebSocketImpl() as typeof WebSocket;
+        // A socket naming its own subprotocols keeps them.
+        const sockets = [
+            new WebSocketImpl("ws://app.test/_lunora/voice/support?threadKey=t1"),
+            new WebSocketImpl("ws://app.test/_lunora/voice/support", ["chat.v2"]),
+        ];
+
+        client.close();
+
+        expect(sockets).toHaveLength(2);
+
+        expect(decodeBearerProtocol(opened[0]?.protocols?.[1] ?? "")).toBe("tok");
+        expect(opened[1]?.protocols).toStrictEqual(["chat.v2"]);
+    });
+
     it("offers the bearer on a defineWebSocket route, which the worker's upgrade handler answers", () => {
         expect.assertions(2);
 

@@ -2742,9 +2742,22 @@ class LunoraClient {
      * constructor to inject the auth-headers factory's credential onto the
      * upgrade request (`createLunoraClient`'s `withAuthWebSocket`), which a raw
      * `new globalThis.WebSocket(url)` would silently bypass.
+     *
+     * A socket constructed without its own subprotocols offers this client's
+     * bearer the way the client's sockets do (see `authTokenOnUpgrade`), read at
+     * construction so it is the token current when the socket opens.
      */
     public getWebSocketImpl(): typeof WebSocket | undefined {
-        return this.WebSocketImpl;
+        const { WebSocketImpl } = this;
+
+        if (WebSocketImpl === undefined) {
+            return undefined;
+        }
+
+        return new Proxy(WebSocketImpl, {
+            construct: (target, [url, protocols]: [string | URL, (string | string[])?]) =>
+                Reflect.construct(target, [url, protocols ?? this.upgradeProtocols()]),
+        });
     }
 
     /**
