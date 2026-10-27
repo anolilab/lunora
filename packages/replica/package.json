@@ -74,7 +74,7 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/wire": "1.0.0-alpha.2"
+        "@lunora/wire": "1.0.0-alpha.3"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",

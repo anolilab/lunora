@@ -69,7 +69,7 @@
         "@lunora/platform": "1.0.0-alpha.75",
         "@lunora/shard-engine": "1.0.0-alpha.164",
         "@lunora/sql-store": "1.0.0-alpha.213",
-        "@lunora/wire": "1.0.0-alpha.2",
+        "@lunora/wire": "1.0.0-alpha.3",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {
