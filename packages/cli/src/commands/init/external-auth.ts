@@ -129,11 +129,12 @@ const CLIENT_FILE = /\.(?:[jt]sx?|svelte|vue)$/u;
 const NEW_CLIENT = "new LunoraClient({";
 
 /**
- * The end of the `defineApp()` chain: its `.build()`, or, for a shared builder
- * finished elsewhere, the `;` closing the statement.
+ * The end of the `defineApp()` chain: its terminal `.build()` /
+ * `.buildFrameworkWorker(host)` (both return a `ComposedApp`, which has no
+ * `.extend`), or, for a shared builder finished elsewhere, the `;` closing the statement.
  */
 // ponytail: text match on the template shapes, not a parse; a chain with a `;` inside an arrow body would need ts-morph.
-const CHAIN_END = /\n([\t ]*)\.build\(\)|;\n/u;
+const CHAIN_END = /\n([\t ]*)\.build(?:FrameworkWorker)?\(|;\n/u;
 
 const runtimeModule = (projectDirectory: string): string => (projectUsesUmbrella(projectDirectory) ? "lunorash/runtime" : "@lunora/runtime");
 

@@ -68,6 +68,24 @@ describe(wireExternalAuth, () => {
         expect(entry.startsWith('import type { ShardNamespaceLike } from "lunorash/runtime";')).toBe(true);
     });
 
+    it("chains resolveIdentity in front of a terminal buildFrameworkWorker call", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(project, "src", "server.ts"),
+            ENTRY.replace(
+                ".build();",
+                ".buildFrameworkWorker((request: Request, env: unknown, ctx: unknown) => handle(request, env as Env, ctx as ExecutionContext));",
+            ),
+        );
+
+        wireExternalAuth(project, "clerk", silentLogger().logger);
+
+        expect(readFileSync(join(project, "src", "server.ts"), "utf8")).toMatch(
+            /\.extend\(\(env\) => \(\{ resolveIdentity: memoizeIdentity\(clerkIdentity\(env\)\) \}\)\)\n {4}\.buildFrameworkWorker\(/u,
+        );
+    });
+
     it("writes lunora.config.ts for a Vite-first app with no entry", () => {
         expect.assertions(2);
 
