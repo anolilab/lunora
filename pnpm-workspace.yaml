@@ -1147,7 +1147,8 @@ minimumReleaseAgeExclude:
   - 'eslint-plugin-react-web-api@5.8.17'
   - 'eslint-plugin-react-x@5.8.17'
   - 'eslint-plugin-react-you-might-not-need-an-effect@1.0.0'
-  - 'fast-uri@3.1.3 || 3.1.4 || 3.1.5'
+  # Renovate security update: fast-uri@3.1.9
+  - 'fast-uri@3.1.3 || 3.1.4 || 3.1.5 || 3.1.9'
   - 'fast-xml-parser@5.7.0'
   - 'fumadocs-mdx@15.0.11'
   # Renovate security update: hono@4.12.34
