@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
+import { toBase64Url } from "../../../shared/base64";
 import { SchedulerDO } from "../src/scheduler-do";
 import type { ScheduleRecord } from "../src/types";
 import { createAlarmHarness } from "./alarm-harness";
@@ -1016,12 +1017,12 @@ describe("schedulerDO — real dispatch() fetch contract", () => {
     });
 
     /** Stub global fetch with a fixed status; capture every request it sees. */
-    const stubFetch = (status: number): { calls: { headers: Headers; url: string }[] } => {
-        const calls: { headers: Headers; url: string }[] = [];
+    const stubFetch = (status: number): { calls: { body: string; headers: Headers; url: string }[] } => {
+        const calls: { body: string; headers: Headers; url: string }[] = [];
         const stub = vi.fn<typeof fetch>(async (input: RequestInfo | URL, init?: RequestInit) => {
             const url = input instanceof Request ? input.url : String(input);
 
-            calls.push({ headers: new Headers(init?.headers), url });
+            calls.push({ body: typeof init?.body === "string" ? init.body : "", headers: new Headers(init?.headers), url });
 
             return new Response(null, { status });
         });
@@ -1198,6 +1199,40 @@ describe("schedulerDO — real dispatch() fetch contract", () => {
         expect(calls[0]?.url).toBe("https://app.test/_lunora/scheduler/dispatch");
         // The body is HMAC-signed so the receiver can reject anonymous callers.
         expect((calls[0]?.headers.get("x-lunora-scheduler-signature") ?? "").length).toBeGreaterThan(0);
+    });
+
+    it("imports the HMAC key once and signs every dispatch with it", async () => {
+        expect.assertions(3);
+
+        const { calls } = stubFetch(200);
+        const importKey = vi.spyOn(crypto.subtle, "importKey");
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, {
+            LUNORA_ORIGIN_URL: "https://app.test",
+            LUNORA_SCHEDULER_SECRET: "import-once-s3cr3t",
+        });
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 }));
+        await scheduler.alarm();
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "g", scheduledFor: Date.now() - 1000 }));
+        await scheduler.alarm();
+
+        const imports = importKey.mock.calls.length;
+
+        importKey.mockRestore();
+
+        const verifyKey = await crypto.subtle.importKey("raw", new TextEncoder().encode("import-once-s3cr3t"), { hash: "SHA-256", name: "HMAC" }, false, [
+            "sign",
+        ]);
+        const expected = await Promise.all(
+            calls.map(async (call) => toBase64Url(new Uint8Array(await crypto.subtle.sign("HMAC", verifyKey, new TextEncoder().encode(call.body))))),
+        );
+
+        // The key cache is per isolate, so this test owns its secret to see the first import.
+        expect(imports).toBe(1);
+        expect(calls).toHaveLength(2);
+        expect(calls.map((call) => call.headers.get("x-lunora-scheduler-signature"))).toStrictEqual(expected);
     });
 
     it("falls back to a bearer admin token when no HMAC secret is configured", async () => {
