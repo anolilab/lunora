@@ -1004,7 +1004,7 @@ describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
 
             await writer.rankPage("notes", "byPriority", { cursor, take: 2 });
 
-            const seek = statements.find((statement) => /from .*__rank_bypriority.* where/iu.test(statement));
+            const seek = statements.find((statement) => /^select .*from .*__rank_bypriority.* where/iu.test(statement));
 
             expect(seek).toBeDefined();
             expect(seek).toMatch(NULL_SAFE_OPERATOR[engine]);

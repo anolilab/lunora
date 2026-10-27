@@ -50,7 +50,7 @@ const schemaFor = (table: string): SchemaLike =>
     }) as never;
 
 /** A whole-companion truncate: the first step of a rebuild, and only of a rebuild. */
-const isRebuild = (statement: string): boolean => /^DELETE FROM "[^"]+"$/u.test(statement.trim());
+const isRebuild = (statement: string): boolean => /^DELETE FROM "[^"]+" WHERE EXISTS \(SELECT 1 FROM "__lunora_companion_fence"/u.test(statement.trim());
 
 describe("companion rebuilds and pinned writes on D1", () => {
     it("rebuilds once per scope, and a later writer's deltas keep the companions exact", async () => {

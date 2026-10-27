@@ -1673,6 +1673,13 @@ interface CompanionBackfill {
 const COMPANION_BACKFILL_WAIT_MS = 30_000;
 
 /**
+ * One row per companion table holding the token of the rebuild that last claimed it. Every rebuild write is
+ * conditional on that token in the same statement, so a replaced run's statement that was already dispatched
+ * (and which the in-process {@link CompanionRebuild} check cannot recall) writes nothing once it lands.
+ */
+const COMPANION_FENCE_TABLE = "__lunora_companion_fence";
+
+/**
  * A companion's key in {@link companionBackfillsByScope}: a JSON tuple tagged with the kind, since index names
  * may contain any separator a string key would use. One key per companion table, whatever its definition, so
  * two definitions of one index never rebuild that table at the same time.
@@ -2088,6 +2095,25 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
+     * The outcome of `key`'s rebuild if it has settled under `definition`, otherwise `undefined` after dropping the
+     * entry. For the post-commit delta sync: the row is already in the table, so a rebuild started now would tally
+     * it and the delta would count it twice. With no settled rebuild to trust the delta is skipped, and the next
+     * writer's pre-write hook rebuilds from the table instead.
+     */
+    const settledBackfill = async (key: string, definition: string): Promise<boolean | undefined> => {
+        const entry = backfills.get(key);
+        const outcome = entry?.settled === true && entry.definition === definition ? await entry.run : undefined;
+
+        if (typeof outcome === "boolean") {
+            return outcome;
+        }
+
+        backfills.delete(key);
+
+        return undefined;
+    };
+
+    /**
      * Forget `tableName`'s settled rebuilds after its companion batch failed:
      * the source row committed without its deltas, so the companions are stale
      * until the next writer rebuilds them from the table.
@@ -2116,6 +2142,46 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const rows = await queryAll(exec, dialect, dialect.tableExists(aggTable));
 
         return rows.length > 0;
+    };
+
+    /**
+     * Claim `companion` for one rebuild run by writing a fresh token to its fence row (last claim wins), and
+     * return that run's writers. Both are conditional on the token still being the stored one, evaluated inside
+     * the statement, so a superseded run's late DELETE or INSERT is a no-op on every engine.
+     */
+    const claimCompanionFence = async (
+        companion: string,
+    ): Promise<{ guardedDelete: () => SQL; guardedInsert: (columns: ReadonlyArray<string>, values: ReadonlyArray<unknown>) => SQL }> => {
+        const { key } = dialect.companionTypes;
+        const token = generateId();
+
+        await queryRun(
+            exec,
+            dialect,
+            sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(COMPANION_FENCE_TABLE)} (${sql.identifier("name")} ${sql.raw(key)} PRIMARY KEY, ${sql.identifier("token")} ${sql.raw(key)} NOT NULL)`,
+        );
+        await queryRun(
+            exec,
+            dialect,
+            upsertSql({
+                columns: ["name", "token"],
+                conflictKey: "name",
+                set: (excluded) => {
+                    return { token: excluded("token") };
+                },
+                table: COMPANION_FENCE_TABLE,
+                values: [companion, token],
+            }),
+        );
+
+        const held = sql`${sql.identifier("name")} = ${companion} AND ${sql.identifier("token")} = ${token}`;
+
+        return {
+            guardedDelete: () =>
+                sql`DELETE FROM ${sql.identifier(companion)} WHERE EXISTS (SELECT 1 FROM ${sql.identifier(COMPANION_FENCE_TABLE)} WHERE ${held})`,
+            guardedInsert: (columns, values) =>
+                sql`INSERT INTO ${sql.identifier(companion)} (${identifierList(columns)}) SELECT ${bindList(values)} FROM ${sql.identifier(COMPANION_FENCE_TABLE)} WHERE ${held}`,
+        };
     };
 
     /**
@@ -2159,14 +2225,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return COMPANION_SUPERSEDED;
         }
 
-        await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(aggTable)}`);
+        const fence = await claimCompanionFence(aggTable);
+
+        await queryRun(exec, dialect, fence.guardedDelete());
 
         const inserts: SQL[] = [];
 
         for (const [encoded, tally] of tallies) {
-            inserts.push(
-                sql`INSERT INTO ${sql.identifier(aggTable)} (${sql.identifier("__key__")}, ${sql.identifier("__value__")}, ${sql.identifier("__count__")}) VALUES (${encoded}, ${tally.value}, ${tally.count})`,
-            );
+            inserts.push(fence.guardedInsert(["__key__", "__value__", "__count__"], [encoded, tally.value, tally.count]));
         }
 
         // One round trip for the whole backfill when the exec exposes `batch`
@@ -2497,9 +2563,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // table — the SCAN fallback still answers correctly. The pre-write
             // `ensureBackfilledForTable` hook always runs immediately before
             // this sync (see insert/patch/replace/delete), so this reads its
-            // memoised answer rather than re-probing `sqlite_master`.
+            // settled answer rather than re-probing `sqlite_master` (see
+            // `settledBackfill` for when it is gone).
             // eslint-disable-next-line no-await-in-loop -- resolves from the memo, sequentially so the -prev/+next writes don't interleave across indexes.
-            const exists = await ensureBackfilled(tableName, index);
+            const exists = await settledBackfill(companionBackfillKey("aggregate", tableName, index.name), companionDefinition(index));
 
             if (!exists) {
                 continue;
@@ -2545,10 +2612,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return COMPANION_SUPERSEDED;
         }
 
-        await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(rankTable)}`);
+        const fence = await claimCompanionFence(rankTable);
+
+        await queryRun(exec, dialect, fence.guardedDelete());
 
         const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-        const insertColumnList = identifierList(["__id__", "__partition__", ...sortColumns]);
+        const insertColumns = ["__id__", "__partition__", ...sortColumns];
 
         // One INSERT per source row, flushed a page at a time. The aggregate
         // twin buffers its whole insert list because that list is `unique(by)`
@@ -2587,9 +2656,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent sort-key column must bind `null`, not undefined.
             const sortValues = index.sortBy.map((key) => serializeColumnValue(document[key.field] ?? null));
 
-            pending.push(
-                sql`INSERT INTO ${sql.identifier(rankTable)} (${insertColumnList}) VALUES (${bindList([document["_id"], partitionKey, ...sortValues])})`,
-            );
+            pending.push(fence.guardedInsert(insertColumns, [document["_id"], partitionKey, ...sortValues]));
 
             if (pending.length >= BACKFILL_BATCH_SIZE) {
                 await flush();
@@ -2666,10 +2733,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             // eslint-disable-next-line no-secrets/no-secrets -- false positive: this is a function name referenced in a comment, not a secret.
             // The pre-write `ensureRankBackfilledForTable` hook always runs
-            // immediately before this sync, so this reads its memoised answer
+            // immediately before this sync, so this reads its settled answer
             // rather than re-probing `sqlite_master`.
             // eslint-disable-next-line no-await-in-loop -- resolves from the memo, sequentially so DELETE/INSERT pairs don't interleave across indexes.
-            const exists = await ensureRankBackfilled(tableName, index);
+            const exists = await settledBackfill(companionBackfillKey("rank", tableName, index.name), companionDefinition(index));
 
             if (!exists) {
                 continue;

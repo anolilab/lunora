@@ -44,7 +44,7 @@ const recording = (exec: SqlCtxExec): { exec: SqlCtxExec; statements: string[] }
 };
 
 /** A whole-companion truncate: the first step of a counter or rank rebuild, and only of a rebuild. */
-const isRebuild = (statement: string): boolean => /^DELETE FROM "[^"]+"$/u.test(statement.trim());
+const isRebuild = (statement: string): boolean => /^DELETE FROM "[^"]+" WHERE EXISTS \(SELECT 1 FROM "__lunora_companion_fence"/u.test(statement.trim());
 
 /** The keyset page a rebuild walks the source table with. */
 const isSourcePage = (statement: string): boolean => /ORDER BY "notes"\."id" ASC LIMIT/u.test(statement);
@@ -299,6 +299,111 @@ describe("createSqlCtxDb — companion rebuilds", () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it("fences a replaced rebuild's already-dispatched DELETE so it cannot wipe its replacement", async () => {
+        // The in-process check cannot recall a statement the stalled run already sent: it lands after the
+        // replacement has refilled the counter, and must write nothing.
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        try {
+            const provisionScope = {};
+            let land: (() => void) | undefined;
+            const held = new Promise<void>((resolve) => {
+                land = resolve;
+            });
+            let first = true;
+            const stalled: SqlCtxExec = {
+                ...harness.exec,
+                run: async (query, parameters) => {
+                    if (isRebuild(query) && first) {
+                        first = false;
+                        await held;
+                    }
+
+                    return await harness.exec.run(query, parameters);
+                },
+            };
+            const seed = createSqlCtxDb({ clock: () => 1, dialect, exec: harness.exec, provisionScope: {}, schema: companionSchema });
+
+            await seed.insert("notes", { org: "a", score: 1 });
+
+            const abandoned = createSqlCtxDb({ clock: () => 1, dialect, exec: stalled, provisionScope, schema: companionSchema });
+
+            abandoned.count("notes", { org: "a" }).catch(() => undefined);
+
+            const next = createSqlCtxDb({ clock: () => 2, dialect, exec: harness.exec, provisionScope, schema: companionSchema });
+            const counted = next.count("notes", { org: "a" });
+
+            await vi.advanceTimersByTimeAsync(30_000);
+
+            await expect(counted).resolves.toBe(1);
+
+            land?.();
+            await vi.advanceTimersByTimeAsync(10);
+
+            await expect(next.count("notes", { org: "a" })).resolves.toBe(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("does not start a rebuild after the row committed when another writer evicted the shared one", async () => {
+        // The rebuild would tally the committed row, and the writer's own delta would then count it again.
+        expect.assertions(1);
+
+        const provisionScope = {};
+        const seed = createSqlCtxDb({ clock: () => 1, dialect, exec: harness.exec, provisionScope, schema: companionSchema });
+
+        await seed.insert("notes", { org: "a", score: 1 });
+
+        const failing: SqlCtxExec = {
+            ...harness.exec,
+            batch: async (batch) => {
+                if (batch.some((statement) => statement.sql.includes("__agg_"))) {
+                    throw new Error("connection reset");
+                }
+
+                await (harness.exec.batch as NonNullable<SqlCtxExec["batch"]>)(batch);
+            },
+            run: async (query, parameters) => {
+                if (query.includes("__agg_")) {
+                    throw new Error("connection reset");
+                }
+
+                return await harness.exec.run(query, parameters);
+            },
+        };
+        const other = createSqlCtxDb({ clock: () => 3, dialect, exec: failing, provisionScope, schema: companionSchema });
+        let evicted = false;
+        const writer = createSqlCtxDb({
+            clock: () => 2,
+            dialect,
+            exec: {
+                ...harness.exec,
+                run: async (query, parameters) => {
+                    const result = await harness.exec.run(query, parameters);
+
+                    // The writer's own row has committed; now another writer's failed companion batch evicts.
+                    if (!evicted && query.startsWith('INSERT INTO "notes"')) {
+                        evicted = true;
+                        await other.insert("notes", { org: "a", score: 3 }).catch(() => undefined);
+                    }
+
+                    return result;
+                },
+            },
+            provisionScope,
+            schema: companionSchema,
+        });
+
+        await writer.insert("notes", { org: "a", score: 2 });
+
+        await expect(
+            createSqlCtxDb({ clock: () => 4, dialect, exec: harness.exec, provisionScope, schema: companionSchema }).count("notes", { org: "a" }),
+        ).resolves.toBe(3);
     });
 
     it("makes a replaced rebuild's caller wait for the replacement rather than trust the emptied companion", async () => {
