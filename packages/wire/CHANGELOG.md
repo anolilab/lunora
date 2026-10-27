@@ -1,3 +1,9 @@
+## @lunora/wire [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/wire@1.0.0-alpha.2...@lunora/wire@1.0.0-alpha.3) (2026-10-27)
+
+### Performance Improvements
+
+* cut per-request CPU on the DO dispatch and fan-out path ([#1351](https://github.com/anolilab/lunora/issues/1351)) ([2f94aa9](https://github.com/anolilab/lunora/commit/2f94aa9bafb63d15288730a8dea7f408db97a760)), closes [#1370](https://github.com/anolilab/lunora/issues/1370) [Array#some](https://github.com/anolilab/Array/issues/some)
+
 ## @lunora/wire [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/@lunora/wire@1.0.0-alpha.1...@lunora/wire@1.0.0-alpha.2) (2026-10-20)
 
 ### Bug Fixes
