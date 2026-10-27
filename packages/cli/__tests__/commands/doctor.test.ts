@@ -1394,6 +1394,31 @@ describe("runDoctor", () => {
             expect(verifyCalls).toHaveLength(1);
         });
 
+        it("passes a token that only one of several configured accounts accepts", async () => {
+            // An account-owned token answers only at its own account; the top-level account refusing it is not a rejection.
+            expect.assertions(1);
+
+            const cwd = mkdtempSync(join(tmpdir(), "lunora-doctor-token-"));
+
+            try {
+                seed(
+                    cwd,
+                    JSON.stringify({ ...(JSON.parse(CLEAN_WRANGLER) as object), account_id: "top-acc", env: { production: { account_id: "prod-acc" } } }),
+                );
+
+                const fetchImpl = vi.fn<typeof globalThis.fetch>(async (url) =>
+                    urlOf(url).endsWith("/accounts/prod-acc/tokens/verify")
+                        ? Response.json({ result: { status: "active" }, success: true })
+                        : Response.json({ success: false }, { status: 401 }),
+                );
+                const result = await runDoctor({ cwd, environment: { CLOUDFLARE_API_TOKEN: "token" }, fetch: fetchImpl, logger: makeLogger().logger });
+
+                expect(result.findings.find((finding) => finding.code.startsWith("cloudflare-token"))).toMatchObject({ code: "cloudflare-token-ok" });
+            } finally {
+                rmSync(cwd, { force: true, recursive: true });
+            }
+        });
+
         it("checks an account that is configured only in an env block", async () => {
             expect.assertions(2);
 

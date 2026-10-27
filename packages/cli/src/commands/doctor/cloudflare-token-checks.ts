@@ -8,7 +8,7 @@
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 
 import { cloudflareRestRequest } from "../../../../../shared/cloudflare-rest";
-import { resolveCloudflareCredentials } from "../../util/cloudflare-credentials";
+import { nonEmpty, resolveCloudflareCredentials } from "../../util/cloudflare-credentials";
 import type { Finding } from "./handler";
 
 /** How long a verify call may take: the check is advice, and must never stall doctor. */
@@ -70,22 +70,8 @@ const probeAccountToken = async (accountId: string, token: string, fetchImpl: ty
  * rejection, since a user-owned token answers at the user endpoint and an
  * account-owned one only at its account's. An inconclusive answer is unchecked.
  */
-const judgeToken = async (token: string, accountId: string | undefined, fetchImpl: typeof globalThis.fetch): Promise<TokenVerdict> => {
-    const user = await probeUserToken(token, fetchImpl);
-
-    if (user.reported !== undefined) {
-        return user.reported === "active" ? { verdict: "active" } : { verdict: "rejected" };
-    }
-
-    // A 403 can mean the user endpoint does not let a token ask about itself, so it is not a verdict either.
-    if (user.status !== 401 && user.status !== 403) {
-        return { reason: `HTTP ${String(user.status)}`, verdict: "unchecked" };
-    }
-
-    if (accountId === undefined) {
-        return { reason: "the user endpoint refused it, and no account id is set to check an account-owned token", verdict: "unchecked" };
-    }
-
+/** One account endpoint's answer: a reported status or a 401/403 decides; anything else is inconclusive. */
+const judgeAccount = async (accountId: string, token: string, fetchImpl: typeof globalThis.fetch): Promise<TokenVerdict> => {
     const account = await probeAccountToken(accountId, token, fetchImpl);
 
     if (account.reported !== undefined) {
@@ -99,15 +85,55 @@ const judgeToken = async (token: string, accountId: string | undefined, fetchImp
     return { reason: `HTTP ${String(account.status)}`, verdict: "unchecked" };
 };
 
-/** The account a token is checked against when no `CLOUDFLARE_ACCOUNT_ID` overrides it: the top level's, else the first environment block's. */
-const configuredAccountId = (parsed: WranglerConfig | undefined): unknown =>
-    parsed?.account_id ??
-    Object.values(parsed?.env ?? {})
-        .map((block) => (block as WranglerConfig | null | undefined)?.account_id)
-        .find((id) => typeof id === "string" && id !== "");
+const judgeToken = async (token: string, accountIds: ReadonlyArray<string>, fetchImpl: typeof globalThis.fetch): Promise<TokenVerdict> => {
+    const user = await probeUserToken(token, fetchImpl);
+
+    if (user.reported !== undefined) {
+        return user.reported === "active" ? { verdict: "active" } : { verdict: "rejected" };
+    }
+
+    // A 403 can mean the user endpoint does not let a token ask about itself, so it is not a verdict either.
+    if (user.status !== 401 && user.status !== 403) {
+        return { reason: `HTTP ${String(user.status)}`, verdict: "unchecked" };
+    }
+
+    if (accountIds.length === 0) {
+        return { reason: "the user endpoint refused it, and no account id is set to check an account-owned token", verdict: "unchecked" };
+    }
+
+    // An account-owned token answers only at its own account, so a config that deploys to several accounts is
+    // checked against each: one active answer passes, and only a refusal from every account is a rejection.
+    let inconclusive: TokenVerdict | undefined;
+
+    for (const accountId of accountIds) {
+        // eslint-disable-next-line no-await-in-loop -- stops at the first account that reports the token active
+        const verdict = await judgeAccount(accountId, token, fetchImpl);
+
+        if (verdict.verdict === "active") {
+            return verdict;
+        }
+
+        if (verdict.verdict === "unchecked") {
+            inconclusive = verdict;
+        }
+    }
+
+    return inconclusive ?? { verdict: "rejected" };
+};
+
+/** Every account the config deploys to, top level first, so an account-owned token is checked against its own account. */
+const configuredAccountIds = (parsed: WranglerConfig | undefined): string[] => {
+    const ids = [parsed?.account_id, ...Object.values(parsed?.env ?? {}).map((block) => (block as WranglerConfig | null | undefined)?.account_id)];
+
+    return [...new Set(ids.filter((id): id is string => typeof id === "string" && id !== ""))];
+};
 
 const checkCloudflareToken = async (parsed: WranglerConfig | undefined, options: CloudflareTokenCheckOptions, findings: Finding[]): Promise<void> => {
-    const { accountId, token } = resolveCloudflareCredentials(options.environment ?? process.env, configuredAccountId(parsed));
+    const environment = options.environment ?? process.env;
+    const configured = configuredAccountIds(parsed);
+    const { accountId, token } = resolveCloudflareCredentials(environment, configured[0]);
+    // `CLOUDFLARE_ACCOUNT_ID` overrides every block's account, so it is the only one checked when set.
+    const accountIds = nonEmpty(environment.CLOUDFLARE_ACCOUNT_ID) === undefined ? configured : [accountId].filter((id) => id !== undefined);
 
     if (token === undefined) {
         findings.push({
@@ -124,7 +150,7 @@ const checkCloudflareToken = async (parsed: WranglerConfig | undefined, options:
     let verdict: TokenVerdict;
 
     try {
-        verdict = await judgeToken(token, accountId, fetchImpl);
+        verdict = await judgeToken(token, accountIds, fetchImpl);
     } catch (error) {
         verdict = { reason: error instanceof Error ? error.message : String(error), verdict: "unchecked" };
     }

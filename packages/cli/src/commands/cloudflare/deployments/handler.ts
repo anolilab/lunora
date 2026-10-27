@@ -199,7 +199,7 @@ const buildArgs = (options: DeploymentsCommandOptions): ArgsResult => {
 };
 
 const runDeploymentsCommand = async (options: DeploymentsCommandOptions): Promise<DeploymentsCommandResult> => {
-    // Only `list` has a document. Refused rather than ignored: a caller that
+    // Only `list` and `status` have a document. Refused rather than ignored: a caller that
     // pipes `deployments rollback --format json` into a parser would otherwise
     // get wrangler's prose and a zero exit.
     if (options.format === "json" && options.subcommand !== "list" && options.subcommand !== "status") {
