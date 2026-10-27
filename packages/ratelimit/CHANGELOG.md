@@ -1,3 +1,16 @@
+## @lunora/ratelimit [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.174...@lunora/ratelimit@1.0.0-alpha.175) (2026-10-27)
+
+### Performance Improvements
+
+* cut per-request CPU on the DO dispatch and fan-out path ([#1351](https://github.com/anolilab/lunora/issues/1351)) ([2f94aa9](https://github.com/anolilab/lunora/commit/2f94aa9bafb63d15288730a8dea7f408db97a760)), closes [#1370](https://github.com/anolilab/lunora/issues/1370) [Array#some](https://github.com/anolilab/Array/issues/some)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.213
+* **@lunora/server:** upgraded to 1.0.0-alpha.244
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.165
+
 ## @lunora/ratelimit [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.173...@lunora/ratelimit@1.0.0-alpha.174) (2026-10-27)
 
 
