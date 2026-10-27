@@ -18,6 +18,8 @@ const rows = Array.from({ length: 200 }, (_, index) => {
 
 const args = { channel: "general", cursor: null, filter: { done: false, tags: ["alpha"] }, limit: 50 };
 
+const idListArgs = { filter: { done: false }, ids: Array.from({ length: 100 }, (_, index) => `doc_${String(index)}`) };
+
 const encodedRows = structuredClone(encodeWire(rows));
 
 describe("encodeWire", () => {
@@ -39,5 +41,9 @@ describe("decodeWire", () => {
 describe("stableWireKey", () => {
     bench("small args object", () => {
         stableWireKey(args);
+    });
+
+    bench("args with a 100-id array", () => {
+        stableWireKey(idListArgs);
     });
 });
