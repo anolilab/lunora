@@ -2,7 +2,7 @@ import type { CryptoKey, JWK } from "jose";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { bearerToken, cookieToken, firstToken, headerToken, jwtIdentityResolver, jwtVerifier } from "../src";
+import { bearerToken, cookieToken, firstToken, headerToken, jwtIdentityResolver, jwtVerifier, verifyJwt } from "../src";
 
 const ISSUER = "https://issuer.example.test";
 const AUDIENCE = "https://api.example.test";
@@ -238,6 +238,13 @@ describe(jwtIdentityResolver, () => {
         expect(() => jwtIdentityResolver({ issuer: "http://issuer.example.test" })).toThrow(/https `issuer`/);
     });
 
+    it("refuses a malformed https jwksUrl or issuer at construction, not per request", () => {
+        expect.assertions(2);
+
+        expect(() => jwtIdentityResolver({ jwksUrl: "https://[bad" })).toThrow(/https URL/);
+        expect(() => jwtIdentityResolver({ issuer: "https://[bad" })).toThrow(/https `issuer`/);
+    });
+
     it("refuses a discovery document that names another issuer", async () => {
         expect.assertions(2);
 
@@ -266,6 +273,29 @@ describe(jwtVerifier, () => {
         expect.assertions(1);
 
         await expect(verify(request({ "x-assertion": await sign({ sub: "user_1" }) }))).resolves.toMatchObject({ expired: false, payload: { sub: "user_1" } });
+    });
+
+    it("reports a throwing token source to onError and resolves anonymous", async () => {
+        expect.assertions(2);
+
+        const onError = vi.fn<(error: unknown) => void>();
+        const throwing = jwtVerifier({
+            issuer: ISSUER,
+            keySet: createLocalJWKSet(jwks),
+            onError,
+            token: () => {
+                throw new Error("unparseable");
+            },
+        });
+
+        await expect(throwing(request())).resolves.toBeUndefined();
+        expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: "unparseable" }), expect.any(Request));
+    });
+
+    it("applies the key-source checks to a direct verifyJwt call", async () => {
+        expect.assertions(1);
+
+        await expect(verifyJwt(await sign({ sub: "user_1" }), { issuer: "http://issuer.example.test" })).rejects.toThrow(/https `issuer`/);
     });
 
     it("flags an expired-but-genuine token and drops an expired forgery", async () => {

@@ -20,6 +20,9 @@ const SCHEME = /^https?:\/\//iu;
  */
 const IAT_SKEW_SECONDS = 60;
 
+/** OIDC discovery gives up after this long, as `jose`'s remote key-set fetch does: a hung lookup stays cached until it settles. */
+const DISCOVERY_TIMEOUT_MS = 5000;
+
 /** Algorithms accepted when `algorithms` is not set: asymmetric only, so an `alg: none` or HMAC forgery never verifies against a public key set. */
 const DEFAULT_ALGORITHMS = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"];
 
@@ -171,7 +174,9 @@ const discoverJwksUrl = (issuer: string): Promise<string> => {
 
     if (pending === undefined) {
         pending = (async () => {
-            const response = await fetch(new URL(".well-known/openid-configuration", issuer.endsWith("/") ? issuer : `${issuer}/`));
+            const response = await fetch(new URL(".well-known/openid-configuration", issuer.endsWith("/") ? issuer : `${issuer}/`), {
+                signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
+            });
 
             if (!response.ok) {
                 throw new Error(`OIDC discovery for ${issuer} failed with HTTP ${String(response.status)}`);
@@ -202,6 +207,15 @@ const discoverJwksUrl = (issuer: string): Promise<string> => {
 
 const issuerList = (issuer: string | string[] | undefined): string[] =>
     (Array.isArray(issuer) ? issuer : [issuer]).filter((value): value is string => nonEmpty(value) !== undefined);
+
+/** Parses as an `https:` URL: a scheme check alone lets `https://[bad` through to fail on every request instead of at wiring. */
+const isHttpsUrl = (value: string): boolean => {
+    try {
+        return new URL(value).protocol === "https:";
+    } catch {
+        return false;
+    }
+};
 
 interface JwtVerification<Key, Claims> {
     /** The `https://` origin of a configured host or URL (`acme.auth0.com`, `https://clerk.example.com/`), throwing when it is empty. */
@@ -276,7 +290,27 @@ const createJwtVerification = <Key, Claims extends JwtClaims>({
         return new URL(SCHEME.test(trimmed) ? trimmed : `https://${trimmed}`).origin;
     };
 
+    /** Where the keys come from must be configured, and over https; `verifyJwt` is public, so it checks too, not only `jwtVerifier`. */
+    const assertKeySource = (options: Omit<JwtVerifierOptionsOf<Key>, "onError" | "token">): void => {
+        const issuers = issuerList(options.issuer);
+        const jwksUrl = options.jwksUrl === undefined ? undefined : String(options.jwksUrl);
+
+        if (issuers.length === 0 && nonEmpty(jwksUrl) === undefined && options.keySet === undefined) {
+            throw fail(`${name}: set \`issuer\` (OIDC discovery) or \`jwksUrl\` — check that the env var holding it is set`);
+        }
+
+        if (jwksUrl !== undefined && !isHttpsUrl(jwksUrl)) {
+            throw fail(`${name}: \`jwksUrl\` must be an https URL, got "${jwksUrl}"`);
+        }
+
+        if (jwksUrl === undefined && options.keySet === undefined && !isHttpsUrl(issuers[0] ?? "")) {
+            throw fail(`${name}: OIDC discovery needs an https \`issuer\`, got "${issuers[0] ?? ""}"`);
+        }
+    };
+
     const verifyJwt = async (token: string, options: Omit<JwtVerifierOptionsOf<Key>, "onError" | "token">): Promise<Claims> => {
+        assertKeySource(options);
+
         const issuers = issuerList(options.issuer);
         const jwksUrl = options.jwksUrl === undefined ? undefined : String(options.jwksUrl);
         const keySet = options.keySet ?? remoteKeySet(jwksUrl ?? (await discoverJwksUrl(issuers[0] ?? "")));
@@ -298,31 +332,19 @@ const createJwtVerification = <Key, Claims extends JwtClaims>({
     };
 
     const jwtVerifier = (options: JwtVerifierOptionsOf<Key>): JwtVerifierOf<Claims> => {
-        const issuers = issuerList(options.issuer);
-        const jwksUrl = options.jwksUrl === undefined ? undefined : String(options.jwksUrl);
-
-        if (issuers.length === 0 && nonEmpty(jwksUrl) === undefined && options.keySet === undefined) {
-            throw fail(`${name}: set \`issuer\` (OIDC discovery) or \`jwksUrl\` — check that the env var holding it is set`);
-        }
-
-        if (jwksUrl !== undefined && !jwksUrl.startsWith("https://")) {
-            throw fail(`${name}: \`jwksUrl\` must be an https URL, got "${jwksUrl}"`);
-        }
-
-        if (jwksUrl === undefined && options.keySet === undefined && !(issuers[0] ?? "").startsWith("https://")) {
-            throw fail(`${name}: OIDC discovery needs an https \`issuer\`, got "${issuers[0] ?? ""}"`);
-        }
+        assertKeySource(options);
 
         const readToken = options.token ?? bearerToken;
 
         return async (request) => {
-            const token = readToken(request);
-
-            if (!token) {
-                return undefined;
-            }
-
+            // A custom token source that throws is a failed request credential, not a failed request.
             try {
+                const token = readToken(request);
+
+                if (!token) {
+                    return undefined;
+                }
+
                 return { expired: false, payload: await verifyJwt(token, options) };
             } catch (error) {
                 try {
