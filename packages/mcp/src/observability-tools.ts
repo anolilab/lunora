@@ -121,7 +121,11 @@ const MIGRATION_STATUS_INPUT_SCHEMA: ToolInputSchema = {
 };
 
 const SCHEDULE_OUTBOX_INPUT_SCHEMA: ToolInputSchema = {
-    properties: { limit: LIMIT_PROPERTY, shardKey: SHARD_KEY_PROPERTY },
+    properties: {
+        cursor: { description: "`nextCursor` from a previous call, to read the page after it.", type: "string" },
+        limit: LIMIT_PROPERTY,
+        shardKey: SHARD_KEY_PROPERTY,
+    },
     type: "object",
 };
 
@@ -192,6 +196,7 @@ const SCHEDULE_OUTBOX_OUTPUT_SCHEMA: ToolInputSchema = {
                 "Deferred schedules the scheduler has not accepted, live first then parked: { id, target, attempts, parked, forever, nextAttemptAt, createdAt, when }.",
             type: "array",
         },
+        nextCursor: { description: "Pass back as `cursor` to read the next page. Absent on the last page.", type: "string" },
     },
     required: ["entries"],
     type: "object",
@@ -350,9 +355,11 @@ const callObservabilityTool = async (client: LunoraClient, name: string, input: 
             });
         }
         case "lunora_get_schedule_outbox": {
-            const result = await adminRead(client, ADMIN_FUNCTIONS.getScheduleOutbox, { limit }, shardKey);
+            // An absent cursor or `nextCursor` stays `undefined`, which the JSON hop drops.
+            const result = await adminRead(client, ADMIN_FUNCTIONS.getScheduleOutbox, { cursor: readText(input.cursor), limit }, shardKey);
+            const { nextCursor } = (result ?? {}) as { nextCursor?: string };
 
-            return okStructured({ entries: rowsOf(result, "entries") });
+            return okStructured({ entries: rowsOf(result, "entries"), nextCursor });
         }
         default: {
             throw new LunoraError("INTERNAL", `unknown observability tool: ${name}`);

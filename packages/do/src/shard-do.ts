@@ -1581,48 +1581,61 @@ const isScheduleOutboxTarget = (target: unknown): boolean => {
         return false;
     }
 
-    if (typeof target["__lunoraRef"] === "string") {
-        return target["__lunoraRef"].length > 0;
+    // The brand first: the scheduler routes any branded target to the workflow
+    // path, so a stray `__lunoraRef` must not vouch for a workflow with no class.
+    if (target["isLunoraWorkflow"] === true) {
+        return (
+            typeof target["className"] === "string" && target["className"].length > 0 && (target["name"] === undefined || typeof target["name"] === "string")
+        );
     }
 
-    return (
-        target["isLunoraWorkflow"] === true &&
-        typeof target["className"] === "string" &&
-        target["className"].length > 0 &&
-        (target["name"] === undefined || typeof target["name"] === "string")
-    );
+    return typeof target["__lunoraRef"] === "string" && target["__lunoraRef"].length > 0;
 };
 
 /**
- * Read one stored call back, or `undefined` when it cannot be replayed. Checked
- * field by field rather than cast: under the default policy a malformed entry
- * would at worst cost eight attempts, but a `retry.forever` one would never park,
- * so an envelope that can never become a job has to be recognised up front.
+ * Read one stored call back, or say why it cannot be replayed. Checked field by
+ * field rather than cast: under the default policy a malformed entry would at
+ * worst cost eight attempts, but a `retry.forever` one would never park, so an
+ * envelope that can never become a job has to be recognised up front.
+ *
+ * `args` only has to decode: a workflow's params may be an array or a `Date`, so
+ * the root is not required to be an object. A refusal carries whatever `target`
+ * the JSON named, so the park log still says which job was lost.
  */
-const parseScheduleOutboxEnvelope = (envelopeJson: string): { args: unknown; envelope: ScheduleOutboxEnvelope } | undefined => {
+const parseScheduleOutboxEnvelope = (
+    envelopeJson: string,
+): { args: unknown; envelope: ScheduleOutboxEnvelope; ok: true } | { ok: false; reason: string; target: unknown } => {
+    let parsed: unknown;
+
     try {
-        const parsed: unknown = JSON.parse(envelopeJson);
-
-        if (
-            !isPlainObject(parsed) ||
-            !Object.hasOwn(parsed, "args") ||
-            typeof parsed["when"] !== "number" ||
-            !Number.isFinite(parsed["when"]) ||
-            (parsed["options"] !== undefined && !isPlainObject(parsed["options"])) ||
-            !isScheduleOutboxTarget(parsed["target"])
-        ) {
-            return undefined;
-        }
-
-        const args = decodeWire(parsed["args"]);
-
-        if (args !== undefined && !isPlainObject(args)) {
-            return undefined;
-        }
-
-        return { args, envelope: parsed as unknown as ScheduleOutboxEnvelope };
+        parsed = JSON.parse(envelopeJson);
     } catch {
-        return undefined;
+        return { ok: false, reason: "its stored payload is not valid JSON", target: undefined };
+    }
+
+    if (!isPlainObject(parsed) || !Object.hasOwn(parsed, "args")) {
+        return { ok: false, reason: "its stored payload is not a scheduled call", target: undefined };
+    }
+
+    const { target } = parsed;
+    let reason: string | undefined;
+
+    if (!isScheduleOutboxTarget(target)) {
+        reason = "its target is neither a function reference nor a workflow";
+    } else if (typeof parsed["when"] !== "number" || !Number.isFinite(parsed["when"])) {
+        reason = "its fire time is missing";
+    } else if (parsed["options"] !== undefined && !isPlainObject(parsed["options"])) {
+        reason = "its options are not an object";
+    }
+
+    if (reason !== undefined) {
+        return { ok: false, reason, target };
+    }
+
+    try {
+        return { args: decodeWire(parsed["args"]), envelope: parsed as unknown as ScheduleOutboxEnvelope, ok: true };
+    } catch {
+        return { ok: false, reason: "its arguments cannot be decoded", target };
     }
 };
 
@@ -3212,6 +3225,13 @@ abstract class ShardDO {
      * only saves round trips; it resets with the instance.
      */
     private readonly registeredTables = new Set<string>();
+
+    /**
+     * Outbox entries whose retry is awaiting the scheduler. `retryOutboxEntry`
+     * removes an id to tell that attempt its result is stale. In memory is enough:
+     * an attempt never outlives the instance that started it.
+     */
+    private readonly scheduleOutboxInFlight = new Set<string>();
 
     /**
      * Epoch millis before which registration is not retried, set when one
@@ -12059,16 +12079,17 @@ abstract class ShardDO {
      * scheduler is healthy. Arms the poll alarm for now, because nothing else is
      * due to wake a shard whose entries were all parked. Admin-gated by the caller.
      */
-    private handleRetryOutboxEntry(args: Record<string, unknown>): Response {
+    private async handleRetryOutboxEntry(args: Record<string, unknown>): Promise<Response> {
         const { id } = parseScheduleOutboxEntryArgs("retryOutboxEntry", args);
         const now = Date.now();
         const retried = requeueScheduleOutbox(this.sql as SqlExec, id, now);
 
         if (retried) {
+            this.scheduleOutboxInFlight.delete(id);
             this.recordAudit("retryOutboxEntry", { id });
-            this.scheduleGlobalPoll(now).catch(() => {
-                /* the host could not arm; the next cold start probes again */
-            });
+            // Rethrown: the row is due now, but if no alarm is armed nothing runs
+            // it until the next cold start, and "retried" would claim otherwise.
+            await this.scheduleGlobalPoll(now, true);
         }
 
         return adminResponse({ retried });
@@ -15400,7 +15421,7 @@ abstract class ShardDO {
      * or before it is left alone. Only ever moves the wake EARLIER, so repeated
      * seeds cannot walk the alarm out.
      */
-    private async scheduleGlobalPoll(atMs?: number): Promise<void> {
+    private async scheduleGlobalPoll(atMs?: number, rethrow = false): Promise<void> {
         const target = atMs ?? Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
         const pendingAt = this.globalPollArmedAt;
 
@@ -15415,7 +15436,7 @@ abstract class ShardDO {
             // silently rather than throwing, which is the same outcome the
             // previous `if (!setAlarm) return` produced — no alarm, no crash.
             await this.shardHost.alarms.set(target);
-        } catch {
+        } catch (error) {
             // A failed arm restores the previous pending time (not `undefined`)
             // so a later seed/tick retries without forgetting an alarm that is
             // still armed at the older, later target — but only while this call
@@ -15427,6 +15448,10 @@ abstract class ShardDO {
             // and delays the next poll.
             if (this.globalPollArmedAt === target) {
                 this.globalPollArmedAt = pendingAt;
+            }
+
+            if (rethrow) {
+                throw error;
             }
         }
     }
@@ -15659,8 +15684,8 @@ abstract class ShardDO {
         const attempts = nextScheduleOutboxAttempt(entry.attempts);
         const stored = parseScheduleOutboxEnvelope(entry.envelopeJson);
 
-        if (stored === undefined) {
-            this.parkScheduleOutboxEntry(sql, entry.id, attempts, undefined, "its stored payload is unreadable", trace);
+        if (!stored.ok) {
+            this.parkScheduleOutboxEntry(sql, entry.id, attempts, stored.target, stored.reason, trace);
 
             return;
         }
@@ -15677,6 +15702,8 @@ abstract class ShardDO {
 
             return;
         }
+
+        this.scheduleOutboxInFlight.add(entry.id);
 
         try {
             // `runAt`, never `runAfter`: the envelope stores the absolute instant
@@ -15700,6 +15727,12 @@ abstract class ShardDO {
                 return;
             }
 
+            // `retryOutboxEntry` reset the row while this attempt was awaiting the
+            // scheduler; writing this attempt's count and backoff would undo it.
+            if (!this.scheduleOutboxInFlight.has(entry.id)) {
+                return;
+            }
+
             const parkReason = scheduleOutboxParkReason(error, forever, attempts);
 
             if (parkReason === undefined) {
@@ -15707,6 +15740,8 @@ abstract class ShardDO {
             } else {
                 this.parkScheduleOutboxEntry(sql, entry.id, attempts, envelope.target, parkReason, trace);
             }
+        } finally {
+            this.scheduleOutboxInFlight.delete(entry.id);
         }
     }
 
@@ -15731,7 +15766,7 @@ abstract class ShardDO {
 
     /** Park one entry and say so at `error` — a job was promised to a caller and will not be enqueued. */
     private parkScheduleOutboxEntry(sql: SqlExec, id: string, attempts: number, target: unknown, why: string, trace?: TraceRefLike): void {
-        parkScheduleOutbox(sql, id, attempts);
+        parkScheduleOutbox(sql, id, attempts, Date.now());
 
         this.logs.push({
             functionPath: "scheduler:outbox",

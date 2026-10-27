@@ -572,6 +572,35 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
             expect(retryRow(state)?.retry?.forever).toBe(true);
         });
 
+        it("warns once, at the attempt a default job would have dead-lettered", async () => {
+            expect.assertions(2);
+
+            const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            try {
+                const state = createFakeState();
+                const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
+
+                const id = await scheduledId(
+                    await scheduler.fetch(
+                        post("/schedule", { args: {}, functionPath: "f", retry: { forever: true, maxAttempts: 1 }, scheduledFor: Date.now() - 1000 }),
+                    ),
+                );
+
+                for (let index = 0; index < 6; index += 1) {
+                    forceDue(state);
+
+                    // eslint-disable-next-line no-await-in-loop -- sequential alarm fires
+                    await scheduler.alarm();
+                }
+
+                expect(warnSpy).toHaveBeenCalledTimes(1);
+                expect(warnSpy).toHaveBeenCalledWith(`@lunora/scheduler: job "${id}" (f) has failed 2 attempts and keeps retrying (retry.forever)`);
+            } finally {
+                warnSpy.mockRestore();
+            }
+        });
+
         it("ignores a forever flag that is not exactly true", async () => {
             expect.assertions(1);
 

@@ -28,6 +28,7 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-schedule-outbox" mirrors its parent "ctx-db.ts" (the established public module name). */
 
+import { LunoraError } from "@lunora/errors";
 import { isPlainObject } from "@lunora/wire";
 import { sql as dsql } from "drizzle-orm";
 
@@ -59,7 +60,7 @@ interface ScheduleOutboxEntry {
     /** Whether the call asked for `retry.forever`, which keeps it live past the attempt ceiling. */
     forever: boolean;
     id: string;
-    /** When the next attempt is due. Meaningless once `parked`. */
+    /** When the next attempt is due, or, once `parked`, when the entry parked. */
     nextAttemptAt: number;
     /** Retries stopped: the attempts ran out or the scheduler refused the call. */
     parked: boolean;
@@ -136,8 +137,9 @@ interface ScheduleOutbox {
  * exist before the first mutation makes one.
  *
  * `dead` marks an entry that exhausted its attempts: it is no longer retried, and
- * is kept for inspection until {@link trimScheduleOutbox} drops it. The index
- * leads with it so the due-scan reads only live rows.
+ * is kept for inspection until {@link trimScheduleOutbox} drops it. A parked row's
+ * `next_attempt_at` holds the instant it parked, which is what the trim ages it by.
+ * The index leads with `dead` so the due-scan reads only live rows.
  */
 const migrateScheduleOutbox = (sql: SqlExec): void => {
     runDrizzle(
@@ -211,9 +213,13 @@ const deferScheduleOutbox = (sql: SqlExec, id: string, attempts: number, nextAtt
  * Stop retrying an entry that exhausted its attempts. The row stays — parked, not
  * deleted — so the job that was promised and never enqueued can be found and
  * re-driven by hand; {@link trimScheduleOutbox} is what eventually bounds it.
+ *
+ * The park instant goes into `next_attempt_at` because the trim must age a
+ * parked row from when it parked: a `retry.forever` entry or a re-queued one can
+ * be weeks old by `created_at`, and would be trimmed in the tick that parked it.
  */
-const parkScheduleOutbox = (sql: SqlExec, id: string, attempts: number): void => {
-    runDrizzle(sql, dsql`UPDATE ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)} SET attempts = ${attempts}, dead = 1 WHERE id = ${id}`);
+const parkScheduleOutbox = (sql: SqlExec, id: string, attempts: number, now: number): void => {
+    runDrizzle(sql, dsql`UPDATE ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)} SET attempts = ${attempts}, next_attempt_at = ${now}, dead = 1 WHERE id = ${id}`);
 };
 
 /**
@@ -239,13 +245,13 @@ const probeScheduleOutbox = (sql: SqlExec): { dueAt: number | undefined; populat
 };
 
 /**
- * Drop PARKED entries created before `olderThanTs` (millis). Live entries are
- * never trimmed — a job still being retried is not garbage. The attempt ceiling
- * bounds live entries under the default policy; a `retry.forever` entry stays
- * live until the scheduler accepts or refuses it.
+ * Drop entries PARKED before `olderThanTs` (millis). Live entries are never
+ * trimmed — a job still being retried is not garbage. The attempt ceiling bounds
+ * live entries under the default policy; a `retry.forever` entry stays live until
+ * the scheduler accepts or refuses it.
  */
 const trimScheduleOutbox = (sql: SqlExec, olderThanTs: number): void => {
-    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)} WHERE dead = 1 AND created_at < ${olderThanTs}`);
+    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)} WHERE dead = 1 AND next_attempt_at < ${olderThanTs}`);
 };
 
 /** The target a stored envelope names, for display: a function path or a workflow class. */
@@ -300,18 +306,50 @@ const toEntry = (row: {
     };
 };
 
+/** `<dead>:<created_at>:<id>`. The id is the remainder, since a caller-supplied job id may contain `:`. */
+const SCHEDULE_OUTBOX_CURSOR = /^([01]):(\d+(?:\.\d+)?):(.+)$/su;
+
+/** Where a page of {@link readScheduleOutbox} ended. */
+const toScheduleOutboxCursor = (entry: ScheduleOutboxEntry): string => `${entry.parked ? "1" : "0"}:${String(entry.createdAt)}:${entry.id}`;
+
+/** `undefined` for a cursor this module did not issue. */
+const parseScheduleOutboxCursor = (cursor: string): { createdAt: number; dead: number; id: string } | undefined => {
+    const match = SCHEDULE_OUTBOX_CURSOR.exec(cursor);
+
+    if (match === null) {
+        return undefined;
+    }
+
+    return { createdAt: Number(match[2]), dead: Number(match[1]), id: match[3] as string };
+};
+
 /**
- * Every entry, live first and then parked, each oldest first: what an operator
- * needs to find a job that was promised and has not reached the scheduler.
+ * One page of entries, live first and then parked, each oldest first: what an
+ * operator needs to find a job that was promised and has not reached the
+ * scheduler. Keyset-paged on that order, so parked entries stay reachable behind
+ * any number of live ones and a page does not shift as the retry loop deletes rows.
  */
-const readScheduleOutbox = (sql: SqlExec, limit: number): { entries: ScheduleOutboxEntry[] } => {
+const readScheduleOutbox = (sql: SqlExec, limit: number, cursor?: string): { entries: ScheduleOutboxEntry[]; nextCursor: string | undefined } => {
+    const after = cursor === undefined ? undefined : parseScheduleOutboxCursor(cursor);
+
+    if (cursor !== undefined && after === undefined) {
+        throw new LunoraError("BAD_REQUEST", `getScheduleOutbox: malformed cursor ${JSON.stringify(cursor)}`);
+    }
+
+    const where =
+        after === undefined
+            ? dsql``
+            : dsql`WHERE dead > ${after.dead} OR (dead = ${after.dead} AND (created_at > ${after.createdAt} OR (created_at = ${after.createdAt} AND id > ${after.id})))`;
+    // One row past the page says whether another page exists without a COUNT.
     const rows = runDrizzle<{ attempts: number; created_at: number; dead: number; envelope_json: string; id: string; next_attempt_at: number }>(
         sql,
         dsql`SELECT id, envelope_json, attempts, next_attempt_at, created_at, dead FROM ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)}
-            ORDER BY dead ASC, created_at ASC, id ASC LIMIT ${limit}`,
+            ${where} ORDER BY dead ASC, created_at ASC, id ASC LIMIT ${limit + 1}`,
     ).toArray();
+    const entries = rows.slice(0, limit).map((row) => toEntry(row));
+    const last = entries.at(-1);
 
-    return { entries: rows.map((row) => toEntry(row)) };
+    return { entries, nextCursor: rows.length > limit && last !== undefined ? toScheduleOutboxCursor(last) : undefined };
 };
 
 const hasScheduleOutboxEntry = (sql: SqlExec, id: string): boolean =>

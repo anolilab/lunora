@@ -345,6 +345,16 @@ describe("the remaining reads", () => {
         expect(result.structuredContent).toStrictEqual({ entries });
     });
 
+    it("lunora_get_schedule_outbox pages with the cursor the previous read returned", async () => {
+        expect.assertions(2);
+
+        const mock = mockClient({ [ADMIN_FUNCTIONS.getScheduleOutbox]: { entries: [], nextCursor: "1:200:job-9" } });
+        const result = await callTool(mock.asClient, "lunora_get_schedule_outbox", { cursor: "0:100:job-1" }, false, true);
+
+        expect(mock.query).toHaveBeenCalledWith({ __lunoraRef: ADMIN_FUNCTIONS.getScheduleOutbox }, expect.objectContaining({ cursor: "0:100:job-1" }), {});
+        expect(result.structuredContent).toStrictEqual({ entries: [], nextCursor: "1:200:job-9" });
+    });
+
     it("surfaces a failed admin read as an error result rather than rejecting", async () => {
         expect.assertions(2);
 

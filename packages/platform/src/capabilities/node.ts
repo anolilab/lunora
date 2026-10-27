@@ -147,7 +147,7 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         scheduler: {
             level: "emulated",
-            note: "SQLite job table dispatched to onDispatch and re-armed on construction, with finite retry backoff and a dead-letter queue. `retry.forever` is refused as INVALID_INPUT before a job is persisted or armed; only SchedulerDO-backed hosts support it. It is also the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer — but nothing walks an app's DECLARED crons into that method, which is why cronTriggers is rated separately and unsupported here. This rating covers the imperative surface only: ctx.scheduler.runAfter/runAt do dispatch on this host",
+            note: "SQLite job table dispatched to onDispatch and re-armed on construction, with finite retry backoff and a dead-letter queue. This host's schedule() refuses `retry.forever` as INVALID_INPUT before a job is persisted or armed. ctx.scheduler does not call schedule(): it posts to the SchedulerDO namespace the app's .scheduler() declaration binds, so whether a ctx.scheduler call can retry forever is decided by what backs that binding, not by this host. It is also the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer — but nothing walks an app's DECLARED crons into that method, which is why cronTriggers is rated separately and unsupported here. This rating covers the imperative surface only: ctx.scheduler.runAfter/runAt do dispatch on this host",
         },
         relationGraph: {
             level: "emulated",

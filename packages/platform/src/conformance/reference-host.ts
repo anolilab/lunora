@@ -910,8 +910,14 @@ const createReferenceHost = (): ReferenceHost => {
         schedule: async (functionPath, args, options) => {
             assertOpen("schedule a job");
 
+            // Coded by hand like the SHARD_UNAVAILABLE refusal above: a shard outbox
+            // parks an INVALID_INPUT refusal, and would re-offer an uncoded one forever.
             if (options?.retry?.forever === true) {
-                throw new Error("reference host: retry.forever is unsupported; this host requires a finite retry budget");
+                throw Object.assign(new Error("reference host: retry.forever is unsupported; this host requires a finite retry budget"), {
+                    code: "INVALID_INPUT",
+                    status: 400,
+                    type: "VisulimaError",
+                });
             }
 
             const id = nextJobId();

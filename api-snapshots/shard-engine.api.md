@@ -4779,7 +4779,7 @@ const param: (value: unknown) => SQL;
 ### `parkScheduleOutbox` (const)
 
 ```ts
-const parkScheduleOutbox: (sql: SqlExec, id: string, attempts: number) => void;
+const parkScheduleOutbox: (sql: SqlExec, id: string, attempts: number, now: number) => void;
 ```
 
 ### `parseExportShardArgs` (const)
@@ -5049,8 +5049,9 @@ const readReactorState: (sql: SqlExec, path: string) => ReactorState | undefined
 ### `readScheduleOutbox` (const)
 
 ```ts
-const readScheduleOutbox: (sql: SqlExec, limit: number) => {
+const readScheduleOutbox: (sql: SqlExec, limit: number, cursor?: string) => {
     entries: ScheduleOutboxEntry[];
+    nextCursor: string | undefined;
 };
 ```
 

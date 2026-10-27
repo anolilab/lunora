@@ -186,23 +186,23 @@ const readAdminQueueMessages = (sql: SqlExec, args: Record<string, unknown>): { 
 const SCHEDULE_OUTBOX_READ_LIMIT = 500;
 
 /**
- * Resolve a `getScheduleOutbox` admin read — the deferred schedules this shard
- * holds because the scheduler has not accepted them, live and parked. Best-effort
- * like the other durable-signal reads: a shard with no outbox table reads as
- * empty. The retry loop writes the table without a `flushChangedTables`, so the
- * panel refreshes on its poll rather than a live push.
+ * Resolve a `getScheduleOutbox` admin read — one page of the deferred schedules
+ * this shard holds because the scheduler has not accepted them, live and parked.
+ * A shard with no outbox table reads as empty; any other failure is the RPC's
+ * error, because an empty list is what tells the operator nothing is waiting. The
+ * retry loop writes the table without a `flushChangedTables`, so the panel
+ * refreshes on its poll rather than a live push.
  */
 const readAdminScheduleOutbox = (sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } => {
     const requested = typeof args["limit"] === "number" && Number.isInteger(args["limit"]) && args["limit"] > 0 ? args["limit"] : 100;
-    let result: { entries: unknown[] };
+    const cursor = typeof args["cursor"] === "string" ? args["cursor"] : undefined;
+    const tables = new Set([SCHEDULE_OUTBOX_TABLE]);
 
-    try {
-        result = readScheduleOutbox(sql, Math.min(requested, SCHEDULE_OUTBOX_READ_LIMIT));
-    } catch {
-        result = { entries: [] };
+    if (sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", SCHEDULE_OUTBOX_TABLE).toArray().length === 0) {
+        return { result: { entries: [], nextCursor: undefined }, tables };
     }
 
-    return { result, tables: new Set([SCHEDULE_OUTBOX_TABLE]) };
+    return { result: readScheduleOutbox(sql, Math.min(requested, SCHEDULE_OUTBOX_READ_LIMIT), cursor), tables };
 };
 
 /**

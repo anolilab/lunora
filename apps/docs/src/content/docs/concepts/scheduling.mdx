@@ -120,7 +120,7 @@ that did land is recognised rather than scheduled twice, and the `cancel(id)` yo
 stored on a row keeps working throughout.
 
 A job the scheduler refuses eight times over is **parked**: it stops being
-retried, is logged at `error` naming its id and target, and is kept for a week so
+retried, is logged at `error` naming its id and target, and is kept for a week from then so
 you can see what was promised and never enqueued. That is the one case where a
 scheduled job is dropped without the mutation being rolled back — and it is
 reported rather than silent.
@@ -146,15 +146,20 @@ await ctx.scheduler.runAfter(0, internal.billing.syncInvoice, { invoiceId }, { r
 ```
 
 `retry.forever: true` keeps retrying instead of dead-lettering, for work that
-must eventually happen. Its delay stays between 1 second and 30 minutes whatever
-`baseMs`/`maxMs` say, and the same opt-in keeps it in the shard's custody past the
-eight attempts above: it is logged once at `warn` when it reaches that point and
-retried every 30 minutes after, until the scheduler accepts it. A call the
-scheduler refuses as invalid is still parked. While a forever job is still
+must eventually happen. Its delay is clamped to between 1 second and 30 minutes:
+the default backoff climbs to 30 minutes, while a `maxMs` below that keeps it
+retrying more often. The `SchedulerDO` logs it once at `warn` at the attempt that
+would have dead-lettered it. The same opt-in keeps a job in the shard's custody
+past the eight attempts above: it is logged once at `warn` when it reaches that
+point and retried every 30 minutes after, until the scheduler accepts it. A call
+the scheduler refuses as invalid is still parked. While a forever job is still
 waiting in custody, drop it from the Outbox view; once the scheduler holds it,
-`ctx.scheduler.cancel(id)` works as usual. Only `SchedulerDO`
-hosts (Cloudflare and celld) support it; the Node scheduler host refuses it with
-`INVALID_INPUT`.
+`ctx.scheduler.cancel(id)` works as usual.
+
+`ctx.scheduler` always goes to the `SchedulerDO` namespace the app declares, so
+`forever` is honoured wherever that runs. Calling a `SchedulerHost` directly is
+different: the Node host's `schedule()` refuses `retry.forever` with
+`INVALID_INPUT`, since its job table has no unbounded retry.
 
 ### Inspecting and cancelling
 

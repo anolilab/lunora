@@ -1568,9 +1568,10 @@ interface RetryPolicy {
     baseMs?: number;
 
     /**
-     * Keep retrying instead of dead-lettering, overriding `maxAttempts`. Delays stay between 1 second
-     * and 30 minutes. Cancellation applies once the scheduler has accepted the job, not while it is
-     * still in a shard's outbox custody. The Node scheduler host rejects this option.
+     * Keep retrying instead of dead-lettering, overriding `maxAttempts`. Delays are clamped to between
+     * 1 second and 30 minutes, so a `maxMs` below the ceiling sets how often a failing job retries.
+     * `cancel` applies once the scheduler has accepted the job; while it is still in a shard's outbox
+     * custody, drop it from Studio's Outbox view. Honoured by SchedulerDO.
      */
     forever?: boolean;
     /** Maximum number of dispatch attempts before dead-lettering. Default `5`. */

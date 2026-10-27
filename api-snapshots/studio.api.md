@@ -1946,6 +1946,8 @@ const MESSAGE_IDS: readonly [
     "unreadable",
     "Nothing is waiting for the scheduler.",
     "Jobs whose mutation committed but that the scheduler has not accepted yet wait here.",
+    "First page",
+    "Next page",
     "No workpools.",
     "pool",
     "Pools",

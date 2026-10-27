@@ -89,15 +89,18 @@ export interface RetryPolicy {
 
     /**
      * Keep retrying failed deliveries instead of dead-lettering. Overrides
-     * `maxAttempts`; the delay between attempts stays between 1 second and 30
-     * minutes, including a caller-supplied `baseMs`/`maxMs`, so a job that never succeeds
-     * costs one alarm per half hour rather than spinning or going quiet for days.
+     * `maxAttempts`, and logs once at `warn` at the attempt that would have
+     * dead-lettered. The delay between attempts is clamped to between 1 second
+     * and 30 minutes: the default backoff climbs to the 30-minute ceiling, but a
+     * caller-supplied `maxMs` below it keeps a job that never succeeds retrying
+     * that often.
      *
-     * Cancellation applies once SchedulerDO has accepted the job. A job still in
-     * a shard's outbox custody (its mutation committed, the hand-off has not
-     * landed) cannot be cancelled yet. A stored call the scheduler refuses as
-     * invalid is parked and logged rather than retried. Supported by SchedulerDO
-     * on Cloudflare and celld; the Node scheduler host rejects it.
+     * `cancel` applies once SchedulerDO has accepted the job. A job still in a
+     * shard's outbox custody (its mutation committed, the hand-off has not
+     * landed) is dropped from the shard's `dropOutboxEntry` admin RPC instead. A
+     * stored call the scheduler refuses as invalid is parked and logged rather
+     * than retried. Honoured by SchedulerDO; a `SchedulerHost` without unbounded
+     * retry, such as the Node one, refuses it.
      */
     forever?: boolean;
 

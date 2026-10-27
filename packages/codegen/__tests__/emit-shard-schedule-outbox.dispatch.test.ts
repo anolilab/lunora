@@ -91,6 +91,8 @@ const createState = (): { run: (query: string, ...parameters: unknown[]) => unkn
 interface Harness {
     /** Make the scheduler throw `error` on every call until reset with `setReachable(true)`. */
     failWith: (error: Error) => void;
+    /** Hold the next scheduler call: `entered` settles once it is waiting, `release` lets it finish. */
+    hold: () => { entered: Promise<void>; release: () => void };
     /** Shard log lines pushed for `functionPath`. */
     logs: (functionPath: string) => { level: string; message: string }[];
     /** Make every live entry due now, so the retry ladder can be driven without waiting it out. */
@@ -110,6 +112,7 @@ interface Harness {
     shard: {
         cached: (mutationId: string) => { value: unknown } | undefined;
         handleRpc: (path: string, args: Record<string, unknown>) => Promise<unknown>;
+        requeue: (id: string) => Promise<Response>;
         underMutationId: (id: string) => void;
     };
 }
@@ -118,9 +121,18 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
     const scheduled: AcceptedJob[] = [];
     const received: ReceivedOptions[] = [];
     let failure: Error | undefined;
+    let held: { entered: () => void; released: Promise<undefined> } | undefined;
 
     const accept = async (target: unknown, args: unknown, options?: { id?: string }): Promise<string> => {
         received.push(options);
+
+        if (held !== undefined) {
+            const { entered, released } = held;
+
+            held = undefined;
+            entered();
+            await released;
+        }
 
         if (failure !== undefined) {
             throw failure;
@@ -163,6 +175,10 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
             return (this as unknown as { readIdempotentResult: (id: string) => { value: unknown } | undefined }).readIdempotentResult(mutationId);
         }
 
+        public requeue(id: string): Promise<Response> {
+            return (this as unknown as { handleRetryOutboxEntry: (args: Record<string, unknown>) => Promise<Response> }).handleRetryOutboxEntry({ id });
+        }
+
         public retry(): Promise<number | undefined> {
             return (this as unknown as { pollScheduleOutbox: () => Promise<number | undefined> }).pollScheduleOutbox();
         }
@@ -177,6 +193,24 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
     return {
         failWith: (error: Error) => {
             failure = error;
+        },
+        hold: () => {
+            const entered = Promise.withResolvers<undefined>();
+            const released = Promise.withResolvers<undefined>();
+
+            held = {
+                entered: () => {
+                    entered.resolve(undefined);
+                },
+                released: released.promise,
+            };
+
+            return {
+                entered: entered.promise,
+                release: () => {
+                    released.resolve(undefined);
+                },
+            };
         },
         logs: (functionPath: string) =>
             (shard as unknown as { logs: { entries: () => { functionPath: string; level: string; message: string }[] } }).logs
@@ -333,6 +367,32 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         // retry loop resurrects a job the design deliberately dropped.
         expect(harness.outbox()).toStrictEqual([]);
         expect(harness.scheduled).toStrictEqual([{ args: {}, id: expect.any(String), target: { __lunoraRef: "outbox:outer" } }]);
+    });
+
+    it("keeps an operator's Retry now when an attempt already in flight fails afterwards", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+        const { entered, release } = harness.hold();
+
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await entered;
+        await harness.shard.requeue(id);
+        release();
+        await attempt;
+
+        // The reset stands: the stale attempt neither counted itself nor pushed the entry out.
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 0, id }]);
+        expect(harness.logs("scheduler:outbox")).toStrictEqual([]);
     });
 
     it("parks an entry the scheduler never accepts, rather than retrying it forever", async () => {
@@ -565,5 +625,63 @@ describe("emitted shard — a retry.forever deferred schedule", () => {
 
         expect(harness.outbox()).toStrictEqual([{ attempts: 1, dead: 1, id: "job-2" }]);
         expect(harness.received).toStrictEqual([]);
+    });
+
+    /** Put one hand-written envelope in custody, due now, on a freshly initialised shard. */
+    const seed = async (harness: Harness, id: string, envelope: Record<string, unknown>): Promise<void> => {
+        // The table is created by shard init, which the first dispatch runs.
+        await expect(harness.shard.handleRpc("outbox:countNotes", {})).resolves.toBe(0);
+
+        harness.run(
+            "INSERT INTO __schedule_outbox (id, envelope_json, attempts, next_attempt_at, created_at, dead) VALUES (?, ?, 0, 0, ?, 0)",
+            id,
+            JSON.stringify(envelope),
+            Date.now(),
+        );
+    };
+
+    it("replays a workflow whose params are not an object", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        await seed(harness, "job-3", {
+            args: [1, 2],
+            options: { retry: { forever: true } },
+            target: { className: "ImportWorkflow", isLunoraWorkflow: true },
+            when: 0,
+        });
+        await drive(harness, 1);
+
+        expect(harness.outbox()).toStrictEqual([]);
+        expect(harness.scheduled.map((job) => job.args)).toStrictEqual([[1, 2]]);
+    });
+
+    it("parks a workflow-branded target with no class, whatever reference it also carries", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        await seed(harness, "job-4", { args: {}, target: { __lunoraRef: "outbox:charge", isLunoraWorkflow: true }, when: 0 });
+        await drive(harness, 1);
+
+        expect(harness.outbox()).toStrictEqual([{ attempts: 1, dead: 1, id: "job-4" }]);
+        expect(harness.received).toStrictEqual([]);
+    });
+
+    it("names the target and the reason when a readable envelope cannot be replayed", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+
+        await seed(harness, "job-5", { args: {}, target: { __lunoraRef: "outbox:charge" } });
+        await drive(harness, 1);
+
+        expect(harness.logs("scheduler:outbox")).toStrictEqual([
+            {
+                level: "error",
+                message: expect.stringMatching(/job-5 \(target \{"__lunoraRef":"outbox:charge"\}\) will not be enqueued: its fire time is missing/u),
+            },
+        ]);
     });
 });

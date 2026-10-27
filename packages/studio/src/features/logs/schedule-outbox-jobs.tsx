@@ -40,8 +40,15 @@ export const ScheduleOutboxJobs = ({ initialShardKey }: ScheduleOutboxJobsProps 
     const t = useT();
     const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
 
-    const { data, error, poll, refetch } = useAdminQuery<ScheduleOutboxResult>(ADMIN_FUNCTIONS.getScheduleOutbox, {}, { shardKey: queryShardKey });
+    // A cursor belongs to the shard it was read from; switching shards starts over on page one.
+    const [page, setPage] = useState<{ cursor: string | undefined; shardKey: string }>({ cursor: undefined, shardKey: queryShardKey });
+    const cursor = page.shardKey === queryShardKey ? page.cursor : undefined;
+
+    const { data, error, poll, refetch } = useAdminQuery<ScheduleOutboxResult>(ADMIN_FUNCTIONS.getScheduleOutbox, cursor === undefined ? {} : { cursor }, {
+        shardKey: queryShardKey,
+    });
     const entries = data?.entries;
+    const nextCursor = data?.nextCursor;
 
     const [actionError, setActionError] = useState<string | undefined>(undefined);
     const shownError = error ?? actionError;
@@ -149,6 +156,37 @@ export const ScheduleOutboxJobs = ({ initialShardKey }: ScheduleOutboxJobsProps 
                         </Table>
                     </CardContent>
                 </Card>
+            )}
+
+            {(cursor !== undefined || nextCursor !== undefined) && (
+                <div className="flex justify-end gap-1.5">
+                    {cursor !== undefined && (
+                        <Button
+                            data-testid="outbox-first-page"
+                            onClick={() => {
+                                setPage({ cursor: undefined, shardKey: queryShardKey });
+                            }}
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                        >
+                            {t("First page")}
+                        </Button>
+                    )}
+                    {nextCursor !== undefined && (
+                        <Button
+                            data-testid="outbox-next-page"
+                            onClick={() => {
+                                setPage({ cursor: nextCursor, shardKey: queryShardKey });
+                            }}
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                        >
+                            {t("Next page")}
+                        </Button>
+                    )}
+                </div>
             )}
         </div>
     );

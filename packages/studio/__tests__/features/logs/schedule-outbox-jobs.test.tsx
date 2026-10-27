@@ -99,6 +99,36 @@ describe("scheduleOutboxJobs", () => {
         });
     });
 
+    it("walks to the next page and back with the cursor the read returned", async () => {
+        expect.assertions(3);
+
+        const reads: unknown[] = [];
+        const mock = createMockClient({
+            query: (_reference, args): unknown => {
+                reads.push(args);
+
+                return (args as { cursor?: string }).cursor === undefined
+                    ? { entries: [entry()], nextCursor: "0:1700000000000:job-1" }
+                    : { entries: [entry({ id: "job-2", parked: true })] };
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <ScheduleOutboxJobs />
+            </LunoraProvider>,
+        );
+
+        fireEvent.click(await screen.findByTestId("outbox-next-page"));
+
+        await expect(screen.findByTestId("outbox-row-job-2")).resolves.toBeDefined();
+        expect(reads).toContainEqual({ cursor: "0:1700000000000:job-1" });
+
+        fireEvent.click(screen.getByTestId("outbox-first-page"));
+
+        await expect(screen.findByTestId("outbox-row-job-1")).resolves.toBeDefined();
+    });
+
     it("says so when nothing is waiting", async () => {
         expect.assertions(1);
 

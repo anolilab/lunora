@@ -1651,6 +1651,15 @@ class SchedulerDO {
             return;
         }
 
+        // A forever job never reaches `parkDead`, the only other line a failing job
+        // logs, so say it once where a default job would have parked.
+        if (forever && !inProgress && attempts === maxAttempts + 1) {
+            // eslint-disable-next-line no-console -- no logger is injected into SchedulerDO; emit via console so the host captures it
+            console.warn(
+                `@lunora/scheduler: job "${record.id}" (${record.functionPath ?? record.workflow ?? "unknown"}) has failed ${String(attempts)} attempts and keeps retrying (retry.forever)`,
+            );
+        }
+
         if (!isIndexableTime(nextScheduledFor)) {
             // The backoff ladder ran past the largest instant the `t:` index can
             // represent (see isIndexableTime). Writing the key anyway is strictly

@@ -1276,14 +1276,14 @@ describe("shardDO admin introspection", () => {
     describe("schedule outbox", () => {
         /** Shape of a `getScheduleOutbox` admin response. */
         interface OutboxResponse {
-            result: { entries: { attempts: number; id: string; parked: boolean; target?: string }[] };
+            result: { entries: { attempts: number; id: string; parked: boolean; target?: string }[]; nextCursor?: string };
         }
 
         const seed = (): void => {
             migrateScheduleOutbox(database.sql);
             recordScheduleOutbox(database.sql, "job-live", JSON.stringify({ args: {}, target: { __lunoraRef: "billing:sync" }, when: 0 }), 100);
             recordScheduleOutbox(database.sql, "job-parked", JSON.stringify({ args: {}, target: { __lunoraRef: "billing:charge" }, when: 0 }), 200);
-            parkScheduleOutbox(database.sql, "job-parked", 8);
+            parkScheduleOutbox(database.sql, "job-parked", 8, 300);
         };
 
         const readOutbox = async (shard: AdminShard): Promise<OutboxResponse["result"]["entries"]> => {
@@ -1332,6 +1332,63 @@ describe("shardDO admin introspection", () => {
 
             await expect(response.json()).resolves.toEqual({ result: { dropped: true } });
             await expect(readOutbox(shard)).resolves.toMatchObject([{ id: "job-parked" }]);
+        });
+
+        it("pages to the parked entries behind the live ones", async () => {
+            expect.assertions(2);
+
+            seed();
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const firstResponse = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.getScheduleOutbox, { limit: 1 }, ADMIN_TOKEN));
+            const first = await firstResponse.json<OutboxResponse>();
+            const secondResponse = await shard.fetch(
+                tokenAdminRequest(ADMIN_FUNCTIONS.getScheduleOutbox, { cursor: first.result.nextCursor, limit: 1 }, ADMIN_TOKEN),
+            );
+            const second = await secondResponse.json<OutboxResponse>();
+
+            expect(first.result.entries.map((entry) => entry.id)).toStrictEqual(["job-live"]);
+            expect(second.result).toMatchObject({ entries: [{ id: "job-parked" }] });
+        });
+
+        it("reads a shard with no outbox table as empty", async () => {
+            expect.assertions(1);
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            await expect(readOutbox(shard)).resolves.toStrictEqual([]);
+        });
+
+        it("fails the read rather than reporting an empty outbox when the table cannot be read", async () => {
+            expect.assertions(1);
+
+            // The name exists, the columns the read needs do not.
+            database.raw(`CREATE TABLE "__schedule_outbox" ("id" TEXT PRIMARY KEY)`);
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.getScheduleOutbox, {}, ADMIN_TOKEN));
+
+            expect(response.ok).toBe(false);
+        });
+
+        it("reports a Retry now whose poll alarm could not be armed", async () => {
+            expect.assertions(1);
+
+            seed();
+
+            const refusing: ShardDOState = {
+                ...state,
+                storage: {
+                    ...state.storage,
+                    setAlarm: async () => {
+                        throw new Error("alarm refused");
+                    },
+                },
+            };
+            const shard = new AdminShard(refusing, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.retryOutboxEntry, { id: "job-parked" }, ADMIN_TOKEN));
+
+            expect(response.ok).toBe(false);
         });
 
         it("refuses a drop without an id", async () => {
