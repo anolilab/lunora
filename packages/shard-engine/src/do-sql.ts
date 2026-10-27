@@ -14,7 +14,7 @@
  */
 
 import { LunoraError } from "@lunora/errors";
-import { decodeWire, encodeWire, needsWireEncoding } from "@lunora/wire";
+import { decodeWire, encodeWire, needsWireEncoding, WIRE_TAG } from "@lunora/wire";
 import type { Name, SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
@@ -154,7 +154,10 @@ const encodeDocJson = (document: Record<string, unknown>): string => {
  */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- see encodeDocJson above.
 const decodeDocJson = (raw: string): Record<string, unknown> => {
-    const decoded = decodeWire(JSON.parse(raw)) as Record<string, unknown>;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    // A tagged leaf always carries the tag verbatim in the text (`JSON.stringify` never escapes it), so a row without
+    // it decodes to a copy of what `JSON.parse` returned. Skipping that copy is the common case on every row read.
+    const decoded = raw.includes(WIRE_TAG) ? (decodeWire(parsed) as Record<string, unknown>) : parsed;
     const originals = decoded[DOC_ORIGINALS_KEY];
 
     // Claim the key only when it looks like ours. `encodeDocJson` always writes
