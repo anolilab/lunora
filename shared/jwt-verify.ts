@@ -339,5 +339,5 @@ const createJwtVerification = <Key, Claims extends JwtClaims>({
     return { httpsOrigin, jwtVerifier, verifyJwt };
 };
 
-export type { JoseApi, JwtClaims, JwtVerification, JwtVerifierOf, JwtVerifierOptionsOf, TokenSource, VerifiedJwtOf };
+export type { JwtVerifierOf, JwtVerifierOptionsOf, TokenSource, VerifiedJwtOf };
 export { bearerToken, cookieToken, createJwtVerification, firstToken, headerToken, nonEmpty };
