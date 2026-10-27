@@ -697,13 +697,11 @@ class LunoraAdminClient extends LunoraClient {
         await this.adminHost.adminFetch(AUTH_REVOKE_SIGN_UP_INVITATION_PATH, "POST", input);
     }
 
-    /** Remove a member from an organization. */
     public async removeAuthOrgMember(input: { memberId: string }): Promise<void> {
         this.adminHost.assertOpen();
         await this.adminHost.adminFetch(AUTH_REMOVE_MEMBER_PATH, "POST", input);
     }
 
-    /** Cancel a pending organization invitation. */
     public async cancelAuthOrgInvitation(input: { invitationId: string }): Promise<void> {
         this.adminHost.assertOpen();
         await this.adminHost.adminFetch(AUTH_CANCEL_INVITATION_PATH, "POST", input);
@@ -762,7 +760,6 @@ class LunoraAdminClient extends LunoraClient {
         return (await this.adminHost.adminFetch(AUTH_INVITE_MEMBER_PATH, "POST", input)) as Record<string, unknown>;
     }
 
-    /** Change a member's role. */
     public async setAuthOrgMemberRole(input: { memberId: string; role: string | string[] }): Promise<Record<string, unknown>> {
         this.adminHost.assertOpen();
         return (await this.adminHost.adminFetch(AUTH_MEMBER_ROLE_PATH, "POST", input)) as Record<string, unknown>;
@@ -782,7 +779,6 @@ class LunoraAdminClient extends LunoraClient {
         return (await this.adminHost.adminFetch(AUTH_CREATE_TEAM_PATH, "POST", input)) as Record<string, unknown>;
     }
 
-    /** Rename a team. */
     public async updateAuthOrgTeam(input: { name: string; teamId: string }): Promise<Record<string, unknown>> {
         this.adminHost.assertOpen();
         return (await this.adminHost.adminFetch(AUTH_UPDATE_TEAM_PATH, "POST", input)) as Record<string, unknown>;
@@ -794,7 +790,6 @@ class LunoraAdminClient extends LunoraClient {
         await this.adminHost.adminFetch(AUTH_REMOVE_TEAM_PATH, "POST", input);
     }
 
-    /** List a team's members. */
     public async listAuthOrgTeamMembers(input: { limit?: number; offset?: number; teamId: string }): Promise<AuthPage<Record<string, unknown>>> {
         this.adminHost.assertOpen();
         const path = withQuery(AUTH_ORG_TEAM_MEMBERS_PATH, { limit: input.limit, offset: input.offset, teamId: input.teamId });
@@ -802,13 +797,11 @@ class LunoraAdminClient extends LunoraClient {
         return (await this.adminHost.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
     }
 
-    /** Add a user to a team. */
     public async addAuthOrgTeamMember(input: { teamId: string; userId: string }): Promise<Record<string, unknown>> {
         this.adminHost.assertOpen();
         return (await this.adminHost.adminFetch(AUTH_ADD_TEAM_MEMBER_PATH, "POST", input)) as Record<string, unknown>;
     }
 
-    /** Remove a member from a team. */
     public async removeAuthOrgTeamMember(input: { teamMemberId: string }): Promise<void> {
         this.adminHost.assertOpen();
         await this.adminHost.adminFetch(AUTH_REMOVE_TEAM_MEMBER_PATH, "POST", input);
@@ -834,7 +827,6 @@ class LunoraAdminClient extends LunoraClient {
         return (await this.adminHost.adminFetch(AUTH_UPDATE_ROLE_PATH, "POST", input)) as Record<string, unknown>;
     }
 
-    /** Delete a custom org role. */
     public async deleteAuthOrgRole(input: { roleId: string }): Promise<void> {
         this.adminHost.assertOpen();
         await this.adminHost.adminFetch(AUTH_REMOVE_ROLE_PATH, "POST", input);
