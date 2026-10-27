@@ -131,7 +131,7 @@ const KvKeyTable = ({ allSelected, bulkSelected, keys, onSelectKey, onToggleAll,
         // table and the filter bar sit above it), so the scroll offset the
         // virtualizer needs is how far the list's first row has scrolled past the
         // viewport top — read from layout on each scroll, so content above that
-        // grows or shrinks never leaves the window misaligned.
+        // grows or shrinks is not re-read until the next scroll.
         observeElementOffset: (instance, callback) =>
             isDocumentScroll(instance)
                 ? observeDocumentOffset(instance, callback, () => bodyRef.current)
@@ -146,6 +146,12 @@ const KvKeyTable = ({ allSelected, bulkSelected, keys, onSelectKey, onToggleAll,
         overscan: 12,
     });
     const virtualRows = virtualizer.getVirtualItems();
+    // Sized from every loaded key, not the mounted window, so scrolling never widens the table.
+    let longestKey = 0;
+
+    for (const entry of keys) {
+        longestKey = Math.max(longestKey, entry.name.length);
+    }
     const padTop = virtualRows[0]?.start ?? 0;
     const padBottom = virtualizer.getTotalSize() - (virtualRows.at(-1)?.end ?? 0);
 
@@ -188,7 +194,9 @@ const KvKeyTable = ({ allSelected, bulkSelected, keys, onSelectKey, onToggleAll,
                                     }}
                                 />
                             </TableCell>
-                            <TableCell className="font-mono text-xs">{entry.name}</TableCell>
+                            <TableCell className="font-mono text-xs" style={{ width: `${String(longestKey)}ch` }}>
+                                {entry.name}
+                            </TableCell>
                             <TableCell className="tabular-nums text-xs">{formatExpiration(entry.expiration)}</TableCell>
                         </TableRow>
                     );

@@ -82,8 +82,12 @@ const OPTIONS: ReadonlyArray<{ readonly Icon: () => ReactElement; readonly value
 const ThemeToggle = (): ReactElement => {
     const { theme, setTheme } = useTheme();
     const t = useT();
-    // Until the first change, the static box stands in, so a page load does not fetch the motion chunk.
-    const [hasInteracted, setHasInteracted] = useState(false);
+    // The static box stands in until the pointer or keyboard reaches the control, so a page load does not fetch
+    // the motion chunk, yet the indicator is already mounted on the old segment when the first change lands.
+    const [isPrimed, setIsPrimed] = useState(false);
+    const prime = (): void => {
+        setIsPrimed(true);
+    };
 
     const label: Record<ThemePreference, string> = {
         dark: t("Dark theme"),
@@ -96,6 +100,8 @@ const ThemeToggle = (): ReactElement => {
             aria-label={t("Theme")}
             className="inline-flex items-center gap-0.5 overflow-hidden rounded-md border border-border bg-muted/60 p-0.5"
             data-testid="dash-app-theme"
+            onFocus={prime}
+            onPointerEnter={prime}
             role="radiogroup"
         >
             {OPTIONS.map(({ Icon, value }) => {
@@ -112,7 +118,7 @@ const ThemeToggle = (): ReactElement => {
                         data-testid={`dash-app-theme-${value}`}
                         key={value}
                         onClick={() => {
-                            setHasInteracted(true);
+                            prime();
                             setTheme(value);
                         }}
                         role="radio"
@@ -120,7 +126,7 @@ const ThemeToggle = (): ReactElement => {
                         type="button"
                     >
                         {active &&
-                            (hasInteracted ? (
+                            (isPrimed ? (
                                 <Suspense fallback={<span className={INDICATOR_CLASS} />}>
                                     <ThemeIndicator className={INDICATOR_CLASS} />
                                 </Suspense>
