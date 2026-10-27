@@ -310,12 +310,14 @@ const FEATURE_COLLECTORS: Partial<Record<StackFeature, (deps: OfferDeps, picked:
  */
 const applyPreselected = async (deps: OfferDeps): Promise<boolean> => {
     const authPlan = externalAuthPlan(deps.auth);
-    // An external provider and Lunora auth are one choice, as the interactive auth question makes them.
-    const conflicting = authPlan === undefined ? [] : (deps.preselected ?? []).filter((feature) => LUNORA_AUTH_FEATURES.has(feature));
-    const preselected = (deps.preselected ?? []).filter((feature) => !conflicting.includes(feature));
+    // An explicit `--auth` other than `lunora` (an external provider, or `none`) rules out Lunora auth,
+    // as the interactive auth question does.
+    const excludesLunoraAuth = deps.auth !== undefined && deps.auth !== "lunora";
+    const conflicting = new Set(excludesLunoraAuth ? (deps.preselected ?? []).filter((feature) => LUNORA_AUTH_FEATURES.has(feature)) : []);
+    const preselected = (deps.preselected ?? []).filter((feature) => !conflicting.has(feature));
 
     for (const feature of conflicting) {
-        deps.logger.warn(`--auth ${String(deps.auth)} replaces Lunora auth; ignoring \`${feature}\` from --add.`);
+        deps.logger.warn(`--auth ${String(deps.auth)} rules out Lunora auth; ignoring \`${feature}\` from --add.`);
     }
 
     if (deps.auth === "lunora" && !preselected.includes("auth")) {
@@ -330,7 +332,7 @@ const applyPreselected = async (deps: OfferDeps): Promise<boolean> => {
 
     const applied = await deps.applyAll(plans);
 
-    return applied && !refused && conflicting.length === 0;
+    return applied && !refused && conflicting.size === 0;
 };
 
 /**
@@ -362,7 +364,8 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<boolean> => {
 
     const auth = deps.auth ?? (await deps.selectAuth("Which auth do you want?", AUTH_CHOICE_OPTIONS, { default: "none" })) ?? "none";
     const chosenAuthPlan = externalAuthPlan(auth);
-    const options = chosenAuthPlan === undefined ? MULTI_SELECT_OPTIONS : MULTI_SELECT_OPTIONS.filter((option) => !LUNORA_AUTH_FEATURES.has(option.value));
+    // Auth UI sits on Lunora auth (its item requires `auth`), so only that choice offers it.
+    const options = auth === "lunora" ? MULTI_SELECT_OPTIONS : MULTI_SELECT_OPTIONS.filter((option) => !LUNORA_AUTH_FEATURES.has(option.value));
     const selected = await deps.multiSelect("Which features do you want to add?", options, { defaults: [] });
     const picked = auth === "lunora" && !selected.includes("auth") ? ["auth" as const, ...selected] : selected;
 

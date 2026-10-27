@@ -446,7 +446,7 @@ describe("offerRegistryExtras", () => {
             const ok = await offerRegistryExtras(baseDeps({ applyAll, auth: "clerk", logger, preselected: ["auth", "email"] }));
 
             expect(plans().map((plan) => [...plan.names])).toStrictEqual([["auth-clerk-jwt"], ["mail"]]);
-            expect(lines.join("\n")).toMatch(/warn: --auth clerk replaces Lunora auth/);
+            expect(lines.join("\n")).toMatch(/warn: --auth clerk rules out Lunora auth/);
             expect(ok).toBe(false);
         });
 
@@ -470,6 +470,32 @@ describe("offerRegistryExtras", () => {
             await offerRegistryExtras(baseDeps({ multiSelect, selectAuth: async () => "clerk" }));
 
             expect(multiSelect.mock.calls[0]?.[1].map((option) => option.value)).not.toContain("auth-ui");
+        });
+
+        it("drops auth and auth-ui from --add under --auth none, and fails the run", async () => {
+            expect.assertions(2);
+
+            const { applyAll, plans } = captureApplyAll();
+
+            const ok = await offerRegistryExtras(baseDeps({ applyAll, auth: "none", preselected: ["auth", "auth-ui", "email"] }));
+
+            expect(plans().map((plan) => [...plan.names])).toStrictEqual([["mail"]]);
+            expect(ok).toBe(false);
+        });
+
+        it("offers auth-ui only when Lunora auth is chosen", async () => {
+            expect.assertions(2);
+
+            const offered = async (choice: "lunora" | "none"): Promise<string[]> => {
+                const multiSelect = vi.fn<OfferDeps["multiSelect"]>(async () => []);
+
+                await offerRegistryExtras(baseDeps({ multiSelect, selectAuth: async () => choice, text: async () => "db" }));
+
+                return multiSelect.mock.calls[0]?.[1].map((option) => option.value) ?? [];
+            };
+
+            await expect(offered("none")).resolves.not.toContain("auth-ui");
+            await expect(offered("lunora")).resolves.toContain("auth-ui");
         });
 
         it("maps --auth lunora onto the base auth item", async () => {
