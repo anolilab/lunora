@@ -1,3 +1,14 @@
+## @lunora/replica [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.218...@lunora/replica@1.0.0-alpha.219) (2026-10-27)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.244
+
 ## @lunora/replica [1.0.0-alpha.218](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.217...@lunora/replica@1.0.0-alpha.218) (2026-10-27)
 
 
