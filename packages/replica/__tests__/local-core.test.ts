@@ -594,6 +594,27 @@ describe(EventLog, () => {
         expect(log.getSince(0).map((e) => e.seq)).toStrictEqual([7, 8, 9]);
     });
 
+    it("reads by watermark skip entries evicted but not yet compacted away", () => {
+        expect.assertions(6);
+
+        // 15 appends under a cap of 10 leave 5 evicted entries in the backing array.
+        const log = new EventLog({ maxEntries: 10 });
+
+        for (let index = 0; index < 15; index += 1) {
+            log.append("tick", index);
+        }
+
+        expect(log.getSince(3).map((e) => e.seq)).toStrictEqual([5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+        expect(log.getSince(12).map((e) => e.seq)).toStrictEqual([12, 13, 14]);
+        expect(log.getSince(99)).toStrictEqual([]);
+        expect(log.getSince(Number.NaN)).toStrictEqual([]);
+
+        const page = log.getFrom(3, 2);
+
+        expect(page.entries.map((e) => e.seq)).toStrictEqual([5, 6]);
+        expect(page.hasMore).toBe(true);
+    });
+
     it("without maxEntries the log stays unbounded (default, backward-compatible)", () => {
         expect.assertions(1);
 
