@@ -1,3 +1,17 @@
+## @lunora/react-native [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.234...@lunora/react-native@1.0.0-alpha.235) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.256
+* **@lunora/react:** upgraded to 1.0.0-alpha.268
+
+## @lunora/react-native [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.233...@lunora/react-native@1.0.0-alpha.234) (2026-10-27)
+
+### Features
+
+* first-class external auth (Clerk, WorkOS, any OIDC JWT) ([#1356](https://github.com/anolilab/lunora/issues/1356)) ([8833879](https://github.com/anolilab/lunora/commit/883387960f8352f70d07edfa3e0c0c5d560ef7bc))
+
 ## @lunora/react-native [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.232...@lunora/react-native@1.0.0-alpha.233) (2026-10-27)
 
 

@@ -3479,7 +3479,7 @@ export default schema;
         });
 
         it("names the constraint and the workaround for a nested index path", () => {
-            expect.assertions(3);
+            expect.assertions(4);
 
             // `.index("by_state", ["state.kind"])` is a common
             // Convex idiom (discriminated-union column with an indexed `kind`).
@@ -3510,6 +3510,7 @@ export default schema;
 
             const message = thrown instanceof Error ? thrown.message : String(thrown);
 
+            expect(thrown).toMatchObject({ code: "INDEX_FIELD_NESTED_PATH" });
             expect(message).toContain('index "by_state" indexes the nested path "state.kind"');
             expect(message).toContain("Lunora indexes only top-level columns");
             // Names a concrete replacement column, and points at the mechanism

@@ -1,3 +1,27 @@
+## @lunora/codegen [1.0.0-alpha.363](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.362...@lunora/codegen@1.0.0-alpha.363) (2026-10-27)
+
+### Bug Fixes
+
+* **server:** reject nested-path index fields with a coded error ([#1364](https://github.com/anolilab/lunora/issues/1364)) ([b2c3be9](https://github.com/anolilab/lunora/commit/b2c3be9f456208e1aa514bff1d1baf38f2371e54))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.262
+* **@lunora/agent:** upgraded to 1.0.0-alpha.253
+* **@lunora/container:** upgraded to 1.0.0-alpha.94
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/queue:** upgraded to 1.0.0-alpha.130
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.153
+* **@lunora/values:** upgraded to 1.0.0-alpha.83
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.97
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.137
+* **@lunora/client:** upgraded to 1.0.0-alpha.256
+* **@lunora/do:** upgraded to 1.0.0-alpha.253
+* **@lunora/payment:** upgraded to 1.0.0-alpha.245
+* **@lunora/server:** upgraded to 1.0.0-alpha.243
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.164
+
 ## @lunora/codegen [1.0.0-alpha.362](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.361...@lunora/codegen@1.0.0-alpha.362) (2026-10-26)
 
 ### Features

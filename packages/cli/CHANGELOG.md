@@ -1,3 +1,39 @@
+## @lunora/cli [1.0.0-alpha.442](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.441...@lunora/cli@1.0.0-alpha.442) (2026-10-27)
+
+### Bug Fixes
+
+* **server:** reject nested-path index fields with a coded error ([#1364](https://github.com/anolilab/lunora/issues/1364)) ([b2c3be9](https://github.com/anolilab/lunora/commit/b2c3be9f456208e1aa514bff1d1baf38f2371e54))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.262
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.137
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.363
+* **@lunora/config:** upgraded to 1.0.0-alpha.418
+* **@lunora/container:** upgraded to 1.0.0-alpha.94
+* **@lunora/d1:** upgraded to 1.0.0-alpha.212
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.266
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.245
+* **@lunora/seed:** upgraded to 1.0.0-alpha.260
+* **@lunora/testing:** upgraded to 1.0.0-alpha.309
+
+## @lunora/cli [1.0.0-alpha.441](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.440...@lunora/cli@1.0.0-alpha.441) (2026-10-27)
+
+### Features
+
+* first-class external auth (Clerk, WorkOS, any OIDC JWT) ([#1356](https://github.com/anolilab/lunora/issues/1356)) ([8833879](https://github.com/anolilab/lunora/commit/883387960f8352f70d07edfa3e0c0c5d560ef7bc))
+
+### Performance Improvements
+
+* **config:** compress studio assets the dev hosts serve ([#1368](https://github.com/anolilab/lunora/issues/1368)) ([b978a84](https://github.com/anolilab/lunora/commit/b978a844e4df769d8c04f63b2b216eb2dea79fec))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.417
+
 ## @lunora/cli [1.0.0-alpha.440](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.439...@lunora/cli@1.0.0-alpha.440) (2026-10-27)
 
 ### Features

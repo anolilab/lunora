@@ -1,3 +1,20 @@
+## @lunora/config [1.0.0-alpha.418](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.417...@lunora/config@1.0.0-alpha.418) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.363
+* **@lunora/container:** upgraded to 1.0.0-alpha.94
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/seed:** upgraded to 1.0.0-alpha.260
+* **@lunora/studio:** upgraded to 1.0.0-alpha.349
+
+## @lunora/config [1.0.0-alpha.417](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.416...@lunora/config@1.0.0-alpha.417) (2026-10-27)
+
+### Performance Improvements
+
+* **config:** compress studio assets the dev hosts serve ([#1368](https://github.com/anolilab/lunora/issues/1368)) ([b978a84](https://github.com/anolilab/lunora/commit/b978a844e4df769d8c04f63b2b216eb2dea79fec))
+
 ## @lunora/config [1.0.0-alpha.416](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.415...@lunora/config@1.0.0-alpha.416) (2026-10-27)
 
 

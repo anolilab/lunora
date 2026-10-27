@@ -289,6 +289,8 @@ const assertTopLevelIndexField = (element: TsNode, field: string, indexName: str
         element,
         `index "${indexName}" indexes the nested path ${JSON.stringify(field)} — Lunora indexes only top-level columns. ` +
             `Denormalise the value into its own column (e.g. \`${denormalised}\`), index that instead, and keep it in sync with a table \`.triggers()\` beforeInsert/beforeUpdate.`,
+        // Same code `defineSchema` throws at runtime, so the CLI maps either path to exit 2.
+        { code: "INDEX_FIELD_NESTED_PATH", name: "LunoraError", status: 500 },
     );
 };
 

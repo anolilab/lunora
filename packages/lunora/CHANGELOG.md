@@ -1,3 +1,30 @@
+## lunorash [1.0.0-alpha.440](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.439...lunorash@1.0.0-alpha.440) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.442
+* **@lunora/client:** upgraded to 1.0.0-alpha.256
+* **@lunora/do:** upgraded to 1.0.0-alpha.253
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/flags:** upgraded to 1.0.0-alpha.88
+* **@lunora/observability:** upgraded to 1.0.0-alpha.176
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.174
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.245
+* **@lunora/server:** upgraded to 1.0.0-alpha.243
+* **@lunora/values:** upgraded to 1.0.0-alpha.83
+
+## lunorash [1.0.0-alpha.439](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.438...lunorash@1.0.0-alpha.439) (2026-10-27)
+
+### Features
+
+* first-class external auth (Clerk, WorkOS, any OIDC JWT) ([#1356](https://github.com/anolilab/lunora/issues/1356)) ([8833879](https://github.com/anolilab/lunora/commit/883387960f8352f70d07edfa3e0c0c5d560ef7bc))
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.441
+
 ## lunorash [1.0.0-alpha.438](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.437...lunorash@1.0.0-alpha.438) (2026-10-27)
 
 

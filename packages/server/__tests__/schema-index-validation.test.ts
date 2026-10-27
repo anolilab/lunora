@@ -69,6 +69,33 @@ describe("defineSchema validates .index() fields", () => {
             }),
         ).not.toThrow();
     });
+
+    // The global DDL would otherwise quote the path as one identifier, which workerd's SQLite indexes as a string literal.
+    it("rejects a nested-path index field on a global table with INDEX_FIELD_NESTED_PATH", () => {
+        expect.assertions(2);
+
+        const define = (): unknown =>
+            defineSchema({
+                users: defineTable({ profile: v.object({ plan: v.string() }) })
+                    .global()
+                    .index("by_plan", ["profile.plan" as never]),
+            });
+
+        expect(define).toThrow(expect.objectContaining({ code: "INDEX_FIELD_NESTED_PATH" }));
+        expect(define).toThrow(/table "users" index "by_plan" indexes the nested path "profile\.plan"/);
+    });
+
+    it("rejects a nested-path rankIndex sortBy field", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                users: defineTable({ stats: v.object({ score: v.number() }) }).rankIndex("by_score", {
+                    sortBy: [{ field: "stats.score" as never }],
+                }),
+            }),
+        ).toThrow(expect.objectContaining({ code: "INDEX_FIELD_NESTED_PATH" }));
+    });
 });
 
 /**
