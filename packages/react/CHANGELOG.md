@@ -1,3 +1,126 @@
+## @lunora/react [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.268...@lunora/react@1.0.0-alpha.269) (2026-10-27)
+
+### ⚠ BREAKING CHANGES
+
+* **client:** the admin methods (`listFunctions`, `listKvKeys`,
+`listScheduledJobs`, `listAuthUsers`, `getAuthConfig`, ... ) are no longer
+on `LunoraClient`; construct `new LunoraAdminClient(...)` from
+`@lunora/client/admin` to call them. `@lunora/react`'s admin-auth hooks
+throw unless the provider's client is a LunoraAdminClient. `@lunora/studio`'s
+`client` prop and `@lunora/mcp`'s `client` option and `callTool` now take a
+LunoraAdminClient.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* ci: note that the client size job builds its workspace deps
+
+The step lists only the adapters; vis expands it to their whole
+dependency closure (26 build tasks, including server, shard-engine and
+values, which the reference apps resolve through ratelimit).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* ci: count TanStack Query in the React size budget and require baselines
+
+- `@tanstack/*` was external to the reference apps, but the React adapter
+  ships TanStack Query, so adapter-driven growth there passed the gate. It is
+  now bundled; the React baseline moves from 47.3 to 56.7 KiB gzip (the other
+  adapters do not use it and are unchanged).
+- An app with no committed baseline got an unlimited ceiling. Check mode now
+  fails it with the instruction to run `client-size:update`.
+- The reference apps are written out literally instead of built from
+  JSON.stringify templates, which code scanning flagged as code built from
+  improperly sanitized values (the inputs were constants, so nothing was
+  injectable, but the literal source is also simpler to read).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(studio): embed Studio with a LunoraAdminClient
+
+The README still built a plain `LunoraClient` for `<Studio>`, which now
+requires the admin client, so following it crashed on first render. Also
+points the data browser's transport note at `useStudioClient` and fixes a
+`{@link}` to `readGlobalTablePage`, which moved to `LunoraAdminClient`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(mcp): reject an injected client without the admin surface
+
+A JS caller or a cast that passes a plain LunoraClient as `client` used to
+fail on the first tool call with `listFunctions is not a function`. Fail at
+construction instead, with the same LunoraAdminClient message Studio and the
+React admin-auth hooks give.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* ci: run the client size gate on lockfile and catalog bumps
+
+The gate bundles TanStack Query and each adapter's framework runtime, so a
+dependency bump changes the shipped size without touching `packages/**`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* test: type the mcp client stubs and sort an admin-list import
+
+The Lint (eslint) job failed on `vitest/require-mock-type-parameters` for the
+`listFunctions` stubs added with the MCP client guard, and on import order in
+the admin-auth-lists test after it switched to LunoraAdminClient.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(client): drop admin doc comments that restate the method
+
+Eight auth-admin methods carried a one-line comment that only repeated the
+method name; the signature already says it. The rest name a plugin
+requirement, a cascade or a caveat and stay.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* refactor(studio): split five panels past the complexity budget
+
+VectorBrowser, MetricsPanel, HealthPanel, QueuesPanel and
+PermissionsPlayground each exceeded react-doctor's cyclomatic/cognitive
+limit of 15. Their independent render branches move into components
+(index table, matches, metrics tabs/toolbar/overview, status banner,
+shards card, DLQ warning, probe outcome and run controls), and the send
+form's validation into a pure parseSendInput.
+
+The metrics sparkline series is now tagged with its shard and reads as
+empty under another, instead of being reset by a setState in the effect,
+which react-doctor flagged as adjusting state on a prop change. A test
+covers the shard switch.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): reset shard metrics series when the shard changes
+
+The sparkline series stayed in state after a shard switch until the new shard recorded its first
+delta, so returning to a previously viewed shard restored its stale history and appended new
+deltas to it. A shard switch now starts an empty series.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(deps): pin @lunora/client to the version that ships ./admin
+
+react, mcp, studio and lunorash import the @lunora/client/admin subpath but pinned older
+exact versions that do not export it. Pin them to the current in-repo version.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Performance Improvements
+
+* **client:** smaller browser bundle, one-pass delta merge, client size gate ([#1353](https://github.com/anolilab/lunora/issues/1353)) ([b940830](https://github.com/anolilab/lunora/commit/b9408305ff0fa5d6328a63078bf40e66e70893eb))
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.257
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.175
+
 ## @lunora/react [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.267...@lunora/react@1.0.0-alpha.268) (2026-10-27)
 
 
