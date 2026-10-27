@@ -76,7 +76,7 @@
     },
     "dependencies": {
         "@cfworker/json-schema": "catalog:mcp",
-        "@lunora/client": "1.0.0-alpha.253",
+        "@lunora/client": "1.0.0-alpha.255",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/shard-engine": "1.0.0-alpha.162",
         "@lunora/wire": "1.0.0-alpha.2",
