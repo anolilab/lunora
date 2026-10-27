@@ -1,3 +1,19 @@
+## @lunora/sql-store [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.213...@lunora/sql-store@1.0.0-alpha.214) (2026-10-27)
+
+### Performance Improvements
+
+* **sql-store:** cut per-request rebuilds, pinned-write probes and cdc log scans ([#1362](https://github.com/anolilab/lunora/issues/1362)) ([4d44ab4](https://github.com/anolilab/lunora/commit/4d44ab4d1d27d77c1f4521fefc9722b540b948b9)), closes [#1372](https://github.com/anolilab/lunora/issues/1372) [#1367](https://github.com/anolilab/lunora/issues/1367)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.165
+* **@lunora/do:** upgraded to 1.0.0-alpha.254
+
 ## @lunora/sql-store [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.212...@lunora/sql-store@1.0.0-alpha.213) (2026-10-27)
 
 
