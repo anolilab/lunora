@@ -1,3 +1,14 @@
+## @lunora/runtime [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.243...@lunora/runtime@1.0.0-alpha.244) (2026-10-27)
+
+### Features
+
+* first-class external auth (Clerk, WorkOS, any OIDC JWT) ([#1356](https://github.com/anolilab/lunora/issues/1356)) ([8833879](https://github.com/anolilab/lunora/commit/883387960f8352f70d07edfa3e0c0c5d560ef7bc))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.252
+
 ## @lunora/runtime [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.242...@lunora/runtime@1.0.0-alpha.243) (2026-10-26)
 
 
