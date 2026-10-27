@@ -205,6 +205,25 @@ const FRAMEWORK_FIELDS = new Set(["_creationTime", "_id"]);
 const undeclaredField = (definition: SchemaLike["tables"][string], document: Record<string, unknown>): string | undefined =>
     Object.keys(document).find((key) => !FRAMEWORK_FIELDS.has(key) && !Object.hasOwn(definition.shape, key));
 
+/**
+ * A present system field the writer cannot use would be dropped and regenerated, silently giving a restored row a new
+ * identity, so it is a row error in the dry run and the write alike.
+ */
+const systemFieldError = (document: Record<string, unknown>): string | undefined => {
+    const id = document["_id"];
+    const creationTime = document["_creationTime"];
+
+    if (id !== undefined && (typeof id !== "string" || id === "")) {
+        return 'field "_id": must be a non-empty string';
+    }
+
+    if (creationTime !== undefined && (typeof creationTime !== "number" || !Number.isFinite(creationTime))) {
+        return 'field "_creationTime": must be a finite number';
+    }
+
+    return undefined;
+};
+
 const validateRow = (schema: SchemaLike, table: string, document: Record<string, unknown>): string | undefined => {
     const definition = schema.tables[table];
 
@@ -216,6 +235,12 @@ const validateRow = (schema: SchemaLike, table: string, document: Record<string,
 
     if (undeclared !== undefined) {
         return `unexpected field "${undeclared}": not declared in table "${table}"`;
+    }
+
+    const systemField = systemFieldError(document);
+
+    if (systemField !== undefined) {
+        return systemField;
     }
 
     // Only declared schema fields are validated; `definition.shape` never

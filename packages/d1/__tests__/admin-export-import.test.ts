@@ -307,6 +307,25 @@ describe("d1 admin export/import globals", () => {
             });
         });
 
+        it("rejects a malformed _id or _creationTime instead of inserting the row under a new identity", async () => {
+            // Dropped and regenerated, a bad _id would restore the row as a different document and still report success.
+            expect.assertions(3);
+
+            const result = await importGlobalRows(writer, schema, {
+                rows: [
+                    { doc: { _id: 42, name: "ok", value: "x" }, table: "settings" },
+                    { doc: { _creationTime: "yesterday", _id: "s2", name: "ok2", value: "y" }, table: "settings" },
+                ],
+            });
+
+            expect(result.inserted).toEqual({});
+            expect(result.errors.map((error) => error.message)).toStrictEqual([
+                'field "_id": must be a non-empty string',
+                'field "_creationTime": must be a finite number',
+            ]);
+            expect(result.errors.every((error) => error.code === "VALIDATION_ERROR")).toBe(true);
+        });
+
         it("rejects a prototype-named field the table does not declare", async () => {
             expect.assertions(2);
 

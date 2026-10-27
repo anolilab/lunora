@@ -872,7 +872,10 @@ const runMigrateBackendCommand = async (options: MigrateBackendOptions): Promise
         }
 
         if (importResult.inserted + replaced === exportResult.rows) {
-            const overwritten = replaced > 0 ? ` (${String(replaced)} existing row(s) overwritten)` : "";
+            // Insert and overwrite only: a row deleted on the source since cutover stays in the target, and saying so here
+            // keeps a "counts match" from reading as "the target now mirrors the source".
+            const overwritten =
+                replaced > 0 ? ` (${String(replaced)} existing row(s) overwritten; rows deleted on ${source} since cutover are not removed)` : "";
 
             logger.info(
                 `✓ Migrated ${String(exportResult.rows)} row(s)${overwritten} — counts match. Verify your app reads from ${target}, then decommission the ${source} binding.`,

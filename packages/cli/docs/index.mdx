@@ -1124,7 +1124,8 @@ cutover, that means rows missing from D1 come back but edits made on Hyperdrive
 to rows D1 still holds do not. Pass `--replace` to overwrite those rows with the
 source's values (it keeps their `_id` and takes the source's `_creationTime`),
 or keep the dump with `--out` and reconcile by hand. `--replace` writes like any
-import, so a remote target still needs `--yes`.
+import, so a remote target still needs `--yes`. Neither mode deletes anything: a
+row removed from the source since cutover is still in the target afterwards.
 
 ### `lunora run`
 

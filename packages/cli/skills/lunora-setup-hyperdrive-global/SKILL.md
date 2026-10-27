@@ -173,7 +173,8 @@ on Hyperdrive since cutover: a row D1 already holds is a conflict and keeps its
 D1 values. Add `--replace` (plus `--tables` naming the `.global()` tables, and
 `--yes` for a remote target) to overwrite those
 rows with the Hyperdrive values, or keep the dump with `--out` and reconcile by
-hand.
+hand. Neither mode carries deletions over: a row deleted on Hyperdrive since
+cutover is still in D1 afterwards, so remove those by hand.
 
 ## Common Pitfalls
 
