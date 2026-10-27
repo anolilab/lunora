@@ -1,6 +1,6 @@
 import type { FunctionReference } from "@lunora/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { effectScope } from "vue";
+import { effectScope, nextTick, ref } from "vue";
 
 import type { UseStreamResult } from "../src/use-stream";
 import { useStream } from "../src/use-stream";
@@ -77,6 +77,60 @@ describe(useStream, () => {
         expect(fake.streamCalls).toHaveLength(0);
         expect(result.status.value).toBe("idle");
         expect(result.chunks.value).toStrictEqual([]);
+
+        scope.stop();
+    });
+
+    it("keeps the stream open when a reactive args source re-emits equal content", async () => {
+        expect.hasAssertions();
+
+        const fake = createFakeClient();
+        // `Math.min(limit, 10)` clamps 15 and 20 to the same 10: the getter re-runs
+        // and builds a fresh object, but the args it produces are unchanged.
+        const limit = ref(15);
+        const scope = effectScope();
+        const result = scope.run(() =>
+            fake.provide((): UseStreamResult<unknown> =>
+                useStream(makeStreamRef(TICK_REF), () => {
+                    return { limit: Math.min(limit.value, 10) };
+                }),
+            ),
+        )!;
+
+        fake.pushStream(TICK_REF, { limit: 10 }, { tick: 1 });
+        await fake.flush();
+
+        limit.value = 20;
+        await nextTick();
+
+        expect(fake.streamCalls).toHaveLength(1);
+        expect(fake.streamCalls[0]?.onCancel).not.toHaveBeenCalled();
+        expect(result.chunks.value).toStrictEqual([{ tick: 1 }]);
+
+        scope.stop();
+    });
+
+    it("restarts the stream when the reactive args content changes", async () => {
+        expect.hasAssertions();
+
+        const fake = createFakeClient();
+        const since = ref(0);
+        const scope = effectScope();
+
+        scope.run(() =>
+            fake.provide(() =>
+                useStream(makeStreamRef(TICK_REF), () => {
+                    return { since: since.value };
+                }),
+            ),
+        );
+
+        since.value = 5;
+        await nextTick();
+
+        expect(fake.streamCalls).toHaveLength(2);
+        expect(fake.streamCalls[0]?.onCancel).toHaveBeenCalledWith();
+        expect(fake.streamCalls[1]?.args).toStrictEqual({ since: 5 });
 
         scope.stop();
     });

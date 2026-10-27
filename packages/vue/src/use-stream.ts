@@ -1,4 +1,5 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
+import { stableWireKey } from "@lunora/wire";
 import type { MaybeRefOrGetter, Ref } from "vue";
 import { onScopeDispose, ref, toValue, watch } from "vue";
 
@@ -59,9 +60,14 @@ const useStream = <F extends FunctionReference<"stream">>(
         cancelCurrent?.();
     };
 
+    // Keyed on the args' CONTENT (`stableWireKey`), not object identity: a getter
+    // that re-runs and produces equal args must not cancel the live stream,
+    // drop its chunks and restart the generation server-side. See `use-query`.
     watch(
-        () => toValue(args),
-        (currentArgs, _previous, onCleanup) => {
+        () => stableWireKey(toValue(args)),
+        (_key, _previousKey, onCleanup) => {
+            const currentArgs = toValue(args);
+
             // Reset for the new (or torn-down) stream.
             chunks.value = [];
             error.value = undefined;
