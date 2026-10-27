@@ -22,23 +22,23 @@ interface CloudflareTokenCheckOptions {
     fetch?: typeof globalThis.fetch;
 }
 
-/** What one verify call said: its HTTP status, and whether the token reported itself `active`. */
+/** What one verify call said: its HTTP status, and the `status` the token reported, if the body held one. */
 interface VerifyProbe {
-    active: boolean;
+    reported: string | undefined;
     status: number;
 }
 
 type TokenVerdict = { verdict: "active" } | { verdict: "rejected" } | { reason: string; verdict: "unchecked" };
 
-/** Whether a verify answer's `result.status` is `active`. */
-const isActive = (body: unknown): boolean => {
+/** The `result.status` of a verify answer, or `undefined` when the body does not carry one. */
+const reportedStatus = (body: unknown): string | undefined => {
     if (typeof body !== "object" || body === null || !("result" in body)) {
-        return false;
+        return undefined;
     }
 
     const { result } = body;
 
-    return typeof result === "object" && result !== null && "status" in result && result.status === "active";
+    return typeof result === "object" && result !== null && "status" in result && typeof result.status === "string" ? result.status : undefined;
 };
 
 const probeUserToken = async (token: string, fetchImpl: typeof globalThis.fetch): Promise<VerifyProbe> => {
@@ -48,7 +48,7 @@ const probeUserToken = async (token: string, fetchImpl: typeof globalThis.fetch)
     });
     const body: unknown = await response.json().catch(() => undefined);
 
-    return { active: response.ok && isActive(body), status: response.status };
+    return { reported: response.ok ? reportedStatus(body) : undefined, status: response.status };
 };
 
 const probeAccountToken = async (accountId: string, token: string, fetchImpl: typeof globalThis.fetch): Promise<VerifyProbe> => {
@@ -60,23 +60,21 @@ const probeAccountToken = async (accountId: string, token: string, fetchImpl: ty
         path: "/tokens/verify",
     });
 
-    return outcome.ok ? { active: isActive(outcome.body), status: 200 } : { active: false, status: outcome.status };
+    return outcome.ok ? { reported: reportedStatus(outcome.body), status: 200 } : { reported: undefined, status: outcome.status };
 };
 
 /**
- * Decide what the two endpoints say. Only a 401 from both is a rejection: a
- * user-owned token answers at the user endpoint, and an account-owned one only
- * at its account's, so a 401 from one of them is not yet a verdict.
+ * Decide what the two endpoints say. A status the token reports is the verdict:
+ * `active` passes, anything else (disabled, expired) is rejected. Without a
+ * reported status, only a refusal from both endpoints (401 or 403) is a
+ * rejection, since a user-owned token answers at the user endpoint and an
+ * account-owned one only at its account's. An inconclusive answer is unchecked.
  */
 const judgeToken = async (token: string, accountId: string | undefined, fetchImpl: typeof globalThis.fetch): Promise<TokenVerdict> => {
     const user = await probeUserToken(token, fetchImpl);
 
-    if (user.active) {
-        return { verdict: "active" };
-    }
-
-    if (user.status === 200) {
-        return { verdict: "rejected" };
+    if (user.reported !== undefined) {
+        return user.reported === "active" ? { verdict: "active" } : { verdict: "rejected" };
     }
 
     // A 403 can mean the user endpoint does not let a token ask about itself, so it is not a verdict either.
@@ -90,19 +88,26 @@ const judgeToken = async (token: string, accountId: string | undefined, fetchImp
 
     const account = await probeAccountToken(accountId, token, fetchImpl);
 
-    if (account.active) {
-        return { verdict: "active" };
+    if (account.reported !== undefined) {
+        return account.reported === "active" ? { verdict: "active" } : { verdict: "rejected" };
     }
 
-    if (account.status === 401) {
+    if (account.status === 401 || account.status === 403) {
         return { verdict: "rejected" };
     }
 
     return { reason: `HTTP ${String(account.status)}`, verdict: "unchecked" };
 };
 
+/** The account a token is checked against when no `CLOUDFLARE_ACCOUNT_ID` overrides it: the top level's, else the first environment block's. */
+const configuredAccountId = (parsed: WranglerConfig | undefined): unknown =>
+    parsed?.account_id ??
+    Object.values(parsed?.env ?? {})
+        .map((block) => (block as WranglerConfig | null | undefined)?.account_id)
+        .find((id) => typeof id === "string" && id !== "");
+
 const checkCloudflareToken = async (parsed: WranglerConfig | undefined, options: CloudflareTokenCheckOptions, findings: Finding[]): Promise<void> => {
-    const { accountId, token } = resolveCloudflareCredentials(options.environment ?? process.env, parsed?.account_id);
+    const { accountId, token } = resolveCloudflareCredentials(options.environment ?? process.env, configuredAccountId(parsed));
 
     if (token === undefined) {
         findings.push({

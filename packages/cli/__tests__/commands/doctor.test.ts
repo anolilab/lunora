@@ -1205,6 +1205,14 @@ describe("runDoctor", () => {
             expect(redactionFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
         });
 
+        it("warns when only traces are on, since traces keep the request URL too", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ observability: { enabled: false, traces: { enabled: true } } }));
+
+            expect(redactionFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))?.level).toBe("warn");
+        });
+
         it("is quiet when logging is disabled", async () => {
             expect.assertions(1);
 
@@ -1325,6 +1333,54 @@ describe("runDoctor", () => {
 
             await expect(tokenFinding(fetchImpl, { CLOUDFLARE_API_TOKEN: "token" })).resolves.toMatchObject({ code: "cloudflare-token-unchecked" });
             expect(fetchImpl).toHaveBeenCalledTimes(1);
+        });
+
+        it("fails a token that both endpoints refuse with 401 or 403", async () => {
+            expect.assertions(1);
+
+            const fetchImpl = vi.fn<typeof globalThis.fetch>(async (url) =>
+                Response.json({ success: false }, { status: urlOf(url).endsWith("/user/tokens/verify") ? 401 : 403 }),
+            );
+
+            await expect(tokenFinding(fetchImpl, credentials)).resolves.toMatchObject({ code: "cloudflare-token-rejected", level: "fail" });
+        });
+
+        it("leaves a 200 with no readable status unchecked, rather than rejected", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = vi.fn<typeof globalThis.fetch>(async () => Response.json({ success: true }));
+
+            await expect(tokenFinding(fetchImpl, credentials)).resolves.toMatchObject({ code: "cloudflare-token-unchecked" });
+
+            const verifyCalls = vi.mocked(fetchImpl).mock.calls.filter(([called]) => urlOf(called).endsWith("/tokens/verify"));
+
+            expect(verifyCalls).toHaveLength(1);
+        });
+
+        it("checks an account that is configured only in an env block", async () => {
+            expect.assertions(2);
+
+            const cwd = mkdtempSync(join(tmpdir(), "lunora-doctor-token-"));
+
+            try {
+                seed(
+                    cwd,
+                    JSON.stringify({ ...(JSON.parse(CLEAN_WRANGLER) as object), account_id: undefined, env: { staging: { account_id: "staging-acc" } } }),
+                );
+
+                const fetchImpl = vi.fn<typeof globalThis.fetch>(async (url) =>
+                    Response.json({ success: false }, { status: urlOf(url).endsWith("/user/tokens/verify") ? 401 : 200 }),
+                );
+
+                await runDoctor({ cwd, environment: { CLOUDFLARE_API_TOKEN: "token" }, fetch: fetchImpl, logger: makeLogger().logger });
+
+                const urls = vi.mocked(fetchImpl).mock.calls.map(([called]) => urlOf(called));
+
+                expect(urls).toContain("https://api.cloudflare.com/client/v4/accounts/staging-acc/tokens/verify");
+                expect(urls.some((called) => called.includes("/accounts/undefined/"))).toBe(false);
+            } finally {
+                rmSync(cwd, { force: true, recursive: true });
+            }
         });
 
         it("fails a token the account reports as disabled", async () => {

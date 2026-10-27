@@ -10,11 +10,18 @@ import type { Finding } from "./handler";
 
 /**
  * Whether an explicit `observability` block persists request URLs with their
- * query strings. An absent block is the reconciled default, which redacts, so
- * it is never flagged.
+ * query strings. Traces keep the URL too, so either signal counts. An absent
+ * block is the reconciled default, which redacts, so it is never flagged.
  */
-const keepsQueryStrings = (observability: WranglerObservability | undefined): boolean =>
-    observability !== undefined && resolveObservabilitySampling(observability).logs.enabled && observability.redact_query_string !== true;
+const keepsQueryStrings = (observability: WranglerObservability | undefined): boolean => {
+    if (observability === undefined || observability.redact_query_string === true) {
+        return false;
+    }
+
+    const { logs, traces } = resolveObservabilitySampling(observability);
+
+    return logs.enabled || traces.enabled;
+};
 
 /**
  * WARN (`observability-query-unredacted`) when request logging is on without
