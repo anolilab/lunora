@@ -277,6 +277,39 @@ describe("createSqlCtxDb — the changed-tables poll", () => {
         expect(tsIndex()).toBe(1);
     });
 
+    it("drops and rebuilds a ts index a failed concurrent Postgres build left invalid", async () => {
+        // `IF NOT EXISTS` takes an invalid index for the real one, and the planner never uses it.
+        expect.assertions(1);
+
+        const ddl: string[] = [];
+        const postgres = { ...dialect, name: "postgres" } as typeof dialect;
+        const exec: SqlCtxExec = {
+            ...harness.exec,
+            all: async (query, parameters) => {
+                if (query.includes("pg_index")) {
+                    ddl.push("state");
+
+                    return [{ indisvalid: false }];
+                }
+
+                return await harness.exec.all(query, parameters);
+            },
+            run: async (query, parameters) => {
+                if (query.includes(" INDEX ")) {
+                    ddl.push(query.replace(/ ON .*/u, ""));
+
+                    return undefined;
+                }
+
+                return await harness.exec.run(query, parameters);
+            },
+        };
+
+        await sweepSqlCdcRetention(exec, postgres, 10_000, 9999);
+
+        expect(ddl).toStrictEqual(["state", `DROP INDEX IF EXISTS "__cdc_log_ts"`, `CREATE INDEX CONCURRENTLY IF NOT EXISTS "__cdc_log_ts"`]);
+    });
+
     it("still deletes the expired rows", async () => {
         expect.assertions(1);
 
