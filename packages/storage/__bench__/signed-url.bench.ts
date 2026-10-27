@@ -33,30 +33,30 @@ let signedUrl: string;
 let canonical: string;
 let sigBytes: Uint8Array;
 
-describe("verifySignedUrl", () => {
-    // Mint the URL + derive verify inputs in beforeAll: CodSpeed's instrumented
-    // runner honors beforeAll but does NOT pick up module-top-level await state,
-    // so a top-level `await buildSignedUrl(...)` would leave the benches with an
-    // undefined URL.
-    beforeAll(async () => {
-        // Pre-mint a valid URL once so both benches measure only the verify cost.
-        signedUrl = await buildSignedUrl({
-            baseUrl: "https://cdn.test",
-            bucketName: "default",
-            expiresInSeconds: 7 * 24 * 60 * 60,
-            key: "uploads/x.png",
-            secret: SECRET,
-        });
-
-        const url = new URL(signedUrl);
-        const exp = Number(url.searchParams.get("exp"));
-        const method = url.searchParams.get("method") ?? "GET";
-        const sig = url.searchParams.get("sig") ?? "";
-
-        canonical = `${method}\n${url.host.toLowerCase()}\nuploads/x.png\n${String(exp)}`;
-        sigBytes = fromBase64Url(sig);
+// Mint the URL + derive verify inputs in a file-level beforeAll. CodSpeed's instrumented runner does not pick up
+// module-top-level await state, and vitest's own bench runner skips hooks registered inside a `describe` (its
+// `runBenchmarkSuite` recurses into sub-suites without running their hooks), which left both arms with an undefined
+// URL. A file-level hook runs under both.
+beforeAll(async () => {
+    // Pre-mint a valid URL once so both benches measure only the verify cost.
+    signedUrl = await buildSignedUrl({
+        baseUrl: "https://cdn.test",
+        bucketName: "default",
+        expiresInSeconds: 7 * 24 * 60 * 60,
+        key: "uploads/x.png",
+        secret: SECRET,
     });
 
+    const url = new URL(signedUrl);
+    const exp = Number(url.searchParams.get("exp"));
+    const method = url.searchParams.get("method") ?? "GET";
+    const sig = url.searchParams.get("sig") ?? "";
+
+    canonical = `${method}\n${url.host.toLowerCase()}\nuploads/x.png\n${String(exp)}`;
+    sigBytes = fromBase64Url(sig);
+});
+
+describe("verifySignedUrl", () => {
     bench("cached key import (shipped)", async () => {
         await verifySignedUrl(signedUrl, SECRET);
     });
