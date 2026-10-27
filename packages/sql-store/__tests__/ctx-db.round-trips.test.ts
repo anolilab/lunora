@@ -232,10 +232,16 @@ describe("createSqlCtxDb — companion rebuilds", () => {
 
         try {
             const provisionScope = {};
+            let markStalled: () => void = () => undefined;
+            const stalled = new Promise<void>((resolve) => {
+                markStalled = resolve;
+            });
             const stuck: SqlCtxExec = {
                 ...harness.exec,
                 all: async (query, parameters) => {
                     if (isSourcePage(query)) {
+                        markStalled();
+
                         // Never settles, like a rebuild whose request was cancelled.
                         return await new Promise<never>(() => {});
                     }
@@ -246,6 +252,9 @@ describe("createSqlCtxDb — companion rebuilds", () => {
             const abandoned = createSqlCtxDb({ clock: () => 1, dialect, exec: stuck, provisionScope, schema: companionSchema });
 
             abandoned.count("notes", { org: "a" }).catch(() => undefined);
+
+            // Only a rebuild already parked on the source page exercises the wait being abandoned.
+            await stalled;
 
             const next = createSqlCtxDb({ clock: () => 2, dialect, exec: harness.exec, provisionScope, schema: companionSchema });
             const counted = next.count("notes", { org: "a" });
