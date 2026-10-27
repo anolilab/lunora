@@ -1,3 +1,9 @@
+## @lunora/storage [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.157...@lunora/storage@1.0.0-alpha.158) (2026-10-27)
+
+### Performance Improvements
+
+* cut per-request CPU on the DO dispatch and fan-out path ([#1351](https://github.com/anolilab/lunora/issues/1351)) ([2f94aa9](https://github.com/anolilab/lunora/commit/2f94aa9bafb63d15288730a8dea7f408db97a760)), closes [#1370](https://github.com/anolilab/lunora/issues/1370) [Array#some](https://github.com/anolilab/Array/issues/some)
+
 ## @lunora/storage [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.156...@lunora/storage@1.0.0-alpha.157) (2026-10-27)
 
 
