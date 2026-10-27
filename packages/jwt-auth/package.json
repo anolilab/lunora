@@ -1,6 +1,6 @@
 {
     "name": "@lunora/jwt-auth",
-    "version": "1.0.0-alpha.0",
+    "version": "1.0.0-alpha.1",
     "description": "Bring your own auth to Lunora — verify JWTs from Clerk, WorkOS, Auth0, Supabase or any OIDC issuer against their JWKS and feed the verified identity into ctx.auth / RLS via a resolveIdentity adapter",
     "keywords": [
         "auth0",
