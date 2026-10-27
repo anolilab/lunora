@@ -13807,7 +13807,9 @@ abstract class ShardDO {
                         (error.code === "SUBSCRIPTION_RESULT_TOO_LARGE" || (this.deliveryAuthorization && error.code === "SUBSCRIPTION_PERSIST_FAILED"))
                     ) {
                         this.unsubscribe(ws, subId);
-                        this.sendSubscriptionError(ws, subId, error.code, error.message, { why: error.why });
+                        // `toErrorBody` resolves the catalog hint (and redacts as the other paths do); the client no longer
+                        // falls back to one when it rebuilds the error.
+                        this.sendSubscriptionError(ws, subId, error.code, error.message, toErrorBody(error).body);
                         this.recordSubscriptionRefreshError(functionPath, error, { subId });
                         return;
                     }
