@@ -74,6 +74,12 @@ catalogs:
     '@better-auth/sso':
       specifier: 1.7.7
       version: 1.7.7
+    '@clerk/react':
+      specifier: 6.18.0
+      version: 6.18.0
+    '@workos-inc/authkit-react':
+      specifier: 0.16.3
+      version: 0.16.3
     better-auth:
       specifier: 1.7.7
       version: 1.7.7
@@ -1083,6 +1089,7 @@ overrides:
   '@lunora/fingerprint': workspace:*
   '@lunora/flags': workspace:*
   '@lunora/hyperdrive': workspace:*
+  '@lunora/jwt-auth': workspace:*
   '@lunora/mail': workspace:*
   '@lunora/mcp': workspace:*
   '@lunora/notify': workspace:*
@@ -1883,6 +1890,61 @@ importers:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
 
+  examples/clerk-auth:
+    dependencies:
+      '@clerk/react':
+        specifier: catalog:auth
+        version: 6.18.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@lunora/jwt-auth':
+        specifier: workspace:*
+        version: link:../../packages/jwt-auth
+      '@lunora/react':
+        specifier: workspace:*
+        version: link:../../packages/react
+      '@lunora/vite':
+        specifier: workspace:*
+        version: link:../../packages/vite
+      lunorash:
+        specifier: workspace:*
+        version: link:../../packages/lunora
+      react:
+        specifier: 19.3.0
+        version: 19.3.0
+      react-dom:
+        specifier: 19.3.0
+        version: 19.3.0(react@19.3.0)
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93)
+      '@lunora/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
+      '@types/node':
+        specifier: catalog:types
+        version: 26.6.4
+      '@types/react':
+        specifier: catalog:frontend
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: catalog:frontend
+        version: 19.3.0(@types/react@19.3.0)
+      jose:
+        specifier: 6.2.12
+        version: 6.2.12
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vite:
+        specifier: catalog:vite
+        version: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
+      vitest:
+        specifier: catalog:test
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      wrangler:
+        specifier: catalog:cloudflare
+        version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
+
   examples/expo:
     dependencies:
       '@better-auth/expo':
@@ -2482,6 +2544,61 @@ importers:
       vite:
         specifier: catalog:vite
         version: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
+      wrangler:
+        specifier: catalog:cloudflare
+        version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
+
+  examples/workos-auth:
+    dependencies:
+      '@lunora/jwt-auth':
+        specifier: workspace:*
+        version: link:../../packages/jwt-auth
+      '@lunora/react':
+        specifier: workspace:*
+        version: link:../../packages/react
+      '@lunora/vite':
+        specifier: workspace:*
+        version: link:../../packages/vite
+      '@workos-inc/authkit-react':
+        specifier: catalog:auth
+        version: 0.16.3(react@19.3.0)
+      lunorash:
+        specifier: workspace:*
+        version: link:../../packages/lunora
+      react:
+        specifier: 19.3.0
+        version: 19.3.0
+      react-dom:
+        specifier: 19.3.0
+        version: 19.3.0(react@19.3.0)
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93)
+      '@lunora/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
+      '@types/node':
+        specifier: catalog:types
+        version: 26.6.4
+      '@types/react':
+        specifier: catalog:frontend
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: catalog:frontend
+        version: 19.3.0(@types/react@19.3.0)
+      jose:
+        specifier: 6.2.12
+        version: 6.2.12
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vite:
+        specifier: catalog:vite
+        version: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
+      vitest:
+        specifier: catalog:test
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -3838,6 +3955,40 @@ importers:
       postgres:
         specifier: catalog:sql
         version: 3.4.9
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+
+  packages/jwt-auth:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
+      jose:
+        specifier: 6.2.12
+        version: 6.2.12
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93)
+      '@types/node':
+        specifier: catalog:types
+        version: 26.6.4
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 4.0.2(1dd7044527b8d97bb3f7a9233d2950f4)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.10(vitest@4.1.11)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.2
+      fallow:
+        specifier: catalog:lint
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -7215,6 +7366,25 @@ packages:
   '@clack/prompts@1.8.1':
     resolution: {integrity: sha512-dlT1m5e/0yUL0kRNcQn7yGLVThkgbB0Ga/1AmfDDC/8ik6AIiSf2QLQO2zPYvefsHP0aFgxO93cVLCCfDp7kzQ==}
     engines: {node: '>= 20.12.0'}
+
+  '@clerk/react@6.18.0':
+    resolution: {integrity: sha512-MmLhXGtrGByt0ZJjLyh88rP7uESxONji4FFVFKe7U11DIGRVdvgRs/mWfLsNa1R23knxeTw3HMEVLIjQ6v5DgQ==}
+    engines: {node: '>=20.9.0'}
+    peerDependencies:
+      react: 19.3.0
+      react-dom: 19.3.0
+
+  '@clerk/shared@4.41.1':
+    resolution: {integrity: sha512-qxy8bzGMV6EGuKqnfEVm/+f9yGncUyOJhxdbM10X52PoMiALJ5VOH+c3C427ETkupYalF81eBlg7aBH50AtbNA==}
+    engines: {node: '>=20.9.0'}
+    peerDependencies:
+      react: 19.3.0
+      react-dom: 19.3.0
+    peerDependenciesMeta:
+      react:
+        optional: true
+      react-dom:
+        optional: true
 
   '@cloudflare/containers@0.3.7':
     resolution: {integrity: sha512-DM9dm3FnIBSyiSJ1FLavKwl/lk3oAmTaynCzZQ9pZR0ncRPquSxkxd8Nu2MFILxmDDsPkxKsSNEh9mHHMty4Fw==}
@@ -15784,6 +15954,14 @@ packages:
 
   '@workflow/serde@4.1.0':
     resolution: {integrity: sha512-pav4F2BoirECWR7Nf1TKt+2eETcBj7jj4cBefQ8VXQCA6NPkaKeLfj/zMgi+3zYV5ZIBT4GuUiphsj0/b9hPQQ==}
+
+  '@workos-inc/authkit-js@0.20.4':
+    resolution: {integrity: sha512-hr6umahJXM8bQ+cxC0Li9MIgBlzZCQwWGxINWC1j51Bj/l/6rl0VNnyuTkeHZsKpwk0i0goE128ooAGJ6Y/3OQ==}
+
+  '@workos-inc/authkit-react@0.16.3':
+    resolution: {integrity: sha512-0dBvUp/ZEF/yrojfDHK9T/eMmNxMtH7HbWZvA8Aum5wRn874Yr0wraAFr/wAKBRJYoYLCcfYwSEDlYTjKTk2sQ==}
+    peerDependencies:
+      react: 19.3.0
 
   '@x402/core@2.28.0':
     resolution: {integrity: sha512-Da/7zKxCKqpBoB4Msc9tFgkAv7tJTD8nG+DSSm+QdXAyJS4PQsmgVSKe17rDJTtlu0pwNbLcOje6MyQ6kaDkig==}
@@ -27890,6 +28068,23 @@ snapshots:
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
 
+  '@clerk/react@6.18.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+    dependencies:
+      '@clerk/shared': 4.41.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      react: 19.3.0
+      react-dom: 19.3.0(react@19.3.0)
+      tslib: 2.8.1
+
+  '@clerk/shared@4.41.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+    dependencies:
+      '@tanstack/query-core': 5.102.8
+      dequal: 2.0.3
+      glob-to-regexp: 0.4.1
+      js-cookie: 3.0.8
+    optionalDependencies:
+      react: 19.3.0
+      react-dom: 19.3.0(react@19.3.0)
+
   '@cloudflare/containers@0.3.7(patch_hash=8ca3df4c873451e338a4f41b8af65d2929f6d860099ee284102689c15da9752a)': {}
 
   '@cloudflare/flagship@0.5.0(@openfeature/server-sdk@1.23.0(@openfeature/core@1.12.0))(@openfeature/web-sdk@1.10.0(@openfeature/core@1.12.0))':
@@ -30691,8 +30886,8 @@ snapshots:
   '@nuxt/vite-builder@4.5.2(@babel/plugin-proposal-decorators@7.29.7(@babel/core@7.29.7(supports-color@10.2.2))(supports-color@10.2.2))(@babel/plugin-syntax-jsx@8.0.1(@babel/core@7.29.7(supports-color@10.2.2)))(@types/node@26.6.4)(esbuild@0.28.2)(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(magic-string@1.4.2)(magicast@0.5.4)(meow@14.1.0)(nuxt@4.5.2(ae4fc1e826bcff52b98099b1c61544eb))(optionator@0.9.4)(oxc-parser@0.155.0)(oxlint@1.81.0)(rolldown@1.2.12)(rollup-plugin-visualizer@7.1.1(rolldown@1.2.15)(rollup@4.65.0))(supports-color@10.2.2)(terser@5.51.2)(typescript@6.0.3)(unplugin@3.4.0(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.12)(rollup@4.63.1)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.28))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.28)(uglify-js@3.19.3)))(vue@3.5.43(typescript@6.0.3))(yaml@2.9.1)':
     dependencies:
       '@nuxt/kit': 4.5.2(magic-string@1.4.2)(magicast@0.5.4)(oxc-parser@0.155.0)(rolldown@1.2.12)(unplugin@3.4.0(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.12)(rollup@4.63.1)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.28))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.28)(uglify-js@3.19.3)))
-      '@vitejs/plugin-vue': 6.0.9(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(vue@3.5.43(typescript@6.0.3))
-      '@vitejs/plugin-vue-jsx': 5.1.6(supports-color@10.2.2)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(vue@3.5.43(typescript@6.0.3))
+      '@vitejs/plugin-vue': 6.0.9(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(vue@3.5.43(typescript@6.0.3))
+      '@vitejs/plugin-vue-jsx': 5.1.6(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(vue@3.5.43(typescript@6.0.3))
       autoprefixer: 10.5.4(postcss@8.5.28)
       consola: 3.4.2
       cssnano: 8.0.2(postcss@8.5.28)
@@ -30716,9 +30911,9 @@ snapshots:
       std-env: 4.2.0
       ufo: 1.6.4
       unenv: 2.0.0-rc.24
-      vite: 8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
+      vite: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
       vite-node: 6.0.0(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
-      vite-plugin-checker: 0.14.5(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(meow@14.1.0)(optionator@0.9.4)(oxlint@1.81.0)(typescript@6.0.3)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      vite-plugin-checker: 0.14.5(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(meow@14.1.0)(optionator@0.9.4)(oxlint@1.81.0)(typescript@6.0.3)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       vue: 3.5.43(typescript@6.0.3)
       vue-bundle-renderer: 2.3.2
     optionalDependencies:
@@ -38019,23 +38214,17 @@ snapshots:
       '@rolldown/plugin-babel': 0.2.4(@babel/core@8.0.9)(@babel/plugin-transform-runtime@7.29.7(@babel/core@8.0.9)(supports-color@10.2.2))(@babel/runtime@7.29.7)(rolldown@1.2.15)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       babel-plugin-react-compiler: 1.0.0
 
-  '@vitejs/plugin-vue-jsx@5.1.6(supports-color@10.2.2)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(vue@3.5.43(typescript@6.0.3))':
+  '@vitejs/plugin-vue-jsx@5.1.6(supports-color@10.2.2)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(vue@3.5.43(typescript@6.0.3))':
     dependencies:
       '@babel/core': 7.29.7(supports-color@10.2.2)
       '@babel/plugin-syntax-typescript': 7.29.7(@babel/core@7.29.7(supports-color@10.2.2))
       '@babel/plugin-transform-typescript': 7.29.7(@babel/core@7.29.7(supports-color@10.2.2))(supports-color@10.2.2)
       '@rolldown/pluginutils': 1.0.1
       '@vue/babel-plugin-jsx': 2.0.1(@babel/core@7.29.7(supports-color@10.2.2))(supports-color@10.2.2)
-      vite: 8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
+      vite: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
       vue: 3.5.43(typescript@6.0.3)
     transitivePeerDependencies:
       - supports-color
-
-  '@vitejs/plugin-vue@6.0.9(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(vue@3.5.43(typescript@6.0.3))':
-    dependencies:
-      '@rolldown/pluginutils': 1.0.1
-      vite: 8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
-      vue: 3.5.43(typescript@6.0.3)
 
   '@vitejs/plugin-vue@6.0.9(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(vue@3.5.43(typescript@6.0.3))':
     dependencies:
@@ -38447,6 +38636,13 @@ snapshots:
       tslib: 2.8.1
 
   '@workflow/serde@4.1.0': {}
+
+  '@workos-inc/authkit-js@0.20.4': {}
+
+  '@workos-inc/authkit-react@0.16.3(react@19.3.0)':
+    dependencies:
+      '@workos-inc/authkit-js': 0.20.4
+      react: 19.3.0
 
   '@x402/core@2.28.0':
     dependencies:
@@ -39013,8 +39209,8 @@ snapshots:
       unifont: 0.7.5
       unstorage: 1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(aws4fetch@1.0.20)(db0@0.3.4(@electric-sql/pglite@0.5.8)(better-sqlite3@13.0.3)(drizzle-orm@0.45.3(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.24.5(@types/node@26.6.4)))(ioredis@5.11.1(supports-color@10.2.2))
       verkit: 0.4.1
-      vite: 8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
-      vitefu: 1.1.3(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      vite: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
+      vitefu: 1.1.3(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       xxhash-wasm: 1.1.0
       yargs-parser: 22.0.0
       zod: 4.6.5
@@ -42906,8 +43102,7 @@ snapshots:
     dependencies:
       is-glob: 4.0.3
 
-  glob-to-regexp@0.4.1:
-    optional: true
+  glob-to-regexp@0.4.1: {}
 
   glob@10.5.0:
     dependencies:
@@ -49973,7 +50168,7 @@ snapshots:
       es-module-lexer: 2.3.2
       obug: 2.1.4
       pathe: 2.0.3
-      vite: 8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
+      vite: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
     transitivePeerDependencies:
       - '@types/node'
       - '@vitejs/devtools'
@@ -49988,7 +50183,7 @@ snapshots:
       - tsx
       - yaml
 
-  vite-plugin-checker@0.14.5(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(meow@14.1.0)(optionator@0.9.4)(oxlint@1.81.0)(typescript@6.0.3)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)):
+  vite-plugin-checker@0.14.5(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(meow@14.1.0)(optionator@0.9.4)(oxlint@1.81.0)(typescript@6.0.3)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)):
     dependencies:
       '@babel/code-frame': 7.29.7
       chokidar: 5.0.0
@@ -49997,7 +50192,7 @@ snapshots:
       picomatch: 4.0.7
       proper-lockfile: 4.1.2
       tiny-invariant: 1.3.3
-      vite: 8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
+      vite: 8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
     optionalDependencies:
       eslint: 10.12.0(jiti@2.7.0)(supports-color@10.2.2)
       meow: 14.1.0
