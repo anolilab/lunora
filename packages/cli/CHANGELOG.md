@@ -1,3 +1,18 @@
+## @lunora/cli [1.0.0-alpha.441](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.440...@lunora/cli@1.0.0-alpha.441) (2026-10-27)
+
+### Features
+
+* first-class external auth (Clerk, WorkOS, any OIDC JWT) ([#1356](https://github.com/anolilab/lunora/issues/1356)) ([8833879](https://github.com/anolilab/lunora/commit/883387960f8352f70d07edfa3e0c0c5d560ef7bc))
+
+### Performance Improvements
+
+* **config:** compress studio assets the dev hosts serve ([#1368](https://github.com/anolilab/lunora/issues/1368)) ([b978a84](https://github.com/anolilab/lunora/commit/b978a844e4df769d8c04f63b2b216eb2dea79fec))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.417
+
 ## @lunora/cli [1.0.0-alpha.440](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.439...@lunora/cli@1.0.0-alpha.440) (2026-10-27)
 
 ### Features
