@@ -12,9 +12,8 @@
  * it from every browser bundle.
  */
 
-/* eslint-disable import/exports-last -- a data + types module: the hint types are declared next to the tables they describe. */
-
 import type { LunoraErrorCode } from "./catalog";
+import { HTTP_STREAM_NO_BODY_HINT, OFFLINE_NOT_QUEUED_HINT } from "./client-hints";
 
 /**
  * Canonical Cloudflare support-docs pages for the two platform-error families.
@@ -28,7 +27,7 @@ const CF_1XXX_DOCS = "https://developers.cloudflare.com/support/troubleshooting/
 const ROW_TOO_BIG_RE = /string or blob too big/iu;
 
 /** Markdown hint: a single string or an array of lines. Shape matches `@visulima/error`'s `hint`. */
-export type ErrorHint = string | ReadonlyArray<string>;
+type ErrorHint = string | ReadonlyArray<string>;
 
 /** Shared by the `CONFLICT` code hint and the message-matched OCC solution. */
 const CONFLICT_HINT: ReadonlyArray<string> = [
@@ -41,7 +40,7 @@ const CONFLICT_HINT: ReadonlyArray<string> = [
  * The actionable fix (Markdown) for each catalog code that has one, keyed by
  * code. Read through {@link getCatalogHint}, never by a bare bracket.
  */
-export const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> = {
+const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> = {
     DELIVERY_FENCED:
         "The operation may have committed. Retry with the same transport key; a committed result from an older authority epoch returns DELIVERY_RECEIPT_FENCED. Do not automatically retry with a new transport key.",
     DELIVERY_RECEIPT_FENCED:
@@ -71,8 +70,7 @@ export const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> 
         "- **Its text changed after it ran:** revert the edit and put the change in a new migration. If the edit is inert (a comment, whitespace, line endings), record the new hash with the `UPDATE` the message prints.",
         "- **Tracking rows predate versions and match no migration:** set each row's `version` with the `UPDATE` the message prints, so the runner can tell what already ran.",
     ],
-    OFFLINE_NOT_QUEUED:
-        "A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).",
+    OFFLINE_NOT_QUEUED: OFFLINE_NOT_QUEUED_HINT,
     IDENTITY_MISMATCH: [
         "A write queued offline was replayed on a session that now belongs to someone else (a sign-out, or another user's sign-in, while it waited), so the worker refused it rather than commit it as them.",
         "",
@@ -173,10 +171,7 @@ export const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> 
     ],
     TOO_MANY_WHISPER_TOPICS:
         "Reuse a stable set of whisper topic names, or reconnect — the per-socket verdict memo is in-memory, so a new connection starts empty. Leaving a topic does not free its entry.",
-    HTTP_STREAM_NO_BODY: [
-        "The `fetch` implementation resolved with a response that exposes neither a `body` stream nor a `text()` read — a broken `fetch` substitute, not a runtime limitation.",
-        "A response with no `body` stream that can still be read as text (React Native's `whatwg-fetch` polyfill) is buffered through `text()` instead and never raises this code. Check the `fetch` override passed to the client or the `httpStream` call.",
-    ],
+    HTTP_STREAM_NO_BODY: HTTP_STREAM_NO_BODY_HINT,
     LOCAL_DEPENDENCY_MISSING: [
         "The command Lunora tried to run is not on your PATH, so nothing ran.",
         "",
@@ -189,7 +184,7 @@ export const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> 
  * for the same reason as `getCatalogEntry`: a bracket read of `"constructor"`
  * would return `Object.prototype`'s member.
  */
-export const getCatalogHint = (code: string): ErrorHint | undefined =>
+const getCatalogHint = (code: string): ErrorHint | undefined =>
     Object.hasOwn(ERROR_HINTS, code) ? (ERROR_HINTS as Record<string, ErrorHint>)[code] : undefined;
 
 /**
@@ -199,7 +194,7 @@ export const getCatalogHint = (code: string): ErrorHint | undefined =>
  * the message text is the only stable join key. Ordered most- to least-specific;
  * the first matching rule wins.
  */
-export interface Solution {
+interface Solution {
     /** Markdown body shown under the header. */
     body: string;
     /** Short header for the solution. */
@@ -209,7 +204,7 @@ export interface Solution {
 }
 
 /** A {@link Solution} plus its message matcher. */
-export interface SolutionRule extends Solution {
+interface SolutionRule extends Solution {
     /** True when this rule recognizes the error message. */
     test: (message: string) => boolean;
 }
@@ -219,7 +214,7 @@ export interface SolutionRule extends Solution {
  * `@lunora/codegen` solutions table). Re-exported by `@lunora/codegen` as
  * `LUNORA_SOLUTION_RULES` for backward compatibility.
  */
-export const MESSAGE_SOLUTIONS: ReadonlyArray<SolutionRule> = [
+const MESSAGE_SOLUTIONS: ReadonlyArray<SolutionRule> = [
     {
         body: [
             "A single row exceeded the storage engine's per-row ceiling — 2 MB on a Durable Object's SQLite, and 2,000,000 bytes on D1.",
@@ -371,7 +366,7 @@ export const MESSAGE_SOLUTIONS: ReadonlyArray<SolutionRule> = [
  * a deploy that throws surfaces as `Error 1101`, and so on. The fields are the
  * curated facts a grounded explainer elaborates on — never invents beyond.
  */
-export interface CloudflarePlatformError {
+interface CloudflarePlatformError {
     /** Documented likely causes (a short, comma-joined clause). */
     causes: string;
     /** The numeric Cloudflare error code, as it appears in the message (e.g. `"522"`, `"1101"`). */
@@ -394,7 +389,7 @@ export interface CloudflarePlatformError {
  * origin-connection 52x family and the Worker/DNS/security 1xxx family). `1101`
  * (a Worker threw) and `1102` (a Worker exceeded CPU) are the most Lunora-relevant.
  */
-export const CLOUDFLARE_PLATFORM_ERRORS: ReadonlyArray<CloudflarePlatformError> = [
+const CLOUDFLARE_PLATFORM_ERRORS: ReadonlyArray<CloudflarePlatformError> = [
     {
         causes: "the origin returned an empty, unknown, or malformed response Cloudflare couldn't interpret (often an origin crash or an oversized response header)",
         code: "520",
@@ -597,7 +592,7 @@ const cloudflarePlatformSolution = (entry: CloudflarePlatformError): Solution =>
  * Error 1102: exceeded after 524 ms"` resolved to 524, and that wrong grounded
  * fix is exactly what the explainer prompt is built from.
  */
-export const findCloudflarePlatformSolution = (message: string): Solution | undefined => {
+const findCloudflarePlatformSolution = (message: string): Solution | undefined => {
     // A message carrying neither word cannot match any code — bail before both
     // the lowercasing and the per-entry scans.
     if (!CF_PLATFORM_PREFILTER.test(message)) {
@@ -634,7 +629,7 @@ export const findCloudflarePlatformSolution = (message: string): Solution | unde
  * drop code-fence markers and strip inline `**bold**` / `` `code` `` emphasis.
  * Shared by the CLI renderer and the Studio `ErrorAlert` so the two can't drift.
  */
-export const flattenHint = (hint: ErrorHint): string =>
+const flattenHint = (hint: ErrorHint): string =>
     (typeof hint === "string" ? hint : hint.join("\n"))
         .split("\n")
         .filter((line) => !line.startsWith("```"))
@@ -646,7 +641,7 @@ export const flattenHint = (hint: ErrorHint): string =>
  * Find the first message-matched {@link Solution} for `message`, or `undefined`
  * if none recognize it. Re-exported by `@lunora/codegen` as `findLunoraSolution`.
  */
-export const findSolutionByMessage = (message: string): Solution | undefined => {
+const findSolutionByMessage = (message: string): Solution | undefined => {
     for (const rule of MESSAGE_SOLUTIONS) {
         if (rule.test(message)) {
             return { body: rule.body, header: rule.header, id: rule.id };
@@ -673,7 +668,7 @@ export const findSolutionByMessage = (message: string): Solution | undefined => 
  * Platform errors are operator-facing context for an already-persisted Issue, so
  * the operator-facing surfaces opt in here and the wire path stays Lunora-only.
  */
-export const findIssueSolution = (message: string): Solution | undefined => findSolutionByMessage(message) ?? findCloudflarePlatformSolution(message);
+const findIssueSolution = (message: string): Solution | undefined => findSolutionByMessage(message) ?? findCloudflarePlatformSolution(message);
 
 /**
  * Resolve an actionable hint for an error: prefer a hint carried on the error
@@ -681,7 +676,7 @@ export const findIssueSolution = (message: string): Solution | undefined => find
  * `undefined` when nothing recognizes it.
  */
 // eslint-disable-next-line sonarjs/function-return-type -- ErrorHint is intentionally `string | string[]`
-export const resolveHint = (input: { code?: string; hint?: ErrorHint; message?: string } | string): ErrorHint | undefined => {
+const resolveHint = (input: { code?: string; hint?: ErrorHint; message?: string } | string): ErrorHint | undefined => {
     if (typeof input === "string") {
         return findSolutionByMessage(input)?.body;
     }
@@ -699,4 +694,17 @@ export const resolveHint = (input: { code?: string; hint?: ErrorHint; message?: 
     }
 
     return input.message === undefined ? undefined : findSolutionByMessage(input.message)?.body;
+};
+
+export type { CloudflarePlatformError, ErrorHint, Solution, SolutionRule };
+export {
+    CLOUDFLARE_PLATFORM_ERRORS,
+    ERROR_HINTS,
+    findCloudflarePlatformSolution,
+    findIssueSolution,
+    findSolutionByMessage,
+    flattenHint,
+    getCatalogHint,
+    MESSAGE_SOLUTIONS,
+    resolveHint,
 };

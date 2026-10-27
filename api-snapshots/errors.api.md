@@ -923,6 +923,12 @@ interface ErrorLocation {
 }
 ```
 
+### `HTTP_STREAM_NO_BODY_HINT` (const)
+
+```ts
+const HTTP_STREAM_NO_BODY_HINT: ReadonlyArray<string>;
+```
+
 ### `LunoraError` (class)
 
 ```ts
@@ -991,6 +997,12 @@ interface LunoraErrorOptions {
 
 ```ts
 const MESSAGE_SOLUTIONS: ReadonlyArray<SolutionRule>;
+```
+
+### `OFFLINE_NOT_QUEUED_HINT` (const)
+
+```ts
+const OFFLINE_NOT_QUEUED_HINT = "A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).";
 ```
 
 ### `Solution` (interface)

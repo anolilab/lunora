@@ -28,7 +28,7 @@
  * thing that reconnects; a terminal `complete`/`error` frame, a non-2xx status,
  * and a consumer `.cancel()` / external abort all end the stream.
  */
-import { LunoraError } from "@lunora/errors";
+import { HTTP_STREAM_NO_BODY_HINT, LunoraError } from "@lunora/errors";
 import { decodeWire } from "@lunora/wire";
 
 import { createReconnect } from "./reconnect";
@@ -776,7 +776,11 @@ const httpStream = <Ref extends HttpStreamRef>(
                 // broken `fetch` implementation, which keeps the explicit
                 // `HTTP_STREAM_NO_BODY` failure.
                 if (typeof response.text !== "function") {
-                    handle.fail(new LunoraError("HTTP_STREAM_NO_BODY", "httpStream: response exposes neither a body stream nor a text() read"));
+                    handle.fail(
+                        new LunoraError("HTTP_STREAM_NO_BODY", "httpStream: response exposes neither a body stream nor a text() read", {
+                            hint: HTTP_STREAM_NO_BODY_HINT,
+                        }),
+                    );
 
                     return undefined;
                 }

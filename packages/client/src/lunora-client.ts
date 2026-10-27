@@ -1,4 +1,4 @@
-import { LunoraError } from "@lunora/errors";
+import { LunoraError, OFFLINE_NOT_QUEUED_HINT } from "@lunora/errors";
 import { decodeWire, encodeWire, stableWireKey } from "@lunora/wire";
 
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
@@ -534,6 +534,7 @@ const sendLiveControl = async (fetchImpl: typeof fetch, url: string, body: strin
 const offlineNotQueuedError = (functionPath: string, cause?: unknown): LunoraError =>
     new LunoraError("OFFLINE_NOT_QUEUED", `'${functionPath}' is online-only and the connection is not live, so it was not queued`, {
         cause,
+        hint: OFFLINE_NOT_QUEUED_HINT,
     });
 
 /**

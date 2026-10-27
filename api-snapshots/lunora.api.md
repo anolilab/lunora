@@ -3133,6 +3133,10 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
+### `HTTP_STREAM_NO_BODY_HINT` (const)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
 ### `LunoraError` (class)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
@@ -3154,6 +3158,10 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `MESSAGE_SOLUTIONS` (const)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `OFFLINE_NOT_QUEUED_HINT` (const)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 

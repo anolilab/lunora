@@ -11,6 +11,7 @@ export type { ErrorLocation, LunoraErrorCodeInput, LunoraErrorOptions } from "./
 export { LunoraError } from "./base";
 export type { ErrorCatalogEntry, LunoraErrorCode } from "./catalog";
 export { ERROR_CATALOG, getCatalogEntry, isInternalCode } from "./catalog";
+export { HTTP_STREAM_NO_BODY_HINT, OFFLINE_NOT_QUEUED_HINT } from "./client-hints";
 export type { LunoraErrorLike } from "./guards";
 export { isLunoraError } from "./guards";
 export type { CloudflarePlatformError, ErrorHint, Solution, SolutionRule } from "./hints";
