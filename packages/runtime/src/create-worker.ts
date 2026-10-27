@@ -2484,8 +2484,8 @@ const FORWARDABLE_ENVELOPE_KEYS = new Set(["args", "functionPath", "shardKey"]);
  * `JSON.parse`, so it sees exactly the values validated here. Skipping the
  * re-stringify lets `-0` and an out-of-range numeral (`Infinity`) through
  * unnormalised — as a socket frame already delivers them. Any other key, and any
- * fan-out, takes the re-stringified body, so the shard never sees a field it did
- * not see before.
+ * fan-out, takes the re-stringified body, so a key outside that set never
+ * reaches the shard.
  */
 const forwardsVerbatim = (body: object, fanOut: FanOutSpec | undefined): boolean =>
     fanOut === undefined && Object.keys(body).every((key) => FORWARDABLE_ENVELOPE_KEYS.has(key));
