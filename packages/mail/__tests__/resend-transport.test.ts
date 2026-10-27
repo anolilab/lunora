@@ -52,6 +52,19 @@ describe("resend transport error mapping", () => {
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("rate limited"));
     });
 
+    it("does not mark an accepted send without a message id as retryable", async () => {
+        expect.assertions(2);
+
+        sendEmail.mockResolvedValue({ success: true });
+
+        const error = await mailer()
+            .send({ subject: "Hi", to: "a@x.test" })
+            .catch((error_: unknown) => error_);
+
+        expect(error).toBeInstanceOf(MailSendError);
+        expect(isRetryableMailError(error)).toBe(false);
+    });
+
     it("logs a string reason", async () => {
         expect.assertions(2);
 

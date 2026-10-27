@@ -131,6 +131,11 @@ const toProviderEmail = (payload: SendPayload, defaultFrom: string, to: Provider
  * and throw a stable, generic error; on success, return the message id.
  */
 const interpretSendResult = (result: ProviderSendResult): { id: string } => {
+    if (result.success && !result.data) {
+        // The provider accepted the send, so a redelivery would email the recipient twice.
+        throw new MailSendError({ message: "@lunora/mail: provider accepted the send but returned no message id", retryable: false });
+    }
+
     if (!result.success || !result.data) {
         // eslint-disable-next-line no-console -- intentional server-side log of the redacted provider error before throwing a generic message
         console.error(`@lunora/mail: send failed: ${reasonOf(result.error)}`);
