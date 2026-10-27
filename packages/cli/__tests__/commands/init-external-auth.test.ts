@@ -86,6 +86,46 @@ describe(wireExternalAuth, () => {
         );
     });
 
+    it("leaves an entry it already wired untouched on a repeat run", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(project, "src", "server.ts"), ENTRY);
+        wireExternalAuth(project, "clerk", silentLogger().logger);
+
+        const once = readFileSync(join(project, "src", "server.ts"), "utf8");
+        const { lines, logger } = silentLogger();
+
+        wireExternalAuth(project, "clerk", logger);
+
+        expect(readFileSync(join(project, "src", "server.ts"), "utf8")).toBe(once);
+        expect(lines.join("\n")).toContain("already wires clerkIdentity");
+    });
+
+    it("does not replace a resolveIdentity the app already sets, and says how to compose them", () => {
+        expect.assertions(2);
+
+        const own = ENTRY.replace(".build();", ".extend(() => ({ resolveIdentity: accessResolver }))\n    .build();");
+
+        writeFileSync(join(project, "src", "server.ts"), own);
+
+        const { lines, logger } = silentLogger();
+
+        wireExternalAuth(project, "workos", logger);
+
+        expect(readFileSync(join(project, "src", "server.ts"), "utf8")).toBe(own);
+        expect(lines.join("\n")).toContain("composeIdentityResolvers([memoizeIdentity(workosIdentity(env)), <your resolver>])");
+    });
+
+    it("puts the imports at the top of an entry without semicolons instead of after its first character", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(project, "src", "server.ts"), ENTRY.replaceAll(";\n", "\n"));
+
+        wireExternalAuth(project, "clerk", silentLogger().logger);
+
+        expect(readFileSync(join(project, "src", "server.ts"), "utf8").startsWith('import { memoizeIdentity } from "lunorash/runtime";\n')).toBe(true);
+    });
+
     it("writes lunora.config.ts for a Vite-first app with no entry", () => {
         expect.assertions(2);
 

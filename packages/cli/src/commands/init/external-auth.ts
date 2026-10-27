@@ -49,11 +49,15 @@ const EXTERNAL_AUTH: Readonly<Record<ExternalAuthProvider, ExternalAuthSpec>> = 
     auth0: {
         clientSnippet: [
             "// @auth0/auth0-react: <Auth0Provider authorizationParams={{ audience: AUTH0_AUDIENCE }} useRefreshTokens>",
+            "// const { getAccessTokenSilently, isLoading, user } = useAuth0();",
+            "// In a useEffect over [client, getAccessTokenSilently, isLoading, user?.sub]:",
+            "if (isLoading) return;",
+            "if (!user) return client.setAuthToken(null);",
             "const fetchToken = () => getAccessTokenSilently().catch((error) => {",
             '    if (["login_required", "missing_refresh_token"].includes(error?.error)) return null; // signed out',
             "    throw error;",
             "});",
-            "const stop = setAuthTokenProvider(client, fetchToken, { subject: user.sub });",
+            "return setAuthTokenProvider(client, fetchToken, { subject: user.sub });",
         ].join("\n"),
         envVars: ["AUTH0_DOMAIN", "AUTH0_AUDIENCE"],
         identity: "auth0Identity",
@@ -153,34 +157,64 @@ const identitySpecifier = (projectDirectory: string, fromFile: string, spec: Ext
  * builder, at the end of the chain, and import what it uses. Returns the
  * patched file, or `undefined` when no candidate calls `defineApp()`.
  */
-const wireEntry = (projectDirectory: string, spec: ExternalAuthSpec): string | undefined => {
+/** What wiring did to the file it chose: wrote the resolver, found it already there, or found another `resolveIdentity` it must not replace. */
+interface ServerWiring {
+    file: string;
+    outcome: "already-wired" | "has-resolver" | "wired";
+}
+
+const RESOLVE_IDENTITY = /\bresolveIdentity\b/u;
+const MEMOIZE_IDENTITY = /\bmemoizeIdentity\b/u;
+
+/** The patched `candidate` source, or what stopped the patch; `undefined` when it builds no `defineApp()` chain. */
+const wireSource = (
+    projectDirectory: string,
+    candidate: string,
+    source: string,
+    spec: ExternalAuthSpec,
+): { outcome: "already-wired" | "has-resolver" } | { outcome: "wired"; patched: string } | undefined => {
+    const start = source.indexOf("defineApp<");
+    const end = start === -1 ? undefined : (CHAIN_END.exec(source.slice(start)) ?? undefined);
+
+    if (end === undefined) {
+        return undefined;
+    }
+
+    if (source.includes(`${spec.identity}(env)`)) {
+        return { outcome: "already-wired" };
+    }
+
+    // `.extend` results merge in order, so a second `resolveIdentity` would silently replace the app's own.
+    if (RESOLVE_IDENTITY.test(source)) {
+        return { outcome: "has-resolver" };
+    }
+
+    const indent = end[1] ?? "    ";
+    const at = start + end.index;
+    const extend = `\n${indent}// Verify the provider's token on every request and feed it into ctx.auth (memoized for 5 s).\n${indent}.extend((env) => ({ resolveIdentity: memoizeIdentity(${spec.identity}(env)) }))`;
+    const memoizeImport = MEMOIZE_IDENTITY.test(source) ? "" : `import { memoizeIdentity } from "${runtimeModule(projectDirectory)}";\n`;
+    const imports = `${memoizeImport}import { ${spec.identity} } from "${identitySpecifier(projectDirectory, candidate, spec)}";\n`;
+
+    // After the last import, so the file's own header comment stays first; at the top when no `;`-terminated import line is found.
+    const lastImport = source.lastIndexOf("\nimport ", start);
+    const importEnd = lastImport === -1 ? -1 : source.indexOf(";\n", lastImport);
+    const afterImports = importEnd === -1 ? 0 : importEnd + 2;
+
+    return { outcome: "wired", patched: source.slice(0, afterImports) + imports + source.slice(afterImports, at) + extend + source.slice(at) };
+};
+
+const wireEntry = (projectDirectory: string, spec: ExternalAuthSpec): ServerWiring | undefined => {
     for (const candidate of ENTRY_CANDIDATES) {
         const path = join(projectDirectory, candidate);
+        const result = existsSync(path) ? wireSource(projectDirectory, candidate, readFileSync(path, "utf8"), spec) : undefined;
 
-        if (!existsSync(path)) {
-            continue;
+        if (result?.outcome === "wired") {
+            writeFileSync(path, result.patched);
         }
 
-        const source = readFileSync(path, "utf8");
-        const start = source.indexOf("defineApp<");
-        const end = start === -1 ? undefined : (CHAIN_END.exec(source.slice(start)) ?? undefined);
-
-        if (end === undefined) {
-            continue;
+        if (result !== undefined) {
+            return { file: candidate, outcome: result.outcome };
         }
-
-        const indent = end[1] ?? "    ";
-        const at = start + end.index;
-        const extend = `\n${indent}// Verify the provider's token on every request and feed it into ctx.auth (memoized for 5 s).\n${indent}.extend((env) => ({ resolveIdentity: memoizeIdentity(${spec.identity}(env)) }))`;
-        const imports = `import { memoizeIdentity } from "${runtimeModule(projectDirectory)}";\nimport { ${spec.identity} } from "${identitySpecifier(projectDirectory, candidate, spec)}";\n`;
-
-        // After the last import, so the file's own header comment stays first.
-        const lastImport = source.lastIndexOf("\nimport ", start);
-        const afterImports = lastImport === -1 ? 0 : source.indexOf(";\n", lastImport) + 2;
-
-        writeFileSync(path, source.slice(0, afterImports) + imports + source.slice(afterImports, at) + extend + source.slice(at));
-
-        return candidate;
     }
 
     return undefined;
@@ -285,14 +319,25 @@ const recordEnvExample = (projectDirectory: string, spec: ExternalAuthSpec): boo
  */
 const wireExternalAuth = (projectDirectory: string, provider: ExternalAuthProvider, logger: Logger): void => {
     const spec = EXTERNAL_AUTH[provider];
-    const server = wireEntry(projectDirectory, spec) ?? wireConfig(projectDirectory, spec);
+    const configWiring = (): ServerWiring | undefined => {
+        const file = wireConfig(projectDirectory, spec);
+
+        return file === undefined ? undefined : { file, outcome: "wired" };
+    };
+    const server = wireEntry(projectDirectory, spec) ?? configWiring();
 
     if (server === undefined) {
         logger.warn(
             `auth: add \`.extend((env) => ({ resolveIdentity: memoizeIdentity(${spec.identity}(env)) }))\` to your app builder (lunora.config.ts \`app\` hook or the Worker entry) — ${spec.identity} is in lunora/identity/${spec.identityFile}.ts.`,
         );
+    } else if (server.outcome === "already-wired") {
+        logger.info(`auth: ${server.file} already wires ${spec.identity}; left as is.`);
+    } else if (server.outcome === "has-resolver") {
+        logger.warn(
+            `auth: ${server.file} already sets resolveIdentity, so it was left as is. Compose the two: \`resolveIdentity: composeIdentityResolvers([memoizeIdentity(${spec.identity}(env)), <your resolver>])\` — ${spec.identity} is in lunora/identity/${spec.identityFile}.ts.`,
+        );
     } else {
-        logger.success(`auth: wired ${spec.identity} as resolveIdentity in ${server}`);
+        logger.success(`auth: wired ${spec.identity} as resolveIdentity in ${server.file}`);
     }
 
     if (recordEnvExample(projectDirectory, spec)) {
