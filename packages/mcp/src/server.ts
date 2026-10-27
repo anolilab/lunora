@@ -114,6 +114,14 @@ interface LunoraMcpServerOptions {
  */
 const resolveClient = (options: LunoraMcpServerOptions): LunoraAdminClient => {
     if (options.client !== undefined) {
+        // The type already says so; this catches a JS caller or a cast, which would
+        // otherwise fail on the first tool call with `listFunctions is not a function`.
+        // It probes the one admin method every tool needs rather than
+        // `isLunoraAdminClient`, so an injected stub need only carry what MCP calls.
+        if (typeof (options.client as Partial<LunoraAdminClient>).listFunctions !== "function") {
+            throw new LunoraError("INTERNAL", "createLunoraMcpServer needs a LunoraAdminClient (`@lunora/client/admin`), not a plain LunoraClient.");
+        }
+
         return options.client;
     }
 
