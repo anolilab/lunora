@@ -104,9 +104,18 @@ const SendEventForm = ({ eventTypes, exportName, onSent }: SendEventFormProps): 
 
         try {
             await client.query(SEND_WORKFLOW_EVENT, { exportName, id, payload: payload.value, type: typeInput }, callOptions(""));
-            await onSent(exportName, id);
         } catch (error_: unknown) {
             setError(errorMessage(error_));
+            setSending(false);
+
+            return;
+        }
+
+        // The event is delivered by now; a failed refresh must not read as a failed send, or a retry would send it twice.
+        try {
+            await onSent(exportName, id);
+        } catch (error_: unknown) {
+            setError(`${t("Event sent, but refreshing the instance failed")}: ${errorMessage(error_)}`);
         }
 
         setSending(false);
@@ -280,9 +289,13 @@ const WorkflowsPanel = (): ReactElement => {
             const result = (await client.query(GET_WORKFLOW_INSTANCE_STATUS, { exportName, id }, callOptions(""))) as WorkflowInstanceStatusResult;
 
             upsertInstance({ error: result.error, exportName, id: result.id, output: result.output, status: result.status });
-        } finally {
+        } catch (error_: unknown) {
             setRefreshingId(null);
+
+            throw error_;
         }
+
+        setRefreshingId(null);
     };
 
     const refreshInstance = async (exportName: string, id: string): Promise<void> => {

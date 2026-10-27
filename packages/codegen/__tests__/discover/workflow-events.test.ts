@@ -46,6 +46,20 @@ describe("discoverWorkflowEvents", () => {
         ]);
     });
 
+    it("reads definitions called through a namespace import or wrapped in a non-null assertion", () => {
+        expect.assertions(1);
+
+        write(
+            "events.ts",
+            `import * as workflow from "@lunora/workflow";\nimport { defineWorkflowEvent } from "@lunora/workflow";\nimport { v } from "@lunora/values";\n\nexport const viaNamespace = workflow.defineWorkflowEvent("ns", v.null());\nexport const asserted = defineWorkflowEvent("asserted", v.null())!;\n`,
+        );
+
+        expect(discover()).toStrictEqual([
+            { exportName: "asserted", filePath: "events", type: "asserted" },
+            { exportName: "viaNamespace", filePath: "events", type: "ns" },
+        ]);
+    });
+
     it("finds nothing in an app without events", () => {
         expect.assertions(1);
 

@@ -1294,6 +1294,7 @@ const MESSAGE_IDS = [
     "Payload (JSON)",
     "Payload (JSON, optional)",
     "Payload must be valid JSON",
+    "Event sent, but refreshing the instance failed",
     "Instances",
     "Status",
     "Output",

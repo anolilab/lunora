@@ -10,26 +10,47 @@ import { importAliases } from "./callee";
 
 const isWorkflowModule = (moduleSpecifier: string): boolean => moduleSpecifier === "@lunora/workflow";
 
+const workflowNamespaces = (sourceFile: SourceFile): Set<string> =>
+    new Set(
+        sourceFile
+            .getImportDeclarations()
+            .filter((declaration) => isWorkflowModule(declaration.getModuleSpecifierValue()))
+            .map((declaration) => declaration.getNamespaceImport()?.getText())
+            .filter((name): name is string => name !== undefined),
+    );
+
+const isEventFactoryCall = (callee: Node, aliases: Set<string>, namespaces: Set<string>): boolean => {
+    if (Node.isIdentifier(callee)) {
+        return aliases.has(callee.getText());
+    }
+
+    return Node.isPropertyAccessExpression(callee) && callee.getName() === "defineWorkflowEvent" && namespaces.has(callee.getExpression().getText());
+};
+
 /** The exported `defineWorkflowEvent(…)` calls of one file. Unexported ones are skipped: the shard cannot import them. */
 const eventsIn = (sourceFile: SourceFile, lunoraDirectory: string): WorkflowEventIR[] => {
     const aliases = importAliases(sourceFile, "defineWorkflowEvent", isWorkflowModule);
+    const namespaces = workflowNamespaces(sourceFile);
 
-    if (aliases.size === 0) {
+    if (aliases.size === 0 && namespaces.size === 0) {
         return [];
     }
 
     const events: WorkflowEventIR[] = [];
 
     for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
-        const callee = call.getExpression();
-
-        if (!Node.isIdentifier(callee) || !aliases.has(callee.getText())) {
+        if (!isEventFactoryCall(call.getExpression(), aliases, namespaces)) {
             continue;
         }
 
         let declaration = call.getParent();
 
-        while (Node.isAsExpression(declaration) || Node.isSatisfiesExpression(declaration) || Node.isParenthesizedExpression(declaration)) {
+        while (
+            Node.isAsExpression(declaration) ||
+            Node.isSatisfiesExpression(declaration) ||
+            Node.isParenthesizedExpression(declaration) ||
+            Node.isNonNullExpression(declaration)
+        ) {
             declaration = declaration.getParent();
         }
 
