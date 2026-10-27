@@ -84,6 +84,8 @@ export const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> 
         // eslint-disable-next-line no-secrets/no-secrets -- admin op names, not credentials
         'Acknowledge with `.jurisdiction("eu", { pinAuth: true })` and deploy, then copy the auth tables across with the `__lunora_admin__:copyAuthToJurisdiction` admin op and, once the counts check out, purge the unpinned copy with `__lunora_admin__:purgeUnpinnedAuth` (see [Pinning auth and voice](/docs/concepts/data-residency#pinning-auth-and-voice)). For D1-mode auth the acknowledgement changes nothing.',
     ],
+    INDEX_FIELD_NESTED_PATH:
+        "Indexes cover top-level columns only. Denormalise the nested value into its own column, index that, and keep it in sync with a table `.triggers()` beforeInsert/beforeUpdate.",
     EMAIL_DOMAIN_BLOCKED: [
         "This address's domain is on the disposable/throwaway blocklist (or your configured deny-list).",
         "",

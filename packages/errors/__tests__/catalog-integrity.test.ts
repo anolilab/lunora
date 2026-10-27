@@ -87,6 +87,12 @@ describe("error catalog integrity", () => {
         }
     });
 
+    it("keeps hint text out of the catalog, so browser bundles do not ship it", () => {
+        // A hint left on a catalog entry is also invisible to resolveHint and the docs generator, which read ERROR_HINTS.
+        expect.assertions(1);
+        expect(codes.filter((code) => Object.hasOwn(ERROR_CATALOG[code], "hint"))).toStrictEqual([]);
+    });
+
     it("isInternalCode treats unknown codes as client-safe (author's vouch)", () => {
         expect.assertions(2);
 
