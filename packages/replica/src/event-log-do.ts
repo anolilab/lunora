@@ -419,11 +419,13 @@ export class EventLogDO {
 
         const now = Date.now();
         const entries: EventLogEntry[] = [];
+        // Read once, not per event: the batch runs inside the storage transaction,
+        // so nothing else can insert between these rows.
+        const firstSeq = EventLogDO.#nextSeq(sql);
 
-        for (const eventRecord of body.events) {
-            const seq = EventLogDO.#nextSeq(sql);
+        for (const [index, eventRecord] of body.events.entries()) {
             const entry: EventLogEntry = {
-                seq,
+                seq: firstSeq + index,
                 type: eventRecord.type,
                 payload: eventRecord.payload,
                 timestamp: eventRecord.timestamp ?? now,
@@ -435,10 +437,9 @@ export class EventLogDO {
             entries.push(entry);
         }
 
-        const firstSeq = entries[0]?.seq;
         const lastSeq = entries.at(-1)?.seq;
 
-        if (firstSeq !== undefined && lastSeq !== undefined) {
+        if (lastSeq !== undefined) {
             EventLogDO.#recordBatch(sql, batchId, firstSeq, lastSeq, fingerprint);
         }
 

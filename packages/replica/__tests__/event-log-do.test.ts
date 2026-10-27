@@ -186,6 +186,25 @@ describe(EventLogDO, () => {
         expect(data.entries[1]!.payload).toEqual({ num: 42 });
     });
 
+    it("reads the next seq once per batch, not once per event", async () => {
+        expect.assertions(2);
+
+        const state = createMockState();
+        const do_ = new EventLogDO(state, TEST_ENV);
+        const exec = vi.spyOn(state.storage.sql, "exec");
+        const res = await doFetch(do_, "POST", "/append", {
+            batchId: nextBatchId(),
+            events: [
+                { type: "e.1", payload: {} },
+                { type: "e.2", payload: {} },
+                { type: "e.3", payload: {} },
+            ],
+        });
+
+        expect(res.status).toBe(200);
+        expect(exec.mock.calls.filter(([query]) => query.toUpperCase().includes("MAX(SEQ)"))).toHaveLength(1);
+    });
+
     it("returns events since a given seq", async () => {
         expect.assertions(6);
 
