@@ -418,7 +418,7 @@ prose is not. New codes are added over time; treat an unknown one as advisory.
 | `do-class-budget-unchecked`        | info  | No `CLOUDFLARE_API_TOKEN` / account id, or the API refused, so the class count was not read.                              |
 | `email-destination-placeholder`    | warn  | A `send_email` binding has a placeholder `destination_address`.                                                           |
 | `observability-full-sampling`      | info  | Logs or traces sample every request; Workers Observability is billed from 2026-12-01.                                     |
-| `observability-query-unredacted`   | warn  | Request logs keep query strings, which carry auth-link tokens. Set `redact_query_string`.                                 |
+| `observability-query-unredacted`   | warn  | Request logs or traces keep query strings, which carry auth-link tokens. Set `redact_query_string`.                       |
 | `paid-product-bound`               | info  | A metered product (Workers AI, Browser Rendering, Images) is bound; only an account budget alert caps it.                 |
 | `paid-product-unknown`             | info  | Argo Smart Routing and Log Explorer enablement is a dashboard setting, which lunora cannot read.                          |
 | `r2-lifecycle-unset`               | info  | An R2 bucket may lack an abort-incomplete-multipart lifecycle rule.                                                       |

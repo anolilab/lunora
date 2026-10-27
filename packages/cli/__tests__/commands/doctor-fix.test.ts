@@ -117,6 +117,31 @@ describe("lunora doctor --fix", () => {
         expect(written).not.toContain(PLACEHOLDER);
     });
 
+    it("leaves an env-scoped placeholder alone on a celld project, which projects only the top level", async () => {
+        expect.hasAssertions();
+
+        writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+        writeFileSync(
+            join(workdir, "wrangler.jsonc"),
+            `{
+    "name": "app",
+    "d1_databases": [{ "binding": "DB", "database_name": "app-db", "database_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }],
+    "env": {
+        "staging": {
+            "d1_databases": [{ "binding": "DB", "database_name": "staging-db", "database_id": "${PLACEHOLDER}" }],
+        },
+    },
+}
+`,
+        );
+        const { calls, runner } = stubWrangler([]);
+
+        await applyDoctorFixes({ configPath: join(workdir, "wrangler.jsonc"), cwd: workdir, dryRun: false, logger: silentLogger, runner });
+
+        expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toContain(PLACEHOLDER);
+        expect(calls).toStrictEqual([]);
+    });
+
     it("runs wrangler for an env-scoped placeholder with that environment, so its account is the one deploy uses", async () => {
         expect.hasAssertions();
 

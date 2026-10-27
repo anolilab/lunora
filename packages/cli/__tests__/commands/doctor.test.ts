@@ -1025,6 +1025,32 @@ describe("runDoctor", () => {
         });
     });
 
+    describe("d1 placeholder in an env block on celld", () => {
+        const envWrangler = JSON.stringify({
+            compatibility_date: "2026-04-07",
+            d1_databases: [{ binding: "DB", database_id: "11111111-2222-3333-4444-555555555555" }],
+            env: { staging: { d1_databases: [{ binding: "DB", database_id: "" }] } },
+            name: "demo",
+        });
+
+        // celld rejects --env and projects only the top level, so an env block never reaches it.
+        it("ignores env blocks for a celld project but still fails them for cloudflare", async () => {
+            expect.assertions(2);
+
+            seed(workdir, envWrangler);
+
+            const cloudflare = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
+
+            expect(cloudflare.findings.some((finding) => finding.code === "d1-placeholder-id" && finding.level === "fail")).toBe(true);
+
+            writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+            const celld = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
+
+            expect(celld.findings.some((finding) => finding.code === "d1-placeholder-id")).toBe(false);
+        });
+    });
+
     describe("celld toolchain", () => {
         // `lunora dev` and a dry-run deploy never touch the fleet bucket, so a
         // dev-only celld project must not fail doctor for lacking one.

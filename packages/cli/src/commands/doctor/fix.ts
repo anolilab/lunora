@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { DEFAULT_TARGET, readProjectTarget } from "@lunora/codegen";
 import {
     DEV_VARS_FILE,
     generateSecretValue,
@@ -169,12 +170,13 @@ const placeholdersInScope = (databasesValue: unknown, prefix: ReadonlyArray<stri
  * The `d1_databases` entries whose `database_id` is still a placeholder, at the
  * top level and in every `env` block: `deploy --env` reads those blocks, so a
  * placeholder there blocks the deploy that `doctor --fix` must be able to clear.
+ * `topLevelOnly` (celld) skips the blocks: celld rejects `--env` and projects only the top level.
  */
-const placeholdersIn = (text: string): D1Placeholder[] => {
+const placeholdersIn = (text: string, topLevelOnly: boolean): D1Placeholder[] => {
     const parsed = parseJsonc(text) as { d1_databases?: unknown; env?: Record<string, { d1_databases?: unknown } | undefined> } | undefined;
     const scopes: { config: { d1_databases?: unknown } | undefined; environment: string | undefined; prefix: ReadonlyArray<string> }[] = [
         { config: parsed, environment: undefined, prefix: [] },
-        ...Object.entries(parsed?.env ?? {}).map(([name, block]) => {
+        ...Object.entries(topLevelOnly ? {} : (parsed?.env ?? {})).map(([name, block]) => {
             return { config: block, environment: name, prefix: ["env", name] };
         }),
     ];
@@ -249,7 +251,7 @@ const fixD1Placeholders = async (options: DoctorFixOptions, result: DoctorFixRes
 
     const runner = options.runner ?? defaultRunner;
     const text = readFileSync(options.configPath, "utf8");
-    const placeholders = placeholdersIn(text);
+    const placeholders = placeholdersIn(text, (readProjectTarget(options.cwd) ?? DEFAULT_TARGET) === "celld");
     let edited = text;
 
     for (const placeholder of placeholders) {

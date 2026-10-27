@@ -441,9 +441,10 @@ const checkD1Placeholders = (cwd: string, parsed: WranglerConfig | undefined, fi
     // celld's projection replaces only the exact placeholder with a name-derived id; any other placeholder still reaches it.
     const celld = (readProjectTarget(cwd) ?? DEFAULT_TARGET) === "celld";
     // `deploy --env` reads each env block's own array, so a placeholder there blocks that deploy too.
+    // celld has no `--env` and projects only the top level, so its env blocks never reach a deploy.
     const scopes: { config: unknown; suffix: string }[] = [
         { config: parsed, suffix: "" },
-        ...Object.entries(parsed.env ?? {}).map(([name, block]) => {
+        ...Object.entries(celld ? {} : (parsed.env ?? {})).map(([name, block]) => {
             return { config: block, suffix: ` in env.${name}` };
         }),
     ];
