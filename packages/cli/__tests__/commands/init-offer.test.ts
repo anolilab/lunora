@@ -437,6 +437,19 @@ describe("offerRegistryExtras", () => {
             expect(plans().map((plan) => [...plan.names])).toStrictEqual([["auth-auth0-jwt"], ["mail"]]);
         });
 
+        it("drops auth from --add when --auth names an external provider, and fails the run", async () => {
+            expect.assertions(3);
+
+            const { applyAll, plans } = captureApplyAll();
+            const { lines, logger } = makeLogger();
+
+            const ok = await offerRegistryExtras(baseDeps({ applyAll, auth: "clerk", logger, preselected: ["auth", "email"] }));
+
+            expect(plans().map((plan) => [...plan.names])).toStrictEqual([["auth-clerk-jwt"], ["mail"]]);
+            expect(lines.join("\n")).toMatch(/warn: --auth clerk replaces Lunora auth/);
+            expect(ok).toBe(false);
+        });
+
         it("maps --auth lunora onto the base auth item", async () => {
             expect.assertions(1);
 

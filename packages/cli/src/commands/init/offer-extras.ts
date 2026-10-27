@@ -306,14 +306,20 @@ const FEATURE_COLLECTORS: Partial<Record<StackFeature, (deps: OfferDeps, picked:
  * succeed.
  */
 const applyPreselected = async (deps: OfferDeps): Promise<boolean> => {
-    const preselected = [...(deps.preselected ?? [])];
+    const authPlan = externalAuthPlan(deps.auth);
+    // An external provider and Lunora auth are one choice, as the interactive auth question makes them.
+    const conflicting = authPlan !== undefined && deps.preselected?.includes("auth") === true;
+    const preselected = (deps.preselected ?? []).filter((feature) => !conflicting || feature !== "auth");
+
+    if (conflicting) {
+        deps.logger.warn(`--auth ${String(deps.auth)} replaces Lunora auth; ignoring \`auth\` from --add.`);
+    }
 
     if (deps.auth === "lunora" && !preselected.includes("auth")) {
         preselected.unshift("auth");
     }
 
     const { plans, refused } = preselectedPlans(deps, preselected);
-    const authPlan = externalAuthPlan(deps.auth);
 
     if (authPlan !== undefined) {
         plans.unshift(authPlan);
@@ -321,7 +327,7 @@ const applyPreselected = async (deps: OfferDeps): Promise<boolean> => {
 
     const applied = await deps.applyAll(plans);
 
-    return applied && !refused;
+    return applied && !refused && !conflicting;
 };
 
 /**
