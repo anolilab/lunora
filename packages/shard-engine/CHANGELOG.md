@@ -1,3 +1,14 @@
+## @lunora/shard-engine [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.164...@lunora/shard-engine@1.0.0-alpha.165) (2026-10-27)
+
+### Performance Improvements
+
+* cut per-request CPU on the DO dispatch and fan-out path ([#1351](https://github.com/anolilab/lunora/issues/1351)) ([2f94aa9](https://github.com/anolilab/lunora/commit/2f94aa9bafb63d15288730a8dea7f408db97a760)), closes [#1370](https://github.com/anolilab/lunora/issues/1370) [Array#some](https://github.com/anolilab/Array/issues/some)
+* **shard-engine:** stop rewriting the index ledger and search-state columns on every wake ([#1365](https://github.com/anolilab/lunora/issues/1365)) ([37941f4](https://github.com/anolilab/lunora/commit/37941f422abcedf30ba4d814fda0cca0d839face))
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
 ## @lunora/shard-engine [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.163...@lunora/shard-engine@1.0.0-alpha.164) (2026-10-27)
 
 
