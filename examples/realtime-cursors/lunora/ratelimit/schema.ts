@@ -46,7 +46,7 @@ export const makeRateLimiter = (ctx: { db: unknown }): RateLimiter<LimitName> =>
 /**
  * Middleware that injects `ctx.api.ratelimit` — a per-request limiter helper —
  * for any procedure that opts in with `.use(ratelimit.middleware)`. Convention
- * (see `@lunora/server` `definePlugin`): helpers hang off `ctx.api.<key>`.
+ * (see `definePlugin`): helpers hang off `ctx.api.<key>`.
  */
 const middleware: Middleware<{ api?: Record<string, unknown>; db: unknown }, { api: Record<string, unknown>; db: unknown }> = ({ ctx, next }) =>
     next({
