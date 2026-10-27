@@ -32,13 +32,13 @@ describe("handshake version", () => {
         expect.assertions(1);
 
         const manifest = JSON.parse(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../package.json"), "utf8")) as { version: string };
-        const server = await connectStdio({ client: { listFunctions: vi.fn() } as never });
+        const server = await connectStdio({ client: { listFunctions: vi.fn<() => Promise<[]>>() } as never });
 
         expect(advertised(server)).toBe(manifest.version);
     });
 
     it("reports the bundled constant on the worker path", () => {
         expect.assertions(1);
-        expect(advertised(createLunoraMcpServer({ client: { listFunctions: vi.fn() } as never }))).toBe("0.0.0-bundled");
+        expect(advertised(createLunoraMcpServer({ client: { listFunctions: vi.fn<() => Promise<[]>>() } as never }))).toBe("0.0.0-bundled");
     });
 });

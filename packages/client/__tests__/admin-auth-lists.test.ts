@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { LunoraAdminClient } from "../src/admin/admin-client";
 import {
     adminAuthListHasMore,
     adminAuthListQueryKey,
@@ -9,7 +10,6 @@ import {
     authUsersList,
     subscribeAdminAuthIdentity,
 } from "../src/auth";
-import type { LunoraAdminClient } from "../src/admin/admin-client";
 
 const page = { rows: [], total: 0 };
 

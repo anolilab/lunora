@@ -54,7 +54,7 @@ describe("resolveClient", () => {
     it("rejects an injected client that lacks the admin surface", () => {
         expect.assertions(1);
 
-        const plain = { query: vi.fn() } as unknown as LunoraAdminClient;
+        const plain = { query: vi.fn<() => Promise<unknown>>() } as unknown as LunoraAdminClient;
 
         expect(() => createLunoraMcpServer({ client: plain })).toThrow(/needs a LunoraAdminClient/);
     });
@@ -242,7 +242,7 @@ const agentClient = (): { asClient: LunoraAdminClient; mutation: ReturnType<type
         (reference as { __lunoraRef: string }).__lunoraRef === "agents:agentMessages" ? [{ content: "answer", role: "assistant" }] : { status: "idle" },
     );
 
-    return { asClient: { listFunctions: vi.fn(), mutation, query } as unknown as LunoraAdminClient, mutation };
+    return { asClient: { listFunctions: vi.fn<() => Promise<[]>>(), mutation, query } as unknown as LunoraAdminClient, mutation };
 };
 
 const supportExposure = [{ description: "Support", name: "support" }];
