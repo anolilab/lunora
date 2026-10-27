@@ -23,9 +23,9 @@ const textEncoder = new TextEncoder();
 const KEY_CACHE_MAX = 64;
 const keyCache = new Map<string, Promise<CryptoKey>>();
 
-// `memoizePromise` rather than a bare `set`: a rejected import used to stay in
-// the map, so one failed `importKey` poisoned that secret for the isolate's
-// whole life and every later verify against it failed with the original error.
+// `memoizePromise` rather than a bare `set`: a rejected import left in the map
+// would poison that secret for the isolate's whole life, failing every later
+// verify against it with the original error.
 // It carries the FIFO bound too, evicting on the insert path.
 const importHmacKey = async (secret: string): Promise<CryptoKey> =>
     memoizePromise(

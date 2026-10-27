@@ -3,8 +3,8 @@
  * (`buildSignedUrl`/`verifySignedUrl`) and `@lunora/bindings` images
  * (`buildSignedImageUrl`/`verifySignedImageUrl`). Both mint Worker-resolved
  * signed URLs with the same crypto envelope — base64url codec, the bounded
- * per-secret `CryptoKey` cache (`shared/hmac-key.ts`), host extraction, and sign/verify over a
- * canonical string — differing only in what each binds into that canonical
+ * per-secret `CryptoKey` cache (`shared/hmac-key.ts`), host extraction, and
+ * sign/verify over a canonical string — differing only in what each binds into that canonical
  * (storage: method + content-type; images: transform) and how it assembles the
  * URL.
  *
