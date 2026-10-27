@@ -103,22 +103,23 @@ const SendEventForm = ({ eventTypes, exportName, onSent }: SendEventFormProps): 
         setError(null);
 
         try {
-            await client.query(SEND_WORKFLOW_EVENT, { exportName, id, payload: payload.value, type: typeInput }, callOptions(""));
-        } catch (error_: unknown) {
-            setError(errorMessage(error_));
+            try {
+                await client.query(SEND_WORKFLOW_EVENT, { exportName, id, payload: payload.value, type: typeInput }, callOptions(""));
+            } catch (error_: unknown) {
+                setError(errorMessage(error_));
+
+                return;
+            }
+
+            // The event is delivered by now; a failed refresh must not read as a failed send, or a retry would send it twice.
+            try {
+                await onSent(exportName, id);
+            } catch (error_: unknown) {
+                setError(`${t("Event sent, but refreshing the instance failed")}: ${errorMessage(error_)}`);
+            }
+        } finally {
             setSending(false);
-
-            return;
         }
-
-        // The event is delivered by now; a failed refresh must not read as a failed send, or a retry would send it twice.
-        try {
-            await onSent(exportName, id);
-        } catch (error_: unknown) {
-            setError(`${t("Event sent, but refreshing the instance failed")}: ${errorMessage(error_)}`);
-        }
-
-        setSending(false);
     };
 
     return (
