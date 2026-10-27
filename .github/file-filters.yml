@@ -266,6 +266,10 @@ worker_size:
 client_size:
     - "scripts/check-client-size.js"
     - "client-size.json"
+    # The gate bundles third-party code (TanStack Query, the adapters' framework
+    # runtimes) whose bump touches nothing under `packages/**`.
+    - "pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
     - ".github/workflows/test.yml"
     - ".github/file-filters.yml"
 
