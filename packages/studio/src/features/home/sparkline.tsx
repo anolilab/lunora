@@ -11,7 +11,7 @@ const GAP = 1;
 const BOTTOM_TRIM = 3;
 const MAX_POINTS = 16;
 
-export interface SparklineBar {
+interface SparklineBar {
     readonly height: number;
     readonly width: number;
     readonly x: number;
