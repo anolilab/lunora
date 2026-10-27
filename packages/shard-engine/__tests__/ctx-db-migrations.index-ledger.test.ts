@@ -46,6 +46,37 @@ describe("runShardMigrations — framework index ownership", () => {
         expect(harness.raw(`SELECT name FROM "${LEDGER}"`).map((row) => row["name"])).not.toContain("notes_by_hand");
     });
 
+    it("re-runs on a migrated shard without rewriting the ledger or re-adding columns", () => {
+        expect.assertions(2);
+
+        // Every cold start re-runs the pass over a database it already migrated.
+        runShardMigrations(harness.sql, withIndex(false));
+
+        const statements: string[] = [];
+        const exec = harness.sql.exec.bind(harness.sql);
+
+        harness.sql.exec = (query: string, ...bindings: unknown[]) => {
+            statements.push(query);
+
+            return exec(query, ...bindings);
+        };
+
+        runShardMigrations(harness.sql, withIndex(false));
+
+        expect(statements.filter((query) => query.includes(`INSERT OR IGNORE INTO "${LEDGER}"`))).toStrictEqual([]);
+        expect(statements.filter((query) => query.startsWith("ALTER TABLE"))).toStrictEqual([]);
+    });
+
+    it("records an index again when it is declared again after being dropped", () => {
+        expect.assertions(1);
+
+        runShardMigrations(harness.sql, withIndex(false));
+        runShardMigrations(harness.sql, plain);
+        runShardMigrations(harness.sql, withIndex(false));
+
+        expect(harness.raw(`SELECT name FROM "${LEDGER}"`).map((row) => row["name"])).toStrictEqual(["notes_by_slug"]);
+    });
+
     it("records the indexes it creates and forgets one it drops", () => {
         expect.assertions(2);
 

@@ -269,9 +269,34 @@ const looksFrameworkCreated = (tableName: string, name: string, statement: null 
     statement !== null &&
     (statement.includes("json_extract(") || statement.trimEnd().endsWith(INDEX_SORT_KEYS_TAIL));
 
+/**
+ * The ledger's names as the current {@link runShardMigrations} pass knows them,
+ * folded like the table's NOCASE key. Every cold start re-runs the pass and
+ * re-declares every index it already owns, so the pass reads the ledger once
+ * instead of writing one `INSERT OR IGNORE` per index. Reset at the start of each
+ * pass, so it never outlives the reads it was built from.
+ */
+const ledgerNames = new WeakMap<SqlExec, Set<string>>();
+
 /** Note that this module owns the index `indexName` on `tableName`. */
 const recordFrameworkIndex = (sql: SqlExec, indexName: string, tableName: string): void => {
+    let known = ledgerNames.get(sql);
+
+    if (known === undefined) {
+        known = new Set(
+            runDrizzle<{ name: string }>(sql, dsql`SELECT name FROM ${dsql.identifier(INDEX_LEDGER_TABLE)}`)
+                .toArray()
+                .map((row) => foldIdentifier(row.name)),
+        );
+        ledgerNames.set(sql, known);
+    }
+
+    if (known.has(foldIdentifier(indexName))) {
+        return;
+    }
+
     runDrizzle(sql, dsql`INSERT OR IGNORE INTO ${dsql.identifier(INDEX_LEDGER_TABLE)} (name, table_name) VALUES (${indexName}, ${tableName})`);
+    known.add(foldIdentifier(indexName));
 };
 
 /**
@@ -329,6 +354,7 @@ const dropUndeclaredIndexes = (sql: SqlExec, tableName: string, declared: Readon
         if (!declaredFolded.has(foldIdentifier(name))) {
             runDrizzle(sql, dsql`DROP INDEX IF EXISTS ${dsql.identifier(name)}`);
             runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(INDEX_LEDGER_TABLE)} WHERE ${dsql.identifier(INDEX_LEDGER_TABLE)}."name" = ${name}`);
+            ledgerNames.get(sql)?.delete(foldIdentifier(name));
         }
     }
 };
@@ -607,6 +633,8 @@ export const runShardMigrations = (
     } = {},
 ): ReadonlyArray<string> => {
     const blocked: string[] | undefined = options.deferBlockedUniqueIndexes ? [] : undefined;
+
+    ledgerNames.delete(sql);
 
     // Record this schema shape in the version ledger before touching any table.
     // Codegen threads the snapshot it already computes for the deploy gate, so

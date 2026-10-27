@@ -47,19 +47,23 @@ const migrateSearchState = (sql: SqlExec): void => {
         dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(SEARCH_STATE_TABLE)} (${dsql.identifier("companion")} TEXT PRIMARY KEY, ${dsql.identifier("cursor")} TEXT, ${dsql.identifier("done")} INTEGER NOT NULL DEFAULT 0, ${dsql.identifier("profile")} TEXT, ${dsql.identifier("covered")} INTEGER NOT NULL DEFAULT 0)`,
     );
 
-    // A table created by an earlier build has no `profile` column, and
-    // `CREATE TABLE IF NOT EXISTS` will not add one — every read would then
-    // fail on the missing column. Mirrors the sql-store twin.
-    try {
+    // A table created by an earlier build has no `profile` / `covered` column, and
+    // `CREATE TABLE IF NOT EXISTS` will not add one — every read would then fail on
+    // the missing column. Pragma-checked rather than blindly ALTERed: this runs on
+    // every cold start, and an ALTER that raises "duplicate column" each time is two
+    // failed statements per wake. Same shape as `reactor-state.ts`.
+    const existing = new Set(
+        runDrizzle<{ name: string }>(sql, dsql`PRAGMA table_info(${dsql.identifier(SEARCH_STATE_TABLE)})`)
+            .toArray()
+            .map((column) => column.name),
+    );
+
+    if (!existing.has("profile")) {
         runDrizzle(sql, dsql`ALTER TABLE ${dsql.identifier(SEARCH_STATE_TABLE)} ADD COLUMN ${dsql.identifier("profile")} TEXT`);
-    } catch {
-        // Already present (or the table was just created with it).
     }
 
-    try {
+    if (!existing.has("covered")) {
         runDrizzle(sql, dsql`ALTER TABLE ${dsql.identifier(SEARCH_STATE_TABLE)} ADD COLUMN ${dsql.identifier("covered")} INTEGER NOT NULL DEFAULT 0`);
-    } catch {
-        // Already present (or the table was just created with it).
     }
 
     // Backfill `covered` for rows that predate the column, in its OWN statement
