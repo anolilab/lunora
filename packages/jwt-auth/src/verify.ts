@@ -16,6 +16,13 @@ type TokenSource = (request: Request) => string | null | undefined;
  */
 type JwtKeySet = CryptoKey | JWTVerifyGetKey | KeyObject;
 
+/**
+ * Seconds a token's `iat` may lie ahead of the worker's clock whatever
+ * `clockTolerance` says: an issuer whose clock runs slightly fast mints tokens
+ * that are genuine from the first second, and the default tolerance is 0.
+ */
+const IAT_SKEW_SECONDS = 60;
+
 /** Algorithms accepted when `algorithms` is not set: asymmetric only, so an `alg: none` or HMAC forgery never verifies against a public key set. */
 const DEFAULT_ALGORITHMS = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"];
 
@@ -206,7 +213,7 @@ const issuerList = (issuer: JwtVerifierOptions["issuer"]): string[] =>
  * Verify one compact JWT and return its payload, throwing `jose`'s error on any
  * failure. Checks the signature against `keySet`, `jwksUrl` or the key set OIDC
  * discovery finds for the first `issuer`, then `iss`, `aud`, `alg`, the
- * `requiredClaims`, `exp` / `nbf`, and that `iat` is not in the future (`jose`
+ * `requiredClaims`, `exp` / `nbf`, and that `iat` is not over a minute in the future (`jose`
  * checks `iat` only together with `maxTokenAge`).
  */
 const verifyJwt = async (token: string, options: Omit<JwtVerifierOptions, "onError" | "token">): Promise<JWTPayload> => {
@@ -223,7 +230,7 @@ const verifyJwt = async (token: string, options: Omit<JwtVerifierOptions, "onErr
         requiredClaims: options.requiredClaims ?? ["exp"],
     });
 
-    if (typeof payload.iat === "number" && payload.iat > Date.now() / 1000 + clockTolerance) {
+    if (typeof payload.iat === "number" && payload.iat > Date.now() / 1000 + Math.max(clockTolerance, IAT_SKEW_SECONDS)) {
         throw new errors.JWTClaimValidationFailed('"iat" claim timestamp check failed (it should be in the past)', payload, "iat", "check_failed");
     }
 

@@ -207,6 +207,22 @@ describe(jwtIdentityResolver, () => {
         await expect(resolver(request({ authorization: `Bearer ${token}` }))).resolves.toBeNull();
     });
 
+    it("accepts an iat a few seconds ahead of the worker's clock and refuses one minutes ahead", async () => {
+        expect.assertions(2);
+
+        const issuedAhead = async (seconds: number): Promise<string> =>
+            new SignJWT({ sub: "user_1" })
+                .setProtectedHeader({ alg: "RS256", kid: "a" })
+                .setIssuedAt(Math.floor(Date.now() / 1000) + seconds)
+                .setIssuer(ISSUER)
+                .setAudience(AUDIENCE)
+                .setExpirationTime("1h")
+                .sign(keyA.privateKey);
+
+        await expect(resolver(request({ authorization: `Bearer ${await issuedAhead(5)}` }))).resolves.toMatchObject({ userId: "user_1" });
+        await expect(resolver(request({ authorization: `Bearer ${await issuedAhead(120)}` }))).resolves.toBeNull();
+    });
+
     it("forwards exp plus the clock tolerance it was accepted under", async () => {
         expect.assertions(1);
 
