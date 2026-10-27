@@ -39,6 +39,28 @@ const scrollParentOf = (node: Element | null): Element | null => {
     return document.scrollingElement;
 };
 
+/**
+ * Calls `onChange` when anything laid out above `body` (up to `boundary`) resizes. Moving the table
+ * without a scroll event leaves the virtualizer's offset stale, so the offset is re-read from layout.
+ */
+const observeContentAbove = (body: Element | null, boundary: Element | null, onChange: () => void): (() => void) | undefined => {
+    if (body === null || typeof ResizeObserver === "undefined") {
+        return undefined;
+    }
+
+    const observer = new ResizeObserver(onChange);
+
+    for (let node: Element | null = body; node !== null && node !== boundary; node = node.parentElement) {
+        for (let sibling = node.previousElementSibling; sibling !== null; sibling = sibling.previousElementSibling) {
+            observer.observe(sibling);
+        }
+    }
+
+    return () => {
+        observer.disconnect();
+    };
+};
+
 const isDocumentScroll = (instance: Virtualizer<Element, Element>): boolean => instance.scrollElement === document.scrollingElement;
 
 /**
@@ -72,7 +94,10 @@ const observeDocumentOffset = (
     win.addEventListener("scroll", onScroll, { passive: true });
     win.addEventListener("scrollend", onScrollEnd);
 
+    const stopObserving = observeContentAbove(bodyOf(), null, onScrollEnd);
+
     return () => {
+        stopObserving?.();
         win.removeEventListener("scroll", onScroll);
         win.removeEventListener("scrollend", onScrollEnd);
     };
@@ -132,17 +157,31 @@ const KvKeyTable = ({ allSelected, bulkSelected, keys, onSelectKey, onToggleAll,
         // The list does not start at the top of the scroll area (the namespace
         // table and the filter bar sit above it), so the scroll offset the
         // virtualizer needs is how far the list's first row has scrolled past the
-        // viewport top — read from layout on each scroll, so content above that
-        // grows or shrinks is not re-read until the next scroll.
-        observeElementOffset: (instance, callback) =>
-            isDocumentScroll(instance)
-                ? observeDocumentOffset(instance, callback, () => bodyRef.current)
-                : observeElementOffset(instance, (_offset, isScrolling) => {
-                      const scroller = instance.scrollElement;
-                      const body = bodyRef.current;
+        // viewport top — read from layout on each scroll and whenever content
+        // above the list resizes.
+        observeElementOffset: (instance, callback) => {
+            if (isDocumentScroll(instance)) {
+                return observeDocumentOffset(instance, callback, () => bodyRef.current);
+            }
 
-                      callback(scroller && body ? Math.max(0, scroller.getBoundingClientRect().top - body.getBoundingClientRect().top) : 0, isScrolling);
-                  }),
+            const report = (isScrolling: boolean): void => {
+                const scroller = instance.scrollElement;
+                const body = bodyRef.current;
+
+                callback(scroller && body ? Math.max(0, scroller.getBoundingClientRect().top - body.getBoundingClientRect().top) : 0, isScrolling);
+            };
+            const stopScroll = observeElementOffset(instance, (_offset, isScrolling) => {
+                report(isScrolling);
+            });
+            const stopLayout = observeContentAbove(bodyRef.current, instance.scrollElement, () => {
+                report(false);
+            });
+
+            return () => {
+                stopLayout?.();
+                stopScroll?.();
+            };
+        },
         observeElementRect: (instance, callback) =>
             isDocumentScroll(instance) ? observeDocumentRect(instance, callback) : flooredRectObserver(instance, callback, FALLBACK_VIEWPORT),
         overscan: 12,

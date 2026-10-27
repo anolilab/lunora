@@ -33,6 +33,8 @@ describe("kvBrowser", () => {
     });
 
     afterEach(() => {
+        Reflect.deleteProperty(document, "scrollingElement");
+        vi.unstubAllGlobals();
         vi.restoreAllMocks();
     });
 
@@ -307,5 +309,49 @@ describe("kvBrowser", () => {
         fireEvent.click(screen.getByTestId("kv-select-all"));
 
         expect(screen.getByTestId("kv-bulk-delete-btn").textContent).toBe("Delete 2000");
+    });
+
+    it("re-reads the window when content above the key table resizes without a scroll", async () => {
+        // The table's offset is read from layout; a resize above it moves the table with no scroll event.
+        expect.assertions(2);
+
+        const callbacks: (() => void)[] = [];
+
+        vi.stubGlobal(
+            "ResizeObserver",
+            // eslint-disable-next-line prefer-arrow-callback -- the stub is called with `new`, which an arrow function cannot be
+            vi.fn(function ResizeObserverStub(callback: () => void) {
+                callbacks.push(callback);
+
+                return { disconnect: vi.fn(), observe: vi.fn(), unobserve: vi.fn() };
+            }),
+        );
+
+        // jsdom has no scrolling element, so the table would never observe an offset at all.
+        Object.defineProperty(document, "scrollingElement", { configurable: true, value: document.documentElement });
+
+        const seed: Record<string, { value: string }> = {};
+
+        for (let index = 0; index < 2000; index += 1) {
+            seed[`key:${String(index).padStart(4, "0")}`] = { value: "v" };
+        }
+
+        render(renderBrowser(createMockClient({ kvNamespaces: [{ binding: "CACHE" }], kvSeed: { CACHE: seed } })));
+
+        await screen.findByTestId("kv-key-row-key:0000");
+
+        expect(screen.queryByTestId("kv-key-row-key:0500")).toBeNull();
+
+        // The body now sits 500 rows above the viewport top, as if the content above it had shrunk.
+        vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+            top: -500 * 33,
+        } as DOMRect);
+        act(() => {
+            for (const callback of callbacks) {
+                callback();
+            }
+        });
+
+        await expect(screen.findByTestId("kv-key-row-key:0500")).resolves.toBeDefined();
     });
 });
