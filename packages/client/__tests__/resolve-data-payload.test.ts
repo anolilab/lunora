@@ -19,6 +19,16 @@ describe("resolveDataPayload", () => {
         expect(resolveDataPayload(snapshot(encodeWire({ total: 42n })), undefined)).toStrictEqual({ total: 42n });
     });
 
+    it("adopts a frame the caller proved tagless without copying it", () => {
+        expect.assertions(2);
+
+        const data = [{ _id: "a" }];
+        const delta = { count: 3 };
+
+        expect(resolveDataPayload(snapshot(data), undefined, false)).toBe(data);
+        expect(resolveDataPayload(deltaFrame(delta), undefined, false)).toBe(delta);
+    });
+
     it("returns a row delta unchanged when there is no base to merge into", () => {
         expect.assertions(1);
 
