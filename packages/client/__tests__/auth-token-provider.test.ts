@@ -68,6 +68,26 @@ describe(setAuthTokenProvider, () => {
         stop();
     });
 
+    it("waits at most a day for a token that expires far in the future", async () => {
+        expect.assertions(2);
+
+        const { client } = fakeClient();
+        // A year out: past setTimeout's 2^31-1 ms ceiling, which would otherwise fire at once and loop.
+        const fetchToken = vi.fn<() => Promise<string>>(async () => jwt(nowSeconds() + 365 * 86_400, "long"));
+
+        const stop = setAuthTokenProvider(client, fetchToken);
+
+        await vi.advanceTimersByTimeAsync(86_399_000);
+
+        expect(fetchToken).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1000);
+
+        expect(fetchToken).toHaveBeenCalledTimes(2);
+
+        stop();
+    });
+
     it("keeps a single timer chain when onTokenExpired fires mid-cycle", async () => {
         expect.assertions(2);
 

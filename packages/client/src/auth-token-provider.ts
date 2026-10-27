@@ -8,6 +8,9 @@ const REFRESH_LEAD_MS = 10_000;
 /** Never refresh more often than this, whatever the token says. */
 const MIN_REFRESH_MS = 5000;
 
+/** Never wait longer than this: `setTimeout` fires at once for a delay past 2^31-1 ms (~24.8 days), which would loop. */
+const MAX_REFRESH_MS = 86_400_000;
+
 /** Retry delay after `fetchToken` threw (a network blip, a provider outage). */
 const RETRY_MS = 5000;
 
@@ -79,7 +82,7 @@ const setAuthTokenProvider = (client: LunoraClient, fetchToken: AuthTokenFetcher
 
         const expiresAt = token === null ? undefined : expiresAtMs(token);
 
-        return expiresAt === undefined ? undefined : Math.max(MIN_REFRESH_MS, expiresAt - Date.now() - REFRESH_LEAD_MS);
+        return expiresAt === undefined ? undefined : Math.min(MAX_REFRESH_MS, Math.max(MIN_REFRESH_MS, expiresAt - Date.now() - REFRESH_LEAD_MS));
     };
 
     /** A refresh while one is in flight joins it: that one schedules the next, so there is only ever one timer chain. */
