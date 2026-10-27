@@ -11440,7 +11440,13 @@ abstract class ShardDO {
 
         await instance.sendEvent({ payload, type: parsed.type });
 
-        this.recordAudit("sendWorkflowEvent", { id: parsed.id, detail: { exportName: parsed.exportName, type: parsed.type } });
+        // The event is already delivered; a failed audit write must not read as a failed send, or a retry would deliver it twice.
+        try {
+            this.recordAudit("sendWorkflowEvent", { id: parsed.id, detail: { exportName: parsed.exportName, type: parsed.type } });
+        } catch (error: unknown) {
+            // eslint-disable-next-line no-console -- server-side diagnostic: the event was delivered, only its audit entry was lost
+            console.error("[@lunora/do] sendWorkflowEvent audit write failed; the event was delivered:", error);
+        }
 
         return adminResponse({ sent: true });
     }

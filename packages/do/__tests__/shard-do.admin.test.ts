@@ -1401,6 +1401,66 @@ describe("shardDO admin introspection", () => {
         expect(result.entries.map((entry) => entry.op)).toContain("sendWorkflowEvent");
     });
 
+    it("starts an instance under the trimmed explicit id, the one status and send-event look up", async () => {
+        expect.assertions(1);
+
+        const created: { id?: string }[] = [];
+        const binding = {
+            create: (options: { id?: string }) => {
+                created.push(options);
+
+                return Promise.resolve({ id: options.id ?? "wf-generated", status: () => Promise.resolve({ status: "queued" }) });
+            },
+            get: () => Promise.reject(new Error("get must not run for create")),
+        };
+
+        const shard = new DeclaredWorkflowShard({ ...state, exports: { OrderPipelineWorkflow: binding } }, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.createWorkflowInstance, { exportName: "orderPipeline", id: " wf-1 " }, ADMIN_TOKEN));
+
+        expect(created).toStrictEqual([{ id: "wf-1", params: undefined }]);
+    });
+
+    it("still answers sent when the audit write fails after the event was delivered", async () => {
+        expect.assertions(2);
+
+        const sent: string[] = [];
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) =>
+                Promise.resolve({
+                    id,
+                    sendEvent: async (event: { type: string }) => {
+                        sent.push(event.type);
+                    },
+                    status: () => Promise.resolve({ status: "waiting" }),
+                }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+
+        vi.spyOn(shard as unknown as { recordAudit: () => void }, "recordAudit").mockImplementation(() => {
+            throw new Error("sqlite is read-only");
+        });
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        try {
+            const response = await shard.fetch(
+                tokenAdminRequest(
+                    ADMIN_FUNCTIONS.sendWorkflowEvent,
+                    { exportName: "orderPipeline", id: "wf-1", payload: { approvedBy: "ops" }, type: "order-approved" },
+                    ADMIN_TOKEN,
+                ),
+            );
+
+            await expect(response.json()).resolves.toEqual({ result: { sent: true } });
+            expect(sent).toStrictEqual(["order-approved"]);
+        } finally {
+            consoleError.mockRestore();
+        }
+    });
+
     it.each([
         ["a missing type", { exportName: "orderPipeline", id: "wf-1" }],
         ["a blank type", { exportName: "orderPipeline", id: "wf-1", type: "  " }],

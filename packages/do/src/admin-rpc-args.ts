@@ -432,7 +432,9 @@ const parseCreateWorkflowInstanceArgs = (args: Record<string, unknown>): CreateW
         throw new LunoraError("BAD_REQUEST", "createWorkflowInstance: `exportName` is required");
     }
 
-    const id = typeof args["id"] === "string" && args["id"] !== "" ? args["id"] : undefined;
+    // Trimmed like the status and send-event parses, so the id a create returns is the one the others look up.
+    const trimmedId = typeof args["id"] === "string" ? args["id"].trim() : "";
+    const id = trimmedId === "" ? undefined : trimmedId;
 
     // Admin-token-gated, but reject the reserved workflow branch-marker key for
     // uniformity with every other create surface — a forged marker could

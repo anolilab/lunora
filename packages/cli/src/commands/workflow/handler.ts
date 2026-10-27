@@ -48,6 +48,17 @@ const usageFailure = (logger: Logger, error: string): RunCommandResult => {
     return { body: undefined, code: EXIT_CODE.USAGE, error, requestUrl: "" };
 };
 
+/** Drop the admin RPC's `{ result }` envelope so `--format json` exposes the instance (`data.id`) directly. */
+const unwrapAdminResult = (outcome: RunCommandResult): RunCommandResult => {
+    const { body } = outcome;
+
+    if (typeof body === "object" && body !== null && "result" in body) {
+        return { ...outcome, body: body.result };
+    }
+
+    return outcome;
+};
+
 /**
  * `lunora workflow create | send-event` core: decode the arguments, then dispatch the admin op
  * the Studio Workflows panel uses through the same `/_lunora/rpc` path as `lunora run`, which
@@ -69,11 +80,13 @@ const runWorkflowCommand = async (options: WorkflowCommandOptions): Promise<RunC
             return usageFailure(logger, "could not parse --params as JSON");
         }
 
-        return runRpcCommand({
-            ...shared,
-            args: JSON.stringify({ exportName: options.exportName, ...(options.id === undefined ? {} : { id: options.id }), params: params.value }),
-            functionPath: CREATE_WORKFLOW_INSTANCE,
-        });
+        return unwrapAdminResult(
+            await runRpcCommand({
+                ...shared,
+                args: JSON.stringify({ exportName: options.exportName, ...(options.id === undefined ? {} : { id: options.id }), params: params.value }),
+                functionPath: CREATE_WORKFLOW_INSTANCE,
+            }),
+        );
     }
 
     if (options.subcommand === "send-event") {
@@ -87,11 +100,13 @@ const runWorkflowCommand = async (options: WorkflowCommandOptions): Promise<RunC
             return usageFailure(logger, "could not parse --payload as JSON");
         }
 
-        return runRpcCommand({
-            ...shared,
-            args: JSON.stringify({ exportName: options.exportName, id: options.id, payload: payload.value, type: options.type }),
-            functionPath: SEND_WORKFLOW_EVENT,
-        });
+        return unwrapAdminResult(
+            await runRpcCommand({
+                ...shared,
+                args: JSON.stringify({ exportName: options.exportName, id: options.id, payload: payload.value, type: options.type }),
+                functionPath: SEND_WORKFLOW_EVENT,
+            }),
+        );
     }
 
     return usageFailure(logger, `workflow: unknown subcommand "${options.subcommand ?? ""}". ${USAGE}`);

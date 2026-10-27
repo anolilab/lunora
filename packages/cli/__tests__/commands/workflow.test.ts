@@ -21,7 +21,7 @@ const recordingWorker =
             },
             ok: status < 300,
             status,
-            text: async () => JSON.stringify({ id: "wf-1", status: "queued" }),
+            text: async () => JSON.stringify({ result: { id: "wf-1", status: "queued" } }),
         };
     };
 
