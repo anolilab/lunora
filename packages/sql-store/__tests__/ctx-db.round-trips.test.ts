@@ -183,6 +183,46 @@ describe("createSqlCtxDb — companion rebuilds", () => {
         await expect(next.count("notes", { org: "a" })).resolves.toBe(2);
     });
 
+    it("rebuilds the companions after a write whose companion reads failed", async () => {
+        // Removing a group's minimum reads the counter to recompute it. That read fails after the row has
+        // committed, ahead of the batch, and left the counter holding the deleted row's value.
+        expect.assertions(2);
+
+        const minSchema = {
+            tables: {
+                notes: {
+                    ...companionSchema.tables["notes"],
+                    aggregateIndexes: [{ by: ["org"], field: "score", name: "min_score", on: "notes", op: "min" }],
+                    rankIndexes: [],
+                },
+            },
+        } as never;
+        const provisionScope = {};
+        let failRead = false;
+        const exec: SqlCtxExec = {
+            ...harness.exec,
+            all: async (query, parameters) => {
+                if (failRead && query.includes(`FROM "notes__agg_min_score" WHERE`)) {
+                    throw new Error("connection reset");
+                }
+
+                return await harness.exec.all(query, parameters);
+            },
+        };
+        const failing = createSqlCtxDb({ clock: () => 1, dialect, exec, provisionScope, schema: minSchema });
+        const lowest = await failing.insert("notes", { org: "a", score: 1 });
+
+        await failing.insert("notes", { org: "a", score: 5 });
+
+        failRead = true;
+
+        await expect(failing.delete("notes", lowest)).rejects.toThrow("connection reset");
+
+        const next = createSqlCtxDb({ clock: () => 2, dialect, exec: harness.exec, provisionScope, schema: minSchema });
+
+        await expect(next.aggregate("notes", { field: "score", op: "min", where: { org: "a" } })).resolves.toBe(5);
+    });
+
     it("stops waiting on another writer's rebuild that never settles", async () => {
         // On Workers a request cancelled mid-rebuild can leave its run pending forever; every later writer in the
         // isolate would wait on it with it.
@@ -283,6 +323,55 @@ describe("createSqlCtxDb — companion rebuilds", () => {
         await expect(writer.count("notes", { org: "b" })).resolves.toBe(0);
 
         expect(statements.filter((statement) => isRebuild(statement))).toHaveLength(1);
+    });
+
+    it("rebuilds a companion for a changed definition only after the old definition's rebuild finished", async () => {
+        // Both definitions rewrite one physical table; two DELETE-then-INSERT passes interleaved would leave
+        // rows from neither definition complete.
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        try {
+            const provisionScope = {};
+            let resume: (() => void) | undefined;
+            const slow: SqlCtxExec = {
+                ...harness.exec,
+                all: async (query, parameters) => {
+                    if (isSourcePage(query) && resume === undefined) {
+                        await new Promise<void>((resolve) => {
+                            resume = resolve;
+                        });
+                    }
+
+                    return await harness.exec.all(query, parameters);
+                },
+            };
+            const old = createSqlCtxDb({ clock: () => 1, dialect, exec: slow, provisionScope, schema: companionSchema }).count("notes", { org: "a" });
+
+            const changed = {
+                tables: {
+                    notes: {
+                        ...companionSchema.tables["notes"],
+                        aggregateIndexes: [{ by: ["org"], name: "count_by_org", on: "notes", op: "count", where: { org: "b" } }],
+                    },
+                },
+            } as never;
+            const { exec, statements } = recording(harness.exec);
+            const counted = createSqlCtxDb({ clock: () => 2, dialect, exec, provisionScope, schema: changed }).count("notes", { org: "b" });
+
+            await vi.advanceTimersByTimeAsync(1000);
+
+            expect(statements.filter((statement) => isRebuild(statement))).toStrictEqual([]);
+
+            resume?.();
+
+            await expect(Promise.all([old, counted])).resolves.toStrictEqual([0, 0]);
+
+            expect(statements.filter((statement) => statement.includes(`"notes__agg_count_by_org"`) && isRebuild(statement))).toHaveLength(1);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("does not record a companion as missing when patchIf runs before provisioning", async () => {
@@ -483,7 +572,7 @@ describe("createSqlCtxDb — the changed-tables poll", () => {
                 if (query.includes("pg_index")) {
                     lookups.push([...parameters, /relname = \?::name/u.test(query)]);
 
-                    if (query.includes("::regclass::text")) {
+                    if (query.includes("pg_namespace")) {
                         ddl.push("lookup");
 
                         return [{ qualified: `"audit"."__cdc_log_ts"` }];
@@ -540,6 +629,24 @@ describe("createSqlCtxDb — the changed-tables poll", () => {
         expect(warn).toHaveBeenCalledTimes(1);
 
         warn.mockRestore();
+    });
+
+    it("walks the bounded DELETE in seq order rather than through the ts index", async () => {
+        // Taking the ts index for `WHERE ts <= ? ORDER BY seq LIMIT` would read every expired row and sort them,
+        // so on a backlog each pass would read the whole backlog. The ts index is only for the probe.
+        expect.assertions(1);
+
+        const { exec, statements } = recording(harness.exec);
+
+        await sweepSqlCdcRetention(exec, dialect, 10_000, 10_099);
+
+        const sweep = statements.find((statement) => statement.trim().startsWith("DELETE")) as string;
+        const plan = harness.database
+            .prepare(`EXPLAIN QUERY PLAN ${sweep}`)
+            .all(99)
+            .map((step) => String(step["detail"]));
+
+        expect(plan.filter((step) => step.includes("__cdc_log_ts") || step.includes("TEMP B-TREE"))).toStrictEqual([]);
     });
 
     it("still deletes the expired rows", async () => {

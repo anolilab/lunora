@@ -456,8 +456,14 @@ const postgresIndexOf = (table: string, name: string): SQL =>
 const dropIndexIfExists = async (exec: SqlCtxExec, dialect: SqlDialect, table: string, name: string): Promise<void> => {
     if (dialect.name === "postgres") {
         // A bare name resolves through `search_path` and can reach a same-named index on another schema's
-        // table. Drop the one on `table`, by the qualified name the catalog gives it.
-        const [owned] = await queryAll(exec, dialect, sql`SELECT ${postgresIndexOf(table, name)}::regclass::text AS ${sql.identifier("qualified")}`);
+        // table. Drop the one on `table`, qualified with its schema from the catalog: `regclass::text` leaves
+        // the schema off when the index is visible on this session's `search_path`, and nothing guarantees
+        // the session that runs the drop has the same one.
+        const [owned] = await queryAll(
+            exec,
+            dialect,
+            sql`SELECT quote_ident(${sql.identifier("n")}.nspname) || '.' || quote_ident(${sql.identifier("c")}.relname) AS ${sql.identifier("qualified")} FROM pg_class ${sql.identifier("c")} JOIN pg_namespace ${sql.identifier("n")} ON ${sql.identifier("n")}.oid = ${sql.identifier("c")}.relnamespace WHERE ${sql.identifier("c")}.oid = ${postgresIndexOf(table, name)}`,
+        );
         const qualified = owned?.["qualified"];
 
         if (typeof qualified === "string") {
