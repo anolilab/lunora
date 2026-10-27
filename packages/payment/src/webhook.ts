@@ -6,6 +6,8 @@
  */
 import { fromBase64, toBase64 } from "../../../shared/base64";
 import { constantTimeEqual as sharedConstantTimeEqual } from "../../../shared/constant-time-equal";
+import { importHmacKey } from "../../../shared/hmac-url";
+import { memoizePromise } from "../../../shared/promise-memo";
 import { LunoraPaymentError } from "./errors";
 
 const encoder = new TextEncoder();
@@ -14,8 +16,7 @@ const toHex = (buffer: ArrayBuffer): string => [...new Uint8Array(buffer)].map((
 
 const SYMMETRIC_PREFIX = "whsec_";
 
-const hmacSha256Base64 = async (keyBytes: BufferSource, payload: string): Promise<string> => {
-    const key = await crypto.subtle.importKey("raw", keyBytes, { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
+const hmacSha256Base64 = async (key: CryptoKey, payload: string): Promise<string> => {
     const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
 
     return toBase64(new Uint8Array(signature));
@@ -40,6 +41,20 @@ const standardWebhookKey = (secret: string): ReturnType<typeof fromBase64> => {
 
     return keyBytes;
 };
+
+// Webhook secrets are static and verified on every delivery, so imported keys are cached per secret.
+// The UTF-8 form shares shared/hmac-url's cache; the base64 form decodes to different key bytes, so it
+// needs its own, bounded the same way. A decode failure rejects inside `memoizePromise` and is evicted.
+const BASE64_KEY_CACHE_MAX = 64;
+const base64KeyCache = new Map<string, Promise<CryptoKey>>();
+
+const importStandardWebhookKey = async (secret: string): Promise<CryptoKey> =>
+    memoizePromise(
+        base64KeyCache,
+        secret,
+        async () => crypto.subtle.importKey("raw", standardWebhookKey(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]),
+        BASE64_KEY_CACHE_MAX,
+    );
 
 /**
  * Fail closed on an empty/missing webhook secret. A zero-length HMAC key is attacker-known, so a
@@ -72,8 +87,7 @@ export const constantTimeEqual: (a: string, b: string) => boolean = sharedConsta
  * webhook verifiers.
  */
 export const hmacSha256Hex = async (secret: string, payload: string): Promise<string> => {
-    const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
-    const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
+    const signature = await crypto.subtle.sign("HMAC", await importHmacKey(secret), encoder.encode(payload));
 
     return toHex(signature);
 };
@@ -127,9 +141,9 @@ export const verifyStandardWebhook = async (input: VerifyStandardWebhookInput): 
         throw new LunoraPaymentError("WEBHOOK_TIMESTAMP_INVALID", "signature timestamp outside tolerance");
     }
 
-    const keyBytes = input.keyEncoding === "utf8" ? encoder.encode(input.secret) : standardWebhookKey(input.secret);
+    const key = input.keyEncoding === "utf8" ? await importHmacKey(input.secret) : await importStandardWebhookKey(input.secret);
 
-    const expected = await hmacSha256Base64(keyBytes, `${input.webhookId}.${input.webhookTimestamp}.${input.payload}`);
+    const expected = await hmacSha256Base64(key, `${input.webhookId}.${input.webhookTimestamp}.${input.payload}`);
     const provided = input.webhookSignature
         .split(" ")
         .map((entry) => {
