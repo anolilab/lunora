@@ -287,6 +287,20 @@ const d1PrefixedTableCase = (target: AdminPlaneTarget) => async (): Promise<void
     await expect(introspector.readTablePage({ table: "d1_orders" })).resolves.toMatchObject({ total: 1 });
 };
 
+const crossSchemaForeignKeyCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
+    // `CREATE SCHEMA` is a separate database on MySQL and a namespace on Postgres; both may hold a same-named table.
+    // A same-named table in the active schema must not become the link target for a reference into another schema.
+    await target.query("CREATE SCHEMA ext_other");
+    await target.query("CREATE TABLE ext_other.parents (id VARCHAR(8) PRIMARY KEY)");
+    await target.query("CREATE TABLE parents (id VARCHAR(8) PRIMARY KEY)");
+    await target.query("CREATE TABLE ext_children (id VARCHAR(8) PRIMARY KEY, parent_id VARCHAR(8) REFERENCES ext_other.parents (id))");
+
+    const introspector = createHyperdriveGlobalIntrospector(target.engine, target.exec, schema);
+    const page = await introspector.readTablePage({ table: "ext_children" });
+
+    expect(page.refs ?? {}).not.toHaveProperty("parent_id");
+};
+
 const cdcCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
     // No changelog yet is "nothing has changed", not an error, and the cursor stays put.
     await expect(readHyperdriveGlobalCdc(target.engine, target.exec, { sinceSeq: 7 })).resolves.toStrictEqual({ changes: [], cursor: 7 });
@@ -322,6 +336,7 @@ const adminPlaneCases = (target: AdminPlaneTarget): [string, () => Promise<void>
     ["pages a keyless external table in a stable order even when its first column ties", keylessTablePagingCase(target)],
     ["pages a keyless external table that has a native json column", keylessJsonTablePagingCase(target)],
     ["lists and reads an external table whose name starts with d1_", d1PrefixedTableCase(target)],
+    ["does not link a foreign key into another schema to a same-named local table", crossSchemaForeignKeyCase(target)],
     ["reads and replays the global changelog", cdcCase(target)],
 ];
 
