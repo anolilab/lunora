@@ -20,7 +20,7 @@ describe("mail send classification", () => {
         const mailer = createMailer({
             from: "noreply@x.test",
             transport: {
-                send: vi.fn(async () => {
+                send: vi.fn<() => Promise<{ id: string }>>(async () => {
                     throw original;
                 }),
             },
