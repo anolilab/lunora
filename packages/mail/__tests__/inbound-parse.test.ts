@@ -88,6 +88,19 @@ describe("parseInboundEmail", () => {
         expect(attachment?.disposition).toBe("attachment");
     });
 
+    it("treats an unrecognised disposition type as an attachment", async () => {
+        expect.assertions(1);
+
+        const parsed = await parseInboundEmail(
+            WITH_ATTACHMENT.replace(
+                "Content-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment;",
+                "Content-Type: application/octet-stream\r\nContent-Disposition: x-custom;",
+            ),
+        );
+
+        expect(parsed.attachments[0]?.disposition).toBe("attachment");
+    });
+
     it("preserves threading headers (In-Reply-To / References)", async () => {
         expect.assertions(3);
 

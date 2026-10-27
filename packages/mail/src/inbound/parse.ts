@@ -144,6 +144,16 @@ const safe = (label: string, value: string | undefined): string | undefined => {
 };
 
 /** Render a parser `Address` (mailbox or group) as a single `name <addr>` string. */
+// postal-mime passes any disposition token through; RFC 2183 §2.8 treats an
+// unrecognised type as `attachment`.
+const normalizeDisposition = (disposition: string | null): InboundAttachment["disposition"] => {
+    if (disposition === null) {
+        return disposition;
+    }
+
+    return disposition === "inline" ? "inline" : "attachment";
+};
+
 const formatAddress = (entry: { address?: string; group?: { address?: string; name?: string }[]; name?: string }): string => {
     if (entry.address !== undefined && entry.address !== "") {
         return entry.name ? `${entry.name} <${entry.address}>` : entry.address;
@@ -300,7 +310,7 @@ const parseInboundEmail = async (raw: RawInboundEmail): Promise<InboundEmail> =>
     const attachments: InboundAttachment[] = parsed.attachments.map((attachment) => {
         return {
             content: attachment.content,
-            disposition: attachment.disposition,
+            disposition: normalizeDisposition(attachment.disposition),
             ...(attachment.encoding === undefined ? {} : { encoding: attachment.encoding }),
             filename: attachment.filename,
             mimeType: attachment.mimeType,
