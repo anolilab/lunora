@@ -1,31 +1,54 @@
 import type { ReactElement } from "react";
 
-import { Bar, EvilBarChart } from "../../components/evilcharts/charts/bar-chart";
-import type { ChartConfig } from "../../components/evilcharts/ui/chart";
+// Geometry of the recharts bar sparkline this replaces, so the stat cards look
+// unchanged: a 112×32 box (`w-28 h-8`), recharts' default 5px plot margin, a 1px
+// gap either side of each bar, and the 3px the old custom bar shape trimmed off
+// every bar's bottom edge.
+const WIDTH = 112;
+const HEIGHT = 32;
+const MARGIN = 5;
+const GAP = 1;
+const BOTTOM_TRIM = 3;
+const MAX_POINTS = 16;
 
-/** Series colour for the stat-card sparkline (the foreground var already flips per theme). */
-const SPARKLINE_CONFIG = { value: { colors: { dark: ["var(--foreground)"], light: ["var(--foreground)"] }, label: "" } } satisfies ChartConfig;
+export interface SparklineBar {
+    readonly height: number;
+    readonly width: number;
+    readonly x: number;
+    readonly y: number;
+}
+
+/** Bar rectangles (in the 112×32 viewBox) for the newest `MAX_POINTS` values, scaled to the series max. */
+export const sparklineBars = (data: ReadonlyArray<number>): SparklineBar[] => {
+    const values = data.slice(-MAX_POINTS);
+    const max = Math.max(0, ...values);
+    const plotHeight = HEIGHT - MARGIN * 2;
+    const slot = (WIDTH - MARGIN * 2) / values.length;
+
+    return values.map((value, index) => {
+        const barHeight = max > 0 ? (Math.max(0, value) / max) * plotHeight : 0;
+
+        return {
+            height: Math.max(0, barHeight - BOTTOM_TRIM),
+            width: Math.max(0, slot - GAP * 2),
+            x: MARGIN + index * slot + GAP,
+            y: HEIGHT - MARGIN - barHeight,
+        };
+    });
+};
 
 /**
- * A compact monochrome bar sparkline (evilcharts) drawn from a numeric series
- * (oldest → newest). Split into its own module so the Home panel can lazy-load
- * it: `recharts` (the chart engine behind evilcharts) is the studio's heaviest
- * client dep, and this is Home's only consumer of it, so deferring it keeps the
- * chart engine off the studio's entry bundle — Home's structure paints first and
- * each sparkline streams in on its own chunk.
+ * A compact monochrome bar sparkline drawn from a numeric series (oldest →
+ * newest), as plain SVG. The stat cards were the only reason Home fetched
+ * `recharts` (plus `motion` and the evilcharts wrapper, ~185 KiB gzipped) for a
+ * chart with no axes, tooltip or animation; a handful of `<rect>`s draw the same.
+ * Decorative, like the chart it replaces: the card prints the value beside it.
  */
-const Sparkline = ({ data }: { readonly data: ReadonlyArray<number> }): ReactElement => {
-    // The caller (Home) only mounts this with enough points to read as a trend.
-    const rows = data.slice(-16).map((value, index) => {
-        return { index, value };
-    });
-
-    return (
-        <div aria-hidden="true" className="h-8 w-28">
-            <EvilBarChart animationType="none" barCategoryGap={1} className="h-8 w-full" config={SPARKLINE_CONFIG} data={rows}>
-                <Bar dataKey="value" />
-            </EvilBarChart>
-        </div>
-    );
-};
-export default Sparkline;
+export const Sparkline = ({ data }: { readonly data: ReadonlyArray<number> }): ReactElement => (
+    <svg aria-hidden="true" className="h-8 w-28 fill-foreground" data-testid="home-sparkline" viewBox="0 0 112 32">
+        {sparklineBars(data).map((bar) => (
+            // x is unique per bar, and a bar's slot is its identity.
+            <rect height={bar.height} key={bar.x} rx={2} width={bar.width} x={bar.x} y={bar.y} />
+        ))}
+    </svg>
+);

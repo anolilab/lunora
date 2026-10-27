@@ -1,6 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement, ReactNode } from "react";
-import { lazy, Suspense } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
@@ -15,18 +14,11 @@ import { cn } from "../../lib/utils";
 import { deriveInsights } from "../advisors/derive-insights";
 import BindingsOverview from "./bindings-overview";
 import { ConnectAgentCard } from "./connect-agent";
-
-// The stat-card sparkline is Home's only `recharts` consumer. Lazy-loading it
-// keeps the (heavy) chart engine out of the studio's entry bundle — Home's
-// structure paints immediately and each sparkline streams in on its own chunk.
-const Sparkline = lazy(() => import("./sparkline"));
+import { Sparkline } from "./sparkline";
 
 /**
  * A single point can't read as a trend (and renders as one fat block), so a
- * sparkline only shows once there are a few buckets. Checked here, before the
- * lazy boundary, rather than inside `Sparkline`: rendering it just to return
- * `null` still fetched and evaluated the whole chart chunk on every Home visit
- * of an app with no metrics history yet.
+ * sparkline only shows once there are a few buckets.
  */
 const SPARKLINE_MIN_POINTS = 3;
 
@@ -159,11 +151,7 @@ const StatCard = ({
                         <span className="text-2xl font-semibold tabular-nums text-foreground">{value}</span>
                         {unit !== undefined && <span className="text-xs text-muted-foreground">{unit}</span>}
                     </span>
-                    {trend !== undefined && trend.length >= SPARKLINE_MIN_POINTS && (
-                        <Suspense fallback={<div aria-hidden="true" className="h-8 w-28" />}>
-                            <Sparkline data={trend} />
-                        </Suspense>
-                    )}
+                    {trend !== undefined && trend.length >= SPARKLINE_MIN_POINTS && <Sparkline data={trend} />}
                 </div>
             </div>
             {delta == null ? (
