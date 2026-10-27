@@ -90,3 +90,24 @@ describe("needsWireEncoding and toJSON", () => {
         expect(encodeWire(value)).toStrictEqual({ visible: 1 });
     });
 });
+
+describe("needsWireEncoding and array accessors", () => {
+    it("sends an array with a getter element to the encoder without running the getter", () => {
+        expect.assertions(2);
+
+        let reads = 0;
+        const value = [1];
+
+        Object.defineProperty(value, 1, {
+            enumerable: true,
+            get: () => {
+                reads += 1;
+
+                return 2;
+            },
+        });
+
+        expect(needsWireEncoding(value)).toBe(true);
+        expect(reads).toBe(0);
+    });
+});

@@ -143,6 +143,21 @@ const setField = (target: Record<string, unknown>, key: string, fieldValue: unkn
     }
 };
 
+// Through the descriptor, like an object field: a getter element would run here and
+// again in the caller's `JSON.stringify`, so an accessor goes to the encoder, which
+// reads it once. A hole is skipped, as `Array#some` skips it.
+const arrayElementsNeedEncoding = (value: ReadonlyArray<unknown>, needs: (item: unknown) => boolean): boolean => {
+    for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, index);
+
+        if (descriptor !== undefined && (!("value" in descriptor) || descriptor.value === undefined || needs(descriptor.value))) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
 /**
  * Would {@link encodeWire} change this value, or is it already the JSON it will
  * become?
@@ -212,7 +227,7 @@ const needsWireEncoding = (value: unknown, depth = 0): boolean => {
         // `undefined` in an array POSITION is tagged, where `JSON.stringify`
         // would write `null` — the one place the two disagree on a value both
         // can represent.
-        return value.some((item) => item === undefined || needsWireEncoding(item, depth + 1));
+        return arrayElementsNeedEncoding(value, (item) => needsWireEncoding(item, depth + 1));
     }
 
     if (!isPlainObject(value)) {
