@@ -148,4 +148,4 @@ const checkCloudflareToken = async (parsed: WranglerConfig | undefined, options:
 };
 
 export type { CloudflareTokenCheckOptions };
-export default checkCloudflareToken;
+export { checkCloudflareToken };

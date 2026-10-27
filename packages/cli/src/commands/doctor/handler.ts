@@ -38,7 +38,7 @@ import isInsideDirectory from "../../util/path-containment";
 import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
 import checkAi from "./ai-checks";
 import checkCimdFetchFlag from "./cimd-checks";
-import checkCloudflareToken from "./cloudflare-token-checks";
+import { checkCloudflareToken } from "./cloudflare-token-checks";
 import { applyDoctorFixes, isD1PlaceholderId, isUnfinishedD1Id } from "./fix";
 import type { DoctorOptions } from "./index";
 import checkObservabilitySampling from "./observability-checks";
