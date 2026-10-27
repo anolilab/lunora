@@ -4465,12 +4465,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // The clone is a new `Request`, so the in-flight execution context recorded
         // for the original is passed explicitly (`context.access`, `waitUntil`).
         const upgrade = bearerUpgrade(request);
-        const { headers: forwardedHeaders, identity } = await forwardContext(
-            identityRequestForUpgrade(request, upgrade),
-            env,
-            publicResolveIdentity,
-            executionContextByRequest.get(request),
-        );
+        const { headers: forwardedHeaders, identity } = await forwardContext(identityRequestForUpgrade(request, upgrade), env, publicResolveIdentity, {
+            executionContext: executionContextByRequest.get(request),
+        });
 
         // The same admin exemption the RPC path applies to `__lunora_admin__:*`
         // (see `authorizeRpcEnvelope`), and the one
@@ -4593,12 +4590,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // ownership). Same shape/authorization ordering as the RPC/WS paths, and the
         // same `lunora.bearer.*` handling as `handleWebSocketUpgrade`.
         const upgrade = bearerUpgrade(request);
-        const { headers: forwardedHeaders, identity } = await forwardContext(
-            identityRequestForUpgrade(request, upgrade),
-            env,
-            publicResolveIdentity,
-            executionContextByRequest.get(request),
-        );
+        const { headers: forwardedHeaders, identity } = await forwardContext(identityRequestForUpgrade(request, upgrade), env, publicResolveIdentity, {
+            executionContext: executionContextByRequest.get(request),
+        });
 
         // Deliberately NOT `assertShardAuthorized`, and the difference is the
         // `else`: that helper default-denies only a NON-default shard, because its
