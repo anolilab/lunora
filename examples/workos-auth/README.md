@@ -33,7 +33,9 @@ What it shows:
 1. In the [WorkOS dashboard](https://dashboard.workos.com), enable AuthKit.
 2. Under **Redirects**, add `http://localhost:5173` as a redirect URI. Under
    **Authentication → CORS** (allowed origins), add `http://localhost:5173` so
-   the browser can refresh tokens.
+   the browser can refresh tokens. `5173` is the default dev port; in a linked
+   git worktree `pnpm dev` prints a shifted one, and that origin is the one to
+   register.
 3. Copy your client id (`client_…`) from **API keys**.
 4. To try the org-gated query, under **Authorization** create a permission
    with the slug `notes:read-org` and add it to the `admin` role (WorkOS puts

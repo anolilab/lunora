@@ -47,6 +47,11 @@ What it shows:
     None of these is a secret. Tokens are verified against Clerk's public JWKS,
     so the Worker needs no Clerk secret key.
 
+    `5173` is the default dev port. In a linked git worktree `pnpm dev` picks a
+    shifted one (its startup line says which); put that origin in
+    `CLERK_AUTHORIZED_PARTIES`, or Clerk's `azp` will not match and every
+    request runs anonymous.
+
 4. Run it:
 
     ```bash
