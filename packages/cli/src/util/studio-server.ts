@@ -30,7 +30,6 @@ import type { CodegenOptions } from "@lunora/codegen";
 import { detectAgentRules, resolveLazyFunctions } from "@lunora/config";
 import type { LocalEndpointHandler } from "@lunora/config/studio-host";
 import {
-    applyStudioAssetCache,
     assetContentType,
     createStudioDocumentCache,
     handlePolicyScaffoldRequest,
@@ -45,6 +44,7 @@ import {
     resolveAdminToken,
     SCHEMA_EDIT_ENDPOINT,
     SEED_ENDPOINT,
+    sendStudioAsset,
     sendStudioDocument,
     serveJsonHandler,
     studioAssetsStamp,
@@ -215,14 +215,9 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         // headers the browser heuristically caches them and serves a rebuilt
         // `@lunora/studio` stale until a hard reload. Shared with the Vite route
         // (`@lunora/config/studio-host`) so the two hosts answer identically; it
-        // sends the `304` itself when the client already holds this version.
-        if (applyStudioAssetCache(request, response, fileName, assetsStamp)) {
-            return;
-        }
-
-        response.statusCode = 200;
-        response.setHeader("Content-Type", contentType);
-        response.end(body);
+        // sends the `304` itself when the client already holds this version, and
+        // compresses the body for a client that accepts it.
+        sendStudioAsset(request, response, body, contentType, fileName, assetsStamp);
     };
 
     const sendText = (response: ServerResponse, statusCode: number, body: string): void => {

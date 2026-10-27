@@ -417,11 +417,20 @@ export interface LunoraClientOptions {
     authBasePath?: string;
 
     /**
-     * Whether the `WebSocket` transport sends the `setAuthToken` bearer on the
-     * upgrade, as `@lunora/react-native` does on native. Then a
-     * sign-in from signed-out reconnects the shard sockets so the server sees the
-     * bearer. A browser socket cannot carry it, so the default `false` leaves its
-     * sockets (and their live values) alone.
+     * Whether sockets present the `setAuthToken` bearer on the upgrade. Turn it on
+     * when the session is a bearer and not a cookie on the API's origin — an
+     * external identity provider's JWT (Clerk, WorkOS, …) or a cross-origin API.
+     *
+     * A browser cannot set `Authorization` on a WebSocket, so the bearer is
+     * offered as a `Sec-WebSocket-Protocol` entry (`lunora.bearer.<base64url>`),
+     * never in the URL; the worker reads it for `resolveIdentity` only.
+     * `@lunora/react-native` turns this on by default on native, where the bearer
+     * also rides an `Authorization` header (the header wins).
+     *
+     * A sign-in from signed-out then reconnects the shard sockets cold, and a
+     * refreshed bearer bounces them warm, so the server sees the current token.
+     * The default `false` keeps cookie-session sockets (and their live values)
+     * alone.
      */
     authTokenOnUpgrade?: boolean;
     bookmarkStorage?: BookmarkStorage;

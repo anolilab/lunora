@@ -1,11 +1,21 @@
 import { createAsyncStoragePersistence, createAsyncStorageQueryCache, LunoraClient } from "@lunora/client";
 
+import { BEARER_PROTOCOL_PREFIX, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
 import type { AuthHeadersFactory, CreateLunoraClientOptions } from "./types";
 
 // React Native's `WebSocket` constructor is `(uri, protocols?, options?)`; the
 // DOM lib types it as two-arg, so the `{ headers }` options object rides through
 // this widened constructor type and the subclass is re-cast to `typeof WebSocket`.
 type WebSocketWithOptions = new (url: string | URL, protocols?: string | string[], options?: unknown) => WebSocket;
+
+/** `protocols` without the client's `lunora` bearer offer; `undefined` when nothing else remains. */
+const withoutLunoraProtocols = (protocols: string | string[] | undefined): string[] | undefined => {
+    const kept = (typeof protocols === "string" ? [protocols] : (protocols ?? [])).filter(
+        (protocol) => protocol !== LUNORA_WS_PROTOCOL && !protocol.startsWith(BEARER_PROTOCOL_PREFIX),
+    );
+
+    return kept.length > 0 ? kept : undefined;
+};
 
 /**
  * True when this bundle is running on native React Native rather than in a
@@ -109,8 +119,15 @@ export const withAuthWebSocket = (WebSocketImpl: typeof WebSocket, getAuthHeader
     class AuthWebSocket extends (WebSocketImpl as unknown as WebSocketWithOptions) {
         public constructor(url: string | URL, protocols?: string | string[]) {
             const headers = getAuthHeaders();
+            const hasAuthorization = headers !== undefined && Object.keys(headers).some((name) => name.toLowerCase() === "authorization");
 
-            super(url, protocols, headers ? { headers } : undefined);
+            // The client offers its bearer as a `lunora` / `lunora.bearer.*` subprotocol for
+            // browsers, which cannot set headers. With a real `Authorization` header that offer
+            // is redundant on native, so drop it there: the native handshake stays exactly as
+            // before (a worker that selects no subprotocol is still accepted) and the token rides
+            // one header. Under react-native-web the browser ignores `{ headers }`, so the
+            // subprotocol is the only credential the upgrade carries and must stay.
+            super(url, hasAuthorization && isNativeRuntime() ? withoutLunoraProtocols(protocols) : protocols, headers ? { headers } : undefined);
         }
     } as unknown as typeof WebSocket;
 

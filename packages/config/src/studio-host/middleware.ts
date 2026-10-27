@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { detectAgentRules } from "../agent-rules";
 import { resolveAdminToken } from "./admin-token";
-import { applyStudioAssetCache, sendStudioDocument } from "./asset-cache";
+import { sendStudioAsset, sendStudioDocument } from "./asset-cache";
 import { assetContentType, isStandaloneModulePath, loadStudioAssets, readStandaloneAsset, studioAssetsStamp } from "./assets";
 import createStudioDocumentCache from "./document-cache";
 import { handlePolicyScaffoldRequest, POLICY_SCAFFOLD_ENDPOINT } from "./policy-scaffold-handler";
@@ -65,13 +65,6 @@ const basePrefixOf = (base: string | undefined): string => (base === undefined |
 
 /** Where the studio is mounted under a dev server's `base` — the path a startup banner announces. */
 const studioMountPath = (base?: string): string => `${basePrefixOf(base)}${STUDIO_PATH}`;
-
-/** Write a 200 response with the given body and content type. */
-const sendOk = (response: ServerResponse, body: Buffer | string, contentType: string): void => {
-    response.statusCode = 200;
-    response.setHeader("Content-Type", contentType);
-    response.end(body);
-};
 
 /**
  * The pathname of a request's `url`, the way every studio host routes on it:
@@ -154,14 +147,10 @@ const createStudioMiddleware = (options: StudioMiddlewareOptions): ((request: In
         // revalidates independently; the rebuild stamp busts them all at once.
         const fileName = pathname.slice(pathname.lastIndexOf("/") + 1);
 
-        // Shared with the CLI host so the two cannot drift; it sends the `304`
-        // itself on a match.
-        if (applyStudioAssetCache(request, response, fileName, stamp)) {
-            return;
-        }
-
+        // Shared with the CLI host so the two cannot drift: cache headers, the
+        // `304`, and compression all happen there.
         if (isStyle) {
-            sendOk(response, assets.styles, "text/css; charset=utf-8");
+            sendStudioAsset(request, response, assets.styles, "text/css; charset=utf-8", fileName, stamp);
 
             return;
         }
@@ -181,7 +170,7 @@ const createStudioMiddleware = (options: StudioMiddlewareOptions): ((request: In
             return;
         }
 
-        sendOk(response, bytes, assetContentType(fileName));
+        sendStudioAsset(request, response, bytes, assetContentType(fileName), fileName, stamp);
     };
 
     return (request: IncomingMessage, response: ServerResponse, next: () => void): void => {

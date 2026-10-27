@@ -1,6 +1,7 @@
 import { LunoraClient } from "@lunora/client";
 import { describe, expect, it, vi } from "vitest";
 
+import { encodeBearerProtocol, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
 import { createLunoraClient, withAuthHeaders, withAuthWebSocket, withoutAmbientCookies } from "../src/create-lunora-client";
 
 const makeFetchSpy = () =>
@@ -208,6 +209,26 @@ describe("withAuthWebSocket", () => {
         expect(calls[0]!.options).toBeUndefined();
     });
 
+    it("drops the browser bearer subprotocol when the bearer rides Authorization", () => {
+        expect.assertions(3);
+
+        const { calls, FakeWebSocket } = makeFakeWebSocket();
+        let headers: Record<string, string> | undefined = { Authorization: "Bearer tok" };
+        const Wrapped = withAuthWebSocket(FakeWebSocket, () => headers);
+
+        // The handshake stays exactly what it was before the subprotocol existed.
+        const native = new Wrapped("wss://api.example.com/_lunora/ws", [LUNORA_WS_PROTOCOL, encodeBearerProtocol("tok")]);
+
+        headers = undefined;
+
+        const headerless = new Wrapped("wss://api.example.com/_lunora/ws", [LUNORA_WS_PROTOCOL, encodeBearerProtocol("tok")]);
+
+        expect([native, headerless].every((socket) => socket instanceof Wrapped)).toBe(true);
+        expect(calls[0]!.protocols).toBeUndefined();
+        // Without an Authorization header the offer is the socket's only credential, so it stays.
+        expect(calls[1]!.protocols).toStrictEqual([LUNORA_WS_PROTOCOL, encodeBearerProtocol("tok")]);
+    });
+
     it("re-reads the factory per socket so a reconnect picks up a new token", () => {
         expect.assertions(4);
 
@@ -341,17 +362,17 @@ describe("createLunoraClient", () => {
 // The session bearer reaches the live socket as the upgrade's `Authorization`
 // header on native, never as `?token=` in the URL (where it lands in logs).
 describe("createLunoraClient — socket credential", () => {
-    const upgrades: { closed: boolean; options?: unknown; url: string }[] = [];
+    const upgrades: { closed: boolean; options?: unknown; protocols?: string | string[]; url: string }[] = [];
 
     class RecordingWebSocket {
         public readyState = 0;
 
         private readonly listeners: unknown[] = [];
 
-        private readonly record: { closed: boolean; options?: unknown; url: string };
+        private readonly record: { closed: boolean; options?: unknown; protocols?: string | string[]; url: string };
 
-        public constructor(url: string, _protocols?: string | string[], options?: unknown) {
-            this.record = { closed: false, options, url };
+        public constructor(url: string, protocols?: string | string[], options?: unknown) {
+            this.record = { closed: false, options, protocols, url };
             upgrades.push(this.record);
         }
 
@@ -448,6 +469,33 @@ describe("createLunoraClient — socket credential", () => {
 
         // The browser socket takes no headers; the cookie session authenticates it.
         expect(upgrades[0]!.options).toBeUndefined();
+    });
+
+    it("keeps the bearer subprotocol under react-native-web even when getAuthHeaders sends Authorization", () => {
+        expect.assertions(1);
+
+        Object.defineProperty(globalThis, "document", { configurable: true, value: {}, writable: true });
+
+        try {
+            withGlobalWebSocket(() => {
+                const client = createLunoraClient({
+                    authTokenOnUpgrade: true,
+                    getAuthHeaders: () => {
+                        return { Authorization: "Bearer tok-a" }; // secret-scanner:allow -- test fixture, not a real credential
+                    },
+                    url: "https://api.example.com",
+                });
+
+                client.setAuthToken("tok-a"); // secret-scanner:allow -- test fixture, not a real credential
+                client.subscribe(ref, {}, () => undefined);
+                client.close();
+            });
+        } finally {
+            delete (globalThis as { document?: unknown }).document;
+        }
+
+        // The browser drops the third constructor argument, so the subprotocol is the socket's only credential.
+        expect(upgrades[0]!.protocols).toStrictEqual([LUNORA_WS_PROTOCOL, encodeBearerProtocol("tok-a")]);
     });
 
     it("keeps the browser socket open on sign-in under react-native-web", () => {

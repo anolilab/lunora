@@ -1,0 +1,411 @@
+---
+title: External auth
+description: Use Clerk, WorkOS AuthKit, Auth0, Supabase or any OIDC JWT issuer as your identity provider — verify its token at the Worker and feed ctx.auth, RLS and live queries, with no second session stack.
+---
+
+Lunora doesn't need to own your sessions. If a hosted identity provider already
+signs your users in, the Worker can verify that provider's token on every
+request and turn it into `ctx.auth`. RLS, `serverDefault` columns and live
+queries then work exactly as they do with `@lunora/auth`.
+
+[`@lunora/jwt-auth`](/docs/packages/jwt-auth) does the verification. It has
+presets for Clerk, WorkOS, Auth0 and Supabase, and `jwtIdentityResolver` covers
+any other OIDC or JWT issuer.
+
+## External provider or `@lunora/auth`?
+
+| Use                                   | When                                                                                                                                         |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| An external provider + `jwt-auth`     | You already use Clerk, WorkOS, Auth0 or Supabase, or want their hosted UI, SSO, SCIM or organizations. The provider owns users and sessions. |
+| [`@lunora/auth`](/docs/packages/auth) | You want users and sessions in your own D1, with no third party. better-auth runs inside your Worker.                                        |
+
+The two can run together: compose the resolvers (see
+[below](#composing-with-lunoraauth-or-cloudflare-access)). Note that
+`registry/auth-clerk` is the **other** Clerk mode. It makes Clerk an OAuth login
+button for `@lunora/auth`, and Lunora owns the session. This page is about
+Clerk owning it.
+
+## The resolver
+
+Everything hangs off one Worker option, `resolveIdentity`: it receives the
+inbound request and returns `{ userId, ...claims }`, or `null` for anonymous.
+The presets return one:
+
+```ts
+import { clerk } from "@lunora/jwt-auth";
+import { memoizeIdentity } from "lunorash/runtime";
+
+import { defineApp } from "../../lunora/_generated/app";
+
+const app = defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .extend((env) => ({
+        resolveIdentity: memoizeIdentity(clerk({ publishableKey: env.CLERK_PUBLISHABLE_KEY, authorizedParties: env.CLERK_AUTHORIZED_PARTIES })),
+    }))
+    .build();
+```
+
+There is no dedicated builder method. `.extend()` is the escape hatch for any
+`WorkerOptions` field, and `resolveIdentity` is the only one an external
+provider needs. With `createWorker` directly, pass the same value as
+`resolveIdentity`.
+
+What every resolver from this package does:
+
+- **Reads the token** from `Authorization: Bearer` by default. The Clerk preset
+  falls back to the `__session` cookie Clerk sets for same-origin requests.
+  Override with `token: (request) => …`, or compose
+  `firstToken(bearerToken, cookieToken("name"))`.
+- **Verifies it** against the provider's JWKS: signature, `iss`, `aud` when the
+  provider issues one, `exp` (required) and `nbf`, and that `iat` is at most
+  a minute in the future. Algorithms are pinned per provider, so `alg: none` and HMAC
+  forgeries never verify. `clockTolerance` allows that much skew, and the
+  forwarded `exp` includes it, since the runtime has no skew allowance of its
+  own.
+- **Caches the key set** per isolate, one per JWKS URL. A token signed with a
+  key it doesn't know (a `kid` miss, which is key rotation) triggers one
+  refetch, then verification retries.
+- **Maps the claims.** `sub` becomes `ctx.auth.userId` and `exp` is forwarded.
+  The preset's org, role and permission claims go onto the identity, readable
+  through `ctx.auth.getIdentity()` and in RLS policies as `auth.identity`.
+  No preset sets `roles`, the app-wide claim behind `auth.roles` (see
+  [RLS with org claims](#rls-with-org-claims)).
+- **Fails closed.** No token, a bad signature, a wrong issuer or audience, or a
+  malformed token all resolve to `null`, so the call runs anonymous and RLS
+  denies. A misconfiguration, such as an unset env var, throws when the worker
+  is built.
+- **Reports an expired token as expired, not anonymous.** A correctly signed
+  token whose only fault is a past `exp` resolves to its identity with that
+  `exp`. The runtime then answers `401 TOKEN_EXPIRED`, or closes a socket with
+  `4001`, and the client refreshes. See
+  [Expired credentials](/docs/concepts/authentication#expired-credentials).
+
+### Presets
+
+| Preset                                                   | Issuer and keys                                                                                                                                | Identity claims                                                                                         |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `clerk({ publishableKey \| issuer, authorizedParties })` | Frontend API URL; `<frontend-api>/.well-known/jwks.json`; RS256; `azp` checked against the required `authorizedParties`; 5 s clock skew        | `orgId`, `orgSlug`, `orgRole` (`org:admin`), `orgPermissions` (`org:<feature>:<perm>`), `sessionId`     |
+| `workos({ clientId, authDomain? })`                      | `https://api.workos.com`, `…/`, or `…/user_management/<clientId>` (or your auth domain); `<host>/sso/jwks/<clientId>`; user access tokens only | `orgId`, `role`, `orgRoles`, `permissions`, `entitlements`, `featureFlags`, `sessionId`, `impersonator` |
+| `auth0({ domain, audience })`                            | `https://<domain>/`; `<domain>/.well-known/jwks.json`; `aud` = your API identifier                                                             | `orgId`, `permissions`, `scopes`                                                                        |
+| `supabase({ projectUrl })`                               | `<project>/auth/v1`; `<project>/auth/v1/.well-known/jwks.json`; `aud: authenticated`                                                           | `email`, `role`, `aal`, `isAnonymous`, `sessionId`                                                      |
+
+Each preset accepts `claims` (extra mapping layered over the preset's; return
+`null` to refuse a token), `clockTolerance`, `keySet`, `onError` and `token`.
+
+`clerk()` requires `authorizedParties` (an array, or a comma-separated string
+as an env var holds it). Clerk warns that skipping the `azp` check opens the
+app to CSRF, so an empty list throws when the worker is built. A token
+without `azp`, as a native app sends, passes. To verify with no network call,
+import Clerk's PEM **JWKS Public Key** with `importSPKI(pem, "RS256")` from
+`jose` and pass it as `keySet`.
+
+`workos()` accepts the `iss` production AuthKit tokens carry,
+`https://api.workos.com/user_management/<clientId>`, as well as the bare forms.
+With `authDomain` set, the same three forms on your domain are accepted and the
+JWKS comes from it, as the WorkOS SDKs do; an `authDomain` with a path is taken
+as the exact issuer. Only user access tokens resolve: the environment's keys
+also sign agent and widget tokens, so a token needs `sid` and `auth_time`, no
+`sub_type`, and a `sub_profile` that is absent or `user`.
+
+<Callout type="warn">
+    **Guests and machines are refused by default.** A Supabase anonymous sign-in carries the `authenticated` role like a permanent user, so `supabase()`
+    resolves `is_anonymous: true` tokens to anonymous unless you pass `allowAnonymousUsers: true`. When you do, the identity carries `isAnonymous: true` for
+    your policies to check. `auth0()` likewise refuses machine-to-machine and agent tokens (`gty: "client-credentials"`, a `…@clients` subject, or a
+    `sub_profile` other than `user`, which RFC 9068-profile tokens use instead of `gty`) unless you pass `allowClientCredentials: true`, because their subject
+    names an app, not a user.
+</Callout>
+
+Clerk session tokens v2 (`v: 2`) encode organization permissions compactly:
+features in `fea`, permission names in `o.per`, and a bitmask per
+organization-scoped feature in `o.fpm`. The preset decodes them to full
+`org:<feature>:<permission>` keys the way `@clerk/shared` does. If the encoding
+is malformed, it forwards no permissions at all rather than guessing.
+
+For Auth0, validate `orgId` against the organization you expect before trusting
+it, as Auth0 advises. Auth0 puts no roles in access tokens; add them as a
+namespaced custom claim from a post-login Action
+(`api.accessToken.setCustomClaim("https://example.com/roles", event.authorization?.roles ?? [])`)
+and map it with `claims`.
+
+### Any other issuer
+
+```ts
+import { jwtIdentityResolver } from "@lunora/jwt-auth";
+
+const resolveIdentity = jwtIdentityResolver({
+    issuer: "https://auth.example.com/", // JWKS discovered from /.well-known/openid-configuration
+    audience: "https://api.example.com", // set it whenever your issuer stamps one
+    algorithms: ["RS256"],
+    claims: (payload) => ({ roles: payload["https://example.com/roles"] }),
+});
+```
+
+Pass `jwksUrl` to skip discovery. Discovery needs an https issuer, and the
+discovery document must name that issuer exactly. With several issuers, only
+the first is discovered; pass `jwksUrl` when they do not share a key set.
+Without `audience`, a token the same issuer minted for any other application
+verifies too, so set it whenever the provider issues one.
+
+`keySet` takes a public key or a key-set getter, never an HMAC secret: the
+default algorithms are asymmetric only.
+
+## Client: hand over the token, refresh it
+
+The browser holds the provider's token. `setAuthTokenProvider` from
+`lunorash/client` (or `@lunora/client`) hands it to the `LunoraClient` and keeps
+it fresh:
+
+```tsx
+import { useAuth } from "@clerk/react";
+import { LunoraClient, setAuthTokenProvider } from "lunorash/client";
+
+const client = new LunoraClient({ url: location.origin, authTokenOnUpgrade: true });
+
+function ClerkTokenBridge({ children }) {
+    const { getToken, isLoaded, isSignedIn, orgId, userId } = useAuth();
+
+    useEffect(() => {
+        if (!isLoaded) return undefined;
+        if (!isSignedIn) return void client.setAuthToken(null);
+
+        return setAuthTokenProvider(client, getToken, { subject: userId });
+    }, [getToken, isLoaded, isSignedIn, orgId, userId]);
+
+    return children;
+}
+```
+
+`setAuthTokenProvider(client, fetchToken, { subject })` returns a stop
+function. It:
+
+- installs each token with `setAuthToken(token, subject)`, which stamps
+  `Authorization: Bearer` on every query, mutation and action. The subject is
+  the stable user id. It keeps a refresh from looking like an account switch,
+  so queued offline writes survive it.
+- fetches the next token 10 seconds **before** the current one's `exp`. A
+  query, mutation or action sent with a lapsed token is refused
+  `TOKEN_EXPIRED`, and an online call is not resent for you. With
+  `authTokenOnUpgrade`, each refresh also reconnects the sockets warm.
+- refreshes again on `onTokenExpired`: a socket the server closed with `4001`,
+  or a queued offline write refused on replay, which is held and sent again
+  after the new token.
+- keeps a single timer chain, retries 5 seconds after `fetchToken` throws, and
+  clears the token when `fetchToken` resolves `null`. Map the provider's
+  "signed out" signal to `null`: Clerk's `getToken()` already resolves `null`,
+  WorkOS's `getAccessToken()` throws `LoginRequiredError`, and Auth0's
+  `getAccessTokenSilently()` throws an error whose `error` is
+  `login_required` (or `missing_refresh_token` with refresh tokens).
+
+Re-run the effect when the organization changes: the provider mints a token
+carrying the new org claims.
+
+For Auth0, request your API as the audience and use refresh tokens, so a
+silent refresh does not depend on third-party cookies:
+
+```tsx
+<Auth0Provider domain={domain} clientId={clientId} authorizationParams={{ audience, redirect_uri: location.origin }} useRefreshTokens>
+```
+
+## WebSockets and live queries
+
+A live query's identity is resolved **once, when its socket upgrades**: the
+Worker runs `resolveIdentity` on the upgrade request. A browser can't set
+`Authorization` on a WebSocket. That leaves gaps with the cookie default:
+
+- **WorkOS AuthKit** and **Auth0** hand the app an access token, not a cookie
+  on your API's domain, so their sockets would be anonymous.
+- **Clerk cross-origin**, with the API on another domain, gets no `__session`
+  cookie, and the upgrade's CSRF guard refuses cross-origin cookie upgrades
+  anyway.
+
+`authTokenOnUpgrade: true` closes both. The client offers the bearer as a
+WebSocket subprotocol:
+
+```
+Sec-WebSocket-Protocol: lunora, lunora.bearer.<base64url(token)>
+```
+
+The Worker lifts it into `Authorization` for `resolveIdentity` only, forwards
+only `lunora` to the Durable Object, and selects `lunora` on the handshake. The
+token never appears in a URL, where proxies would log it. It is a user
+credential only: it can't satisfy `LUNORA_WS_BEARER` or the admin checks,
+which read the forwarded request and the `connect` frame. A real
+`Authorization` header, as React Native sends, takes precedence.
+[`protocol/README.md` §6.1](https://github.com/anolilab/lunora/blob/alpha/protocol/README.md) has the details.
+
+A socket keeps the identity it upgraded with until its `exp`. A proactive
+refresh reconnects it warm before then, resuming each subscription from its
+cursor. If the refresh is late, the Durable Object closes the socket with
+`4001`, `onTokenExpired` fires, and the client reconnects with the fresh token.
+With Clerk's 60-second session tokens, either way that is one warm reconnect a
+minute per socket. Keep using Clerk's session token rather than a JWT template:
+Clerk leaves the session-bound claims (`sid`, `v`, `fea`, …) out of template
+tokens, and the preset reads them. To add claims of your own,
+[customize the session token](https://clerk.com/docs/guides/sessions/customize-session-tokens).
+For WorkOS, lengthen the access-token lifetime under **Sessions**.
+
+The bearer subprotocol is offered on the live-query socket and on
+`defineWebSocket` routes, whose upgrades the Worker answers selecting
+`lunora`. The scheduled-jobs admin socket never offers it.
+
+<Callout type="warn">
+    **A cross-origin API still needs `csrf.trustedOrigins`.** The upgrade's CSRF guard (`enforceWebSocketOrigin`) refuses any upgrade that carries a cookie from
+    an untrusted origin, whatever bearer it also offers. A browser attaches every `SameSite=None` cookie of the API's domain to the handshake, such as
+    Cloudflare's `__cf_bm` bot-management cookie, so with the frontend on another origin the upgrade gets a `403` unless that origin is listed in
+    `csrf.trustedOrigins`.
+</Callout>
+
+## RLS with org claims
+
+Every claim a preset maps lands on `auth.identity`. The `roles` claim, which
+RLS's `auth.roles` and `auth.can(...)` read, is app-wide, and no preset fills
+it from an organization role. That role belongs to one organization, and with
+Clerk any user can create an organization and become its `org:admin`. Copied
+into `roles`, it would satisfy every `defineRole("admin")` in the app.
+
+Check an org role together with the `orgId` it came with:
+
+```ts
+import { definePolicies, definePolicy, rls } from "lunorash/server";
+
+const orgNotes = definePolicies([
+    definePolicy({
+        table: "notes",
+        on: "read",
+        // Clerk: orgRole is "org:admin"; WorkOS: check `role` or `permissions` the same way.
+        when: ({ auth }) => {
+            const orgId = auth.identity?.orgId;
+
+            return auth.identity?.orgRole === "org:admin" && typeof orgId === "string" ? { orgId } : false;
+        },
+    }),
+]);
+
+export const listOrgNotes = query.use(rls(orgNotes)).query(({ ctx }) => ctx.db.query("notes").collect());
+```
+
+To give app-wide roles, map them deliberately with `claims`, from a claim
+that is not scoped to an organization the user controls, such as a Clerk
+public metadata field added to the session token or an Auth0 roles claim set
+by an Action:
+
+```ts
+clerk({ ...options, claims: (payload) => ({ roles: Array.isArray(payload.appRoles) ? payload.appRoles : [] }) });
+```
+
+## Memoization and revocation
+
+`resolveIdentity` runs once per RPC and once per fan-out leg. Verification is
+local once the JWKS is cached, but a burst still repeats it. Use
+`memoizeIdentityPerRequest` to deduplicate within one request, with no
+staleness. `memoizeIdentity(resolver, { ttlMs })` additionally reuses a result
+across requests for the same token.
+
+The memo lives in the resolver, so build it once. A framework-hosted app
+(`.buildFrameworkWorker(...)`) runs its `.extend` callbacks on every request,
+so a `memoizeIdentity(...)` written inline there starts each request with an
+empty cache. Keep one per `env` instead, which is what the registry items'
+`clerkIdentity(env)` / `workosIdentity(env)` / `auth0Identity(env)` do:
+
+```ts
+const resolvers = new WeakMap<object, IdentityResolver>();
+
+const identityFor = (env: Env): IdentityResolver => {
+    let resolver = resolvers.get(env);
+
+    if (resolver === undefined) {
+        resolver = memoizeIdentity(clerk({ publishableKey: env.CLERK_PUBLISHABLE_KEY, authorizedParties: env.CLERK_AUTHORIZED_PARTIES }));
+        resolvers.set(env, resolver);
+    }
+
+    return resolver;
+};
+```
+
+A JWT is valid until its `exp` whatever you do, and `ttlMs` adds at most its
+own length on top. A signed-out or revoked session therefore keeps resolving
+until the token expires: 60 seconds for Clerk, your configured lifetime for
+WorkOS, and 24 hours by default for Auth0 (86,400 seconds; shorten **Token
+Expiration** on your API). If you need fast revocation, keep the token
+lifetime short. With their default token sources the resolvers here read only
+`Authorization` and `Cookie`, so `memoizeIdentity`'s default cache key is safe
+for them. A custom `token` that reads another header needs a cache key that
+includes it.
+
+## Composing with `@lunora/auth` or Cloudflare Access
+
+`.extend()` receives the options assembled so far, so an external resolver can
+run ahead of `.auth()`'s session resolver without replacing it:
+
+```ts
+import { composeIdentityResolvers } from "lunorash/runtime";
+
+defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .auth({ d1: (env) => env.DB, options: authOptions })
+    .extend((env, derived) => ({
+        resolveIdentity: composeIdentityResolvers(
+            [workos({ clientId: env.WORKOS_CLIENT_ID }), derived.resolveIdentity].filter((resolver) => resolver !== undefined),
+        ),
+    }))
+    .build();
+```
+
+The first resolver to return an identity wins. A resolver that throws fails the
+request rather than falling through to a weaker one.
+
+## Walkthrough: Clerk
+
+1. `lunora registry add auth-clerk-jwt`, or `lunora init --auth=clerk` for a
+   new project. This scaffolds `lunora/identity/clerk.ts` and writes
+   `CLERK_PUBLISHABLE_KEY` and `CLERK_AUTHORIZED_PARTIES` into `.dev.vars`.
+2. In the Clerk dashboard, copy the publishable key. Enable Organizations if
+   you want org claims.
+3. Wire `resolveIdentity: clerkIdentity(env)` into the Worker.
+4. In the React app, install `@clerk/react`, wrap it in `<ClerkProvider>`, and
+   add the token bridge above.
+
+`examples/clerk-auth` is the complete app: per-user notes under RLS, an
+org-admin-only query, and live updates over the authenticated socket.
+
+## Walkthrough: WorkOS AuthKit
+
+1. `lunora registry add auth-workos-jwt`, or `lunora init --auth=workos`. This
+   scaffolds `lunora/identity/workos.ts` and writes `WORKOS_CLIENT_ID`.
+2. In the WorkOS dashboard, enable AuthKit, add your redirect URI and allowed
+   origin, and copy the client id.
+3. Wire `resolveIdentity: workosIdentity(env)` into the Worker.
+4. In the React app, install `@workos-inc/authkit-react` and wrap it in
+   `<AuthKitProvider clientId apiHostname>`. Hand `useAuth().getAccessToken` to
+   `setAuthTokenProvider` the same way, mapping `LoginRequiredError` to `null`,
+   keyed on `user.id` and `organizationId`.
+
+Where authkit-react keeps the refresh token depends on the host. On
+`localhost` it runs in `devMode` and keeps it in `localStorage`. In
+production, set `apiHostname` to a custom authentication domain you own, and
+the refresh token becomes a cookie on that domain. `WORKOS_AUTH_DOMAIN` on the
+Worker must name the same host as `VITE_WORKOS_API_HOSTNAME`: the client gets
+its tokens from there, and the Worker expects that host in `iss` and fetches
+the JWKS from it.
+
+`examples/workos-auth` is the complete app.
+
+## Walkthrough: Auth0
+
+1. `lunora registry add auth-auth0-jwt`, or `lunora init --auth=auth0`. This
+   scaffolds `lunora/identity/auth0.ts` and writes `AUTH0_DOMAIN` and
+   `AUTH0_AUDIENCE`.
+2. In the Auth0 dashboard, create an API (its identifier is the audience) and
+   a Single Page Application with your origin in the allowed callback, logout
+   and web origins. Enable refresh-token rotation for the SPA.
+3. Wire `resolveIdentity: auth0Identity(env)` into the Worker.
+4. In the React app, install `@auth0/auth0-react`, wrap it in
+   `<Auth0Provider>` as above, and hand `getAccessTokenSilently` to
+   `setAuthTokenProvider` with `user.sub` as the subject.
+
+## See also
+
+- [Authentication](/docs/concepts/authentication): `ctx.auth`, expired credentials, the client side.
+- [Row-level security](/docs/concepts/rls): policies, roles and permissions.
+- [Adopt in an existing app](/docs/concepts/adopt-in-an-existing-app): bridging any existing session authority.
+- [@lunora/jwt-auth](/docs/packages/jwt-auth): the full API.

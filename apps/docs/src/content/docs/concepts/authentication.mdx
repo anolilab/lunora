@@ -10,6 +10,10 @@ identity off `ctx.auth` (the same shape inside a `query`, a `mutation`, and an
 `action`) and use it to authorize work. Nothing else in a handler needs to know
 _how_ the caller proved who they are.
 
+`@lunora/auth` is one way to fill `ctx.auth`, not the only one. If Clerk, WorkOS,
+Auth0, Supabase or another OIDC provider already owns your sessions, verify its
+token instead. See [External auth](/docs/concepts/external-auth).
+
 ```ts
 import { mutation, v } from "@/lunora/_generated/server";
 
@@ -213,12 +217,16 @@ cases. The four states and what each one means are tabulated in the
 worth knowing about, and it gates as **authenticated**.
 
 `setToken(jwt)` stamps the bearer on every later **query, mutation and action**;
-`setToken(null)` signs out. A socket is authenticated once, at upgrade: on
-React Native the session bearer rides the upgrade's `Authorization` header, and
-in a browser the session cookie does. So `setAuthToken` reconnects the sockets
-when a credential replaces another user's, and on React Native also when one
-arrives on a signed-out client (a browser socket never carries the bearer, so
-it is left open). A same-user token refresh leaves the open socket as it is.
+`setToken(null)` signs out. A socket is authenticated once, at upgrade. In a
+browser the session cookie authenticates it by default. On React Native the
+session bearer rides the upgrade's `Authorization` header. A browser client
+created with `authTokenOnUpgrade: true` offers the bearer as a
+`Sec-WebSocket-Protocol` entry instead, which is how an
+[external identity provider](/docs/concepts/external-auth)'s token reaches a
+live query. `setAuthToken` always reconnects the sockets when a credential
+replaces another user's. When the bearer rides the upgrade, it also reconnects
+them when a bearer arrives on a signed-out client, and it bounces them warm on a
+same-user refresh. A cookie-session browser socket is left as it is.
 `client.setWsToken(token)` sends its value in the next `connect` frame and closes
 the shard sockets to force a reconnect. A server gated by `LUNORA_WS_BEARER`
 accepts only its one shared value there, so a per-user session needs an ungated
@@ -367,5 +375,7 @@ re-evaluate the policy under the socket's verified identity on each push.
 - [Row-level security](/docs/concepts/rls): turning `ctx.auth` into per-row
   authorization.
 - [Real-time](/docs/concepts/realtime): how identity is stamped on a live socket.
+- [External auth](/docs/concepts/external-auth): Clerk, WorkOS, Auth0, Supabase
+  or any OIDC JWT feeding `ctx.auth` without better-auth.
 - [@lunora/auth](/docs/packages/auth): full server configuration.
 - [@lunora/auth plugins](/docs/packages/auth/plugins): passkeys, org, admin, 2FA, and more.

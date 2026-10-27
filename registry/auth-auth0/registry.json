@@ -2,7 +2,7 @@
     "$schema": "../schema/registry-item.schema.json",
     "name": "auth-auth0",
     "title": "Auth — Auth0",
-    "description": "Sign in with Auth0 for Lunora auth. Wires Auth0 as an OIDC provider via better-auth's genericOAuth plugin, on top of the base `auth` item.",
+    "description": "Sign in with Auth0 for Lunora auth, with Lunora (better-auth) owning the session. Wires Auth0 as an OIDC provider via better-auth's genericOAuth plugin, on top of the base `auth` item. To let Auth0 own the session and only verify its access tokens, use auth-auth0-jwt instead.",
     "docs": "Add `auth0` to your auth instance's `plugins` array in lunora/auth/index.ts: `import { auth0 } from \"./auth0.js\"` then `plugins: [auth0(env)]`. Create a Regular Web Application in the Auth0 studio, set the Allowed Callback URL to `<BETTER_AUTH_URL>/api/auth/oauth2/callback/auth0`, and fill in AUTH0_CLIENT_ID / AUTH0_CLIENT_SECRET / AUTH0_DOMAIN.",
     "requires": ["auth"],
     "deps": {

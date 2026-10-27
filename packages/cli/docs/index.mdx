@@ -18,6 +18,7 @@ files are identical regardless of how they were produced.
 # Project
 lunora init [name] [-t <template>]      # scaffold a new project (default: react)
             [-i | --yes]                 #   offer (or skip) adding auth + email
+            [--auth <lunora|clerk|workos|auth0|none>]  #   choose the auth up front
 lunora add <auth|email>                 # add a feature to the current project
 lunora view                             # open the Lunora studio in your browser
 lunora docs [section]                   # open the docs site in your browser
@@ -204,6 +205,13 @@ Additional flags:
 - `--here`: add Lunora to an existing project (detect the framework, patch the config, scaffold `lunora/`, print per-framework wiring steps)
 - `-i` / `--interactive`: after scaffolding, offer to add authentication and transactional email. Defaults on when stdin is a TTY; never prompts in CI.
 - `-y` / `--yes`: scaffold only — skip every post-scaffold prompt (the auth/email offer, the dependency-install offer, and `git init`). The project is complete; run the printed install command yourself.
+- `--auth <lunora|clerk|workos|auth0|none>`: choose the auth. The interactive offer asks the same question first (default `none`).
+    - `lunora` is `@lunora/auth` (better-auth): users and sessions in your own D1, the same as `--add auth`. Interactively it asks for the provider (email & password, or Clerk / Auth0 as an OAuth login) and the D1 database name.
+    - `clerk`, `workos` and `auth0` let the provider own the session: init applies the `auth-clerk-jwt` / `auth-workos-jwt` / `auth-auth0-jwt` registry item (`@lunora/jwt-auth`, `lunora/identity/<provider>.ts`, the env vars in `.dev.vars`), wires the resolver as `resolveIdentity` (chained onto the entry's `defineApp()` builder, or a new `lunora.config.ts` `app` hook for a Vite-first app), turns on `authTokenOnUpgrade` where the app builds its `LunoraClient`, and prints the client snippet that hands the provider's token to `setAuthTokenProvider`. See [External auth](/docs/concepts/external-auth).
+    - `none` adds nothing.
+
+    Without a TTY (or with `--yes`), `--auth` is applied with its shipped defaults, like `--add`.
+
 - `--add <list>`: add features non-interactively after scaffolding — a comma-separated list of the values in the [`lunora add` table](#lunora-add), each applied with its shipped defaults. Bypasses the interactive picker and its sub-prompts.
 - `--dry-run`: walk every step (prompts and output included) without writing files, installing, or running git.
 - `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch **and** a `lunora deploy --preview` on every pull / merge request. Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables.

@@ -1647,6 +1647,14 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `AuthTokenFetcher` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `AuthTokenProviderOptions` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `AuthUser` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -2240,6 +2248,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `reconcileOptimistic` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `setAuthTokenProvider` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 

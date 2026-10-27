@@ -73,6 +73,20 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `AuthTokenFetcher` (type)
+
+```ts
+type AuthTokenFetcher = () => Promise<string | null>;
+```
+
+### `AuthTokenProviderOptions` (interface)
+
+```ts
+interface AuthTokenProviderOptions {
+    subject?: string | null;
+}
+```
+
 ### `AuthUser` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -1924,6 +1938,12 @@ const queryCacheKey: (functionPath: string, argsKey: string, shardKey?: string) 
 
 ```ts
 const reconcileOptimistic: (optimistic: ReadonlyArray<OptimisticMessage>, durable: ReadonlyArray<ReconcileDurableMessage>) => OptimisticMessage[];
+```
+
+### `setAuthTokenProvider` (const)
+
+```ts
+const setAuthTokenProvider: (client: LunoraClient, fetchToken: AuthTokenFetcher, options?: AuthTokenProviderOptions) => Unsubscribe;
 ```
 
 ### `subscribeLiveTopic` (const)
