@@ -125,6 +125,16 @@ you can see what was promised and never enqueued. That is the one case where a
 scheduled job is dropped without the mutation being rolled back — and it is
 reported rather than silent.
 
+Studio's **Schedule → Outbox** view lists what a shard is holding for the
+scheduler, retrying or parked. **Retry now** puts an entry back on the ladder
+from its first rung, which is how a parked job gets a second chance once the
+cause is fixed. **Drop** removes it for good, which is the only way to cancel a
+job the scheduler has not accepted: `ctx.scheduler.cancel(id)` reaches only
+jobs the `SchedulerDO` holds. Both are admin RPCs (`__lunora_admin__:retryOutboxEntry`
+and `dropOutboxEntry`), are recorded in the audit log, and act on one
+shard at a time. The MCP server's `lunora_get_schedule_outbox` tool reads the
+same list.
+
 ### Retry policy
 
 A job whose handler throws is retried by the `SchedulerDO`: five retries with
@@ -140,8 +150,9 @@ must eventually happen. Its delay stays between 1 second and 30 minutes whatever
 `baseMs`/`maxMs` say, and the same opt-in keeps it in the shard's custody past the
 eight attempts above: it is logged once at `warn` when it reaches that point and
 retried every 30 minutes after, until the scheduler accepts it. A call the
-scheduler refuses as invalid is still parked. A forever job can be cancelled once
-the scheduler holds it, not while it is waiting in custody. Only `SchedulerDO`
+scheduler refuses as invalid is still parked. While a forever job is still
+waiting in custody, drop it from the Outbox view; once the scheduler holds it,
+`ctx.scheduler.cancel(id)` works as usual. Only `SchedulerDO`
 hosts (Cloudflare and celld) support it; the Node scheduler host refuses it with
 `INVALID_INPUT`.
 

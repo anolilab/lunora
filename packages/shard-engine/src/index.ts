@@ -101,15 +101,18 @@ export { IDEMPOTENCY_TABLE, migrateIdempotency, readIdempotent, trimIdempotent, 
 export { clearMemoryTables, isMemoryTable, memoryTableNames } from "./ctx-db-memory";
 export type { RankPageComputation, RankPageDeps } from "./ctx-db-rank-page";
 export { computeRankPage, resolveRankSeekTuple } from "./ctx-db-rank-page";
-export type { ScheduleOutbox, ScheduleOutboxEnvelope, ScheduleOutboxRow } from "./ctx-db-schedule-outbox";
+export type { ScheduleOutbox, ScheduleOutboxEntry, ScheduleOutboxEnvelope, ScheduleOutboxRow } from "./ctx-db-schedule-outbox";
 export {
     deferScheduleOutbox,
+    dropScheduleOutbox,
     forgetScheduleOutbox,
     migrateScheduleOutbox,
     parkScheduleOutbox,
     probeScheduleOutbox,
     readDueScheduleOutbox,
+    readScheduleOutbox,
     recordScheduleOutbox,
+    requeueScheduleOutbox,
     SCHEDULE_OUTBOX_TABLE,
     trimScheduleOutbox,
 } from "./ctx-db-schedule-outbox";

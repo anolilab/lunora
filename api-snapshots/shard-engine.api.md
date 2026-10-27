@@ -32,6 +32,7 @@ const ADMIN_FUNCTIONS: {
     readonly deleteRows: "__lunora_admin__:deleteRows";
     readonly describeTable: "__lunora_admin__:describeTable";
     readonly describeTables: "__lunora_admin__:describeTables";
+    readonly dropOutboxEntry: "__lunora_admin__:dropOutboxEntry";
     readonly explainIssue: "__lunora_admin__:explainIssue";
     readonly exportShard: "__lunora_admin__:exportShard";
     readonly facetColumn: "__lunora_admin__:facetColumn";
@@ -46,6 +47,7 @@ const ADMIN_FUNCTIONS: {
     readonly getIssues: "__lunora_admin__:getIssues";
     readonly getMetricHistory: "__lunora_admin__:getMetricHistory";
     readonly getMetricSeries: "__lunora_admin__:getMetricSeries";
+    readonly getScheduleOutbox: "__lunora_admin__:getScheduleOutbox";
     readonly listSubscriptions: "__lunora_admin__:listSubscriptions";
     readonly listTableIndexes: "__lunora_admin__:listTableIndexes";
     readonly listTablesIndexes: "__lunora_admin__:listTablesIndexes";
@@ -81,6 +83,7 @@ const ADMIN_FUNCTIONS: {
     readonly recordQueueMessage: "__lunora_admin__:recordQueueMessage";
     readonly releaseShardRegistration: "__lunora_admin__:releaseShardRegistration";
     readonly replayQueueMessage: "__lunora_admin__:replayQueueMessage";
+    readonly retryOutboxEntry: "__lunora_admin__:retryOutboxEntry";
     readonly resolveIssue: "__lunora_admin__:resolveIssue";
     readonly rlsPolicies: "__lunora_admin__:rlsPolicies";
     readonly schemaHistory: "__lunora_admin__:schemaHistory";
@@ -2672,6 +2675,21 @@ interface ScheduleOutbox {
 }
 ```
 
+### `ScheduleOutboxEntry` (interface)
+
+```ts
+interface ScheduleOutboxEntry {
+    attempts: number;
+    createdAt: number;
+    forever: boolean;
+    id: string;
+    nextAttemptAt: number;
+    parked: boolean;
+    target: string | undefined;
+    when: number | undefined;
+}
+```
+
 ### `ScheduleOutboxEnvelope` (interface)
 
 ```ts
@@ -4221,6 +4239,12 @@ const diffGlobalMembership: (rows: ReadonlyArray<ShapeRow>, previous: ReadonlyMa
 const distinctValues: (rows: Record<string, unknown>[], field: string) => unknown[];
 ```
 
+### `dropScheduleOutbox` (const)
+
+```ts
+const dropScheduleOutbox: (sql: SqlExec, id: string) => boolean;
+```
+
 ### `encodeAggregateKey` (const)
 
 ```ts
@@ -5022,6 +5046,14 @@ const readQueueMessages: (sql: SqlExec, options?: ReadQueueMessagesOptions) => {
 const readReactorState: (sql: SqlExec, path: string) => ReactorState | undefined;
 ```
 
+### `readScheduleOutbox` (const)
+
+```ts
+const readScheduleOutbox: (sql: SqlExec, limit: number) => {
+    entries: ScheduleOutboxEntry[];
+};
+```
+
 ### `readSchemaHistory` (const)
 
 ```ts
@@ -5150,6 +5182,12 @@ const reprojectionMigrationId: (table: string) => string;
 
 ```ts
 const reprojectionTables: (schema: SchemaLike) => string[];
+```
+
+### `requeueScheduleOutbox` (const)
+
+```ts
+const requeueScheduleOutbox: (sql: SqlExec, id: string, now: number) => boolean;
 ```
 
 ### `resolvePatch` (const)

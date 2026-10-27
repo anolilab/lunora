@@ -7,7 +7,14 @@ import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_LIMIT, MAX_LIMIT, OBSERVABILITY_TOOL_DEFINITIONS } from "../src/observability-tools";
 import { callTool, toolDefinitions } from "../src/tools";
 
-const OBSERVABILITY_NAMES = ["lunora_get_logs", "lunora_get_issues", "lunora_get_advisories", "lunora_get_query_insights", "lunora_get_migration_status"];
+const OBSERVABILITY_NAMES = [
+    "lunora_get_logs",
+    "lunora_get_issues",
+    "lunora_get_advisories",
+    "lunora_get_query_insights",
+    "lunora_get_migration_status",
+    "lunora_get_schedule_outbox",
+];
 
 /** A log ring entry, as `__lunora_admin__:getLogs` returns it (newest first). */
 const logEntry = (index: number, level: string): Record<string, unknown> => {
@@ -31,7 +38,7 @@ const mockClient = (
 };
 
 describe("observability tool definitions", () => {
-    it("declares five tools, each read-only and carrying an outputSchema", () => {
+    it("declares six tools, each read-only and carrying an outputSchema", () => {
         expect.assertions(3);
 
         expect(OBSERVABILITY_TOOL_DEFINITIONS.map((tool) => tool.name)).toStrictEqual(OBSERVABILITY_NAMES);
@@ -325,6 +332,17 @@ describe("the remaining reads", () => {
         expect(mock.query).toHaveBeenCalledWith({ __lunoraRef: ADMIN_FUNCTIONS.migrationStatus }, {}, {});
         // Truncating this list would hide exactly the pending migration asked about.
         expect((result.structuredContent as { migrations: unknown[] }).migrations).toHaveLength(migrations.length);
+    });
+
+    it("lunora_get_schedule_outbox forwards the limit and shard to the outbox read", async () => {
+        expect.assertions(2);
+
+        const entries = [{ attempts: 9, forever: true, id: "job-1", parked: false, target: "billing:sync" }];
+        const mock = mockClient({ [ADMIN_FUNCTIONS.getScheduleOutbox]: { entries } });
+        const result = await callTool(mock.asClient, "lunora_get_schedule_outbox", { limit: 5, shardKey: "org-1" }, false, true);
+
+        expect(mock.query).toHaveBeenCalledWith({ __lunoraRef: ADMIN_FUNCTIONS.getScheduleOutbox }, { limit: 5 }, { shardKey: "org-1" });
+        expect(result.structuredContent).toStrictEqual({ entries });
     });
 
     it("surfaces a failed admin read as an error result rather than rejecting", async () => {

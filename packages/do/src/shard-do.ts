@@ -183,6 +183,7 @@ import {
     deleteShapePokeCursor,
     deleteShapePokeCursorsForConnection,
     diffGlobalMembership,
+    dropScheduleOutbox,
     DurableStreamRunner,
     envOptionalPositiveInt,
     envPositiveInt,
@@ -239,6 +240,7 @@ import {
     RELATION_FUNCTION_PREFIX,
     RELAY_SIGNATURE_HEADER,
     RelayMember,
+    requeueScheduleOutbox,
     runSocketPool,
     SCAN_DEP,
     selectExpiredIds,
@@ -376,6 +378,7 @@ import {
     parseRunMigrationArgs,
     parseSampleErrorsHeader,
     parseSampleRate,
+    parseScheduleOutboxEntryArgs,
     parseSendQueueMessageArgs,
     parseSendWorkflowEventArgs,
     parseSeverityArgument,
@@ -12033,6 +12036,44 @@ abstract class ShardDO {
         return adminResponse(result);
     }
 
+    /**
+     * Serve `dropOutboxEntry` — cancel a deferred schedule the scheduler never
+     * accepted, live or parked. `ctx.scheduler.cancel` only reaches jobs the
+     * SchedulerDO holds, so this is the only way to stop a `retry.forever` entry
+     * that is still waiting. Admin-gated by the caller.
+     */
+    private handleDropOutboxEntry(args: Record<string, unknown>): Response {
+        const { id } = parseScheduleOutboxEntryArgs("dropOutboxEntry", args);
+        const dropped = dropScheduleOutbox(this.sql as SqlExec, id);
+
+        if (dropped) {
+            this.recordAudit("dropOutboxEntry", { id });
+        }
+
+        return adminResponse({ dropped });
+    }
+
+    /**
+     * Serve `retryOutboxEntry` — put an entry back on the retry ladder, due now:
+     * the way back for a parked entry, and a way to skip a long backoff once the
+     * scheduler is healthy. Arms the poll alarm for now, because nothing else is
+     * due to wake a shard whose entries were all parked. Admin-gated by the caller.
+     */
+    private handleRetryOutboxEntry(args: Record<string, unknown>): Response {
+        const { id } = parseScheduleOutboxEntryArgs("retryOutboxEntry", args);
+        const now = Date.now();
+        const retried = requeueScheduleOutbox(this.sql as SqlExec, id, now);
+
+        if (retried) {
+            this.recordAudit("retryOutboxEntry", { id });
+            this.scheduleGlobalPoll(now).catch(() => {
+                /* the host could not arm; the next cold start probes again */
+            });
+        }
+
+        return adminResponse({ retried });
+    }
+
     /** Empty the dev queue consumed-message log (studio "clear log" action). Admin-gated by the caller. */
     private handleClearQueueMessages(): Response {
         const result = clearQueueMessages(this.shardHost.sql);
@@ -12174,6 +12215,7 @@ abstract class ShardDO {
             [ADMIN_FUNCTIONS.clearCapturedMail]: () => this.handleClearCapturedMail(),
             [ADMIN_FUNCTIONS.clearQueueMessages]: () => this.handleClearQueueMessages(),
             [ADMIN_FUNCTIONS.createWorkflowInstance]: (args) => this.handleCreateWorkflowInstance(args),
+            [ADMIN_FUNCTIONS.dropOutboxEntry]: (args) => this.handleDropOutboxEntry(args),
             [ADMIN_FUNCTIONS.explainIssue]: (args) => this.handleExplainIssue(args),
             [ADMIN_FUNCTIONS.getWorkflowInstanceStatus]: (args) => this.handleGetWorkflowInstanceStatus(args),
             [ADMIN_FUNCTIONS.listFlags]: (args) => this.handleListFlags(args),
@@ -12184,6 +12226,7 @@ abstract class ShardDO {
             [ADMIN_FUNCTIONS.recordQueueMessage]: (args) => this.handleRecordQueueMessage(args),
             [ADMIN_FUNCTIONS.releaseShardRegistration]: (args) => this.handleReleaseShardRegistration(args),
             [ADMIN_FUNCTIONS.replayQueueMessage]: (args) => this.handleReplayQueueMessage(args),
+            [ADMIN_FUNCTIONS.retryOutboxEntry]: (args) => this.handleRetryOutboxEntry(args),
             [ADMIN_FUNCTIONS.sendQueueMessage]: (args) => this.handleSendQueueMessage(args),
             [ADMIN_FUNCTIONS.sendTestMail]: (args) => this.handleSendTestMail(args),
             [ADMIN_FUNCTIONS.sendWorkflowEvent]: (args) => this.handleSendWorkflowEvent(args),

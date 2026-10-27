@@ -28,6 +28,7 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-schedule-outbox" mirrors its parent "ctx-db.ts" (the established public module name). */
 
+import { isPlainObject } from "@lunora/wire";
 import { sql as dsql } from "drizzle-orm";
 
 import type { SqlExec } from "./ctx-db";
@@ -45,6 +46,27 @@ interface ScheduleOutboxRow {
     id: string;
     /** Wall-clock millis the next retry becomes due. */
     nextAttemptAt: number;
+}
+
+/**
+ * One entry as served by `getScheduleOutbox`. The stored `args` are left out:
+ * the operator decides by target, age and state, and the envelope keeps them
+ * for the replay.
+ */
+interface ScheduleOutboxEntry {
+    attempts: number;
+    createdAt: number;
+    /** Whether the call asked for `retry.forever`, which keeps it live past the attempt ceiling. */
+    forever: boolean;
+    id: string;
+    /** When the next attempt is due. Meaningless once `parked`. */
+    nextAttemptAt: number;
+    /** Retries stopped: the attempts ran out or the scheduler refused the call. */
+    parked: boolean;
+    /** The function path or workflow class, or `undefined` when the envelope is unreadable. */
+    target: string | undefined;
+    /** The instant the job was asked to fire at. */
+    when: number | undefined;
 }
 
 /**
@@ -226,15 +248,116 @@ const trimScheduleOutbox = (sql: SqlExec, olderThanTs: number): void => {
     runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)} WHERE dead = 1 AND created_at < ${olderThanTs}`);
 };
 
+/** The target a stored envelope names, for display: a function path or a workflow class. */
+const describeTarget = (target: unknown): string | undefined => {
+    if (typeof target === "string") {
+        return target;
+    }
+
+    if (!isPlainObject(target)) {
+        return undefined;
+    }
+
+    if (typeof target["__lunoraRef"] === "string") {
+        return target["__lunoraRef"];
+    }
+
+    return typeof target["className"] === "string" ? target["className"] : undefined;
+};
+
+const toEntry = (row: {
+    attempts: number;
+    created_at: number;
+    dead: number;
+    envelope_json: string;
+    id: string;
+    next_attempt_at: number;
+}): ScheduleOutboxEntry => {
+    let envelope: Record<string, unknown> | undefined;
+
+    try {
+        const parsed: unknown = JSON.parse(row.envelope_json);
+
+        envelope = isPlainObject(parsed) ? parsed : undefined;
+    } catch {
+        // An unreadable envelope is still an entry the operator has to be able to see and drop.
+        envelope = undefined;
+    }
+
+    const options = envelope?.["options"];
+    const retry = isPlainObject(options) ? options["retry"] : undefined;
+    const when = envelope?.["when"];
+
+    return {
+        attempts: row.attempts,
+        createdAt: row.created_at,
+        forever: isPlainObject(retry) && retry["forever"] === true,
+        id: row.id,
+        nextAttemptAt: row.next_attempt_at,
+        parked: row.dead === 1,
+        target: describeTarget(envelope?.["target"]),
+        when: typeof when === "number" ? when : undefined,
+    };
+};
+
+/**
+ * Every entry, live first and then parked, each oldest first: what an operator
+ * needs to find a job that was promised and has not reached the scheduler.
+ */
+const readScheduleOutbox = (sql: SqlExec, limit: number): { entries: ScheduleOutboxEntry[] } => {
+    const rows = runDrizzle<{ attempts: number; created_at: number; dead: number; envelope_json: string; id: string; next_attempt_at: number }>(
+        sql,
+        dsql`SELECT id, envelope_json, attempts, next_attempt_at, created_at, dead FROM ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)}
+            ORDER BY dead ASC, created_at ASC, id ASC LIMIT ${limit}`,
+    ).toArray();
+
+    return { entries: rows.map((row) => toEntry(row)) };
+};
+
+const hasScheduleOutboxEntry = (sql: SqlExec, id: string): boolean =>
+    runDrizzle<{ id: string }>(sql, dsql`SELECT id FROM ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)} WHERE id = ${id}`).toArray().length > 0;
+
+/**
+ * Put an entry back on the retry ladder from its first rung, due at `now`. The
+ * way back from a park, and the way to skip a long backoff once the scheduler is
+ * known to be healthy again.
+ */
+const requeueScheduleOutbox = (sql: SqlExec, id: string, now: number): boolean => {
+    if (!hasScheduleOutboxEntry(sql, id)) {
+        return false;
+    }
+
+    runDrizzle(sql, dsql`UPDATE ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)} SET attempts = 0, next_attempt_at = ${now}, dead = 0 WHERE id = ${id}`);
+
+    return true;
+};
+
+/**
+ * Drop an entry for good, live or parked: the way to cancel a job the scheduler
+ * never accepted, which `ctx.scheduler.cancel` cannot reach.
+ */
+const dropScheduleOutbox = (sql: SqlExec, id: string): boolean => {
+    if (!hasScheduleOutboxEntry(sql, id)) {
+        return false;
+    }
+
+    forgetScheduleOutbox(sql, id);
+
+    return true;
+};
+
 export {
     deferScheduleOutbox,
+    dropScheduleOutbox,
     forgetScheduleOutbox,
     migrateScheduleOutbox,
     parkScheduleOutbox,
     probeScheduleOutbox,
     readDueScheduleOutbox,
+    readScheduleOutbox,
     recordScheduleOutbox,
+    requeueScheduleOutbox,
     SCHEDULE_OUTBOX_TABLE,
     trimScheduleOutbox,
 };
-export type { ScheduleOutbox, ScheduleOutboxEnvelope, ScheduleOutboxRow };
+export type { ScheduleOutbox, ScheduleOutboxEntry, ScheduleOutboxEnvelope, ScheduleOutboxRow };
