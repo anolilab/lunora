@@ -1181,6 +1181,10 @@ const sweepSqlCdcRetention = async (exec: SqlCtxExec, dialect: SqlDialect, reten
         }
     }
 
+    // `+ts` keeps the planner off `__cdc_log_ts` here: with no statistics (D1 never runs ANALYZE) it could
+    // range-scan every expired row through that index and sort by `seq`, rather than walk `seq` and stop at
+    // the limit.
+    //
     // Bounded per pass for the same reason the shard-local sweep is: the first
     // sweep after an operator enables retention faces the entire accumulated
     // log, and an unbounded DELETE that aborts leaves no progress behind.
@@ -1200,7 +1204,7 @@ const sweepSqlCdcRetention = async (exec: SqlCtxExec, dialect: SqlDialect, reten
         sql`
             DELETE FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("seq")} IN (
                         SELECT ${sql.identifier("seq")} FROM (
-                            SELECT ${sql.identifier("seq")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("ts")} <= ${cutoff} ORDER BY ${sql.identifier("seq")} ASC LIMIT ${sql.raw(String(GLOBAL_CDC_SWEEP_MAX_ROWS))}
+                            SELECT ${sql.identifier("seq")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE +${sql.identifier("ts")} <= ${cutoff} ORDER BY ${sql.identifier("seq")} ASC LIMIT ${sql.raw(String(GLOBAL_CDC_SWEEP_MAX_ROWS))}
                         ) AS ${sql.identifier("expired")}
                     )
         `,
@@ -1645,11 +1649,19 @@ const provisioningByScope = new WeakMap<object, Promise<void>>();
  */
 const companionBackfillsByScope = new WeakMap<object, Map<string, CompanionBackfill>>();
 
+/**
+ * Rebuilds a companion. It resolves to {@link COMPANION_SUPERSEDED} when it stopped because a newer run (or an
+ * eviction) took over its key, in which case the companion was not filled and the caller must not trust it.
+ */
+type CompanionRebuild = (superseded: () => boolean) => Promise<boolean | typeof COMPANION_SUPERSEDED>;
+
+const COMPANION_SUPERSEDED = "superseded";
+
 /** A scope's companion rebuild: the writer that started it, the definition it built, and whether it has settled. */
 interface CompanionBackfill {
     definition: string;
     owner: object;
-    run: Promise<boolean>;
+    run: Promise<boolean | typeof COMPANION_SUPERSEDED>;
     settled: boolean;
 }
 
@@ -1998,8 +2010,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * Each run is passed a check for whether it still owns `key`. A run that was replaced (or evicted) stops
      * before its next companion write, so it cannot interleave its DELETE-then-INSERT with its replacement's.
      */
-    const startBackfill = (key: string, definition: string, rebuild: (superseded: () => boolean) => Promise<boolean>): Promise<boolean> => {
-        const run = (async (): Promise<boolean> => {
+    const startBackfill = (key: string, definition: string, rebuild: CompanionRebuild): Promise<boolean | typeof COMPANION_SUPERSEDED> => {
+        const run = (async (): Promise<boolean | typeof COMPANION_SUPERSEDED> => {
             await ensureMigrated();
 
             return await rebuild(() => backfills.get(key)?.run !== run);
@@ -2035,7 +2047,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * most {@link COMPANION_BACKFILL_WAIT_MS}, then replaced by this writer's own.
      * A run of another definition is waited on the same way, then rebuilt over.
      */
-    const backfillOnce = async (key: string, definition: string, rebuild: (superseded: () => boolean) => Promise<boolean>): Promise<boolean> => {
+    const backfillAttempt = async (key: string, definition: string, rebuild: CompanionRebuild): Promise<boolean | typeof COMPANION_SUPERSEDED> => {
         const cached = backfills.get(key);
 
         if (cached === undefined) {
@@ -2064,7 +2076,15 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return outcome;
         }
 
-        return backfills.get(key) === cached ? await startBackfill(key, definition, rebuild) : await backfillOnce(key, definition, rebuild);
+        return backfills.get(key) === cached ? await startBackfill(key, definition, rebuild) : await backfillAttempt(key, definition, rebuild);
+    };
+
+    const backfillOnce = async (key: string, definition: string, rebuild: CompanionRebuild): Promise<boolean> => {
+        const outcome = await backfillAttempt(key, definition, rebuild);
+
+        // A superseded run may have emptied the companion without refilling it: report its replacement's outcome,
+        // or rebuild if the key was evicted with none.
+        return outcome === COMPANION_SUPERSEDED ? await backfillOnce(key, definition, rebuild) : outcome;
     };
 
     /**
@@ -2105,7 +2125,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * table's primary key) with a fixed batch size, so a large global table
      * never has to fit in a single result buffer.
      */
-    const rebuildCounter = async (tableName: string, index: AggregateIndexDefinitionLike, superseded: () => boolean): Promise<boolean> => {
+    const rebuildCounter = async (
+        tableName: string,
+        index: AggregateIndexDefinitionLike,
+        superseded: () => boolean,
+    ): Promise<boolean | typeof COMPANION_SUPERSEDED> => {
         const definition = schema.tables[tableName];
 
         if (!definition || !(await counterTableExists(tableName, index.name))) {
@@ -2131,9 +2155,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         const aggTable = aggregateTableName(tableName, index.name);
 
-        // A replaced run leaves the companion to its replacement; it still exists, so `true` stays accurate.
         if (superseded()) {
-            return true;
+            return COMPANION_SUPERSEDED;
         }
 
         await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(aggTable)}`);
@@ -2153,7 +2176,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             await queryBatch(exec, dialect, inserts);
         }
 
-        return true;
+        return superseded() ? COMPANION_SUPERSEDED : true;
     };
 
     const ensureBackfilled = (tableName: string, index: AggregateIndexDefinitionLike): Promise<boolean> =>
@@ -2505,7 +2528,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * before the next one is read, so neither the buffered `SQL` objects nor the
      * dispatched batch ever grows to the row count.
      */
-    const rebuildRankCompanion = async (tableName: string, index: RankIndexDefinitionLike, superseded: () => boolean): Promise<boolean> => {
+    const rebuildRankCompanion = async (
+        tableName: string,
+        index: RankIndexDefinitionLike,
+        superseded: () => boolean,
+    ): Promise<boolean | typeof COMPANION_SUPERSEDED> => {
         const definition = schema.tables[tableName];
 
         if (!definition || !(await rankTableExists(tableName, index.name))) {
@@ -2515,7 +2542,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const rankTable = rankTableName(tableName, index.name);
 
         if (superseded()) {
-            return true;
+            return COMPANION_SUPERSEDED;
         }
 
         await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(rankTable)}`);
@@ -2571,7 +2598,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         await flush();
 
-        return true;
+        return superseded() ? COMPANION_SUPERSEDED : true;
     };
 
     const ensureRankBackfilled = (tableName: string, index: RankIndexDefinitionLike): Promise<boolean> =>

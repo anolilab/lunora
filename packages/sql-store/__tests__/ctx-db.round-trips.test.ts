@@ -301,6 +301,75 @@ describe("createSqlCtxDb — companion rebuilds", () => {
         }
     });
 
+    it("makes a replaced rebuild's caller wait for the replacement rather than trust the emptied companion", async () => {
+        // The replaced run stops before refilling the companion, so its `true` would mean "ready" over a table
+        // its replacement is still filling.
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        try {
+            const provisionScope = {};
+            const gate = (): { exec: SqlCtxExec; release: () => void } => {
+                let release: () => void = () => {};
+                const opened = new Promise<void>((resolve) => {
+                    release = resolve;
+                });
+                let held = false;
+
+                return {
+                    exec: {
+                        ...harness.exec,
+                        all: async (query, parameters) => {
+                            if (isSourcePage(query) && !held) {
+                                held = true;
+                                await opened;
+                            }
+
+                            return await harness.exec.all(query, parameters);
+                        },
+                    },
+                    release,
+                };
+            };
+            const seed = createSqlCtxDb({ clock: () => 1, dialect, exec: harness.exec, provisionScope: {}, schema: companionSchema });
+
+            await seed.insert("notes", { org: "a", score: 1 });
+
+            const stalled = gate();
+            const replacement = gate();
+            const first = createSqlCtxDb({ clock: () => 1, dialect, exec: stalled.exec, provisionScope, schema: companionSchema }).count("notes", {
+                org: "a",
+            });
+            const counted = createSqlCtxDb({ clock: () => 2, dialect, exec: replacement.exec, provisionScope, schema: companionSchema }).count("notes", {
+                org: "a",
+            });
+
+            await vi.advanceTimersByTimeAsync(30_000);
+
+            // The replaced run resumes and stops without writing; the replacement has not filled the counter yet.
+            let settled = false;
+
+            first
+                .then(() => {
+                    settled = true;
+
+                    return undefined;
+                })
+                .catch(() => undefined);
+            stalled.release();
+            await vi.advanceTimersByTimeAsync(10);
+
+            expect(settled).toBe(false);
+
+            replacement.release();
+
+            await expect(Promise.all([first, counted])).resolves.toStrictEqual([1, 1]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("rebuilds a companion whose definition changed under the same name", async () => {
         // A writer built against the new definition would otherwise trust contents tallied under the old one.
         expect.assertions(2);
