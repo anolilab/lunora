@@ -933,7 +933,7 @@ describe("createWorker — admin import endpoint", () => {
     describe("onConflict=replace", () => {
         const replaceImport = async (
             url: string,
-            workerOptions: { importGlobalsSupportsDryRun?: boolean; importGlobalsSupportsReplace?: boolean },
+            workerOptions: { importGlobals?: never; importGlobalsSupportsDryRun?: boolean; importGlobalsSupportsReplace?: boolean },
         ): Promise<{ body: Record<string, unknown>; importGlobals: ReturnType<typeof vi.fn>; status: number }> => {
             const importGlobals = vi.fn<(request: { onConflict?: string }) => Promise<unknown>>(async () => {
                 return { conflicts: 0, errors: [], inserted: {}, replaced: 1 };
@@ -1000,6 +1000,15 @@ describe("createWorker — admin import endpoint", () => {
 
             expect(status).toBe(400);
             expect(importGlobals).not.toHaveBeenCalled();
+            expect(orchestrateImport).not.toHaveBeenCalled();
+        });
+
+        it("refuses the whole import (400) when no global importer is configured, before any shard row is overwritten", async () => {
+            expect.assertions(2);
+
+            const { status } = await replaceImport("https://app.example/_lunora/admin/import?onConflict=replace", { importGlobals: undefined });
+
+            expect(status).toBe(400);
             expect(orchestrateImport).not.toHaveBeenCalled();
         });
 

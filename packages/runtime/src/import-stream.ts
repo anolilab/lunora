@@ -317,11 +317,15 @@ const streamingImport = async (
 
     // Refused before the shard fan-out, not per row after it: shard rows would already have been
     // overwritten by the time the global plane said it cannot replace, and that is not undoable.
-    if (onConflict === "replace" && globalRows.length > 0 && options.importGlobals !== undefined && options.importGlobalsSupportsReplace !== true) {
-        throw new LunoraError("onConflict=replace: the configured `importGlobals` cannot overwrite existing rows, so nothing was imported", {
-            code: "BAD_REQUEST",
-            status: 400,
-        });
+    // A missing importer is the same case: it can never replace, and would only say so after the shards were written.
+    if (onConflict === "replace" && globalRows.length > 0 && (options.importGlobals === undefined || options.importGlobalsSupportsReplace !== true)) {
+        throw new LunoraError(
+            "onConflict=replace: global rows are present but no `importGlobals` that can overwrite existing rows is configured, so nothing was imported",
+            {
+                code: "BAD_REQUEST",
+                status: 400,
+            },
+        );
     }
 
     const totals: ImportTotals = { conflicts: 0, errors, failed: [], inserted: {}, replaced: 0 };

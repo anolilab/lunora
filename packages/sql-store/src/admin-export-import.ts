@@ -338,7 +338,7 @@ const writeRow = async (
 
             delete fields["_id"];
 
-            await writer.replace(existingId, fields, table, { allowExplicitId: true });
+            await writer.replace(table, existingId, fields, { allowExplicitId: true });
 
             return { kind: "replaced" };
         }

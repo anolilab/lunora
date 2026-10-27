@@ -13,7 +13,10 @@ const migrateCommand: Command = {
         ["lunora migrate status backfill-names --format json", "Same, as a single JSON document on stdout"],
         ["lunora migrate d1-to-hyperdrive --from-url https://old --to-url https://new", "Copy .global() data from D1 to Hyperdrive"],
         ["lunora migrate hyperdrive-to-d1 --from-url https://new --to-url https://old", "Roll .global() data back from Hyperdrive to D1"],
-        ["lunora migrate hyperdrive-to-d1 --from-url https://new --to-url https://old --replace --yes", "Roll back, overwriting rows D1 already holds"],
+        [
+            "lunora migrate hyperdrive-to-d1 --from-url https://new --to-url https://old --tables settings --replace --yes",
+            "Roll back, overwriting rows D1 already holds",
+        ],
     ],
     group: "Data",
     loader: () =>

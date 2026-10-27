@@ -84,8 +84,8 @@ const roundTripCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
     // An unset optional column is SQL NULL on disk and must export as absent, not `null`.
     expect(exported[0]?.doc).not.toHaveProperty("note");
 
-    await writer.delete("a1", "assets");
-    await writer.delete("a2", "assets");
+    await writer.delete("assets", "a1");
+    await writer.delete("assets", "a2");
 
     const result = await importHyperdriveGlobalRows({ cdc: false, engine: target.engine, exec: target.exec, rows: exported, schema });
 
@@ -255,14 +255,14 @@ const cdcCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
     const writer = writerFor(target, true);
 
     await writer.insert("extras", { _id: "x1", label: "one" }, { allowExplicitId: true });
-    await writer.patch("x1", { label: "two" });
+    await writer.patch("extras", "x1", { label: "two" });
 
     const page = await readHyperdriveGlobalCdc(target.engine, target.exec, { sinceSeq: 0 });
 
     expect(page.changes.map((change) => change.op)).toStrictEqual(["insert", "update"]);
 
     // Point-in-time apply: replaying the log onto a database that lost the row restores it.
-    await writer.delete("x1", "extras");
+    await writer.delete("extras", "x1");
 
     const replayed = await applyHyperdriveGlobalCdc({ cdc: false, changes: page.changes, engine: target.engine, exec: target.exec, schema });
 

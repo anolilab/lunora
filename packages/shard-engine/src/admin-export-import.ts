@@ -355,7 +355,7 @@ const importOneRow = async (
 
             delete fields["_id"];
 
-            await writer.replace(explicitId, fields, table, { allowExplicitId: true });
+            await writer.replace(table, explicitId, fields, { allowExplicitId: true });
 
             return { kind: "replaced" };
         } catch (error: unknown) {
