@@ -1,6 +1,6 @@
 import { bench, describe } from "vitest";
 
-import { decodeWire, encodeWire, stableWireKey } from "../src";
+import { decodeDocument, decodeWire, encodeWire, parseWire, stableWireKey } from "../src";
 
 // A query result shaped like a typical subscription payload: pure JSON, which is
 // what nearly every frame carries, so the plain-object/array path dominates.
@@ -35,6 +35,32 @@ describe("encodeWire", () => {
 describe("decodeWire", () => {
     bench("200-row query result", () => {
         decodeWire(encodedRows);
+    });
+});
+
+const rowsText = JSON.stringify(encodedRows);
+const taggedRowsText = JSON.stringify(
+    encodeWire(
+        rows.map((row, index) => {
+            return { ...row, version: BigInt(index) };
+        }),
+    ),
+);
+const documentText = JSON.stringify(rows[0]);
+
+describe("parseWire", () => {
+    bench("200-row query result", () => {
+        parseWire(rowsText);
+    });
+
+    bench("200-row query result with a bigint per row", () => {
+        parseWire(taggedRowsText);
+    });
+});
+
+describe("decodeDocument", () => {
+    bench("one stored row", () => {
+        decodeDocument(documentText);
     });
 });
 
