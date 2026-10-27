@@ -9,29 +9,32 @@ const fnRef = (path: string): FunctionReference => {
 };
 
 interface Opened {
+    options?: unknown;
     protocols: string[] | undefined;
     url: string;
 }
 
 /** A WebSocket double that only records how it was constructed. */
 const recordingWebSocket = (opened: Opened[]): typeof WebSocket =>
-    /* eslint-disable class-methods-use-this -- an inert socket double: only the constructor arguments matter. */
     class {
         public readyState = 0;
 
-        public constructor(url: string, protocols?: string[]) {
-            opened.push({ protocols, url });
+        public constructor(url: string, protocols?: string[], options?: unknown) {
+            opened.push({ options, protocols, url });
         }
 
+        // eslint-disable-next-line class-methods-use-this -- an inert socket double: only the constructor arguments matter
         public addEventListener(): void {}
 
+        // eslint-disable-next-line class-methods-use-this -- an inert socket double: only the constructor arguments matter
         public close(): void {}
 
+        // eslint-disable-next-line class-methods-use-this -- an inert socket double: only the constructor arguments matter
         public removeEventListener(): void {}
 
+        // eslint-disable-next-line class-methods-use-this -- an inert socket double: only the constructor arguments matter
         public send(): void {}
     } as unknown as typeof WebSocket;
-/* eslint-enable class-methods-use-this */
 
 const clientWith = (authTokenOnUpgrade: boolean, token: string, opened: Opened[]): LunoraClient => {
     const client = new LunoraClient({
@@ -80,24 +83,27 @@ describe("lunoraClient — bearer on the WebSocket upgrade", () => {
         expect(openWith(false, "tok").protocols).toBeUndefined();
     });
 
-    it("offers the bearer from getWebSocketImpl, for sockets opened outside the client (voice agents)", () => {
-        expect.assertions(3);
+    it("offers the bearer from getWebSocketImpl to the client's own host only, keeping later arguments", () => {
+        expect.assertions(2);
 
         const opened: Opened[] = [];
         const client = clientWith(true, "tok", opened);
-        const WebSocketImpl = client.getWebSocketImpl() as typeof WebSocket;
-        // A socket naming its own subprotocols keeps them.
+        const WebSocketImpl = client.getWebSocketImpl() as unknown as new (url: string, protocols?: string[], options?: unknown) => WebSocket;
+        // A socket naming its own subprotocols keeps them; another host never sees the bearer.
         const sockets = [
-            new WebSocketImpl("ws://app.test/_lunora/voice/support?threadKey=t1"),
+            new WebSocketImpl("ws://app.test/_lunora/voice/support?threadKey=t1", undefined, { headers: { "x-app": "1" } }),
             new WebSocketImpl("ws://app.test/_lunora/voice/support", ["chat.v2"]),
+            new WebSocketImpl("wss://elsewhere.example/socket"),
         ];
 
         client.close();
 
-        expect(sockets).toHaveLength(2);
-
-        expect(decodeBearerProtocol(opened[0]?.protocols?.[1] ?? "")).toBe("tok");
-        expect(opened[1]?.protocols).toStrictEqual(["chat.v2"]);
+        expect(sockets).toHaveLength(3);
+        expect(opened.map((entry) => [decodeBearerProtocol(entry.protocols?.[1] ?? ""), entry.protocols, entry.options])).toStrictEqual([
+            ["tok", expect.any(Array), { headers: { "x-app": "1" } }],
+            [undefined, ["chat.v2"], undefined],
+            [undefined, undefined, undefined],
+        ]);
     });
 
     it("offers the bearer on a defineWebSocket route, which the worker's upgrade handler answers", () => {

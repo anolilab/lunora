@@ -2743,9 +2743,11 @@ class LunoraClient {
      * upgrade request (`createLunoraClient`'s `withAuthWebSocket`), which a raw
      * `new globalThis.WebSocket(url)` would silently bypass.
      *
-     * A socket constructed without its own subprotocols offers this client's
-     * bearer the way the client's sockets do (see `authTokenOnUpgrade`), read at
-     * construction so it is the token current when the socket opens.
+     * A socket to this client's own WebSocket host, constructed without its own
+     * subprotocols, offers this client's bearer the way the client's sockets do
+     * (see `authTokenOnUpgrade`), read at construction so it is the token current
+     * when the socket opens. Any other host gets its arguments untouched: the
+     * bearer is a Lunora credential.
      */
     public getWebSocketImpl(): typeof WebSocket | undefined {
         const { WebSocketImpl } = this;
@@ -2754,9 +2756,13 @@ class LunoraClient {
             return undefined;
         }
 
+        const ownHost = parseSocketUrl(this.wsUrl).host;
+        // React Native's constructor takes a third `{ headers }` argument, forwarded as given.
+        const Construct = WebSocketImpl as unknown as new (url: string | URL, protocols?: string | string[], ...rest: unknown[]) => WebSocket;
+
         return new Proxy(WebSocketImpl, {
-            construct: (target, [url, protocols]: [string | URL, (string | string[])?]) =>
-                Reflect.construct(target, [url, protocols ?? this.upgradeProtocols()]),
+            construct: (_target, [url, protocols, ...rest]: [string | URL, (string | string[])?, ...unknown[]]) =>
+                new Construct(url, protocols ?? (parseSocketUrl(String(url)).host === ownHost ? this.upgradeProtocols() : undefined), ...rest),
         });
     }
 
