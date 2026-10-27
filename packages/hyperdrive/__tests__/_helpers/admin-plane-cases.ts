@@ -274,6 +274,19 @@ const keylessJsonTablePagingCase = (target: AdminPlaneTarget) => async (): Promi
     expect(page.rows.map((row) => row["kind"])).toStrictEqual(["a", "b"]);
 };
 
+const d1PrefixedTableCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
+    // `d1_*` names D1's own internals only on D1; on Postgres or MySQL it is an ordinary table.
+    await target.query("CREATE TABLE d1_orders (id VARCHAR(8) PRIMARY KEY, total INTEGER)");
+    await target.query("INSERT INTO d1_orders (id, total) VALUES ('o1', 3)");
+
+    const introspector = createHyperdriveGlobalIntrospector(target.engine, target.exec, schema);
+
+    const tables = await introspector.listTables();
+
+    expect(tables.map((table) => table.name)).toContain("d1_orders");
+    await expect(introspector.readTablePage({ table: "d1_orders" })).resolves.toMatchObject({ total: 1 });
+};
+
 const cdcCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
     // No changelog yet is "nothing has changed", not an error, and the cursor stays put.
     await expect(readHyperdriveGlobalCdc(target.engine, target.exec, { sinceSeq: 7 })).resolves.toStrictEqual({ changes: [], cursor: 7 });
@@ -308,6 +321,7 @@ const adminPlaneCases = (target: AdminPlaneTarget): [string, () => Promise<void>
     ["shows external tables keyed by their own primary key, with secrets masked and foreign keys named", externalTablesCase(target)],
     ["pages a keyless external table in a stable order even when its first column ties", keylessTablePagingCase(target)],
     ["pages a keyless external table that has a native json column", keylessJsonTablePagingCase(target)],
+    ["lists and reads an external table whose name starts with d1_", d1PrefixedTableCase(target)],
     ["reads and replays the global changelog", cdcCase(target)],
 ];
 

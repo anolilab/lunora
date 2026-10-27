@@ -158,6 +158,14 @@ describe("d1 introspect", () => {
             expect(page.total).toBe(2);
         });
 
+        it("answers a huge or non-finite offset with an empty page rather than invalid SQL", async () => {
+            // Inlined as a literal, 1e21 would print as `1e+21` and NaN as `NaN`, neither of which parses.
+            expect.assertions(2);
+
+            await expect(readGlobalTablePage(harness.exec, schema, { offset: 1e21, table: "organizations" })).resolves.toMatchObject({ rows: [], total: 2 });
+            await expect(readGlobalTablePage(harness.exec, schema, { offset: Number.NaN, table: "organizations" })).resolves.toMatchObject({ total: 2 });
+        });
+
         it("recovers an external table's foreign keys as a column→table ref map", async () => {
             expect.assertions(2);
 

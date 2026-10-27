@@ -12,7 +12,7 @@ import sqliteDialect from "./sqlite-dialect";
 const exportGlobalRows = (exec: SqlCtxExec, schema: SchemaLike, args: ExportGlobalArgs): AsyncGenerator<ExportRow, void, undefined> =>
     exportSqlGlobalRows(exec, schema, sqliteDialect, args);
 
-/** Insert snapshot rows into D1 `.global()` tables; an existing `_id` is a conflict, left unchanged. */
+/** Insert snapshot rows into D1 `.global()` tables; an existing `_id` is a conflict left unchanged unless `args.onConflict` is `"replace"`, which overwrites it. */
 const importGlobalRows = (writer: DatabaseWriterLike, schema: SchemaLike, args: ImportGlobalArgs): Promise<ImportResult> =>
     importSqlGlobalRows(writer, schema, sqliteDialect, args);
 

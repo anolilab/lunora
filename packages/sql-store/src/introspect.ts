@@ -132,14 +132,22 @@ const MAX_FACET_LIMIT = 200;
 const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
 
 /**
+ * A paging bound as a whole number in `[min, max]`, or `fallback` when it is not finite. Limits and offsets are inlined
+ * as SQL literals, so a NaN would print as `NaN` and a huge value as `1e+21`, both invalid SQL.
+ */
+const pagingBound = (value: number | undefined, fallback: number, min: number, max: number): number =>
+    clamp(Math.trunc(value !== undefined && Number.isFinite(value) ? value : fallback), min, max);
+
+/**
  * Bookkeeping tables that must never surface in the browser: everything the
  * shard browser also hides ({@link isInternalTableName} — SQLite and Cloudflare
  * internals, every `__`-prefixed framework table such as `@lunora/d1`'s
  * `__drizzle_migrations`, every index companion), plus D1's own `d1_*`
- * internals. Everything else — the schema's `.global()` tables and any
- * external/auth tables — is fair game.
+ * internals — on the SQLite/D1 catalog only, since a Postgres or MySQL table may
+ * legitimately carry that prefix. Everything else — the schema's `.global()`
+ * tables and any external/auth tables — is fair game.
  */
-const isInternalTable = (name: string): boolean => isInternalTableName(name) || name.startsWith("d1_");
+const isInternalTable = (name: string, dialect: SqlDialect): boolean => isInternalTableName(name) || (dialect.name === "sqlite" && name.startsWith("d1_"));
 
 /** `information_schema`'s scope for the connection's own schema/database, so a shared server never shows another database's tables. */
 const schemaScope = (dialect: SqlDialect): SQL => (dialect.name === "postgres" ? sql`current_schema()` : sql`DATABASE()`);
@@ -254,7 +262,7 @@ const globalTableDefinition = (schema: SchemaLike, table: string): SchemaLike["t
 const listTableNames = async (exec: SqlContextExec, dialect: SqlDialect): Promise<string[]> => {
     const names = await catalog.tables(exec, dialect);
 
-    return names.filter((name) => !isInternalTable(name));
+    return names.filter((name) => !isInternalTable(name, dialect));
 };
 
 /**
@@ -569,8 +577,8 @@ const readSqlGlobalTablePage = async (
 
     await assertBrowsableTable(exec, dialect, schema, table);
 
-    const limit = clamp(Math.trunc(options.limit ?? DEFAULT_PAGE_SIZE), 1, MAX_PAGE_SIZE);
-    const offset = Math.max(0, Math.trunc(options.offset ?? 0));
+    const limit = pagingBound(options.limit, DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE);
+    const offset = pagingBound(options.offset, 0, 0, Number.MAX_SAFE_INTEGER);
     const columns = await resolveColumns(exec, dialect, schema, table);
     const { bound, where } = buildEqPredicate(schema, table, columns, options.filters);
 
@@ -653,7 +661,7 @@ const facetSqlGlobalColumn = async (
         return { truncated: false, values: total === 0 ? [] : [{ count: total, value: "•••" }] };
     }
 
-    const limit = clamp(Math.trunc(options.limit ?? DEFAULT_FACET_LIMIT), 1, MAX_FACET_LIMIT);
+    const limit = pagingBound(options.limit, DEFAULT_FACET_LIMIT, 1, MAX_FACET_LIMIT);
     const physical = sql.identifier(physicalColumnName(schema, table, column));
 
     // Over-fetch one row past the cap to detect (and report) truncation. The
