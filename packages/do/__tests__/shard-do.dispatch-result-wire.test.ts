@@ -261,6 +261,38 @@ describe("shardDO dispatch result wire", () => {
         }
     });
 
+    it("answers a committed mutation from the copy it encoded, not by reading the live result again", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            runShardMigrations(database.sql, messagesSchema, { cdc: true });
+
+            const shard = new WritingMutationShard(makeTransactionalState(database), {}, database);
+            let reads = 0;
+
+            // JSON-safe for two reads, then a bigint `JSON.stringify` cannot write. A
+            // response built from the live object would make that third read after
+            // the commit, and fail the reply of a write that already stands.
+            shard.value = {
+                get amount(): bigint | number {
+                    reads += 1;
+
+                    return reads <= 2 ? 500 : 500n;
+                },
+            };
+
+            const response = await shard.fetch(rpc("payments:charge", { "x-lunora-userid": "u1" }));
+
+            expect(response.status).toBe(200);
+            expect((database.sql.exec("SELECT COUNT(*) AS n FROM messages").one() as { n: number }).n).toBe(1);
+            await expect(response.json()).resolves.toMatchObject({ result: { amount: 500 } });
+        } finally {
+            database.close();
+        }
+    });
+
     it("rolls a mutation back when its return value cannot be wire-encoded, and names the value", async () => {
         expect.assertions(6);
 

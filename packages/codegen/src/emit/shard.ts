@@ -453,7 +453,7 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     // RLS middleware share one implementation (no drift). Only needed when the
     // project declares tables (otherwise no facade is built).
     if (hasTables) {
-        importLines.push(`import { bindOrm, bindTableFacade } from "${base.server}";`);
+        importLines.push(`import type { FacadeEntry } from "${base.server}";`, `import { bindOrm, defineLazyFacade } from "${base.server}";`);
     }
 
     if (hasVectorIndexes) {
@@ -889,7 +889,7 @@ ${sourceBootstrap}${ttlBootstrap}        }
     const shardDispatchMethods = dispatchMethods(hasRooms, lazyFunctions);
 
     const facadeBlock = hasTables
-        ? `\n            const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
+        ? `\n            const facade = db as unknown as Record<string, FacadeEntry>;
 ${schema.tables
     .map(
         // Always bind through `db` (the shard ctx-db) — even for `.global()`
@@ -898,7 +898,10 @@ ${schema.tables
         // drive live subscriptions; binding a global facade straight to `globalDb`
         // would skip those, so a `ctx.db.<global>` read/write would never refresh
         // a subscriber of that table.
-        (table) => `            facade[${JSON.stringify(table.name)}] = bindTableFacade(db, ${JSON.stringify(table.name)});`,
+        //
+        // Lazy: a bound facade is a few dozen closures, built per table on every
+        // dispatch, and a handler typically touches one or two tables.
+        (table) => `            defineLazyFacade(db, ${JSON.stringify(table.name)});`,
     )
     .join("\n")}
 `
@@ -1045,6 +1048,17 @@ export interface ShardDOConfig {
     storage?: (env: Record<string, unknown>, origin?: string) => unknown;${vectorsConfigField}${capabilityWiring.configFields}${flagsFragments.configField}${paymentsConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}${sourceClientConfigField}${shardRegistryFragments.configField}
 }
 ${renderThrowingStub("schedulerStub", schedulerMissing, ["cancel", "runAfter", "runAt"])}${renderThrowingStub("storageStub", storageMissing, ["createMultipartUpload", "delete", "download", "generateUploadUrl", "getMetadata", "getPresignedUrl", "getSignedUrl", "getUrl", "head", "list", "resumeMultipartUpload", "store", "upload"], { sync: ["getUrl", "resumeMultipartUpload"] })}${globalDatabaseStub}${sourceClientCacheConst}${vectorsStub}${capabilityWiring.stubs}${paymentStub}
+// \`ctx.fetch\` is action-only. A query is re-run by every live subscription and a
+// mutation may be replayed, so a network call in either returns a different answer
+// on each run. Refused at runtime, not only linted: the advisor sees just the call
+// sites it can read, and a call inside a dependency is invisible to it.
+// Synchronous on purpose: an async refusal only rejects a promise the handler may
+// discard, and the handler would then return normally. A sync throw surfaces at the call.
+// Module scope: it captures nothing, so one instance serves every dispatch.
+const refuseFetch = (): never => {
+    throw new LunoraError("FORBIDDEN", "ctx.fetch is action-only: network I/O belongs in an action, not a query or mutation");
+};
+
 ${dispatchRun}
 
 /**

@@ -423,15 +423,24 @@ export interface OrmLike {
  * the first read swaps the getter for the bound value so identity is stable.
  */
 export const defineLazyFacade = (target: FacadeWriterLike, tableName: string): void => {
+    const dataProperty = (value: unknown): PropertyDescriptor => {
+        return { configurable: true, enumerable: true, value, writable: true };
+    };
+
     Object.defineProperty(target, tableName, {
         configurable: true,
         enumerable: true,
         get() {
             const bound = bindTableFacade(target, tableName);
 
-            Object.defineProperty(target, tableName, { configurable: true, enumerable: true, value: bound, writable: false });
+            Object.defineProperty(target, tableName, dataProperty(bound));
 
             return bound;
+        },
+        // Assignment behaves as on a writable data property: on an object that
+        // inherits from `target` it shadows the facade rather than replacing it.
+        set(this: object, value: unknown) {
+            Object.defineProperty(this, tableName, dataProperty(value));
         },
     });
 };

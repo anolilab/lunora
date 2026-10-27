@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { subscriptionFrames } from "../src/subscription-delivery";
 
@@ -272,5 +272,100 @@ describe("subscriptionFrames — paginated results", () => {
         ).toStrictEqual(["data"]);
         // The same fields as a plain object ARE diffed — the prototype is the only difference.
         expect(typesOf(paginatedFrames(paginated(page(20)), paginated(changedPage), true))).toStrictEqual(["delta"]);
+    });
+});
+
+describe("subscriptionFrames — sockets sharing one result", () => {
+    it("renders each socket's own envelope around the shared diff", () => {
+        expect.assertions(2);
+
+        // One flush hands every socket on a deduped run the SAME result object;
+        // the diff is shared between them, the per-socket envelope is not.
+        const previous = Array.from({ length: 20 }, (_, index) => row(`r${String(index)}`));
+        const next = [...previous, row("new")];
+        const shared = { nextResult: next, previousJson: JSON.stringify(previous), snapshotJson: JSON.stringify(next), table: "messages" };
+        const delta = `"delta":{"key":"new","op":"insert","row":{"_creationTime":1,"_id":"new"},"table":"messages"}`;
+
+        expect(subscriptionFrames({ ...shared, cursorSuffix: "", subId: "a" })).toStrictEqual([`{"type":"delta","id":"a",${delta}}`]);
+        expect(subscriptionFrames({ ...shared, cursorSuffix: `,"cursor":9,"epoch":"e"`, lastMutationId: 3, subId: "b" })).toStrictEqual([
+            `{"type":"delta","id":"b",${delta},"lastMutationId":3,"cursor":9,"epoch":"e"}`,
+        ]);
+    });
+
+    it("computes the diff once for sockets sharing a result, table and baseline", () => {
+        expect.assertions(2);
+
+        // The diff parses its baseline once, so counting parses of that exact string
+        // counts diffs. A memo that stopped sharing would parse it once per socket.
+        const previous = Array.from({ length: 20 }, (_, index) => row(`shared-${String(index)}`));
+        const next = [...previous, row("shared-new")];
+        const previousJson = JSON.stringify(previous);
+        const otherBaseline = JSON.stringify(previous.slice(0, 19));
+        // One run's outcome, which every socket the run serves passes as its key.
+        const diffKey = {};
+        const parse = vi.spyOn(JSON, "parse");
+
+        try {
+            for (const subId of ["a", "b", "c"]) {
+                subscriptionFrames({ cursorSuffix: "", diffKey, nextResult: next, previousJson, snapshotJson: JSON.stringify(next), subId, table: "messages" });
+            }
+
+            expect(parse.mock.calls.filter(([text]) => text === previousJson)).toHaveLength(1);
+
+            subscriptionFrames({
+                cursorSuffix: "",
+                diffKey,
+                nextResult: next,
+                previousJson: otherBaseline,
+                snapshotJson: JSON.stringify(next),
+                subId: "d",
+                table: "messages",
+            });
+
+            expect(parse.mock.calls.filter(([text]) => text === otherBaseline)).toHaveLength(1);
+        } finally {
+            parse.mockRestore();
+        }
+    });
+
+    it("diffs a result the handler edited in place again on the next run", () => {
+        expect.assertions(2);
+
+        // A handler may return the same array on every run and edit it in place;
+        // only the run's outcome, new each time, may carry its diff forward.
+        const previous = Array.from({ length: 20 }, (_, index) => row(`inplace-${String(index)}`));
+        const previousJson = JSON.stringify(previous);
+        const live = [...previous, row("inplace-a")];
+        const frame = (diffKey: object): string[] =>
+            subscriptionFrames({
+                cursorSuffix: "",
+                diffKey,
+                nextResult: live,
+                previousJson,
+                snapshotJson: JSON.stringify(live),
+                subId: "s",
+                table: "messages",
+            });
+
+        expect(frame({}).join("")).toContain(`"key":"inplace-a"`);
+
+        live[20] = row("inplace-b");
+
+        expect(frame({}).join("")).toContain(`"key":"inplace-b"`);
+    });
+
+    it("diffs the same result separately against each distinct baseline and table", () => {
+        expect.assertions(3);
+
+        const previous = Array.from({ length: 20 }, (_, index) => row(`r${String(index)}`));
+        const next = [...previous, row("new")];
+        const shared = { cursorSuffix: "", nextResult: next, snapshotJson: JSON.stringify(next), subId: "s" };
+
+        // The baseline already holds every row: nothing to diff, so the snapshot goes out.
+        expect(typesOf(subscriptionFrames({ ...shared, previousJson: JSON.stringify(next), table: "messages" }))).toStrictEqual(["data"]);
+        // An older baseline on the same result gets its own delta.
+        expect(typesOf(subscriptionFrames({ ...shared, previousJson: JSON.stringify(previous), table: "messages" }))).toStrictEqual(["delta"]);
+        // Same baseline, other table: the table is part of the delta body.
+        expect(subscriptionFrames({ ...shared, previousJson: JSON.stringify(previous), table: "notes" })[0]).toContain(`"table":"notes"`);
     });
 });

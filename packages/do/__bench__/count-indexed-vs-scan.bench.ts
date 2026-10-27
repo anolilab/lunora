@@ -78,17 +78,16 @@ const scanSchema = makeSchema();
 runShardMigrations(scanHarness.sql, scanSchema);
 const scanWriter = createShardContextDatabase({ schema: scanSchema, sql: scanHarness.sql });
 
-describe("count() — indexed vs scan", () => {
-    // Seed in beforeAll: CodSpeed's instrumented runner (@codspeed/vitest-plugin)
-    // runs each bench against the suite's beforeAll/beforeEach hooks but does NOT
-    // pick up module-top-level await state, so a top-level seed leaves the bench
-    // querying an empty DB. beforeAll is honored in both the plain `vitest bench`
-    // runner and CodSpeed's analysis runner.
-    beforeAll(async () => {
-        await seed(indexedWriter);
-        await seed(scanWriter);
-    });
+// Seed in a file-level beforeAll. CodSpeed's instrumented runner does not pick up module-top-level await state, and
+// vitest's own bench runner skips hooks registered inside a `describe` (its `runBenchmarkSuite` recurses into
+// sub-suites without running their hooks), which left every arm here timing a count over an empty table. A file-level
+// hook runs under both.
+beforeAll(async () => {
+    await seed(indexedWriter);
+    await seed(scanWriter);
+});
 
+describe("count() — indexed vs scan", () => {
     bench("indexed: count by projectId (companion lookup)", async () => {
         await indexedWriter.count("todos", { where: { projectId: "p5" } });
     });

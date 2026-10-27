@@ -123,15 +123,16 @@ const readModifyWrite = async (store: RateLimitStore, ts: number): Promise<void>
 
 let clock = 0;
 
-describe("db store: get()+set() index lookups per consuming call", () => {
-    // Seed in beforeAll: CodSpeed's instrumented runner honors beforeAll but does
-    // NOT pick up module-top-level await state, so a top-level seed would leave the
-    // benches scanning empty tables.
-    beforeAll(async () => {
-        await seed(legacyStore);
-        await seed(currentStore);
-    });
+// Seed in a file-level beforeAll. CodSpeed's instrumented runner does not pick up module-top-level await state, and
+// vitest's own bench runner skips hooks registered inside a `describe` (its `runBenchmarkSuite` recurses into
+// sub-suites without running their hooks), which left both arms scanning empty tables. A file-level hook runs under
+// both.
+beforeAll(async () => {
+    await seed(legacyStore);
+    await seed(currentStore);
+});
 
+describe("db store: get()+set() index lookups per consuming call", () => {
     bench("legacy: find in get + find in set (2 scans)", async () => {
         clock += 1;
         await readModifyWrite(legacyStore, clock);

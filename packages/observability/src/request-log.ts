@@ -40,11 +40,13 @@ import type { SqlExec } from "@lunora/shard-engine";
 import { createRedactor, standardRules } from "@visulima/redact";
 
 import { maskCredentials } from "../../../shared/credential-redaction";
+import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { LogEvent } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields, stringifyFieldValue } from "../../../shared/log-fields";
 import type { IssueSeverity, IssueStatus } from "./issue-state";
 import { readIssueStates } from "./issue-state";
+import { isSmallJsonData } from "./json-data";
 import { pruneOncePerWindow } from "./prune-marker";
 import { runSql } from "./run-sql";
 
@@ -946,6 +948,83 @@ const cacheHitColumn = (cacheHit: boolean | undefined): null | number => {
     return cacheHit ? 1 : 0;
 };
 
+/** How many redacted request-log values {@link rememberedRedaction} keeps per isolate. */
+const REDACTED_JSON_MEMO_ENTRIES = 256;
+
+/**
+ * The longest input (as JSON) {@link rememberedRedaction} keeps; a larger one is
+ * redacted every time. The key is the caller's unredacted text, so this also
+ * caps how much raw input the memo holds per entry.
+ */
+const REDACTED_JSON_MEMO_MAX_CHARS = 1024;
+
+/** One input's redaction, as the durable row stores it and as the Logpush event embeds it. */
+interface RedactedValue {
+    json: string;
+    value: unknown;
+}
+
+const redactedJsonMemo = new Map<string, RedactedValue>();
+
+/**
+ * `redactArgs(value)`, as text and as a value, remembered per input; `undefined`
+ * for an input the memo does not take.
+ *
+ * The redactor walks every key against the rule list and runs its value regexes
+ * over every string, which costs 5–30 µs for an ordinary args object or identity
+ * on the Durable Object's only thread — more than the rest of a cached query.
+ * Its output depends on nothing but its input, and the same inputs recur: one
+ * caller's identity on every request, one channel's query args from every
+ * subscriber, and the durable write and the event of one dispatch. So the
+ * redaction is kept for each input text, but only for small, pure JSON data (see
+ * {@link isSmallJsonData}), whose text identifies it exactly; a large payload is
+ * never stringified for a key. Oldest entry out.
+ */
+const rememberedRedaction = (value: unknown): RedactedValue | undefined => {
+    if (!isSmallJsonData(value, REDACTED_JSON_MEMO_MAX_CHARS)) {
+        return undefined;
+    }
+
+    const key = JSON.stringify(value);
+
+    // The one size limit. `isSmallJsonData` charges at most the text's length, so
+    // it can pass a value whose text is longer (escapes, long numerals); this
+    // check is what bounds an entry.
+    if (key.length > REDACTED_JSON_MEMO_MAX_CHARS) {
+        return undefined;
+    }
+
+    const remembered = redactedJsonMemo.get(key);
+
+    if (remembered !== undefined) {
+        return remembered;
+    }
+
+    const json = JSON.stringify(redactArgs(value));
+    // Parsed from the text rather than kept from the redactor, so the memo owns the
+    // value outright and nothing a caller still holds can change a later hit.
+    const redacted: RedactedValue = { json, value: JSON.parse(json) as unknown };
+
+    evictOldestEntry(redactedJsonMemo, REDACTED_JSON_MEMO_ENTRIES);
+    redactedJsonMemo.set(key, redacted);
+
+    return redacted;
+};
+
+/** `JSON.stringify(redactArgs(value, captureRaw))`, through the memo when it takes `value`. */
+const redactedJson = (value: unknown, captureRaw: boolean): string => {
+    const remembered = captureRaw ? undefined : rememberedRedaction(value);
+
+    return remembered === undefined ? JSON.stringify(redactArgs(value, captureRaw)) : remembered.json;
+};
+
+/** `redactArgs(value, captureRaw)`, through the memo when it takes `value`. */
+const redactedValue = (value: unknown, captureRaw: boolean): unknown => {
+    const remembered = captureRaw ? undefined : rememberedRedaction(value);
+
+    return remembered === undefined ? redactArgs(value, captureRaw) : remembered.value;
+};
+
 /**
  * Append one dispatch to the request log, then — once per
  * {@link REQUEST_LOG_PRUNE_WINDOW_MS} window — trim the log back to the most
@@ -995,9 +1074,9 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
         // `user_id` column above stays raw; it's the non-PII correlation key the
         // `getRequestLog` filters key on.
         // eslint-disable-next-line unicorn/no-null -- anonymous request or no claims attached.
-        entry.identity === undefined ? null : JSON.stringify(redactArgs(entry.identity, captureRaw)),
+        entry.identity === undefined ? null : redactedJson(entry.identity, captureRaw),
         // eslint-disable-next-line unicorn/no-null -- no args were sent on this dispatch.
-        entry.redactedArgs === undefined ? null : JSON.stringify(redactArgs(entry.redactedArgs, captureRaw)),
+        entry.redactedArgs === undefined ? null : redactedJson(entry.redactedArgs, captureRaw),
         entry.outcome,
         // eslint-disable-next-line unicorn/no-null -- success path: no error message. Redacted like args/identity — see the module docstring on `redactArgs`.
         entry.errorMessage === undefined ? null : redactArgs(entry.errorMessage, captureRaw),
@@ -1049,7 +1128,7 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
 const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWriteOptions = {}): void => {
     const captureRaw = options.captureRaw ?? false;
     const event = {
-        args: entry.redactedArgs === undefined ? undefined : redactArgs(entry.redactedArgs, captureRaw),
+        args: entry.redactedArgs === undefined ? undefined : redactedValue(entry.redactedArgs, captureRaw),
         cacheHit: entry.cacheHit,
         // Deploy attribution on EVERY invocation, so "did this start with a
         // specific deploy?" is a group-by in the Workers Logs Query Builder
@@ -1059,7 +1138,7 @@ const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWr
         durationMs: entry.durationMs,
         error: entry.errorMessage === undefined ? undefined : redactArgs(entry.errorMessage, captureRaw),
         function: entry.functionPath,
-        identity: entry.identity === undefined ? undefined : redactArgs(entry.identity, captureRaw),
+        identity: entry.identity === undefined ? undefined : redactedValue(entry.identity, captureRaw),
         outcome: entry.outcome,
         // Search Cloudflare Traces / Workers Logs by it to reach the platform's
         // view of this request. Absent off the edge.

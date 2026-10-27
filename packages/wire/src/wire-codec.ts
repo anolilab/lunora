@@ -143,6 +143,21 @@ const setField = (target: Record<string, unknown>, key: string, fieldValue: unkn
     }
 };
 
+// Through the descriptor, like an object field: a getter element would run here and
+// again in the caller's `JSON.stringify`, so an accessor goes to the encoder, which
+// reads it once. A hole is skipped, as `Array#some` skips it.
+const arrayElementsNeedEncoding = (value: ReadonlyArray<unknown>, needs: (item: unknown) => boolean): boolean => {
+    for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, index);
+
+        if (descriptor !== undefined && (!("value" in descriptor) || descriptor.value === undefined || needs(descriptor.value))) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
 /**
  * Would {@link encodeWire} change this value, or is it already the JSON it will
  * become?
@@ -175,13 +190,9 @@ const needsWireEncoding = (value: unknown, depth = 0): boolean => {
         return true;
     }
 
-    if (value === null) {
-        return false;
-    }
-
     const kind = typeof value;
 
-    if (kind === "string" || kind === "boolean") {
+    if (value === null || kind === "string" || kind === "boolean") {
         return false;
     }
 
@@ -197,6 +208,13 @@ const needsWireEncoding = (value: unknown, depth = 0): boolean => {
         return true;
     }
 
+    // `JSON.stringify` calls a `toJSON` — own (even non-enumerable) or inherited —
+    // where `encodeWire` copies only the enumerable fields, so the two disagree.
+    // `in`, not a read: a `toJSON` getter must not run here.
+    if ("toJSON" in (value as object)) {
+        return true;
+    }
+
     if (Array.isArray(value)) {
         // An array whose first element IS the sentinel gets wrapped as an
         // `"arr"` payload. Only a string equal to the sentinel encodes to it, so
@@ -209,7 +227,7 @@ const needsWireEncoding = (value: unknown, depth = 0): boolean => {
         // `undefined` in an array POSITION is tagged, where `JSON.stringify`
         // would write `null` — the one place the two disagree on a value both
         // can represent.
-        return value.some((item) => item === undefined || needsWireEncoding(item, depth + 1));
+        return arrayElementsNeedEncoding(value, (item) => needsWireEncoding(item, depth + 1));
     }
 
     if (!isPlainObject(value)) {
@@ -226,16 +244,14 @@ const needsWireEncoding = (value: unknown, depth = 0): boolean => {
         return true;
     }
 
-    for (const key of Object.keys(value)) {
-        const field = value[key];
+    // Read through the descriptor: a getter would run here and again when the
+    // caller stringifies the original, so an accessor is never identity and the
+    // encoder reads it once. Both sides drop an `undefined` field.
+    return Object.keys(value).some((key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
 
-        // Both sides drop an `undefined` object field, so it is not a difference.
-        if (field !== undefined && needsWireEncoding(field, depth + 1)) {
-            return true;
-        }
-    }
-
-    return false;
+        return descriptor === undefined || !("value" in descriptor) || (descriptor.value !== undefined && needsWireEncoding(descriptor.value, depth + 1));
+    });
 };
 
 const encodeBigint = (value: bigint): unknown[] => {

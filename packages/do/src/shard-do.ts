@@ -264,7 +264,7 @@ import {
     writeShapePokeCursors,
     writeTouchesMemo,
 } from "@lunora/shard-engine";
-import { decodeWire, encodeWire, isPlainObject } from "@lunora/wire";
+import { decodeWire, encodeWire, isPlainObject, needsWireEncoding } from "@lunora/wire";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
@@ -441,6 +441,9 @@ const loadSqlAssistant = () => import("./sql-assistant");
  */
 const adminResponse = (result: unknown): Response => jsonResponse({ result: encodeWire(result) }, 200);
 
+const wireEncodeFailure = (error: unknown): LunoraError =>
+    new LunoraError("WIRE_ENCODE_FAILED", error instanceof Error ? error.message : String(error), { cause: error });
+
 /**
  * Wire-encode a dispatch's return value, turning the codec's refusal into a
  * coded, non-redacted `WIRE_ENCODE_FAILED` so the handler author sees WHICH
@@ -459,12 +462,31 @@ const adminResponse = (result: unknown): Response => jsonResponse({ result: enco
  * committed — so an unencodable return committed its writes, wrote no dedup row,
  * and answered 500. `RPC_FAILED` is not a transient code, so the client dropped
  * the write as failed while the effect stood, and a retry re-applied it.
+ *
+ * It always takes a copy: a mutation's response is serialized AFTER the commit,
+ * where the live object would read its getters a second time, and a value that
+ * has since turned unencodable (a bigint) would fail the reply of a write that
+ * already stands.
  */
 const encodeDispatchResult = (result: unknown): unknown => {
     try {
         return encodeWire(result);
     } catch (error: unknown) {
-        throw new LunoraError("WIRE_ENCODE_FAILED", error instanceof Error ? error.message : String(error), { cause: error });
+        throw wireEncodeFailure(error);
+    }
+};
+
+/**
+ * The query and action form of {@link encodeDispatchResult}. Every consumer
+ * stringifies the result straight away, and for a value `needsWireEncoding`
+ * clears that string is the same either way, so the deep copy `encodeWire` would
+ * build only to be serialized is skipped.
+ */
+const encodeReadResult = (result: unknown): unknown => {
+    try {
+        return needsWireEncoding(result) ? encodeWire(result) : result;
+    } catch (error: unknown) {
+        throw wireEncodeFailure(error);
     }
 };
 
@@ -1680,6 +1702,21 @@ const countLiveConnections = (
 const socketIdentity = (attachment: SocketAttachment): SubscriptionIdentity => {
     // A copy: the attachment is shared with the socket cache, and user code receives this object.
     return { identity: attachment.identity === undefined ? undefined : structuredClone(attachment.identity), ip: attachment.ip, userId: attachment.userId };
+};
+
+/**
+ * A thunk returning one `structuredClone(args)`, made on its first call. User
+ * code must not reach a socket's stored args, and a refresh that never runs
+ * user code (backoff, a memo skip, a shared run) skips the clone.
+ */
+const cloneArgsOnFirstUse = (args: Record<string, unknown>): (() => Record<string, unknown>) => {
+    let copy: Record<string, unknown> | undefined;
+
+    return () => {
+        copy ??= structuredClone(args);
+
+        return copy;
+    };
 };
 
 /** Canonical string of EVERY {@link SubscriptionIdentity} field: sockets share a live-query run only when it is equal. */
@@ -3199,6 +3236,21 @@ abstract class ShardDO {
     private instrumentedSql: undefined | { proxy: unknown; samples: Map<string, StmtSample> };
 
     /**
+     * Memos for {@link ShardDO.cdcEnabled} and {@link ShardDO.cachedCdcEpoch},
+     * which every flush and resume consults.
+     *
+     * Instance fields, never module state: a native PITR restore reverts
+     * `__cdc_meta` but only takes effect when the object restarts, so a fresh
+     * instance is what guarantees the restored row is read. Presence is
+     * remembered only once TRUE — a migration creates `__cdc_log` mid-instance,
+     * and nothing outside a restore drops it, so a cached `false` is the one
+     * answer that can go stale.
+     */
+    private cdcLogPresent = false;
+
+    private cdcEpochCache: string | undefined;
+
+    /**
      * Set when `currentStmtSamples` hit {@link MAX_STMT_SAMPLES_PER_DISPATCH}
      * distinct statements and a brand-new shape was dropped this dispatch.
      * Folded onto the dispatch's wide event as `db.stmt_samples_truncated`
@@ -4385,6 +4437,8 @@ abstract class ShardDO {
             // that still held it would skip the re-check on the next write. Here rather
             // than in the RPC catch, so every caller (reactors included) is covered.
             this.invalidateCompanionMemo();
+            // Same for an epoch minted or bumped, or a `__cdc_log` migrated, inside it.
+            this.invalidateCdcMetaCache();
 
             throw error;
         }
@@ -5105,9 +5159,8 @@ abstract class ShardDO {
      */
     protected runShardCdcSync(args: RunShardCdcSyncArgs): { changes: CdcChange[]; cursor: number; epoch?: string } {
         const sql = this.sql as SqlExec;
-        const present = sql.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, CDC_LOG_TABLE).toArray().length > 0;
 
-        if (!present) {
+        if (!this.cdcEnabled()) {
             // No changelog, so no timeline to name. The field is omitted rather
             // than guessed, matching {@link ShardDO.currentCdcEpoch} — and a
             // `sinceEpoch` cannot be judged against a shard that has never had
@@ -5139,7 +5192,7 @@ abstract class ShardDO {
         const cursor = readCdcCursor(sql);
         // Read once: it gates the echo guard below AND is stamped on the page
         // this returns, so a served consumer never costs a second read.
-        const epoch = readCdcEpoch(sql);
+        const epoch = this.cachedCdcEpoch();
 
         // Echo guard, ahead of the watermark one because it answers a strictly
         // longer-lived question. The watermark proof expires — a rewound log
@@ -5257,7 +5310,7 @@ abstract class ShardDO {
      * the wire byte-identical to the pre-epoch format for non-CDC apps.
      */
     protected currentCdcEpoch(): string | undefined {
-        return this.cdcEnabled() ? readCdcEpoch(this.sql as SqlExec) : undefined;
+        return this.cdcEnabled() ? this.cachedCdcEpoch() : undefined;
     }
 
     /**
@@ -5338,12 +5391,12 @@ abstract class ShardDO {
         if (this.forkSealed) {
             // Already sealed this wake: hand back the epoch minted then, so the
             // caller still stamps the post-fork timeline on its refusal.
-            return readCdcEpoch(this.sql as SqlExec);
+            return this.cachedCdcEpoch();
         }
 
         this.forkSealed = true;
 
-        return bumpCdcEpoch(this.sql as SqlExec);
+        return this.bumpCdcEpochUncached();
     }
 
     /**
@@ -5379,7 +5432,7 @@ abstract class ShardDO {
         const cursor = readCdcCursor(sql);
         // Read the epoch once: it gates the resume verdict AND is returned so the
         // caller (`seedSubscription`) can stamp the frame without a second read.
-        const epoch = readCdcEpoch(sql);
+        const epoch = this.cachedCdcEpoch();
 
         // Timeline fork: the client cached against a different epoch (a reset, or
         // a recycled DO id), so its `sinceSeq` indexes an unrelated changelog.
@@ -8903,7 +8956,10 @@ abstract class ShardDO {
             // and never reached here. An action/query encodes for the first time
             // here, which is fine — it committed nothing transactionally, and the
             // coded error names the value either way.
-            const response = this.buildDispatchResponse(mutatorClass, encodeDispatchResult(result));
+            const response = this.buildDispatchResponse(
+                mutatorClass,
+                this.isMutationFunction(payload.functionPath) ? encodeDispatchResult(result) : encodeReadResult(result),
+            );
 
             await this.flushChangedTables();
 
@@ -12274,7 +12330,7 @@ abstract class ShardDO {
         // Best-effort: `cdcEnabled()` is false on a stub `sql` handle or a
         // pre-CDC shard, so the bump simply no-ops there.
         if (this.cdcEnabled()) {
-            bumpCdcEpoch(this.sql as SqlExec);
+            this.bumpCdcEpochUncached();
         }
 
         this.recordAudit("pitrRestore", { detail: { restart, restoredTo: armed.restoredTo, undoBookmark: armed.undoBookmark } });
@@ -12751,28 +12807,35 @@ abstract class ShardDO {
      * in ANY identity field never share a result (RLS / `ctx.auth` / per-user flags).
      * The `cache` is created fresh per flush by the caller, so a result is never
      * reused across passes (it would go stale after the next write).
+     *
+     * `args` and `attachment` are the socket's own stored values and are only READ
+     * here, to build the key. What the handler receives is a copy — `handedArgs()`
+     * and a fresh {@link socketIdentity} — made only when the query actually runs,
+     * so every socket that shares a run skips both deep clones.
      */
     private resolveReactiveOutcomeDeduped(
         functionPath: string,
         args: Record<string, unknown>,
+        handedArgs: () => Record<string, unknown>,
         isAdmin: boolean,
-        identity: SubscriptionIdentity,
+        attachment: SocketAttachment,
         cache: Map<string, Promise<SubscriptionOutcome | null>>,
     ): Promise<SubscriptionOutcome | null> {
         if (this.deliveryAuthorization) {
-            return this.resolveReactiveOutcome(functionPath, args, isAdmin, identity);
+            return this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment));
         }
         const key = this.isIdentityIndependent(functionPath)
             ? // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null = the identity-independent bucket
               reactiveCacheKey(functionPath, args, null)
-            : reactiveCacheKey(functionPath, args, subscriptionIdentityKey(identity));
+            : // The key reads the identity, never keeps it, so the stored one serves without a copy.
+              reactiveCacheKey(functionPath, args, subscriptionIdentityKey(attachment));
         const cached = cache.get(key);
 
         if (cached !== undefined) {
             return cached;
         }
 
-        const pending = this.resolveReactiveOutcome(functionPath, args, isAdmin, identity);
+        const pending = this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment));
 
         cache.set(key, pending);
 
@@ -13442,7 +13505,7 @@ abstract class ShardDO {
 
                 // eslint-disable-next-line no-await-in-loop -- passes are intentionally sequential: each observes the prior pass's committed state and the tables merged while it ran
                 await Promise.all([
-                    this.refreshSubscriptions(batch, batchKeys),
+                    this.refreshSubscriptions(batch, frameCursor, frameEpoch, batchKeys),
                     this.pokeShapeSubscribers(batch, frameCursor, frameEpoch),
                     this.relay?.onFlush(batch, frameCursor ?? 0),
                 ]);
@@ -13609,15 +13672,20 @@ abstract class ShardDO {
         );
     }
 
-    private async refreshSubscriptions(changed: Set<string>, changedKeys?: Map<string, IndexKeyEntry[] | undefined>): Promise<void> {
+    /**
+     * `frameCursor` / `frameEpoch` are the pass's post-write high-watermark, the
+     * same for every sub it flushes, stamped on every frame as the cursor each
+     * subscriber advances to.
+     */
+    private async refreshSubscriptions(
+        changed: Set<string>,
+        frameCursor: number | undefined,
+        frameEpoch: string | undefined,
+        changedKeys?: Map<string, IndexKeyEntry[] | undefined>,
+    ): Promise<void> {
         // Delivery authorization settles every subscription on every flush, so it never skips a socket.
         const sockets = [...this.runner.sockets()].filter((ws) => this.deliveryAuthorization !== undefined || this.socketIndex.mayCare(ws, changed));
 
-        // The post-write high-watermark is the same for every sub flushed in
-        // this pass (they all observe the committed state), so resolve it once
-        // and stamp it on every frame as the cursor each subscriber advances to.
-        const frameCursor = this.currentCdcCursor();
-        const frameEpoch = this.currentCdcEpoch();
         const generation = this.writeGeneration;
 
         // Flush-local dedup of reactive runs: sockets on the same
@@ -13674,9 +13742,13 @@ abstract class ShardDO {
                     // per-request identity fields. Without it an `rls()` / `ctx.auth`
                     // scoped live query would evaluate anonymous and return zero rows.
                     // (Admin + reserved flag reads ignore the identity payload.)
+                    //
+                    // `args` is the attachment's stored value; the authorization and the
+                    // run share one copy of it.
+                    const handedArgs = cloneArgsOnFirstUse(args);
                     let permit: SubscriptionDeliveryPermit | undefined;
                     if (this.deliveryAuthorization) {
-                        permit = await this.authorizeSubscription(ws, subId, socketIdentity(attachment), functionPath, args);
+                        permit = await this.authorizeSubscription(ws, subId, socketIdentity(attachment), functionPath, handedArgs());
                     }
                     if (this.deliveryAuthorization && permit === undefined) {
                         return;
@@ -13690,7 +13762,7 @@ abstract class ShardDO {
                         this.sendSubscriptionSettlement(ws, subId, { cursor: frameCursor, epoch: frameEpoch, generation }, delivery, permit, true);
                         return;
                     }
-                    const outcome = await this.resolveReactiveOutcomeDeduped(functionPath, args, isAdmin, socketIdentity(attachment), reactiveRunCache);
+                    const outcome = await this.resolveReactiveOutcomeDeduped(functionPath, args, handedArgs, isAdmin, attachment, reactiveRunCache);
 
                     if (!outcome) {
                         // A clean resolve to "nothing to deliver" still ends the failure streak.
@@ -13788,7 +13860,7 @@ abstract class ShardDO {
                 }
 
                 // eslint-disable-next-line no-await-in-loop -- subscriptions on one socket share its SQLite connection
-                await refreshQuery(subId, functionPath, structuredClone(query.args ?? {}), isAdmin, backingOff);
+                await refreshQuery(subId, functionPath, query.args ?? {}, isAdmin, backingOff);
             }
 
             finishIndexVisit(subs);
@@ -16130,6 +16202,8 @@ abstract class ShardDO {
         // finding d).
         const frames = subscriptionFrames({
             cursorSuffix,
+            // New on every run, and shared by the sockets one run serves.
+            diffKey: outcome,
             lastMutationId: clientWatermark,
             nextResult: outcome.result,
             pageDeltas,
@@ -16621,11 +16695,47 @@ abstract class ShardDO {
      * harness double) or a pre-CDC shard, so callers degrade to the no-CDC path.
      */
     private cdcEnabled(): boolean {
+        if (this.cdcLogPresent) {
+            return true;
+        }
+
         try {
-            return (this.sql as SqlExec).exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, CDC_LOG_TABLE).toArray().length > 0;
+            this.cdcLogPresent =
+                (this.sql as SqlExec).exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, CDC_LOG_TABLE).toArray().length > 0;
         } catch {
             return false;
         }
+
+        return this.cdcLogPresent;
+    }
+
+    /**
+     * The `__cdc_meta` epoch, read from SQLite at most once until
+     * {@link invalidateCdcMetaCache} runs. Callers gate on {@link cdcEnabled}
+     * first, except {@link sealForkedTimeline}, whose callers already proved it.
+     */
+    private cachedCdcEpoch(): string {
+        this.cdcEpochCache ??= readCdcEpoch(this.sql as SqlExec);
+
+        return this.cdcEpochCache;
+    }
+
+    /** Bump the CDC epoch and drop the CDC memos in one step, so no caller can bump without invalidating. */
+    private bumpCdcEpochUncached(): string {
+        const epoch = bumpCdcEpoch(this.sql as SqlExec);
+
+        this.invalidateCdcMetaCache();
+
+        return epoch;
+    }
+
+    /**
+     * Drop both CDC memos — the single exit for every path that can change
+     * `__cdc_log`'s presence or the `__cdc_meta` row behind this instance's back.
+     */
+    private invalidateCdcMetaCache(): void {
+        this.cdcLogPresent = false;
+        this.cdcEpochCache = undefined;
     }
 
     /**

@@ -314,6 +314,46 @@ const collectFramedDeltas = (previousJson: string, nextResult: unknown, table: s
 };
 
 /**
+ * {@link collectFramedDeltas} results per run outcome (the caller's `diffKey`),
+ * then per table, then per baseline string: sockets that shared one run diff the
+ * same result against the same last-sent text, so the diff is computed once per
+ * distinct triple instead of once per socket. Keyed by the outcome, which is new
+ * on every run, not by the result a handler may return again after editing it in
+ * place — and weakly, so an entry lives exactly as long as that outcome.
+ */
+const framedDeltaMemo = new WeakMap<object, Map<string, Map<string, FramedDelta[] | undefined>>>();
+
+const sharedFramedDeltas = (previousJson: string, nextResult: unknown, table: string, diffKey: object | undefined): FramedDelta[] | undefined => {
+    if (diffKey === undefined) {
+        return collectFramedDeltas(previousJson, nextResult, table);
+    }
+
+    let byTable = framedDeltaMemo.get(diffKey);
+
+    if (byTable === undefined) {
+        byTable = new Map();
+        framedDeltaMemo.set(diffKey, byTable);
+    }
+
+    let byBaseline = byTable.get(table);
+
+    if (byBaseline === undefined) {
+        byBaseline = new Map();
+        byTable.set(table, byBaseline);
+    }
+
+    if (byBaseline.has(previousJson)) {
+        return byBaseline.get(previousJson);
+    }
+
+    const framed = collectFramedDeltas(previousJson, nextResult, table);
+
+    byBaseline.set(previousJson, framed);
+
+    return framed;
+};
+
+/**
  * The per-row {@link MutationDelta}s a change decomposes into, or `undefined`
  * when it is not expressible as row deltas — see {@link collectFramedDeltas}
  * for the four conditions.
@@ -385,6 +425,8 @@ const trySendFrame = (ws: FrameSink, frame: string): boolean => {
 interface SubscriptionFrameInput {
     /** The trailing `,"cursor":<n>,"epoch":"<e>"` fragment, or `""` on a non-CDC shard. */
     cursorSuffix: string;
+    /** One run's outcome: sockets passing the same key share its diff (see {@link framedDeltaMemo}); absent, it is computed per call. */
+    diffKey?: object;
     /** This socket's custom-mutator watermark, stamped on every frame; omitted when the socket has none. */
     lastMutationId?: number;
     /** The fresh query result, unencoded — diffed row-wise against `previousJson`. */
@@ -458,7 +500,7 @@ const subscriptionFrames = (input: SubscriptionFrameInput): string[] => {
     // result is additionally gated on the socket having announced that it can
     // merge into `page`; without that the diff is never even attempted.
     const diffable = previousJson !== undefined && (pageDeltas === true || Array.isArray(nextResult));
-    const framed = diffable ? collectFramedDeltas(previousJson, nextResult, table) : undefined;
+    const framed = diffable ? sharedFramedDeltas(previousJson, nextResult, table, input.diffKey) : undefined;
 
     // An EMPTY diff must still put a frame on the wire, so the two are handled
     // together. The caller only suppresses a push when the new snapshot is

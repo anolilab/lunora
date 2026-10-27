@@ -5957,6 +5957,7 @@ interface StagedCondition {
 ```ts
 interface SubscriptionFrameInput {
     cursorSuffix: string;
+    diffKey?: object;
     lastMutationId?: number;
     nextResult: unknown;
     pageDeltas?: boolean;

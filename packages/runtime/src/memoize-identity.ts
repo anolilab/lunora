@@ -28,6 +28,7 @@
  */
 
 import { evictOldestEntry } from "../../../shared/evict-oldest";
+import { encodeIdentityHeaderJson } from "../../../shared/identity-header";
 import type { IdentityResolver } from "./identity-resolvers";
 
 /**
@@ -299,5 +300,39 @@ const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOpt
     };
 };
 
+/**
+ * Encoded `x-lunora-identity` values by their claims JSON. `resolveIdentity`
+ * hands back a fresh object per request, so the serialized text is the only key
+ * that recurs; the encoding is a pure function of it. Bounded because each key
+ * holds one identity's claims, and an isolate can serve many identities.
+ */
+const identityHeaderByClaimsJson = new Map<string, string>();
+
+const IDENTITY_HEADER_MEMO_MAX_ENTRIES = 256;
+
+/** Longer claims JSON is encoded on every request, so one oversized identity cannot pin a large entry. */
+const IDENTITY_HEADER_MEMO_MAX_CHARS = 2048;
+
+const memoizedIdentityHeader = (claims: Record<string, unknown>): string => {
+    const json = JSON.stringify(claims);
+
+    if (json.length > IDENTITY_HEADER_MEMO_MAX_CHARS) {
+        return encodeIdentityHeaderJson(json);
+    }
+
+    const cached = identityHeaderByClaimsJson.get(json);
+
+    if (cached !== undefined) {
+        return cached;
+    }
+
+    const encoded = encodeIdentityHeaderJson(json);
+
+    evictOldestEntry(identityHeaderByClaimsJson, IDENTITY_HEADER_MEMO_MAX_ENTRIES);
+    identityHeaderByClaimsJson.set(json, encoded);
+
+    return encoded;
+};
+
 export type { MemoizeIdentityOptions };
-export { memoizeIdentity, memoizeIdentityPerRequest };
+export { memoizedIdentityHeader, memoizeIdentity, memoizeIdentityPerRequest };

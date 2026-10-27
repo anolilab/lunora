@@ -94,6 +94,24 @@ describe("needsWireEncoding", () => {
         expect(isIdentity(sentinel)).toBe(false);
     });
 
+    it("routes an accessor field to the encoder, which reads it once", () => {
+        expect.assertions(2);
+
+        // A getter runs once here and again when the caller stringifies the
+        // original, so a value that changes between reads would encode differently.
+        let reads = 0;
+        const withGetter = {
+            get live() {
+                reads += 1;
+
+                return reads;
+            },
+        };
+
+        expect(needsWireEncoding(withGetter)).toBe(true);
+        expect(reads).toBe(0);
+    });
+
     it("routes a cyclic graph to the encoder rather than looping", () => {
         expect.assertions(1);
 

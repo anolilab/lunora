@@ -28,7 +28,7 @@ export { defineDocumentHistory, DOCUMENT_HISTORY_REDACTED_FIELDS, DOCUMENT_HISTO
 export type { EnvAccessor, EnvKeyFailure, EnvShape, InferEnv } from "./env";
 export { defineEnv, LunoraEnvError, redactSecrets } from "./env";
 export type { FacadeEntry, FacadeWriterLike, OrmLike } from "./facade";
-export { bindOrm, bindTableFacade } from "./facade";
+export { bindOrm, bindTableFacade, defineLazyFacade } from "./facade";
 export type {
     HttpActionCtx,
     HttpActionHandler,

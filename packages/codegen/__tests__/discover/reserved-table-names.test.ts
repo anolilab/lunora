@@ -37,7 +37,7 @@ const projectWith = (schemaSource: string): { project: Project; schemaPath: stri
 describe("reservedTableNames", () => {
     // The drift gate. `_generated/shard.ts` assigns each table's facade onto the
     // very object that carries the writer's own members
-    // (`facade[<table>] = bindTableFacade(db, <table>)`), so a member name that is
+    // (`defineLazyFacade(db, <table>)`), so a member name that is
     // also a table name is overwritten by a `FacadeEntry`. Most members are
     // methods, so the usual symptom is a flat call throwing — but not all are:
     // `relationEdges` is array metadata, and it breaks by reading as the wrong
