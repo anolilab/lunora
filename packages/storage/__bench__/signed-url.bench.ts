@@ -51,8 +51,9 @@ beforeAll(async () => {
     const exp = Number(url.searchParams.get("exp"));
     const method = url.searchParams.get("method") ?? "GET";
     const sig = url.searchParams.get("sig") ?? "";
+    const bucket = url.searchParams.get("bucket") ?? "";
 
-    canonical = `${method}\n${url.host.toLowerCase()}\nuploads/x.png\n${String(exp)}`;
+    canonical = `${method}\n${url.host.toLowerCase()}\n${bucket}\nuploads/x.png\n${String(exp)}`;
     sigBytes = fromBase64Url(sig);
 });
 

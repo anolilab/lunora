@@ -22,8 +22,12 @@ vi.mock(import("../../../shared/credential-redaction"), async (importOriginal) =
 });
 
 /** Unique per call, so only this test's own calls can fill the redaction memo for it. */
+const dispatchCount = { value: 0 };
+
 const dispatch = () => {
-    const unique = crypto.randomUUID();
+    dispatchCount.value += 1;
+
+    const unique = `n${String(dispatchCount.value)}`;
 
     return {
         durationMs: 5,
