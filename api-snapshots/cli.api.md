@@ -78,7 +78,8 @@ const COMMANDS: readonly [
     "docs",
     "registry",
     "rules",
-    "mcp"
+    "mcp",
+    "workflow"
 ];
 ```
 
