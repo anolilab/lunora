@@ -1,3 +1,20 @@
+## @lunora/runtime [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.245...@lunora/runtime@1.0.0-alpha.246) (2026-10-27)
+
+### Performance Improvements
+
+* cut per-request CPU on the DO dispatch and fan-out path ([#1351](https://github.com/anolilab/lunora/issues/1351)) ([2f94aa9](https://github.com/anolilab/lunora/commit/2f94aa9bafb63d15288730a8dea7f408db97a760)), closes [#1370](https://github.com/anolilab/lunora/issues/1370) [Array#some](https://github.com/anolilab/Array/issues/some)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.177
+* **@lunora/do:** upgraded to 1.0.0-alpha.254
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.165
+
 ## @lunora/runtime [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.244...@lunora/runtime@1.0.0-alpha.245) (2026-10-27)
 
 
