@@ -86,10 +86,18 @@ const useShardMetrics = (queryShardKey: string): AdminQueryResult<ShardMetrics> 
         }
 
         const next = data;
+        const switched = lastShardRef.current !== null && lastShardRef.current !== next.shard;
         const previous = lastShardRef.current === next.shard ? lastRequestsRef.current : null;
 
         lastShardRef.current = next.shard;
         lastRequestsRef.current = next.requests;
+
+        if (switched) {
+            // A cached snapshot for a shard seen earlier must not revive its stale series.
+            setSeries({ points: [], shard: next.shard });
+
+            return;
+        }
 
         if (previous !== null && next.requests >= previous) {
             setSeries((prior) => {
