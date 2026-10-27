@@ -89,6 +89,23 @@ const SendEventForm = ({ eventTypes, exportName, onSent }: SendEventFormProps): 
     const [sending, setSending] = useState(false);
     const [error, setError] = useState<null | string>(null);
 
+    const deliver = async (id: string, payload: unknown): Promise<void> => {
+        try {
+            await client.query(SEND_WORKFLOW_EVENT, { exportName, id, payload, type: typeInput }, callOptions(""));
+        } catch (error_: unknown) {
+            setError(errorMessage(error_));
+
+            return;
+        }
+
+        // The event is delivered by now; a failed refresh must not read as a failed send, or a retry would send it twice.
+        try {
+            await onSent(exportName, id);
+        } catch (error_: unknown) {
+            setError(`${t("Event sent, but refreshing the instance failed")}: ${errorMessage(error_)}`);
+        }
+    };
+
     const send = async (): Promise<void> => {
         const id = idInput.trim();
         const payload = parseOptionalJson(payloadText);
@@ -102,24 +119,10 @@ const SendEventForm = ({ eventTypes, exportName, onSent }: SendEventFormProps): 
         setSending(true);
         setError(null);
 
-        try {
-            try {
-                await client.query(SEND_WORKFLOW_EVENT, { exportName, id, payload: payload.value, type: typeInput }, callOptions(""));
-            } catch (error_: unknown) {
-                setError(errorMessage(error_));
-
-                return;
-            }
-
-            // The event is delivered by now; a failed refresh must not read as a failed send, or a retry would send it twice.
-            try {
-                await onSent(exportName, id);
-            } catch (error_: unknown) {
-                setError(`${t("Event sent, but refreshing the instance failed")}: ${errorMessage(error_)}`);
-            }
-        } finally {
+        // `.finally` rather than a `try … finally`: React Compiler cannot lower a `try` without a `catch`.
+        await deliver(id, payload.value).finally(() => {
             setSending(false);
-        }
+        });
     };
 
     return (
