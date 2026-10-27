@@ -10,6 +10,15 @@ const ownHint = (hint: unknown): ReadonlyArray<string> | undefined => {
     return Array.isArray(hint) ? hint.filter((line): line is string => typeof line === "string") : undefined;
 };
 
+/** A resolved hint as the one string a surface renders: a string as is, lines joined. */
+const hintText = (resolved: ReturnType<typeof resolveHint>): string | undefined => {
+    if (resolved === undefined) {
+        return undefined;
+    }
+
+    return typeof resolved === "string" ? resolved : resolved.join("\n");
+};
+
 /** Error codes no retry will fix: an admin or session rejection a poller must stop on rather than back off from. */
 const TERMINAL_POLL_CODES: ReadonlySet<string> = new Set(["ADMIN_FORBIDDEN", "FORBIDDEN", "UNAUTHORIZED"]);
 
@@ -92,26 +101,28 @@ export const isTerminalPollError = (error: unknown): boolean => {
  * Extract an actionable hint (Markdown) for a thrown value. An explicit `hint` on
  * the error (a `LunoraClientError` reconstructed from the server envelope carries
  * it as a string or an array of lines) wins; otherwise the central catalog is
- * matched by its `code` and message, as the CLI renderer does. Returns
- * `undefined` when neither has one.
+ * matched by its `code` and message, as the CLI renderer does. A thrown string
+ * has no code or hint, so only its text is matched. Returns `undefined` when
+ * nothing has one.
  */
 export const errorHint = (error: unknown): string | undefined => {
+    if (typeof error === "string") {
+        return hintText(resolveHint(error));
+    }
+
     if (error === null || typeof error !== "object") {
         return undefined;
     }
 
     const { code, hint, message } = error as { code?: unknown; hint?: unknown; message?: unknown };
-    const resolved = resolveHint({
-        code: typeof code === "string" ? code : undefined,
-        hint: ownHint(hint),
-        message: typeof message === "string" ? message : undefined,
-    });
 
-    if (resolved === undefined) {
-        return undefined;
-    }
-
-    return typeof resolved === "string" ? resolved : resolved.join("\n");
+    return hintText(
+        resolveHint({
+            code: typeof code === "string" ? code : undefined,
+            hint: ownHint(hint),
+            message: typeof message === "string" ? message : undefined,
+        }),
+    );
 };
 
 /**

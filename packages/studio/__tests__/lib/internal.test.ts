@@ -231,6 +231,12 @@ describe("errorHint", () => {
         expect(errorHint({ hint: [1, 2] })).toBe("");
     });
 
+    it("matches a thrown string against the catalog's message solutions", () => {
+        expect.assertions(1);
+
+        expect(errorHint("SQLITE_TOOBIG: string or blob too big")).toContain("2 MB");
+    });
+
     it("returns undefined when the error carries no usable hint", () => {
         expect.assertions(4);
 
