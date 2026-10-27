@@ -170,7 +170,8 @@ in both directions.
 
 Without `--replace` the rollback restores rows missing from D1, not edits made
 on Hyperdrive since cutover: a row D1 already holds is a conflict and keeps its
-D1 values. Add `--replace` (plus `--yes` for a remote target) to overwrite those
+D1 values. Add `--replace` (plus `--tables` naming the `.global()` tables, and
+`--yes` for a remote target) to overwrite those
 rows with the Hyperdrive values, or keep the dump with `--out` and reconcile by
 hand.
 

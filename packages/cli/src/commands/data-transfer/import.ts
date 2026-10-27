@@ -681,7 +681,8 @@ const reportImportOutcome = (
     }
 
     const replaced = outcome.replaced > 0 ? `${String(outcome.replaced)} replaced, ` : "";
-    const summary = `imported ${String(outcome.insertedTotal)} of ${String(outcome.received)} rows (${replaced}${String(outcome.conflicts)} conflicts, ${String(outcome.errorCount)} errors)`;
+    // A replaced row was written too, so it counts toward the imported total; the breakdown names it.
+    const summary = `imported ${String(outcome.insertedTotal + outcome.replaced)} of ${String(outcome.received)} rows (${replaced}${String(outcome.conflicts)} conflicts, ${String(outcome.errorCount)} errors)`;
 
     // A run that exits 1 must not end on a green line — the summary is the last
     // thing an operator reads, and only the exit code disagreed with it.

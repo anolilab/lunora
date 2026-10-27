@@ -44,10 +44,16 @@ const migrateCommand: Command = {
         { description: "backend migration: source admin token (defaults to --token / LUNORA_ADMIN_TOKEN)", name: "from-token", type: String },
         { description: "backend migration: target worker URL (defaults to --url)", name: "to-url", type: String },
         { description: "backend migration: target admin token (defaults to --token / LUNORA_ADMIN_TOKEN)", name: "to-token", type: String },
-        { description: "backend migration: comma-separated .global() tables to move (default: all global tables)", name: "tables", type: String },
+        {
+            description:
+                "backend migration: comma-separated .global() tables to move (default: every table, shard-local ones included; required with --replace)",
+            name: "tables",
+            type: String,
+        },
         { description: "backend migration: keep the intermediate NDJSON dump at this path", name: "out", type: String },
         {
-            description: "backend migration: overwrite rows that already exist in the target with the source's values (default: leave them, report conflicts)",
+            description:
+                "backend migration: overwrite rows that already exist in the target with the source's values (needs --tables; default: leave them, report conflicts)",
             name: "replace",
             type: Boolean,
         },

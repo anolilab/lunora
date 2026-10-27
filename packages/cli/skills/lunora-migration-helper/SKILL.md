@@ -196,7 +196,8 @@ intermediate NDJSON dump. `lunora migrate hyperdrive-to-d1` takes the same
 flags and moves the data back, for a rollback. Both are insert-only by default:
 a row whose `_id` already exists in the target is reported as a conflict and
 left unchanged, so a rollback restores missing rows, not later edits. Add
-`--replace` to overwrite those rows with the source's values, or keep the dump
+`--replace` (with `--tables` naming the `.global()` tables; it is refused
+without one) to overwrite those rows with the source's values, or keep the dump
 with `--out` and reconcile by hand. This moves the data to another backend; any
 reshaping still follows widen → migrate → narrow.
 

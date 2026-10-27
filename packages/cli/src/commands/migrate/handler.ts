@@ -723,7 +723,7 @@ interface MigrateBackendOptions {
     prod?: boolean;
     /** Overwrite rows the target already holds instead of reporting them as conflicts. */
     replace?: boolean;
-    /** Comma-separated `.global()` tables to move; omit to move every global table (required with `replace`). */
+    /** Comma-separated `.global()` tables to move; omit to move every table, shard-local ones included (required with `replace`). */
     tables?: string;
     toToken?: string;
     /** Target deployment. Defaults to `--url`/localhost. */
@@ -753,6 +753,15 @@ const BACKEND_NAMES: Record<MigrateBackendDirection, { source: string; target: s
     "d1-to-hyperdrive": { source: "D1", target: "Hyperdrive" },
     "hyperdrive-to-d1": { source: "Hyperdrive", target: "D1" },
 };
+
+/** Why a backend migration imported fewer rows than it exported, and what the operator can do about it. */
+const shortfallWarning = (replace: boolean, counts: { exported: number; inserted: number; replaced: number }, source: string, target: string): string =>
+    replace
+        ? // With --replace an existing row is overwritten, so a shortfall is rows the import reported as errors.
+          `Imported ${String(counts.inserted)} and replaced ${String(counts.replaced)} of ${String(counts.exported)} exported row(s). The rest were not written; see the errors reported above, then fix them and re-run.`
+        : // Without --replace the import is insert-only: a row the target already holds is a conflict and keeps the
+          // target's values. Said outright, because on a rollback those are exactly the rows edited since cutover.
+          `Imported ${String(counts.inserted)} of ${String(counts.exported)} exported row(s). The rest already exist in the ${target} target and were left unchanged (reported as conflicts above), so this copied rows missing from ${target}, not later edits to rows it already holds. Re-run with --replace to overwrite them with the ${source} values, or keep the dump with --out and reconcile by hand.`;
 
 /**
  * `lunora migrate d1-to-hyperdrive` — copy `.global()` table data from a
@@ -869,12 +878,7 @@ const runMigrateBackendCommand = async (options: MigrateBackendOptions): Promise
                 `✓ Migrated ${String(exportResult.rows)} row(s)${overwritten} — counts match. Verify your app reads from ${target}, then decommission the ${source} binding.`,
             );
         } else {
-            // Without --replace the import is insert-only: a row the target already
-            // holds is a conflict and keeps the target's values. Said outright,
-            // because on a rollback those are exactly the rows edited since cutover.
-            logger.warn(
-                `Imported ${String(importResult.inserted)} of ${String(exportResult.rows)} exported row(s). The rest already exist in the ${target} target and were left unchanged (reported as conflicts above), so this copied rows missing from ${target}, not later edits to rows it already holds. Re-run with --replace to overwrite them with the ${source} values, or keep the dump with --out and reconcile by hand.`,
-            );
+            logger.warn(shortfallWarning(options.replace === true, { exported: exportResult.rows, inserted: importResult.inserted, replaced }, source, target));
         }
 
         return { bytes: exportResult.bytes, code: 0, exported: exportResult.rows, imported: importResult.inserted, replaced };
