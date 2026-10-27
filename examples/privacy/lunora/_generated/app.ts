@@ -347,9 +347,6 @@ class AppBuilder<Env extends object> {
             ["invoices", { mode: { kind: "root" } }],
             ["exportFiles", { mode: { kind: "root" } }],
             ["ratelimit_buckets", { mode: { kind: "root" } }],
-            ["privacy_archive", { mode: { kind: "root" } }],
-            ["privacy_events", { mode: { kind: "root" } }],
-            ["privacy_requests", { mode: { kind: "root" } }],
         ]);
 
         options.listSchemaTables = () => [...tableSharding.keys()];

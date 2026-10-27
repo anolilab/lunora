@@ -12,9 +12,9 @@ export interface InternalApiTypes {
     };
     requests: {
         exportFile: FunctionReference<"query", { key: string }, null | import("../privacy-files.js").StoredFile>;
-        privacyPort: FunctionReference<"mutation", { method: string; payload: string }, string>;
-        privacySweep: FunctionReference<"mutation", {}, { expired: string[]; purged: number; }>;
-        privacyTick: FunctionReference<"mutation", {}, { approaching: string[]; overdue: string[]; }>;
+        privacyPort: FunctionReference<"mutation", { method: string; payload: string }, unknown>;
+        privacySweep: FunctionReference<"mutation", {}, unknown>;
+        privacyTick: FunctionReference<"mutation", {}, unknown>;
     };
 }
 
