@@ -6,7 +6,7 @@
  */
 
 import { constantTimeEqual } from "./constant-time-equal";
-import { importHmacKey } from "./hmac-url";
+import { importHmacKey } from "./hmac-key";
 
 /** Env var carrying the optional internal control-channel HMAC secret. */
 const RELAY_SECRET_KEY = "LUNORA_RELAY_SECRET";

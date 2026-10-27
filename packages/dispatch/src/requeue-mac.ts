@@ -14,7 +14,7 @@
  * and Node alike.
  */
 
-import { importHmacKey } from "../../../shared/hmac-url";
+import { importHmacKey } from "../../../shared/hmac-key";
 
 /** Keeps a MAC made for one purpose from verifying for another. */
 const DOMAIN = "lunora.requeue.v1";

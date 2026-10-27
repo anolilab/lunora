@@ -6,7 +6,7 @@
  */
 import { fromBase64, toBase64 } from "../../../shared/base64";
 import { constantTimeEqual as sharedConstantTimeEqual } from "../../../shared/constant-time-equal";
-import { importHmacKey } from "../../../shared/hmac-url";
+import { importHmacKey } from "../../../shared/hmac-key";
 import { memoizePromise } from "../../../shared/promise-memo";
 import { LunoraPaymentError } from "./errors";
 
@@ -43,7 +43,7 @@ const standardWebhookKey = (secret: string): ReturnType<typeof fromBase64> => {
 };
 
 // Webhook secrets are static and verified on every delivery, so imported keys are cached per secret.
-// The UTF-8 form shares shared/hmac-url's cache; the base64 form decodes to different key bytes, so it
+// The UTF-8 form shares shared/hmac-key's cache; the base64 form decodes to different key bytes, so it
 // needs its own, bounded the same way. A decode failure rejects inside `memoizePromise` and is evicted.
 const BASE64_KEY_CACHE_MAX = 64;
 const base64KeyCache = new Map<string, Promise<CryptoKey>>();
