@@ -1,5 +1,5 @@
 import type { SchemaLike, TriggerEventLike, ValidatorLike } from "@lunora/shard-engine";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SqlCtxExec } from "../src/ctx-db";
 import { createSqlCtxDb, sweepSqlCdcRetention } from "../src/ctx-db";
@@ -142,6 +142,80 @@ describe("createSqlCtxDb — companion rebuilds", () => {
 
         await expect(writer.count("notes")).resolves.toBe(1);
         await expect(writer.rank("notes", "leaderboard", { row: id })).resolves.toStrictEqual({ position: 1, total: 1 });
+    });
+
+    it("rebuilds the companions after a write whose companion batch failed", async () => {
+        // The row commits before its companion statements run. A failed batch leaves the counter one short, and a
+        // settled rebuild kept for the scope would keep it that way for every later writer.
+        expect.assertions(2);
+
+        const provisionScope = {};
+        let failCounter = false;
+        const exec: SqlCtxExec = {
+            ...harness.exec,
+            batch: async (statements) => {
+                if (failCounter && statements.some((statement) => statement.sql.includes(`"notes__agg_count_by_org"`))) {
+                    throw new Error("connection reset");
+                }
+
+                await (harness.exec.batch as NonNullable<SqlCtxExec["batch"]>)(statements);
+            },
+            run: async (query, parameters) => {
+                if (failCounter && query.includes(`"notes__agg_count_by_org"`)) {
+                    throw new Error("connection reset");
+                }
+
+                return await harness.exec.run(query, parameters);
+            },
+        };
+        const failing = createSqlCtxDb({ clock: () => 1, dialect, exec, provisionScope, schema: companionSchema });
+
+        await failing.insert("notes", { org: "a", score: 1 });
+
+        failCounter = true;
+
+        await expect(failing.insert("notes", { org: "a", score: 2 })).rejects.toThrow("connection reset");
+
+        failCounter = false;
+
+        const next = createSqlCtxDb({ clock: () => 2, dialect, exec: harness.exec, provisionScope, schema: companionSchema });
+
+        await expect(next.count("notes", { org: "a" })).resolves.toBe(2);
+    });
+
+    it("stops waiting on another writer's rebuild that never settles", async () => {
+        // On Workers a request cancelled mid-rebuild can leave its run pending forever; every later writer in the
+        // isolate would wait on it with it.
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
+        try {
+            const provisionScope = {};
+            const stuck: SqlCtxExec = {
+                ...harness.exec,
+                all: async (query, parameters) => {
+                    if (isSourcePage(query)) {
+                        // Never settles, like a rebuild whose request was cancelled.
+                        return await new Promise<never>(() => {});
+                    }
+
+                    return await harness.exec.all(query, parameters);
+                },
+            };
+            const abandoned = createSqlCtxDb({ clock: () => 1, dialect, exec: stuck, provisionScope, schema: companionSchema });
+
+            abandoned.count("notes", { org: "a" }).catch(() => undefined);
+
+            const next = createSqlCtxDb({ clock: () => 2, dialect, exec: harness.exec, provisionScope, schema: companionSchema });
+            const counted = next.count("notes", { org: "a" });
+
+            await vi.advanceTimersByTimeAsync(30_000);
+
+            await expect(counted).resolves.toBe(0);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("does not record a companion as missing when patchIf runs before provisioning", async () => {
@@ -328,15 +402,26 @@ describe("createSqlCtxDb — the changed-tables poll", () => {
     });
 
     it("drops and rebuilds a ts index a failed concurrent Postgres build left invalid", async () => {
-        // `IF NOT EXISTS` takes an invalid index for the real one, and the planner never uses it.
-        expect.assertions(1);
+        // `IF NOT EXISTS` takes an invalid index for the real one, and the planner never uses it. Both catalog
+        // reads go through the table, and the drop names the index the catalog found on it: a bare name resolves
+        // through `search_path` and can reach a same-named index on another schema's table.
+        expect.assertions(2);
 
         const ddl: string[] = [];
+        const lookups: unknown[][] = [];
         const postgres = { ...dialect, name: "postgres" } as typeof dialect;
         const exec: SqlCtxExec = {
             ...harness.exec,
             all: async (query, parameters) => {
                 if (query.includes("pg_index")) {
+                    lookups.push([...parameters]);
+
+                    if (query.includes("::regclass::text")) {
+                        ddl.push("lookup");
+
+                        return [{ qualified: `"audit"."__cdc_log_ts"` }];
+                    }
+
                     ddl.push("state");
 
                     return [{ indisvalid: false }];
@@ -357,7 +442,36 @@ describe("createSqlCtxDb — the changed-tables poll", () => {
 
         await sweepSqlCdcRetention(exec, postgres, 10_000, 9999);
 
-        expect(ddl).toStrictEqual(["state", `DROP INDEX IF EXISTS "__cdc_log_ts"`, `CREATE INDEX CONCURRENTLY IF NOT EXISTS "__cdc_log_ts"`]);
+        expect(ddl).toStrictEqual(["state", "lookup", `DROP INDEX IF EXISTS "audit"."__cdc_log_ts"`, `CREATE INDEX CONCURRENTLY IF NOT EXISTS "__cdc_log_ts"`]);
+        expect(lookups).toStrictEqual([
+            ["__cdc_log", "__cdc_log_ts"],
+            ["__cdc_log", "__cdc_log_ts"],
+        ]);
+    });
+
+    it("still runs the bounded DELETE when the ts index cannot be built", async () => {
+        // A build that keeps failing must not stop retention for as long as it fails.
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const exec: SqlCtxExec = {
+            ...harness.exec,
+            run: async (query, parameters) => {
+                if (query.startsWith("CREATE INDEX")) {
+                    throw new Error("out of disk");
+                }
+
+                return await harness.exec.run(query, parameters);
+            },
+        };
+
+        // cutoff = 99: rows stamped 0..99 expire.
+        await sweepSqlCdcRetention(exec, dialect, 10_000, 10_099);
+
+        expect({ ...harness.database.prepare(`SELECT COUNT(*) AS n FROM "__cdc_log"`).get() }).toStrictEqual({ n: LOG_ROWS - 100 });
+        expect(warn).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
     });
 
     it("still deletes the expired rows", async () => {

@@ -439,12 +439,33 @@ const createIndexIfNotExists = async (
 };
 
 /**
+ * The oid of index `name` on `table`, or NULL. Looked up through the table rather than by the index's own
+ * name, which `search_path` could resolve to a same-named index on another schema's table. `quote_ident`,
+ * so a mixed-case table resolves as the DDL created it.
+ */
+const postgresIndexOf = (table: string, name: string): SQL =>
+    sql`(SELECT ${sql.identifier("c")}.oid FROM pg_index ${sql.identifier("i")} JOIN pg_class ${sql.identifier("c")} ON ${sql.identifier("c")}.oid = ${sql.identifier("i")}.indexrelid WHERE ${sql.identifier("i")}.indrelid = to_regclass(quote_ident(${table})) AND ${sql.identifier("c")}.relname = ${name})`;
+
+/**
  * Drop an index if it exists. MySQL has no `DROP INDEX IF EXISTS` and names the
  * table, so it drops unconditionally and swallows the "can't drop" error
  * (errno 1091) an absent index raises — the mirror of
  * {@link createIndexIfNotExists}.
  */
 const dropIndexIfExists = async (exec: SqlCtxExec, dialect: SqlDialect, table: string, name: string): Promise<void> => {
+    if (dialect.name === "postgres") {
+        // A bare name resolves through `search_path` and can reach a same-named index on another schema's
+        // table. Drop the one on `table`, by the qualified name the catalog gives it.
+        const [owned] = await queryAll(exec, dialect, sql`SELECT ${postgresIndexOf(table, name)}::regclass::text AS ${sql.identifier("qualified")}`);
+        const qualified = owned?.["qualified"];
+
+        if (typeof qualified === "string") {
+            await queryRun(exec, dialect, sql`DROP INDEX IF EXISTS ${sql.raw(qualified)}`);
+        }
+
+        return;
+    }
+
     if (dialect.name !== "mysql") {
         await queryRun(exec, dialect, sql`DROP INDEX IF EXISTS ${sql.identifier(name)}`);
 
@@ -480,8 +501,7 @@ const indexState = async (exec: SqlCtxExec, dialect: SqlDialect, table: string, 
             return rows.length > 0 ? "valid" : "absent";
         }
         case "postgres": {
-            // `quote_ident`, so a mixed-case name resolves as the DDL created it.
-            const rows = await queryAll(exec, dialect, sql`SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(quote_ident(${name}))`);
+            const rows = await queryAll(exec, dialect, sql`SELECT indisvalid FROM pg_index WHERE indexrelid = ${postgresIndexOf(table, name)}`);
 
             if (rows.length === 0) {
                 return "absent";
