@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.72...@lunora/errors@1.0.0-alpha.73) (2026-10-27)
+
+### Bug Fixes
+
+* **server:** reject nested-path index fields with a coded error ([#1364](https://github.com/anolilab/lunora/issues/1364)) ([b2c3be9](https://github.com/anolilab/lunora/commit/b2c3be9f456208e1aa514bff1d1baf38f2371e54))
+
 ## @lunora/errors [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.71...@lunora/errors@1.0.0-alpha.72) (2026-10-26)
 
 ### Bug Fixes
