@@ -13,6 +13,11 @@
  * base64url padding or the constant-time verify applied to one file and not the
  * other would be a silent security divergence. Mirrors `shared/constant-time-equal.ts`.
  *
+ * `importHmacKey` is exported on its own for HMACs that are not signed URLs but
+ * sign a static secret per message: `@lunora/dispatch`'s requeue MAC, the
+ * relay control-frame signature, agent channel and payment webhook verifiers.
+ * They need hex rather than base64url, so they share the key cache, not the codec.
+ *
  * Callers keep their own `canonicalize` (the only real per-package difference)
  * and decode the inbound signature themselves — `verifyCanonical` takes already
  * base64url-decoded bytes so each caller can map a malformed signature to its
@@ -169,6 +174,7 @@ export {
     extractHost,
     fromBase64Url,
     hasControlChar,
+    importHmacKey,
     isOnlySlashesPath,
     MAX_SIGNED_URL_TTL_SECONDS,
     signCanonical,

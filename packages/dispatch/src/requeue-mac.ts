@@ -14,13 +14,12 @@
  * and Node alike.
  */
 
+import { importHmacKey } from "../../../shared/hmac-url";
+
 /** Keeps a MAC made for one purpose from verifying for another. */
 const DOMAIN = "lunora.requeue.v1";
 
 const encoder = new TextEncoder();
-
-const importKey = async (secret: string, usage: "sign" | "verify"): Promise<CryptoKey> =>
-    crypto.subtle.importKey("raw", encoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, [usage]);
 
 const message = (scope: string, id: string, payload: string): Uint8Array<ArrayBuffer> => encoder.encode(`${DOMAIN}\n${scope}\n${id}\n${payload}`);
 
@@ -33,7 +32,7 @@ const HEX_MAC = /^[\da-f]{64}$/u;
  * message's `id` and the copy's serialised `payload`, keyed by `secret`.
  */
 const signRequeue = async (secret: string, scope: string, id: string, payload: string): Promise<string> =>
-    toHex(await crypto.subtle.sign("HMAC", await importKey(secret, "sign"), message(scope, id, payload)));
+    toHex(await crypto.subtle.sign("HMAC", await importHmacKey(secret), message(scope, id, payload)));
 
 /** `true` only when `mac` is {@link signRequeue}'s MAC for exactly these inputs. The comparison is WebCrypto's, not a string compare. */
 const verifyRequeue = async (secret: string, scope: string, id: string, payload: string, mac: unknown): Promise<boolean> => {
@@ -45,7 +44,7 @@ const verifyRequeue = async (secret: string, scope: string, id: string, payload:
         Number.parseInt(mac.slice(index * 2, index * 2 + 2), 16),
     );
 
-    return crypto.subtle.verify("HMAC", await importKey(secret, "verify"), signature, message(scope, id, payload));
+    return crypto.subtle.verify("HMAC", await importHmacKey(secret), signature, message(scope, id, payload));
 };
 
 export { signRequeue, verifyRequeue };
