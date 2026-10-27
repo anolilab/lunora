@@ -123,7 +123,9 @@ overrides:
   # stack-exhaustion DoS on recursive graphs (GHSA-ggr8-5vv4-36mx). 8.0.0 keeps the
   # CJS build and the `deepmergeCustom` export html-to-text calls.
   deepmerge-ts@<8.0.0: ^8.0.0
-  dompurify@<=3.4.10: ^3.4.16
+  # Covers the only consumer (posthog-js declares ^3.4.13); the previous
+  # `dompurify@<=3.4.10` key no longer matched it, so 3.4.16 stayed installed.
+  dompurify@<3.4.17: ^3.4.17
   esbuild@>=0.27.3 <0.28.1: ^0.28.1
   fast-uri@>=3.0.0 <3.1.5: ^3.1.7
   fast-xml-parser@<5.7.0: ^5.7.0
