@@ -35,7 +35,10 @@ What it shows:
    **Authentication → CORS** (allowed origins), add `http://localhost:5173` so
    the browser can refresh tokens.
 3. Copy your client id (`client_…`) from **API keys**.
-4. To try the org-gated query, create an organization, add your user to it,
+4. To try the org-gated query, under **Authorization** create a permission
+   with the slug `notes:read-org` and add it to the `admin` role (WorkOS puts
+   a role's permissions in the access token's `permissions` claim, which is
+   what the policy checks). Then create an organization, add your user to it,
    and give the user the `admin` role.
 5. Fill in the env files:
 
