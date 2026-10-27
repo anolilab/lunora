@@ -138,8 +138,10 @@ import {
     createIndexIfNotExists,
     decodeRow,
     decodeRows,
+    dropIndexIfExists,
     fieldRefSql,
     forEachRowPaged,
+    indexState,
     nextRowVersion,
     nullSafeEqualsSql,
     OCC_VERSION_COLUMN,
@@ -949,6 +951,8 @@ const assertGroupByReducibleBySql = (
 /** Single-row table holding the `.global()` sweep lease — the fleet's only retention coordination. */
 const CDC_SWEEP_TABLE = "__cdc_sweep";
 
+const CDC_LOG_TABLE_TS_INDEX = "__cdc_log_ts";
+
 /** The lease row's fixed key. One log, one sweeper, one row. */
 const CDC_SWEEP_ROW = "global";
 
@@ -1116,6 +1120,47 @@ const sweepSqlCdcRetention = async (exec: SqlCtxExec, dialect: SqlDialect, reten
     }
 
     const cutoff = now - retentionMs;
+
+    // The DELETE below walks the log in `seq` order, so with nothing expired it
+    // reads every row to delete none. This probe answers the same question
+    // through a `ts` index; `seq` order cannot, because writers stamp `ts` with
+    // their own clocks and the lowest `seq` is not the oldest `ts`.
+    //
+    // The index is ensured here rather than in the CDC migration: only a store
+    // with retention reads it, and the migration is memoised per provisioning
+    // scope, so a store that enables retention later would never get it there.
+    // On Postgres it builds concurrently so an upgrade does not stall writers
+    // behind a build over a long log. A concurrent build that fails part-way
+    // leaves an invalid index that `IF NOT EXISTS` takes for the real one and
+    // the planner never uses, so the probe would scan on every pass after it:
+    // an invalid index is dropped and built again. Rarely that is another
+    // sweeper's build still running past its lease, which then fails and is
+    // rebuilt on a later pass.
+    const tsIndex = await indexState(exec, dialect, CDC_LOG_TABLE, CDC_LOG_TABLE_TS_INDEX);
+
+    if (tsIndex !== "valid") {
+        if (tsIndex === "invalid") {
+            await dropIndexIfExists(exec, dialect, CDC_LOG_TABLE, CDC_LOG_TABLE_TS_INDEX);
+        }
+
+        await createIndexIfNotExists(exec, dialect, {
+            columns: sql`${sql.identifier("ts")}`,
+            concurrently: true,
+            name: CDC_LOG_TABLE_TS_INDEX,
+            table: CDC_LOG_TABLE,
+            unique: false,
+        });
+    }
+
+    const expired = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT 1 AS ${sql.identifier("hit")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("ts")} <= ${cutoff} LIMIT 1`,
+    );
+
+    if (expired.length === 0) {
+        return;
+    }
 
     // Bounded per pass for the same reason the shard-local sweep is: the first
     // sweep after an operator enables retention faces the entire accumulated

@@ -2,7 +2,7 @@ import type { SchemaLike, TriggerEventLike, ValidatorLike } from "@lunora/shard-
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { SqlCtxExec } from "../src/ctx-db";
-import { createSqlCtxDb } from "../src/ctx-db";
+import { createSqlCtxDb, sweepSqlCdcRetention } from "../src/ctx-db";
 import { createSqliteBatchHarness, makeSqliteDialect } from "./_helpers/sqlite";
 
 /**
@@ -239,6 +239,102 @@ describe("createSqlCtxDb — the changed-tables poll", () => {
 
         expect(plan.some((step) => step.includes("__cdc_log_table_seq (table=? AND seq>?)"))).toBe(true);
         expect(plan.filter((step) => step.startsWith("SCAN __cdc_log"))).toStrictEqual([]);
+    });
+
+    it("skips the retention DELETE with one index seek when nothing has expired", async () => {
+        // The DELETE's `WHERE ts <= ? ORDER BY seq LIMIT` walks the log in `seq` order, so with nothing expired it
+        // read every row of the log to delete none.
+        expect.assertions(3);
+
+        const { exec, statements } = recording(harness.exec);
+
+        // Every row's `ts` is in [0, LOG_ROWS), so a cutoff of -1 expires none of them.
+        await sweepSqlCdcRetention(exec, dialect, 10_000, 9999);
+
+        expect(statements.filter((statement) => statement.trim().startsWith("DELETE"))).toStrictEqual([]);
+
+        const probe = statements.find((statement) => statement.includes("LIMIT 1")) as string;
+        const plan = harness.database
+            .prepare(`EXPLAIN QUERY PLAN ${probe}`)
+            .all(-1)
+            .map((step) => String(step["detail"]));
+
+        expect(plan).toStrictEqual(["SEARCH __cdc_log USING COVERING INDEX __cdc_log_ts (ts<?)"]);
+        expect({ ...harness.database.prepare(`SELECT COUNT(*) AS n FROM "__cdc_log"`).get() }).toStrictEqual({ n: LOG_ROWS });
+    });
+
+    it("leaves the log without a ts index until a retention sweep runs", async () => {
+        // Only the sweep's probe reads it; a log kept forever should not pay for it on every append.
+        expect.assertions(2);
+
+        const tsIndex = (): unknown =>
+            harness.database.prepare(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'index' AND name = '__cdc_log_ts'`).get()?.["n"];
+
+        expect(tsIndex()).toBe(0);
+
+        await sweepSqlCdcRetention(harness.exec, dialect, 10_000, 9999);
+
+        expect(tsIndex()).toBe(1);
+    });
+
+    it("drops and rebuilds a ts index a failed concurrent Postgres build left invalid", async () => {
+        // `IF NOT EXISTS` takes an invalid index for the real one, and the planner never uses it.
+        expect.assertions(1);
+
+        const ddl: string[] = [];
+        const postgres = { ...dialect, name: "postgres" } as typeof dialect;
+        const exec: SqlCtxExec = {
+            ...harness.exec,
+            all: async (query, parameters) => {
+                if (query.includes("pg_index")) {
+                    ddl.push("state");
+
+                    return [{ indisvalid: false }];
+                }
+
+                return await harness.exec.all(query, parameters);
+            },
+            run: async (query, parameters) => {
+                if (query.includes(" INDEX ")) {
+                    ddl.push(query.replace(/ ON .*/u, ""));
+
+                    return undefined;
+                }
+
+                return await harness.exec.run(query, parameters);
+            },
+        };
+
+        await sweepSqlCdcRetention(exec, postgres, 10_000, 9999);
+
+        expect(ddl).toStrictEqual(["state", `DROP INDEX IF EXISTS "__cdc_log_ts"`, `CREATE INDEX CONCURRENTLY IF NOT EXISTS "__cdc_log_ts"`]);
+    });
+
+    it("still deletes the expired rows", async () => {
+        expect.assertions(1);
+
+        // cutoff = 99: rows stamped 0..99 expire.
+        await sweepSqlCdcRetention(harness.exec, dialect, 10_000, 10_099);
+
+        expect({ ...harness.database.prepare(`SELECT COUNT(*) AS n, MIN(ts) AS oldest FROM "__cdc_log"`).get() }).toStrictEqual({
+            n: LOG_ROWS - 100,
+            oldest: 100,
+        });
+    });
+
+    it("deletes expired rows behind a head stamped by a clock running ahead", async () => {
+        // Writers stamp `ts` with their own clocks, so the lowest `seq` is not the oldest entry.
+        expect.assertions(1);
+
+        harness.database.prepare(`UPDATE "__cdc_log" SET "ts" = 1e12 WHERE "seq" = 1`).run();
+
+        // cutoff = 99: rows stamped 1..99 expire; the head does not.
+        await sweepSqlCdcRetention(harness.exec, dialect, 10_000, 10_099);
+
+        expect({ ...harness.database.prepare(`SELECT COUNT(*) AS n, MIN(seq) AS head FROM "__cdc_log"`).get() }).toStrictEqual({
+            head: 1,
+            n: LOG_ROWS - 99,
+        });
     });
 
     it("reports the same tables and cursor as grouping the log", async () => {
