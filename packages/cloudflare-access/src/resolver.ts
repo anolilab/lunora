@@ -3,7 +3,7 @@ import { nonEmpty, withoutExpiryClaims } from "../../../shared/jwt-verify";
 import { readIdentityGroups, rolesForGroups } from "./identity-groups";
 import readPlatformIdentity from "./platform-identity";
 import type { AccessClaims, CreateAccessResolverOptions, ResolvedAccessIdentity, ResolvedIdentityLike, ResolveIdentityFunction } from "./types";
-import { assertJwtFallbackOptions, verifyRequest } from "./verify";
+import { assertJwtFallbackOptions, requestVerifier } from "./verify";
 
 /**
  * The "anonymous" identity. `null` is the runtime's `resolveIdentity` contract
@@ -113,6 +113,8 @@ export const createAccessResolver = (options?: CreateAccessResolverOptions): Res
     // request with no signal. `undefined` means "no JWT fallback", which is a
     // legal mode only when the caller named neither option.
     const jwtOptions = assertJwtFallbackOptions(options);
+    // Expired-but-genuine tokens are accepted: see the fallback below.
+    const verifyRequest = jwtOptions === undefined ? undefined : requestVerifier(jwtOptions, true);
 
     return async (request: Request, _env?: unknown, context?: ExecutionContextLike): Promise<ResolvedAccessIdentity | null> => {
         // Platform identity wins when present: it is the stronger of the two
@@ -137,7 +139,7 @@ export const createAccessResolver = (options?: CreateAccessResolverOptions): Res
         // answers `TOKEN_EXPIRED` (a client refreshes and re-sends) rather than
         // running the request anonymous, where the app's own check would read
         // as a verdict on the call.
-        const claims = jwtOptions === undefined ? undefined : await verifyRequest(request, jwtOptions, true);
+        const claims = await verifyRequest?.(request);
 
         return claims === undefined ? ANONYMOUS : toIdentity(claims, options);
     };

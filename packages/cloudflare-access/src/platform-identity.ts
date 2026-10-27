@@ -44,7 +44,7 @@ const normalizeGroups = (groups: unknown): string[] | undefined =>
  * Returns `undefined` when Access did not authenticate this request (`ctx.access`
  * is absent), when the host supplied no `ExecutionContext` at all, or when
  * `getIdentity()` yields nothing usable — the same fail-closed "no Access
- * identity" signal `verifyRequest` returns, so callers treat the two uniformly.
+ * identity" signal `requestVerifier` returns, so callers treat the two uniformly.
  *
  * Nothing is verified here, and nothing needs to be: the platform authenticated
  * the caller before the Worker ran and the identity arrives out-of-band, not on

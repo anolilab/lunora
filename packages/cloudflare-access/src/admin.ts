@@ -3,7 +3,7 @@ import { LunoraError } from "@lunora/errors";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import readPlatformIdentity from "./platform-identity";
 import type { AccessClaims, AccessJwtFallbackOptions } from "./types";
-import { assertJwtFallbackOptions, verifyRequest } from "./verify";
+import { assertJwtFallbackOptions, requestVerifier } from "./verify";
 
 /** Options for {@link accessAdminGate}; extends {@link AccessJwtFallbackOptions}. */
 interface AccessAdminGateOptions extends AccessJwtFallbackOptions {
@@ -91,9 +91,10 @@ const accessAdminGate = (options: AccessAdminGateOptions): ((request: Request, c
     // signal. `undefined` means "no JWT configured", which selects the platform
     // identity below rather than adding a fallback to it.
     const jwtOptions = assertJwtFallbackOptions(options);
+    const verifyRequest = jwtOptions === undefined ? undefined : requestVerifier(jwtOptions);
 
     return async (request: Request, context?: ExecutionContextLike): Promise<boolean> => {
-        const claims = jwtOptions === undefined ? await readPlatformIdentity(context) : await verifyRequest(request, jwtOptions);
+        const claims = verifyRequest === undefined ? await readPlatformIdentity(context) : await verifyRequest(request);
 
         if (claims === undefined) {
             return false;
