@@ -10,7 +10,9 @@
  * copy: the leading file doc comment (the item's describes `lunora add`, which
  * never wrote these files) and the `limits` block with the doc comment directly
  * above it (each app enforces its own named limits). Everything else is the
- * item's, with `@lunora/*` imports spelled `lunorash/*`.
+ * item's, with `@lunora/*` imports spelled `lunorash/*`. The `RATELIMIT_SCHEMA`
+ * string `lunora init` writes (packages/cli/src/commands/init/overlay/apply.ts) is
+ * kept identical to the standalone template's copy.
  *
  * Usage:
  *   node scripts/sync-ratelimit-copies.mjs           # rewrite the copies
@@ -97,6 +99,28 @@ for (const copy of copies) {
 
     if (!CHECK) {
         writeFileSync(copy, next);
+    }
+}
+
+// `lunora init`'s overlay embeds the standalone template's copy as a string, so it is derived from that
+// (already synced) file rather than from the item.
+const overlayPath = join(ROOT, "packages", "cli", "src", "commands", "init", "overlay", "apply.ts");
+const overlay = readFileSync(overlayPath, "utf8");
+const embedded = /const RATELIMIT_SCHEMA = `(?:\\.|[^\\`])*`;\n/u;
+
+if (!embedded.test(overlay)) {
+    throw new Error(`${relative(ROOT, overlayPath)}: no \`const RATELIMIT_SCHEMA = \`…\`;\` literal`);
+}
+
+const standalone = readFileSync(join(ROOT, "templates", "standalone", "lunora", "ratelimit", "schema.ts"), "utf8");
+const literal = standalone.replaceAll("\\", "\\\\").replaceAll("`", "\\`").replaceAll("${", "\\${");
+const nextOverlay = overlay.replace(embedded, () => `const RATELIMIT_SCHEMA = \`${literal}\`;\n`);
+
+if (nextOverlay !== overlay) {
+    stale.push(relative(ROOT, overlayPath));
+
+    if (!CHECK) {
+        writeFileSync(overlayPath, nextOverlay);
     }
 }
 
