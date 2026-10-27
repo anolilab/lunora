@@ -34,6 +34,9 @@ type CompiledMessage = ReturnType<typeof compileMessage>;
 
 const compiledMessages = new Map<string, CompiledMessage>();
 
+/** Entries kept before the cache is cleared, so replaced catalogs cannot grow it without limit. */
+const COMPILED_MESSAGE_LIMIT = 1000;
+
 /**
  * `compileMessage`, memoized per source string. Lingui does not cache: `i18n._`
  * re-runs the compiler (a moo lexer + ICU parse) on EVERY call for an
@@ -41,12 +44,17 @@ const compiledMessages = new Map<string, CompiledMessage>();
  * in a render, once per visible row or cell, re-parsed the same string. The
  * result depends only on the string (locale is applied later, by Lingui's
  * interpolation, which only reads it), and the strings are the finite
- * {@link MessageId} set plus their translations, so the cache is bounded.
+ * {@link MessageId} set plus their translations; {@link COMPILED_MESSAGE_LIMIT} caps it when
+ * a host swaps catalogs.
  */
 const compileMessageCached = (message: string): CompiledMessage => {
     let compiled = compiledMessages.get(message);
 
     if (compiled === undefined) {
+        if (compiledMessages.size >= COMPILED_MESSAGE_LIMIT) {
+            compiledMessages.clear();
+        }
+
         compiled = compileMessage(message);
         compiledMessages.set(message, compiled);
     }
