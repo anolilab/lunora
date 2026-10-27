@@ -1304,6 +1304,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                         : (() => {
                             const mutationScheduler = withDeferredSchedules(schedulerBase, this.scheduleOutbox());
                             const mutationDatabase = makeDatabaseContext(mutationScheduler);
+                            // The composed mutation's ids come from the action's replay key and counter, so its draws do too; a
+                            // fresh factory per call would repeat the same draws across sibling mutations.
+                            const mutationRandom = (composedRandom ??= createStableRandomFactory(stableKey, stableScope));
 
                             // Copied from an action's ctx, which carries the real `fetch`; a mutation
                             // refuses network I/O wherever it runs, so its `fetch` is overridden here.
@@ -1312,9 +1315,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                                 db: { configurable: true, enumerable: true, value: mutationDatabase.db, writable: true },
                                 orm: { configurable: true, enumerable: true, value: mutationDatabase.orm, writable: true },
                                 fetch: { configurable: true, enumerable: true, value: refuseFetch, writable: true },
-                                // The composed mutation's ids come from the action's replay key and counter, so its draws do too; a
-                                // fresh factory per call would repeat the same draws across sibling mutations.
-                                random: { configurable: true, enumerable: true, value: (composedRandom ??= createStableRandomFactory(stableKey, stableScope)), writable: true },
+                                random: { configurable: true, enumerable: true, value: mutationRandom, writable: true },
                                 scheduler: { configurable: true, enumerable: true, value: mutationScheduler, writable: true },
                                 storage: { configurable: true, enumerable: true, value: withDeferredDeletes(storage), writable: true },
                             });
