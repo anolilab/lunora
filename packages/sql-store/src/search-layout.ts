@@ -354,7 +354,7 @@ const invertedLayout: SearchLayout = {
         await ensureInvertedUniqueKey(exec, dialect, companion);
     },
     indexDocument: async (exec, dialect, companion, document, index, readAs) => {
-        const counts = [...countSearchTokens(analyzedSearchText(document, index), createSearchAnalyzer(index.language))];
+        const counts = [...countSearchTokens(document, index)];
 
         await runInOrder(exec, dialect, invertedWriteStatements(dialect, companion, String(readAs.row["id"]), counts, readAs));
     },

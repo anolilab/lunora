@@ -90,7 +90,7 @@ describe("write-path entry points", () => {
     });
 
     bench("countSearchTokens (inverted rows)", () => {
-        countSearchTokens(asciiBody, english);
+        countSearchTokens(document, index);
     });
 });
 
