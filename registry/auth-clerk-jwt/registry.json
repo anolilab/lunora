@@ -3,10 +3,11 @@
     "name": "auth-clerk-jwt",
     "title": "Auth — Clerk sessions (bring your own auth)",
     "description": "Use Clerk as the identity provider and let Clerk own the session: verify each request's Clerk session token against your instance's JWKS and feed the user, active organization, role and permissions into ctx.auth / RLS via a resolveIdentity adapter. For Clerk as a login button on a Lunora-owned better-auth session, use auth-clerk instead.",
-    "docs": "Pass `clerkIdentity(env)` as `resolveIdentity` in your Worker entry (`createWorker({ resolveIdentity: clerkIdentity(env), … })`, or `.extend((env) => ({ resolveIdentity: clerkIdentity(env) }))` on the generated app builder). On the client, create the LunoraClient with `authTokenOnUpgrade: true` and call `setAuthTokenProvider(client, () => getToken(), { subject: userId })` from `@lunora/client` once signed in. Guide: https://lunora.sh/docs/concepts/external-auth",
+    "docs": "Pass `clerkIdentity(env)` as `resolveIdentity` in your Worker entry (`createWorker({ resolveIdentity: clerkIdentity(env), … })`, or `.extend((env) => ({ resolveIdentity: clerkIdentity(env) }))` on the generated app builder). On the client, create the LunoraClient with `authTokenOnUpgrade: true` and call `setAuthTokenProvider(client, () => getToken(), { subject: userId })` from `lunorash/client` (`@lunora/client` without the umbrella) once signed in. Guide: https://lunora.sh/docs/concepts/external-auth",
     "requires": [],
     "deps": {
-        "@lunora/jwt-auth": "workspace:*"
+        "@lunora/jwt-auth": "workspace:*",
+        "@lunora/runtime": "workspace:*"
     },
     "envVars": [
         {

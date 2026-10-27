@@ -20,8 +20,17 @@
  *   const client = new LunoraClient({ url, authTokenOnUpgrade: true });
  *   const stop = setAuthTokenProvider(client, () => getToken(), { subject: userId });
  */
-import type { JwtIdentityResolver } from "@lunora/jwt-auth";
 import { clerk } from "@lunora/jwt-auth";
+import type { IdentityResolver } from "@lunora/runtime";
+import { memoizeIdentity } from "@lunora/runtime";
+
+/**
+ * One memoized resolver per `env` object. A framework-hosted worker
+ * (`buildFrameworkWorker`) rebuilds its options on every request, so a resolver
+ * built per call would start each request with an empty cache and re-verify
+ * every token; `memoizeIdentity` reuses a verification for 5 s.
+ */
+const resolvers = new WeakMap<object, IdentityResolver>();
 
 /**
  * A string env var, or `""` when unset. Read by name, so the resolver accepts
@@ -40,8 +49,18 @@ const envString = (env: object, name: string): string => {
  * unset or empty, so a misconfigured deployment never boots resolving every
  * caller to anonymous or skipping the `azp` check.
  */
-export const clerkIdentity = (env: object): JwtIdentityResolver =>
-    clerk({
-        authorizedParties: envString(env, "CLERK_AUTHORIZED_PARTIES"),
-        publishableKey: envString(env, "CLERK_PUBLISHABLE_KEY"),
-    });
+export const clerkIdentity = (env: object): IdentityResolver => {
+    let resolver = resolvers.get(env);
+
+    if (resolver === undefined) {
+        resolver = memoizeIdentity(
+            clerk({
+                authorizedParties: envString(env, "CLERK_AUTHORIZED_PARTIES"),
+                publishableKey: envString(env, "CLERK_PUBLISHABLE_KEY"),
+            }),
+        );
+        resolvers.set(env, resolver);
+    }
+
+    return resolver;
+};

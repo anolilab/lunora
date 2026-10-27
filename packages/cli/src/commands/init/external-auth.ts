@@ -11,7 +11,7 @@
  */
 import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 
-import { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, projectUsesUmbrella } from "@lunora/config";
+import { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import { dirname, join, relative } from "@visulima/path";
 
@@ -138,15 +138,80 @@ const CLIENT_DIRECTORIES = ["src", "app", "pages", "plugins"];
 const CLIENT_FILE = /\.(?:[jt]sx?|svelte|vue)$/u;
 const NEW_CLIENT = "new LunoraClient({";
 
-/**
- * The end of the `defineApp()` chain: its terminal `.build()` /
- * `.buildFrameworkWorker(host)` (both return a `ComposedApp`, which has no
- * `.extend`), or, for a shared builder finished elsewhere, the `;` closing the statement.
- */
-// ponytail: text match on the template shapes, not a parse; a chain with a `;` inside an arrow body would need ts-morph.
-const CHAIN_END = /\n([\t ]*)\.build(?:FrameworkWorker)?\(|;\n/u;
+/** A terminal call on its own line: `.build()` / `.buildFrameworkWorker(host)` return a `ComposedApp`, which has no `.extend`. */
+const TERMINAL_CALL = /\n([\t ]*)\.build(?:FrameworkWorker)?\(/uy;
 
-const runtimeModule = (projectDirectory: string): string => (projectUsesUmbrella(projectDirectory) ? "lunorash/runtime" : "@lunora/runtime");
+const OPENERS = new Set(["(", "[", "{"]);
+const CLOSERS = new Set([")", "]", "}"]);
+
+/** The index just past what starts at `index` when it is a string, template or comment; `index` otherwise. */
+const skipLiteral = (source: string, index: number): number => {
+    const char = source[index];
+
+    if (char === "/" && source[index + 1] === "/") {
+        const lineEnd = source.indexOf("\n", index);
+
+        return lineEnd === -1 ? source.length : lineEnd;
+    }
+
+    if (char === "/" && source[index + 1] === "*") {
+        const close = source.indexOf("*/", index + 2);
+
+        return close === -1 ? source.length : close + 2;
+    }
+
+    if (char !== '"' && char !== "'" && char !== "`") {
+        return index;
+    }
+
+    let cursor = index + 1;
+
+    while (cursor < source.length && source[cursor] !== char) {
+        cursor += source[cursor] === "\\" ? 2 : 1;
+    }
+
+    return cursor + 1;
+};
+
+/**
+ * Where the `defineApp()` chain starting at `start` ends, at bracket depth 0 so a `;` inside a callback body does
+ * not count: before its terminal call's line, or at the `;` closing a shared builder finished elsewhere.
+ */
+// ponytail: a lexical scan, not a parse; regex literals and `${}` holding a backtick are not tracked.
+const chainEnd = (source: string, start: number): { at: number; indent: string } | undefined => {
+    let depth = 0;
+    let index = start;
+
+    while (index < source.length) {
+        const skipped = skipLiteral(source, index);
+
+        if (skipped !== index) {
+            index = skipped;
+
+            continue;
+        }
+
+        const char = source[index] ?? "";
+
+        TERMINAL_CALL.lastIndex = index;
+
+        const terminal = depth === 0 ? (TERMINAL_CALL.exec(source) ?? undefined) : undefined;
+
+        if (terminal !== undefined) {
+            return { at: index, indent: terminal[1] ?? "    " };
+        }
+
+        if (depth === 0 && char === ";") {
+            return { at: index, indent: "    " };
+        }
+
+        depth += OPENERS.has(char) ? 1 : 0;
+        depth -= CLOSERS.has(char) ? 1 : 0;
+        index += 1;
+    }
+
+    return undefined;
+};
 
 /** The relative `import` specifier from `fromFile` to `lunora/identity/<file>`, in the `.js` spelling the templates use. */
 const identitySpecifier = (projectDirectory: string, fromFile: string, spec: ExternalAuthSpec): string => {
@@ -162,7 +227,6 @@ interface ServerWiring {
 }
 
 const RESOLVE_IDENTITY = /\bresolveIdentity\b/u;
-const MEMOIZE_IDENTITY = /\bmemoizeIdentity\b/u;
 
 /** An `import` statement through its module string and the rest of that line (a `;`, a trailing comment, or neither). */
 const IMPORT_STATEMENT = /^import[^"']*["'][^"'\n]*["'][^\n]*\n/u;
@@ -175,7 +239,7 @@ const wireSource = (
     spec: ExternalAuthSpec,
 ): { outcome: "already-wired" | "has-resolver" } | { outcome: "wired"; patched: string } | undefined => {
     const start = source.indexOf("defineApp<");
-    const end = start === -1 ? undefined : (CHAIN_END.exec(source.slice(start)) ?? undefined);
+    const end = start === -1 ? undefined : chainEnd(source, start);
 
     if (end === undefined) {
         return undefined;
@@ -190,11 +254,9 @@ const wireSource = (
         return { outcome: "has-resolver" };
     }
 
-    const indent = end[1] ?? "    ";
-    const at = start + end.index;
-    const extend = `\n${indent}// Verify the provider's token on every request and feed it into ctx.auth (memoized for 5 s).\n${indent}.extend((env) => ({ resolveIdentity: memoizeIdentity(${spec.identity}(env)) }))`;
-    const memoizeImport = MEMOIZE_IDENTITY.test(source) ? "" : `import { memoizeIdentity } from "${runtimeModule(projectDirectory)}";\n`;
-    const imports = `${memoizeImport}import { ${spec.identity} } from "${identitySpecifier(projectDirectory, candidate, spec)}";\n`;
+    const { at, indent } = end;
+    const extend = `\n${indent}// Verify the provider's token on every request and feed it into ctx.auth (memoized for 5 s).\n${indent}.extend((env) => ({ resolveIdentity: ${spec.identity}(env) }))`;
+    const imports = `import { ${spec.identity} } from "${identitySpecifier(projectDirectory, candidate, spec)}";\n`;
 
     // After the last import statement, so the file's own header comment stays first; at the top when none is found.
     const lastImport = source.lastIndexOf("\nimport ", start);
@@ -244,14 +306,12 @@ const wireConfig = (projectDirectory: string, spec: ExternalAuthSpec): string | 
 
     writeFileSync(
         join(projectDirectory, "lunora.config.ts"),
-        `import { memoizeIdentity } from "${runtimeModule(projectDirectory)}";
-
-import type { AppBuilder, LunoraConfig } from "./lunora/_generated/app";
+        `import type { AppBuilder, LunoraConfig } from "./lunora/_generated/app";
 import { ${spec.identity} } from "./lunora/identity/${spec.identityFile}";
 
 export default {
     // Verify the provider's token on every request and feed it into ctx.auth (memoized for 5 s).
-    app: (app: AppBuilder<object>): AppBuilder<object> => app.extend((env) => ({ resolveIdentity: memoizeIdentity(${spec.identity}(env)) })),
+    app: (app: AppBuilder<object>): AppBuilder<object> => app.extend((env) => ({ resolveIdentity: ${spec.identity}(env) })),
 } satisfies LunoraConfig<object>;
 `,
     );
@@ -334,13 +394,13 @@ const wireExternalAuth = (projectDirectory: string, provider: ExternalAuthProvid
 
     if (server === undefined) {
         logger.warn(
-            `auth: add \`.extend((env) => ({ resolveIdentity: memoizeIdentity(${spec.identity}(env)) }))\` to your app builder (lunora.config.ts \`app\` hook or the Worker entry) — ${spec.identity} is in lunora/identity/${spec.identityFile}.ts.`,
+            `auth: add \`.extend((env) => ({ resolveIdentity: ${spec.identity}(env) }))\` to your app builder (lunora.config.ts \`app\` hook or the Worker entry) — ${spec.identity} is in lunora/identity/${spec.identityFile}.ts.`,
         );
     } else if (server.outcome === "already-wired") {
         logger.info(`auth: ${server.file} already wires ${spec.identity}; left as is.`);
     } else if (server.outcome === "has-resolver") {
         logger.warn(
-            `auth: ${server.file} already sets resolveIdentity, so it was left as is. Compose the two: \`resolveIdentity: composeIdentityResolvers([memoizeIdentity(${spec.identity}(env)), <your resolver>])\` — ${spec.identity} is in lunora/identity/${spec.identityFile}.ts.`,
+            `auth: ${server.file} already sets resolveIdentity, so it was left as is. Compose the two: \`resolveIdentity: composeIdentityResolvers([${spec.identity}(env), <your resolver>])\` — ${spec.identity} is in lunora/identity/${spec.identityFile}.ts.`,
         );
     } else {
         logger.success(`auth: wired ${spec.identity} as resolveIdentity in ${server.file}`);

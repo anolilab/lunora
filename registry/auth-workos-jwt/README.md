@@ -30,7 +30,7 @@ token with the user id as its subject, fetches the next one 10 seconds before
 `exp`, and refreshes again whenever the server reports an expired token:
 
 ```tsx
-import { setAuthTokenProvider } from "@lunora/client";
+import { setAuthTokenProvider } from "lunorash/client"; // or "@lunora/client" without the lunorash umbrella
 import { LoginRequiredError, useAuth } from "@workos-inc/authkit-react";
 
 const { getAccessToken, isLoading, organizationId, user } = useAuth();

@@ -301,6 +301,27 @@ local once the JWKS is cached, but a burst still repeats it. Use
 staleness. `memoizeIdentity(resolver, { ttlMs })` additionally reuses a result
 across requests for the same token.
 
+The memo lives in the resolver, so build it once. A framework-hosted app
+(`.buildFrameworkWorker(...)`) runs its `.extend` callbacks on every request,
+so a `memoizeIdentity(...)` written inline there starts each request with an
+empty cache. Keep one per `env` instead, which is what the registry items'
+`clerkIdentity(env)` / `workosIdentity(env)` / `auth0Identity(env)` do:
+
+```ts
+const resolvers = new WeakMap<object, IdentityResolver>();
+
+const identityFor = (env: Env): IdentityResolver => {
+    let resolver = resolvers.get(env);
+
+    if (resolver === undefined) {
+        resolver = memoizeIdentity(clerk({ publishableKey: env.CLERK_PUBLISHABLE_KEY, authorizedParties: env.CLERK_AUTHORIZED_PARTIES }));
+        resolvers.set(env, resolver);
+    }
+
+    return resolver;
+};
+```
+
 A JWT is valid until its `exp` whatever you do, and `ttlMs` adds at most its
 own length on top. A signed-out or revoked session therefore keeps resolving
 until the token expires: 60 seconds for Clerk, your configured lifetime for

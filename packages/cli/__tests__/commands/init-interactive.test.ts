@@ -120,6 +120,6 @@ describe("lunora init — interactive offer", () => {
         const evidence =
             wiredFile === undefined ? lines.filter((line) => line.startsWith("warn: auth:")).join("\n") : readFileSync(join(app, wiredFile), "utf8");
 
-        expect(evidence).toContain("resolveIdentity: memoizeIdentity(clerkIdentity(env))");
+        expect(evidence).toContain("resolveIdentity: clerkIdentity(env)");
     });
 });

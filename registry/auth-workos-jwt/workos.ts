@@ -21,8 +21,17 @@
  *   const client = new LunoraClient({ url, authTokenOnUpgrade: true });
  *   const stop = setAuthTokenProvider(client, fetchToken, { subject: user.id });
  */
-import type { JwtIdentityResolver } from "@lunora/jwt-auth";
 import { workos } from "@lunora/jwt-auth";
+import type { IdentityResolver } from "@lunora/runtime";
+import { memoizeIdentity } from "@lunora/runtime";
+
+/**
+ * One memoized resolver per `env` object. A framework-hosted worker
+ * (`buildFrameworkWorker`) rebuilds its options on every request, so a resolver
+ * built per call would start each request with an empty cache and re-verify
+ * every token; `memoizeIdentity` reuses a verification for 5 s.
+ */
+const resolvers = new WeakMap<object, IdentityResolver>();
 
 /**
  * A string env var, or `""` when unset. Read by name, so the resolver accepts
@@ -40,8 +49,15 @@ const envString = (env: object, name: string): string => {
  * `apiHostname` names). Throws at startup when WORKOS_CLIENT_ID is unset, so a
  * misconfigured deployment never boots resolving every caller to anonymous.
  */
-export const workosIdentity = (env: object): JwtIdentityResolver => {
-    const authDomain = envString(env, "WORKOS_AUTH_DOMAIN");
+export const workosIdentity = (env: object): IdentityResolver => {
+    let resolver = resolvers.get(env);
 
-    return workos({ ...(authDomain ? { authDomain } : {}), clientId: envString(env, "WORKOS_CLIENT_ID") });
+    if (resolver === undefined) {
+        const authDomain = envString(env, "WORKOS_AUTH_DOMAIN");
+
+        resolver = memoizeIdentity(workos({ ...(authDomain ? { authDomain } : {}), clientId: envString(env, "WORKOS_CLIENT_ID") }));
+        resolvers.set(env, resolver);
+    }
+
+    return resolver;
 };

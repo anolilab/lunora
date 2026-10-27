@@ -45,7 +45,7 @@ refresh tokens so a silent refresh does not depend on third-party cookies:
 ```
 
 ```tsx
-import { setAuthTokenProvider } from "@lunora/client";
+import { setAuthTokenProvider } from "lunorash/client"; // or "@lunora/client" without the lunorash umbrella
 
 const { getAccessTokenSilently, isAuthenticated, user } = useAuth0();
 

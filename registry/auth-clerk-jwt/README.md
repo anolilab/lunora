@@ -38,7 +38,7 @@ the user id as its subject, fetches the next one 10 seconds before `exp`, and
 refreshes again whenever the server reports an expired token:
 
 ```tsx
-import { setAuthTokenProvider } from "@lunora/client";
+import { setAuthTokenProvider } from "lunorash/client"; // or "@lunora/client" without the lunorash umbrella
 
 const { getToken, isLoaded, isSignedIn, orgId, userId } = useAuth();
 const client = useMemo(() => new LunoraClient({ url: location.origin, authTokenOnUpgrade: true }), []);

@@ -3,10 +3,11 @@
     "name": "auth-auth0-jwt",
     "title": "Auth — Auth0 access tokens (bring your own auth)",
     "description": "Use Auth0 as the identity provider and let Auth0 own the session: verify each request's Auth0 access token against your tenant's JWKS and API audience, and feed the user, permissions, scopes and organization into ctx.auth / RLS via a resolveIdentity adapter. For Auth0 as a login button on a Lunora-owned better-auth session, use auth-auth0 instead.",
-    "docs": "Pass `auth0Identity(env)` as `resolveIdentity` in your Worker entry (`createWorker({ resolveIdentity: auth0Identity(env), … })`, or `.extend((env) => ({ resolveIdentity: auth0Identity(env) }))` on the generated app builder). On the client, create the LunoraClient with `authTokenOnUpgrade: true` and call `setAuthTokenProvider(client, fetchToken, { subject: user.sub })` from `@lunora/client`, where `fetchToken` returns `getAccessTokenSilently()` and maps a `login_required` error to `null`. Guide: https://lunora.sh/docs/concepts/external-auth",
+    "docs": "Pass `auth0Identity(env)` as `resolveIdentity` in your Worker entry (`createWorker({ resolveIdentity: auth0Identity(env), … })`, or `.extend((env) => ({ resolveIdentity: auth0Identity(env) }))` on the generated app builder). On the client, create the LunoraClient with `authTokenOnUpgrade: true` and call `setAuthTokenProvider(client, fetchToken, { subject: user.sub })` from `lunorash/client` (`@lunora/client` without the umbrella), where `fetchToken` returns `getAccessTokenSilently()` and maps a `login_required` error to `null`. Guide: https://lunora.sh/docs/concepts/external-auth",
     "requires": [],
     "deps": {
-        "@lunora/jwt-auth": "workspace:*"
+        "@lunora/jwt-auth": "workspace:*",
+        "@lunora/runtime": "workspace:*"
     },
     "envVars": [
         {
