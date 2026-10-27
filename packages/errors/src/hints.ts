@@ -13,7 +13,6 @@
  */
 
 import type { LunoraErrorCode } from "./catalog";
-import { HTTP_STREAM_NO_BODY_HINT, OFFLINE_NOT_QUEUED_HINT } from "./client-hints";
 
 /**
  * Canonical Cloudflare support-docs pages for the two platform-error families.
@@ -70,7 +69,8 @@ const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> = {
         "- **Its text changed after it ran:** revert the edit and put the change in a new migration. If the edit is inert (a comment, whitespace, line endings), record the new hash with the `UPDATE` the message prints.",
         "- **Tracking rows predate versions and match no migration:** set each row's `version` with the `UPDATE` the message prints, so the runner can tell what already ran.",
     ],
-    OFFLINE_NOT_QUEUED: OFFLINE_NOT_QUEUED_HINT,
+    OFFLINE_NOT_QUEUED:
+        "A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).",
     IDENTITY_MISMATCH: [
         "A write queued offline was replayed on a session that now belongs to someone else (a sign-out, or another user's sign-in, while it waited), so the worker refused it rather than commit it as them.",
         "",
@@ -171,7 +171,10 @@ const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> = {
     ],
     TOO_MANY_WHISPER_TOPICS:
         "Reuse a stable set of whisper topic names, or reconnect — the per-socket verdict memo is in-memory, so a new connection starts empty. Leaving a topic does not free its entry.",
-    HTTP_STREAM_NO_BODY: HTTP_STREAM_NO_BODY_HINT,
+    HTTP_STREAM_NO_BODY: [
+        "The `fetch` implementation resolved with a response that exposes neither a `body` stream nor a `text()` read — a broken `fetch` substitute, not a runtime limitation.",
+        "A response with no `body` stream that can still be read as text (React Native's `whatwg-fetch` polyfill) is buffered through `text()` instead and never raises this code. Check the `fetch` override passed to the client or the `httpStream` call.",
+    ],
     LOCAL_DEPENDENCY_MISSING: [
         "The command Lunora tried to run is not on your PATH, so nothing ran.",
         "",
