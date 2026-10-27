@@ -10,14 +10,11 @@ import type { PrivacyPreset, RetentionRule } from "./rules";
 /** The statutory voucher period for non-regulated businesses: HGB §257(4) S. 1, AO §147(3) S. 1. */
 const STATUTE_VOUCHER_YEARS = 8;
 
-/** The voucher period the package keeps by default: the value decided on 2026-10-11. */
-const DEFAULT_VOUCHER_YEARS = 10;
-
-/** Options for the German preset. Every option defaults to the decided value. */
+/** Options for the German preset. Every option defaults to the statutory value. */
 interface GermanyOptions {
     /**
      * The retention period for Buchungsbelege (vouchers and invoices): 8 is the statute for
-     * non-regulated businesses; 10 is the value decided on 2026-10-11, kept as the default. Regulated
+     * non-regulated businesses and the default; 10 is the maintainer's longer choice. Regulated
      * institutions keep 10 regardless of this option (HGB §257(4) S. 2).
      */
     readonly voucherYears?: 8 | 10;
@@ -29,7 +26,7 @@ const voucherNote = (years: number): string => {
         return "Set to the statutory 8 years (HGB §257(4) S. 1, AO §147(3) S. 1). Regulated institutions keep 10 years. Confirm with a tax adviser.";
     }
 
-    return "Set to 10 years for every voucher, a maintainer decision. The statute sets 8 years for Buchungsbelege (HGB §257(4) S. 1, AO §147(3) S. 1) and 10 years for regulated institutions. Pass voucherYears: 8 for the statutory period.";
+    return "Set to 10 years for every voucher, chosen by the app with voucherYears: 10. The statute sets 8 years for Buchungsbelege (HGB §257(4) S. 1, AO §147(3) S. 1), so 10 is longer than required unless the business is regulated. Leave voucherYears out for the statutory period.";
 };
 
 /**
@@ -38,7 +35,7 @@ const voucherNote = (years: number): string => {
  * tables to these rules explicitly.
  */
 const germany = (options: GermanyOptions = {}): PrivacyPreset => {
-    const voucherYears = options.voucherYears ?? DEFAULT_VOUCHER_YEARS;
+    const voucherYears = options.voucherYears ?? STATUTE_VOUCHER_YEARS;
 
     return {
         id: "de",

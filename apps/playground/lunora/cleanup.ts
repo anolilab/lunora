@@ -29,7 +29,7 @@ export const cleanupOldMessages = internalMutation.input({ now: v.number() }).mu
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- deletes share one DB handle; parallelizing would interleave statements on a single connection.
-        await ctx.db.delete(row._id);
+        await ctx.db.delete("messages", row._id);
     }
 
     return { deleted: stale.length };

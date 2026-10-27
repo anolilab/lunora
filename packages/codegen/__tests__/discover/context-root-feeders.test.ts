@@ -192,7 +192,7 @@ describe("feeders resolve the ctx by symbol", () => {
         const body = `if (!${identity}) throw new Error("anonymous");
         const id = ${database}.normalizeId("posts", args.id);
         if (id === null) throw new Error("not found");
-        return ${database}.get(id);`;
+        return ${database}.get("posts", id);`;
 
         expect(discoverIn(handler("query", parameters, body), discoverNormalizeIdAuthorization)).toMatchObject([{ mentionsOwnership: true }]);
     });
@@ -241,7 +241,7 @@ describe("feeders resolve the ctx by symbol", () => {
     // to. Each count is what `alpha` reports for the same fixture.
     describe("in a helper outside any handler", () => {
         const tool = (call: string): string => `return generateText({ prompt: args.prompt, tools: { save: tool({ execute: async ({ text }) => ${call} }) } });`;
-        const normalizeBody = `if (!NAME.auth) throw new Error("anonymous");\nconst id = NAME.db.normalizeId("posts", args.id);\nif (id === null) throw new Error("x");\nreturn NAME.db.get(id);`;
+        const normalizeBody = `if (!NAME.auth) throw new Error("anonymous");\nconst id = NAME.db.normalizeId("posts", args.id);\nif (id === null) throw new Error("x");\nreturn NAME.db.get("posts", id);`;
         const cases: [string, "action" | "mutation" | "query", string, (project: Project, directory: string) => ReadonlyArray<unknown>][] = [
             ["kv", "mutation", "await NAME.kv.get(args.key);", discoverKvKeyAccesses],
             ["mail", "action", `await NAME.mail.send({ to: args.email, subject: "x" });`, discoverMailRecipientAccesses],

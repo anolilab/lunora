@@ -85,8 +85,8 @@ export type Doc<T extends keyof DataModel> = DataModel[T];
  * Used by `TableReader.withIndex()` to constrain callers to declared names.
  */
 export interface IndexNamesByTable {
-    feedback: "by_upvotes" | "by_status";
-    votes: "by_voter" | "by_feedback_and_voter";
+    feedback: "by_status" | "by_upvotes";
+    votes: "by_feedback_and_voter" | "by_voter";
     comments: "by_feedback";
     summaries: "by_generated";
     ratelimit_buckets: "by_key";

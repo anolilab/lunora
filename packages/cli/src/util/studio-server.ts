@@ -30,8 +30,8 @@ import type { CodegenOptions } from "@lunora/codegen";
 import { detectAgentRules, resolveLazyFunctions } from "@lunora/config";
 import type { LocalEndpointHandler } from "@lunora/config/studio-host";
 import {
-    applyStudioAssetCache,
     assetContentType,
+    createStudioDocumentCache,
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
     handleSeedRequest,
@@ -44,6 +44,7 @@ import {
     resolveAdminToken,
     SCHEMA_EDIT_ENDPOINT,
     SEED_ENDPOINT,
+    sendStudioAsset,
     sendStudioDocument,
     serveJsonHandler,
     studioAssetsStamp,
@@ -53,11 +54,17 @@ import {
 /** Request paths the studio server reverse-proxies to the worker (admin RPC, RPC, WS). */
 const PROXY_PREFIX = "/_lunora";
 
-/** Forward an HTTP request to the worker and pipe its response back. */
 /** Milliseconds to wait for the worker to answer a proxied HTTP request before giving up. */
 const PROXY_RESPONSE_TIMEOUT_MS = 30_000;
 
-const proxyHttp = (request: IncomingMessage, response: ServerResponse, worker: URL): void => {
+/**
+ * Forward an HTTP request to the worker and pipe its response back.
+ *
+ * Both server routes use the default `timeoutMs`. The parameter exists for the
+ * `proxyHttp timeout` test in `__tests__/util/studio-server.test.ts`, which needs
+ * a timeout short enough to elapse inside a test run.
+ */
+const proxyHttp = (request: IncomingMessage, response: ServerResponse, worker: URL, timeoutMs: number = PROXY_RESPONSE_TIMEOUT_MS): void => {
     const upstream = httpRequest(
         {
             headers: { ...request.headers, host: worker.host },
@@ -67,6 +74,9 @@ const proxyHttp = (request: IncomingMessage, response: ServerResponse, worker: U
             port: worker.port,
         },
         (upstreamResponse) => {
+            // Headers arrived: the time-to-headers bound has done its job. A
+            // long-lived body (SSE, a slow admin operation) may go quiet longer.
+            upstream.setTimeout(0);
             response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
             // `pipeline`, not a bare `pipe`: a worker that dies after its headers
             // but before the body ends closes `upstreamResponse` WITHOUT the
@@ -82,10 +92,11 @@ const proxyHttp = (request: IncomingMessage, response: ServerResponse, worker: U
     );
 
     // A worker that accepts the connection and then never answers would other-
-    // wise hold the request open for as long as the browser waits. Bounded, so
-    // the failure surfaces as a 504 the console can render.
-    upstream.setTimeout(PROXY_RESPONSE_TIMEOUT_MS, () => {
-        upstream.destroy(new Error(`no response within ${String(PROXY_RESPONSE_TIMEOUT_MS)}ms`));
+    // wise hold the request open for as long as the browser waits. Bounded
+    // (time-to-headers only; disarmed in the response callback), so the failure
+    // surfaces as a 504 the console can render.
+    upstream.setTimeout(timeoutMs, () => {
+        upstream.destroy(new Error(`no response within ${String(timeoutMs)}ms`));
     });
 
     upstream.on("error", (error: Error) => {
@@ -179,33 +190,34 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     // doesn't).
     let assets = loadStudioAssets(options.logger, import.meta.url);
     let assetsStamp = studioAssetsStamp(import.meta.url);
-    const html = renderStudioHtml({
-        // The admin token grants full read/write over the local worker. Only embed
-        // it for a loopback bind: a non-loopback (LAN/0.0.0.0) bind would otherwise
-        // hand the token to any network client that GETs `/`.
-        adminToken: isLoopback ? resolveAdminToken(options.cwd) : undefined,
-        basePath: "/",
-        dataEditable: isLoopback,
-        rulesInstalled: detectAgentRules(options.cwd).installed,
-        runAsIdentity: isLoopback,
-        schemaEditable: isLoopback,
-        scriptSrc: "/studio.js",
-        styleHref: "/styles.css",
-    });
+    // Re-rendered when `.dev.vars` changes, so a rotated admin token is never
+    // served stale. Each `/` request costs a `stat`.
+    const currentDocument = createStudioDocumentCache(options.cwd, () =>
+        Buffer.from(
+            renderStudioHtml({
+                // The admin token grants full read/write over the local worker. Only embed
+                // it for a loopback bind: a non-loopback (LAN/0.0.0.0) bind would otherwise
+                // hand the token to any network client that GETs `/`.
+                adminToken: isLoopback ? resolveAdminToken(options.cwd) : undefined,
+                basePath: "/",
+                dataEditable: isLoopback,
+                rulesInstalled: detectAgentRules(options.cwd).installed,
+                runAsIdentity: isLoopback,
+                schemaEditable: isLoopback,
+                scriptSrc: "/studio.js",
+                styleHref: "/styles.css",
+            }),
+        ),
+    );
 
     const sendAsset = (request: IncomingMessage, response: ServerResponse, body: Buffer, contentType: string, fileName: string): void => {
         // The entry + stylesheet sit at stable, unhashed URLs, so without cache
         // headers the browser heuristically caches them and serves a rebuilt
         // `@lunora/studio` stale until a hard reload. Shared with the Vite route
         // (`@lunora/config/studio-host`) so the two hosts answer identically; it
-        // sends the `304` itself when the client already holds this version.
-        if (applyStudioAssetCache(request, response, fileName, assetsStamp)) {
-            return;
-        }
-
-        response.statusCode = 200;
-        response.setHeader("Content-Type", contentType);
-        response.end(body);
+        // sends the `304` itself when the client already holds this version, and
+        // compresses the body for a client that accepts it.
+        sendStudioAsset(request, response, body, contentType, fileName, assetsStamp);
     };
 
     const sendText = (response: ServerResponse, statusCode: number, body: string): void => {
@@ -285,7 +297,9 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         return true;
     };
 
-    const document = Buffer.from(html);
+    // Render up front, so a document that cannot render fails the server's start rather than its first request.
+    currentDocument();
+
     const server: Server = createServer((request, response) => {
         const pathname = requestPathname(request.url ?? "/");
 
@@ -383,7 +397,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
 
         // Everything else is an SPA route → serve the document (history fallback),
         // so a hard load of a deep link like `/data` boots the router there.
-        sendStudioDocument(response, document);
+        sendStudioDocument(response, currentDocument());
     });
 
     server.on("upgrade", (request, socket, head) => {
@@ -461,3 +475,6 @@ export interface StudioServerHandle {
     /** The URL to open in a browser. */
     url: string;
 }
+
+/** Exported for the proxy timeout test only; not part of the package surface. */
+export { proxyHttp };

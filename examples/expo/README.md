@@ -16,8 +16,8 @@ It's one folder with two halves:
 - `createLunoraClient` with `AsyncStorage` persistence — sends made offline are
   queued and flush on reconnect.
 - better-auth over Expo `SecureStore`, bridged into the Lunora client as a bearer
-  token (`expoBearerToken` → `setAuthToken`/`setSessionBearer`) so the live socket and
-  RPC run as the signed-in user.
+  token (`expoBearerToken` → `setAuthToken`) so the live socket (via the upgrade's
+  `Authorization` header) and RPC run as the signed-in user.
 - `useQuery` (live subscription), `useMutation` (optimistic), and
   `useConnectionStatus` (the live/offline badge) from `@lunora/react-native`.
 

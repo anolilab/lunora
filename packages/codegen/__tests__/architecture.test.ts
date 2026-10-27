@@ -295,7 +295,7 @@ export const signupDirect = mutation.input({}).mutation(async ({ ctx }) => {
 });
 
 const openInvoice = async (ctx: MutationCtx) => ctx.db.insert("invoices", { amount: 0 });
-const touchInvoice = async (ctx: MutationCtx, id: Id<"invoices">) => ctx.db.patch(id, { amount: 1 });
+const touchInvoice = async (ctx: MutationCtx, id: Id<"invoices">) => ctx.db.patch("invoices", id, { amount: 1 });
 
 export const signupViaHelper = mutation.input({}).mutation(async ({ ctx }) => {
     const id = await openInvoice(ctx);
@@ -314,7 +314,7 @@ async function pong(ctx: MutationCtx, n: number): Promise<void> {
 
 export const signupCycle = mutation.input({}).mutation(async ({ ctx }) => ping(ctx, 2));
 
-const voidInvoice = async (ctx: MutationCtx, id: Id<"invoices">) => ctx.db.delete(id); // @orphan
+const voidInvoice = async (ctx: MutationCtx, id: Id<"invoices">) => ctx.db.delete("invoices", id); // @orphan
 `;
 
     const writeHelperWrites = (): void => {

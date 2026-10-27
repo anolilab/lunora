@@ -96,6 +96,10 @@ export const memoryFiles = (): MemoryFiles => {
  * A data port over per-table row counts. Each erase batch clears up to 100 rows
  * from every table, as a real port would, and `remaining` reports what is left.
  */
+/** The key of a file an export run wrote, which sits under the request id and then the run id. */
+export const exportFileOf = (files: MemoryFiles, requestId: string, name: string): string =>
+    [...files.files.keys()].find((key) => key.startsWith(`${requestId}/`) && key.endsWith(`/${name}`)) ?? `${requestId}/<no ${name}>`;
+
 export const memoryData = (initial: Readonly<Record<string, number>> = {}): DataPort & { rows: Record<string, number> } => {
     const rows: Record<string, number> = { ...initial };
 
@@ -124,6 +128,7 @@ export const memoryTombstones = (): TombstonePort & { stored: Map<string, Date> 
         add: async (key, erasedAt) => {
             stored.set(key, erasedAt);
         },
+        has: async (key) => stored.has(key),
         keys: async () => new Set(stored.keys()),
         stored,
     };
@@ -212,6 +217,8 @@ export interface HarnessOptions {
     readonly datasets?: ReadonlyArray<Dataset>;
     readonly erasure?: ErasureOptions;
     readonly files?: MemoryFiles;
+    /** Replaces the counter that names requests and runs. */
+    readonly newId?: () => string;
     readonly now?: Date;
     readonly presets?: ReadonlyArray<PrivacyPreset>;
     /** Initial row counts for the default in-memory data port. */
@@ -250,6 +257,13 @@ export const setup = (options: HarnessOptions = {}): Harness => {
     const tombstoneSecret = options.tombstoneSecret === undefined ? SECRET : options.tombstoneSecret;
     let clock = options.now ?? NOW;
     let counter = 0;
+    const newId =
+        options.newId ??
+        (() => {
+            counter += 1;
+
+            return `r${String(counter)}`;
+        });
 
     const privacyFor = definePrivacy({
         datasets: options.datasets ?? [tasksDataset],
@@ -257,11 +271,7 @@ export const setup = (options: HarnessOptions = {}): Harness => {
             return {
                 data,
                 files,
-                newId: () => {
-                    counter += 1;
-
-                    return `r${String(counter)}`;
-                },
+                newId,
                 now: () => clock,
                 store,
                 ...(options.archive === undefined ? {} : { archive: options.archive }),

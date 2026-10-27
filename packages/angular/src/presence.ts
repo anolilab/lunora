@@ -2,6 +2,7 @@ import type { Signal } from "@angular/core";
 import { DestroyRef, inject, signal } from "@angular/core";
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 
+import { assertPresenceInterval } from "../../../shared/presence-interval";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { resolveLunoraClient } from "./client";
 import { runOutsideAngular, shouldOpenSubscription } from "./platform";
@@ -105,9 +106,7 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
     const present = signal<ReturnOf<L> | undefined>(undefined);
     const error = signal<SubscriptionError | undefined>(undefined);
 
-    if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
-        throw new RangeError(`presence intervalMs must be a positive number, got ${String(intervalMs)}`);
-    }
+    assertPresenceInterval(intervalMs);
 
     // Latest awareness data — updated by `setData`; read at heartbeat time so
     // changing data never resets the interval or closes the subscription.

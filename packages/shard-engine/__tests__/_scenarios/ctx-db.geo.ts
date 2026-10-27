@@ -164,7 +164,7 @@ const runGeoScenarios = (factory: () => SqlHarness): void => {
             expect(before).toStrictEqual([]);
 
             // Move it into range; the geohash companion must update.
-            await writer.patch(id, { location: TIMES_SQUARE });
+            await writer.patch("places", id, { location: TIMES_SQUARE });
 
             const after = await writer
                 .query("places")
@@ -207,7 +207,7 @@ const runGeoScenarios = (factory: () => SqlHarness): void => {
             expect(before.map((document) => document["name"])).toStrictEqual(["times-square", "brooklyn"]);
 
             // Deleting removes the geohash companion row (syncGeo(..., undefined)).
-            await writer.delete(id);
+            await writer.delete("places", id);
 
             const after = await writer
                 .query("places")
@@ -232,7 +232,7 @@ const runGeoScenarios = (factory: () => SqlHarness): void => {
             expect(before).toStrictEqual([]);
 
             // A full replace (not a patch) must also re-sync the companion.
-            await writer.replace(id, { location: TIMES_SQUARE, name: "mover" });
+            await writer.replace("places", id, { location: TIMES_SQUARE, name: "mover" });
 
             const after = await writer
                 .query("places")
@@ -257,7 +257,7 @@ const runGeoScenarios = (factory: () => SqlHarness): void => {
             expect(initial.map((document) => document["name"])).toStrictEqual(["cafe"]);
 
             // Soft delete removes the companion row so the point drops out of geo reads.
-            await writer.delete(id);
+            await writer.delete("spots", id);
 
             const deleted = await writer
                 .query("spots")
@@ -267,7 +267,7 @@ const runGeoScenarios = (factory: () => SqlHarness): void => {
             expect(deleted).toStrictEqual([]);
 
             // Restore clears the marker via patch, which re-adds the companion row.
-            await writer.restore?.(id);
+            await writer.restore?.("spots", id);
 
             const restored = await writer
                 .query("spots")

@@ -12,6 +12,7 @@ import { privacyPort, privacySweep } from "../lunora/requests";
 import schema from "../lunora/schema";
 import { addTask } from "../lunora/tasks";
 import { buildWorker } from "../src/server/worker";
+import { d1Double } from "./d1-double";
 import { tombstoneNamespace, workflowContext } from "./workflow-context";
 
 type Harness = ReturnType<typeof lunoraTest>;
@@ -66,7 +67,11 @@ describe("privacy housekeeping", () => {
 
         const shard = shardSpy();
 
-        await buildWorker({ SHARD: shard.namespace }).scheduled({ cron: DAILY, scheduledTime: 0 }, {}, fakeContext);
+        await buildWorker({ AUTH_SECRET: "test-auth-secret-0123456789abcdef", DB: d1Double().db, SHARD: shard.namespace }).scheduled(
+            { cron: DAILY, scheduledTime: 0 },
+            {},
+            fakeContext,
+        );
 
         expect(shard.bodies).toContainEqual({ args: {}, functionPath: "requests:privacySweep" });
     });
@@ -78,7 +83,7 @@ describe("privacy housekeeping", () => {
 
         await privacyWorkflows.exportHandler(
             workflowContext({
-                env: { PRIVACY_TOMBSTONES: tombstoneNamespace() },
+                env: { DB: d1Double().db, PRIVACY_TOMBSTONES: tombstoneNamespace() },
                 params: { requestId: request.id },
                 run: async (_reference, args) => t.run(async (ctx) => appCtx(ctx).runMutation(privacyPort, args)),
             }),
@@ -104,7 +109,7 @@ describe("privacy housekeeping", () => {
         // The download window passed: move the stored expiry into the past, as time would.
         const ready = await rowOf();
 
-        await t.run(async (ctx) => appCtx(ctx).db.patch(ready!._id, { expiresAt: Date.now() - 1000 }));
+        await t.run(async (ctx) => appCtx(ctx).db.patch("privacy_requests", ready!._id, { expiresAt: Date.now() - 1000 }));
 
         await expect(t.run(async (ctx) => appCtx(ctx).runMutation(privacySweep, {}))).resolves.toStrictEqual({ expired: [request.id], purged: 0 });
         await expect(rowOf()).resolves.toMatchObject({ status: "expired" });

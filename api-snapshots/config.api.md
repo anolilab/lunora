@@ -210,6 +210,7 @@ interface CelldDevSession {
 interface CelldDevSessionOptions {
     log: (line: string, origin: CelldLineOrigin) => void;
     port: number;
+    probe?: () => Promise<CelldToolchainProbe>;
     projectRoot: string;
     spawn?: DevProcessSpawner;
 }
@@ -221,6 +222,26 @@ interface CelldDevSessionOptions {
 interface CelldLineOrigin {
     stream: "stderr" | "stdout";
     tag: string;
+}
+```
+
+### `CelldToolchainProbe` (interface)
+
+```ts
+interface CelldToolchainProbe {
+    errors: string[];
+    warnings: string[];
+}
+```
+
+### `CelldToolchainProbeOptions` (interface)
+
+```ts
+interface CelldToolchainProbeOptions {
+    dryRun?: boolean;
+    env?: Readonly<Record<string, string | undefined>>;
+    purpose: "deploy" | "dev";
+    run?: CelldCommandRunner;
 }
 ```
 
@@ -280,6 +301,12 @@ interface ContainerLogStreamOptions {
     onUnavailable?: (message: string) => void;
     pollIntervalMs?: number;
 }
+```
+
+### `D1_PLACEHOLDER_ID` (const)
+
+```ts
+const D1_PLACEHOLDER_ID = "<replace-with-d1-create-id>";
 ```
 
 ### `DEFAULT_BUNDLE_META_PATH` (const)
@@ -739,6 +766,8 @@ interface InferredBindings {
     containers: InferredContainer[];
     durableObjects: DurableObjectSpec[];
     flagshipBinding?: string;
+    hostsEventLog: boolean;
+    hostsShardRegistry: boolean;
     jurisdiction?: SchemaInfo["jurisdiction"];
     needsD1: boolean;
     queues: InferredQueue[];
@@ -752,6 +781,7 @@ interface InferredBindings {
     usesAuth: boolean;
     usesBrowser: boolean;
     usesCimdWorkers: boolean;
+    usesEventLogClient: boolean;
     usesFlags: boolean;
     usesHyperdrive: boolean;
     usesImages: boolean;
@@ -1011,6 +1041,7 @@ interface PostCodegenHookResult {
 interface ProjectedConfig {
     configPath: string;
     dropped: ReadonlyArray<string>;
+    vars: Readonly<Record<string, unknown>>;
     write: () => void;
 }
 ```
@@ -1438,6 +1469,12 @@ const ensureDevVariablesExample: (cwd: string, packageNames: ReadonlyArray<strin
 const ensureDevWorkerEnv: (projectRoot: string, info: (message: string) => void) => void;
 ```
 
+### `ensureGitignoreEntries` (const)
+
+```ts
+const ensureGitignoreEntries: (directory: string, patterns: ReadonlyArray<string>) => string[];
+```
+
 ### `escapeRegExp` (const)
 
 ```ts
@@ -1460,6 +1497,7 @@ const fillDevSecrets: (deps: {
     cwd: string;
     info?: (message: string) => void;
     randomHex?: (bytes: number) => string;
+    secretSources?: ReadonlyArray<string>;
 }) => FillDevSecretsResult;
 ```
 
@@ -1535,7 +1573,7 @@ const isMergedRoleModule: (module: string) => boolean;
 ### `isMintableSecretKey` (const)
 
 ```ts
-const isMintableSecretKey: (key: string) => boolean;
+const isMintableSecretKey: (key: string, value: string, mintable?: ReadonlySet<string>) => boolean;
 ```
 
 ### `isPlaceholderValue` (const)
@@ -1566,6 +1604,12 @@ const isRunnableTarget: (target: string) => boolean;
 
 ```ts
 const lunoraLine: (message: string) => string;
+```
+
+### `mintableSecretKeysFor` (const)
+
+```ts
+const mintableSecretKeysFor: (packageNames: ReadonlyArray<string>) => ReadonlySet<string>;
 ```
 
 ### `padBadge` (const)
@@ -1606,6 +1650,7 @@ const parseSchema: (source: string) => ParseSchemaResult;
 ```ts
 const planDevSecretsFill: (input: {
     existingContent: string;
+    mintable?: ReadonlySet<string>;
     randomHex?: (bytes: number) => string;
 }) => DevSecretsFillPlan;
 ```
@@ -1634,6 +1679,12 @@ const planDevVariablesScaffold: (input: {
 
 ```ts
 const planToolchainInvocation: (driver: DeployDriver, projectRoot: string, purpose: ProjectionPurpose, build: (configPath: string | undefined) => ToolchainCommand) => ToolchainInvocation;
+```
+
+### `probeCelldToolchain` (const)
+
+```ts
+const probeCelldToolchain: (options: CelldToolchainProbeOptions) => Promise<CelldToolchainProbe>;
 ```
 
 ### `projectUsesUmbrella` (const)
@@ -1891,6 +1942,15 @@ const wireRlsIntoProcedure: (source: string, edit: WireRlsEdit, serverModule: st
 const writeApiSpecMarker: (projectRoot: string, apiSpec: MarkedApiSpec | undefined) => void;
 ```
 
+### `writeCelldDevProjection` (const)
+
+```ts
+const writeCelldDevProjection: (options: {
+    probe?: () => Promise<CelldToolchainProbe>;
+    projectRoot: string;
+}) => Promise<string[]>;
+```
+
 ### `writeDevServerState` (const)
 
 ```ts
@@ -2014,6 +2074,7 @@ interface AlchemyTranslation {
 
 ```ts
 interface AssertWranglerOptions {
+    cache?: DiscoveryCache;
     projectRoot: string;
     schemaDir: string;
 }
@@ -2377,6 +2438,7 @@ interface ReconcileResult {
 
 ```ts
 interface ReconcileProject {
+    cache?: DiscoveryCache;
     projectRoot: string;
     schemaDir: string;
     target?: string;
@@ -2785,6 +2847,7 @@ interface WranglerObservabilityTraces {
 
 ```ts
 interface WranglerProjectValidationOptions {
+    cache?: DiscoveryCache;
     environment?: string;
     projectRoot: string;
     schemaDir?: string;
@@ -3062,7 +3125,7 @@ interface LocalEndpointContext {
 ### `LocalEndpointHandler` (type)
 
 ```ts
-type LocalEndpointHandler = (request: LocalEndpointRequest) => LocalEndpointResponse;
+type LocalEndpointHandler = (request: LocalEndpointRequest) => LocalEndpointResponse | Promise<LocalEndpointResponse>;
 ```
 
 ### `LocalEndpointRequest` (interface)
@@ -3146,6 +3209,12 @@ const STUDIO_SCRIPT_PATH: string;
 
 ```ts
 const STUDIO_STYLE_PATH: string;
+```
+
+### `STUDIO_WRITE_TEMP_SUFFIX` (const)
+
+```ts
+const STUDIO_WRITE_TEMP_SUFFIX = ".lunora-tmp";
 ```
 
 ### `SchemaEditRequest` (interface)
@@ -3252,22 +3321,34 @@ interface WirePolicyEdit extends WireRlsEdit {
 }
 ```
 
-### `applyStudioAssetCache` (const)
-
-```ts
-const applyStudioAssetCache: (request: IncomingMessage, response: ServerResponse, fileName: string, stamp: number | undefined) => boolean;
-```
-
 ### `assetContentType` (const)
 
 ```ts
 const assetContentType: (fileName: string) => string;
 ```
 
+### `consumeStudioWrite` (const)
+
+```ts
+const consumeStudioWrite: (path: string, now?: number) => boolean;
+```
+
+### `createStudioDocumentCache` (const)
+
+```ts
+const createStudioDocumentCache: <T>(root: string, render: () => T) => (() => T);
+```
+
 ### `createStudioMiddleware` (const)
 
 ```ts
 const createStudioMiddleware: (options: StudioMiddlewareOptions) => ((request: IncomingMessage, response: ServerResponse, next: () => void) => void);
+```
+
+### `devVariablesStamp` (const)
+
+```ts
+const devVariablesStamp: (root: string) => string;
 ```
 
 ### `handlePolicyScaffoldRequest` (const)
@@ -3285,7 +3366,7 @@ const handleSchemaEditRequest: (request: SchemaEditRequest) => SchemaEditRespons
 ### `handleSeedRequest` (const)
 
 ```ts
-const handleSeedRequest: (request: SeedRequest) => SeedResponse;
+const handleSeedRequest: (request: SeedRequest) => Promise<SeedResponse>;
 ```
 
 ### `headerValue` (const)
@@ -3354,6 +3435,12 @@ const resolveAdminToken: (root: string) => string | undefined;
 const resolveStandaloneDirectory: (resolveFrom?: string) => string | undefined;
 ```
 
+### `sendStudioAsset` (const)
+
+```ts
+const sendStudioAsset: (request: IncomingMessage, response: ServerResponse, body: Buffer, contentType: string, fileName: string, stamp: number | undefined) => void;
+```
+
 ### `sendStudioDocument` (const)
 
 ```ts
@@ -3398,6 +3485,22 @@ interface BindingEntry {
     id?: unknown;
     remote?: boolean;
 }
+```
+
+### `CelldCommandResult` (interface)
+
+```ts
+interface CelldCommandResult {
+    code: number;
+    error?: string;
+    stdout: string;
+}
+```
+
+### `CelldCommandRunner` (type)
+
+```ts
+type CelldCommandRunner = (command: string, args: ReadonlyArray<string>) => Promise<CelldCommandResult | undefined>;
 ```
 
 ### `DockerLogStream` (interface)

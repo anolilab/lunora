@@ -41,6 +41,8 @@ interface Subscription {
     readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;
+    /** Store-maintained write counter. The kit does not read it; it is mirrored so the drift gate sees every field. */
+    readonly revision?: number;
     readonly state: "active" | "canceled" | "past_due" | "paused" | "trialing";
     readonly updatedAt: number;
 }

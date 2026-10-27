@@ -50,6 +50,17 @@ interface ExportShardArgs {
 }
 
 interface ImportShardArgs {
+    /**
+     * Check every row and report what the import would reject, writing nothing.
+     *
+     * Only the shape is checked here: the envelope, undeclared fields and each
+     * declared validator. A row that passes can still fail the real import when
+     * it writes. Its `_id` may already be in use (a conflict, or an `ID_COLLISION`
+     * when another table holds it), and the writer enforces foreign keys and
+     * unique indexes. Those are only knowable by writing, so a dry run is a
+     * partial answer: a clean dry run does not promise a clean import.
+     */
+    dryRun?: boolean;
     /** Inbound NDJSON rows. Order is preserved on disk. */
     rows: ReadonlyArray<ExportRow>;
     /** Starting line number (1-based) for error attribution. Defaults to 1. */
@@ -218,7 +229,8 @@ const validateImportRow = (schema: SchemaLike, table: string, record: Record<str
  * All `inserted` counts are bucketed per table.
  *
  * The writer is responsible for invoking this from within the appropriate
- * transaction; this helper takes no SQL handle of its own.
+ * transaction; this helper takes no SQL handle of its own. With `dryRun` set it
+ * writes nothing and reports only the shape errors (see `ImportShardArgs.dryRun`).
  */
 /** Outcome of importing one row: a recorded error, a skipped conflict, or a successful insert into `table`. */
 type RowOutcome = { error: ImportError; kind: "error" } | { kind: "conflict" } | { kind: "inserted"; table: string };
@@ -245,7 +257,7 @@ const locateExistingId = async (writer: DatabaseWriterLike, table: string, expli
             return located === null ? undefined : located.tableName;
         }
 
-        return (await writer.get(explicitId, table)) === null ? undefined : table;
+        return (await writer.get(table, explicitId)) === null ? undefined : table;
     } catch {
         // An unknown-table failure here is surfaced when the insert runs against
         // the real schema.
@@ -269,32 +281,43 @@ const locateExistingId = async (writer: DatabaseWriterLike, table: string, expli
 const stripDerivedFields = (document: Record<string, unknown>): Record<string, unknown> =>
     COMMIT_SEQ_FIELD in document ? Object.fromEntries(Object.entries(document).filter(([key]) => key !== COMMIT_SEQ_FIELD)) : document;
 
-/** Validate, conflict-check and insert one inbound row, returning its outcome. */
-const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row: ExportRow, line: number): Promise<RowOutcome> => {
+/**
+ * The first shape error in an inbound row, or `undefined` when the row fits its
+ * table. This is the whole of a dry run, and the first half of a real import.
+ * Sharing it is what keeps a dry run from approving a row the import would refuse.
+ */
+const rowShapeError = (schema: SchemaLike, row: ExportRow, line: number): ImportError | undefined => {
     const { table } = row;
-    let { doc } = row;
 
     if (typeof table !== "string" || table.length === 0) {
-        return { error: { code: "BAD_ROW", line, message: "row is missing `table`", table }, kind: "error" };
+        return { code: "BAD_ROW", line, message: "row is missing `table`", table };
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `doc` is parsed wire data; the declared type can't be trusted at runtime
-    if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
-        return { error: { code: "BAD_ROW", line, message: "row is missing or malformed `doc`", table }, kind: "error" };
+    if (!row.doc || typeof row.doc !== "object" || Array.isArray(row.doc)) {
+        return { code: "BAD_ROW", line, message: "row is missing or malformed `doc`", table };
     }
 
-    doc = stripDerivedFields(doc);
+    const failure = validateImportRow(schema, table, stripDerivedFields(row.doc));
 
-    const failure = validateImportRow(schema, table, doc);
+    return failure === undefined ? undefined : { code: "VALIDATION_ERROR", line, message: failure, table };
+};
 
-    if (failure !== undefined) {
-        return { error: { code: "VALIDATION_ERROR", line, message: failure, table }, kind: "error" };
+/** Validate, conflict-check and insert one inbound row, returning its outcome. */
+const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row: ExportRow, line: number): Promise<RowOutcome> => {
+    const shapeError = rowShapeError(schema, row, line);
+
+    if (shapeError !== undefined) {
+        return { error: shapeError, kind: "error" };
     }
+
+    const { table } = row;
+    const stripped = stripDerivedFields(row.doc);
 
     // v1 mode is `append`: when `_id` collides in its own table, skip the row and
     // count it. The same id under a DIFFERENT table is not a conflict to skip —
     // it is unrepresentable (ids resolve per shard, not per table), so say so.
-    const explicitId = typeof doc["_id"] === "string" ? doc["_id"] : undefined;
+    const explicitId = typeof stripped["_id"] === "string" ? stripped["_id"] : undefined;
 
     if (explicitId !== undefined) {
         const owner = await locateExistingId(writer, table, explicitId);
@@ -312,7 +335,7 @@ const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row:
         // Trusted import path: this is a snapshot round-trip, so a `_id`
         // carried on the row is intentional and must be preserved (the default
         // mutation path drops client-chosen ids).
-        await writer.insert(table, doc, { allowExplicitId: true });
+        await writer.insert(table, stripped, { allowExplicitId: true });
 
         return { kind: "inserted", table };
     } catch (error: unknown) {
@@ -337,6 +360,19 @@ const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, a
     for (const row of args.rows) {
         line += 1;
 
+        // A dry run never reaches the writer: it reports the shape errors and
+        // nothing else, so the caller can refuse a file before the first real
+        // chunk lands.
+        if (args.dryRun === true) {
+            const shapeError = rowShapeError(schema, row, line);
+
+            if (shapeError !== undefined) {
+                errors.push(shapeError);
+            }
+
+            continue;
+        }
+
         // eslint-disable-next-line no-await-in-loop -- rows are inserted in stream order through one SQLite handle; line-number attribution depends on the sequence
         const outcome = await importOneRow(writer, schema, row, line);
 
@@ -360,6 +396,7 @@ interface ExportShardAdminArgs {
 
 /** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
 interface ImportShardAdminArgs {
+    dryRun: boolean;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -400,7 +437,8 @@ const parseImportShardArgs = (args: Record<string, unknown>): ImportShardAdminAr
 
     const startLine = typeof args["startLine"] === "number" ? args["startLine"] : undefined;
 
-    return { rows, startLine };
+    // Off unless asked for: a caller that never heard of a dry run keeps writing, as it always has.
+    return { dryRun: args["dryRun"] === true, rows, startLine };
 };
 
 export { exportShardRows, importShardRows, parseExportShardArgs, parseImportShardArgs, selectExportTables, validateImportRow };

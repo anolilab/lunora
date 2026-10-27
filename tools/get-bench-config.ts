@@ -19,8 +19,14 @@ import { defineConfig } from "vitest/config";
  * `benchmark.include` covers both `.bench.ts` and `.bench.tsx` (mail renders
  * React Email templates), and JSX is compiled with the automatic runtime so
  * `.tsx` benches need no explicit `React` import.
+ *
+ * `codspeed` defaults to the root install of `@codspeed/vitest-plugin`. Its runner
+ * imports `vitest/suite` and reads the benches from that vitest copy, so a package
+ * that resolves a different vitest (`@lunora/vite`, on Vite 8, gets its own peer
+ * variant) must pass the plugin from its own config, or every bench fails in
+ * CodSpeed CI with "fn is not a function".
  */
-export const getBenchConfig = (options: ViteUserConfig = {}) =>
+export const getBenchConfig = (options: ViteUserConfig = {}, codspeed: typeof codspeedPlugin = codspeedPlugin) =>
     defineConfig({
         ...options,
         esbuild: {
@@ -28,7 +34,7 @@ export const getBenchConfig = (options: ViteUserConfig = {}) =>
             jsxImportSource: "react",
             ...options.esbuild,
         },
-        plugins: [codspeedPlugin(), ...(options.plugins ?? [])],
+        plugins: [codspeed(), ...(options.plugins ?? [])],
         test: {
             environment: "node",
             // CodSpeed instruments benches under cachegrind (~50-100x slower than

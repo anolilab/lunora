@@ -1,3 +1,75 @@
+## @lunora/react [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.266...@lunora/react@1.0.0-alpha.267) (2026-10-27)
+
+### Performance Improvements
+
+* **react:** skip foreign cache events in usePaginatedQuery ([#1371](https://github.com/anolilab/lunora/issues/1371)) ([1956a48](https://github.com/anolilab/lunora/commit/1956a487f0a1f7f105ad1e6d503676d2afce55c8))
+
+### Code Refactoring
+
+* **client:** host the framework-neutral auth and query-options cores ([#1358](https://github.com/anolilab/lunora/issues/1358)) ([861397a](https://github.com/anolilab/lunora/commit/861397afe2b363999bbcd1400d6a0190715c6fee))
+
+## @lunora/react [1.0.0-alpha.266](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.265...@lunora/react@1.0.0-alpha.266) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.253
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.172
+
+## @lunora/react [1.0.0-alpha.265](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.264...@lunora/react@1.0.0-alpha.265) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.252
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.171
+
+## @lunora/react [1.0.0-alpha.264](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.263...@lunora/react@1.0.0-alpha.264) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.251
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.170
+
+## @lunora/react [1.0.0-alpha.263](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.262...@lunora/react@1.0.0-alpha.263) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.250
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.169
+
+## @lunora/react [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.261...@lunora/react@1.0.0-alpha.262) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.249
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.168
+
+## @lunora/react [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.260...@lunora/react@1.0.0-alpha.261) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.248
+
+## @lunora/react [1.0.0-alpha.260](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.259...@lunora/react@1.0.0-alpha.260) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.247
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.167
+
 ## @lunora/react [1.0.0-alpha.259](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.258...@lunora/react@1.0.0-alpha.259) (2026-10-24)
 
 

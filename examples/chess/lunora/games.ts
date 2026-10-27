@@ -48,8 +48,8 @@ const settle = async (ctx: MutationCtx, game: Document_<"games">, result: "black
 
     const updates = ratingUpdates(white, black, result);
 
-    await ctx.db.patch(white._id, updates.white);
-    await ctx.db.patch(black._id, updates.black);
+    await ctx.db.patch("profiles", white._id, updates.white);
+    await ctx.db.patch("profiles", black._id, updates.black);
 };
 
 /** Signed-in app, so limits key on the player rather than the IP. */
@@ -60,7 +60,7 @@ const PROMOTION_CHOICES = new Set<PieceType>(["B", "N", "Q", "R"]);
 
 export const get = query
     .input({ gameId: v.id("games") })
-    .query(async ({ args: { gameId }, ctx }): Promise<Document_<"games"> | null> => (await ctx.db.get(gameId)) ?? null);
+    .query(async ({ args: { gameId }, ctx }): Promise<Document_<"games"> | null> => (await ctx.db.get("games", gameId)) ?? null);
 
 /** The move list, oldest first — the board's history panel subscribes to this. */
 export const moves = query.input({ gameId: v.id("games") }).query(async ({ args: { gameId }, ctx }): Promise<Document_<"moves">[]> =>
@@ -102,7 +102,7 @@ export const start = mutation
     .use(rateLimit(mutationLimiter, "move", byPlayer))
     .input({ lobbyId: v.id("lobbies") })
     .mutation(async ({ args: { lobbyId }, ctx }): Promise<Id<"games">> => {
-        const lobby = await ctx.db.get(lobbyId);
+        const lobby = await ctx.db.get("lobbies", lobbyId);
 
         if (!lobby) {
             throw new LunoraError("NOT_FOUND", "lobby not found");
@@ -138,7 +138,7 @@ export const start = mutation
 
         // The guest is subscribed to the lobby, so writing the id here is how they
         // learn the game exists — no polling, no second channel.
-        await ctx.db.patch(lobbyId, { gameId, isOpen: false });
+        await ctx.db.patch("lobbies", lobbyId, { gameId, isOpen: false });
 
         return gameId;
     });
@@ -180,7 +180,7 @@ export const makeMove = mutation
             throw new LunoraError("UNAUTHENTICATED", "sign in to play");
         }
 
-        const game = await ctx.db.get(gameId);
+        const game = await ctx.db.get("games", gameId);
 
         if (!game) {
             throw new LunoraError("NOT_FOUND", "game not found");
@@ -236,7 +236,7 @@ export const makeMove = mutation
         // rather than leave it alone — so the end-of-game fields are spread in
         // only when the game actually ended. `drawOfferedBy` is set to `null`
         // because a move always withdraws a pending offer.
-        await ctx.db.patch(gameId, {
+        await ctx.db.patch("games", gameId, {
             drawOfferedBy: null,
             moveCount: game.moveCount + 1,
             position: serializeState(next),
@@ -261,7 +261,7 @@ export const makeMove = mutation
  * that is copied is a guard that eventually diverges.
  */
 const requirePlayer = async (ctx: MutationCtx, gameId: Id<"games">): Promise<Document_<"games">> => {
-    const game = await ctx.db.get(gameId);
+    const game = await ctx.db.get("games", gameId);
 
     if (game?.status !== "active") {
         throw new LunoraError("CONFLICT", "this game is not in progress");
@@ -284,7 +284,7 @@ export const resign = mutation
 
         const result = ctx.auth.userId === game.whiteId ? "black_wins" : "white_wins";
 
-        await ctx.db.patch(gameId, {
+        await ctx.db.patch("games", gameId, {
             drawOfferedBy: null,
             endedAt: Date.now(),
             result,
@@ -303,7 +303,7 @@ export const offerDraw = mutation
         await requirePlayer(ctx, gameId);
 
         ctx.log.info("draw offered", { by: ctx.auth.userId, gameId });
-        await ctx.db.patch(gameId, { drawOfferedBy: ctx.auth.userId });
+        await ctx.db.patch("games", gameId, { drawOfferedBy: ctx.auth.userId });
     });
 
 export const respondToDraw = mutation
@@ -318,12 +318,12 @@ export const respondToDraw = mutation
 
         if (!accept) {
             ctx.log.info("draw declined", { gameId });
-            await ctx.db.patch(gameId, { drawOfferedBy: null });
+            await ctx.db.patch("games", gameId, { drawOfferedBy: null });
 
             return;
         }
 
         ctx.log.info("draw accepted", { gameId });
-        await ctx.db.patch(gameId, { drawOfferedBy: null, endedAt: Date.now(), result: "draw", status: "completed" });
+        await ctx.db.patch("games", gameId, { drawOfferedBy: null, endedAt: Date.now(), result: "draw", status: "completed" });
         await settle(ctx, game, "draw");
     });

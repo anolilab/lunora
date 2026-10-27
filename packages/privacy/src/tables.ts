@@ -33,6 +33,8 @@ const privacyExtension: SchemaExtension<Record<"archive" | "events" | "requests"
             erasureGraceUntil: v.optional(v.number()),
             expiresAt: v.optional(v.number()),
             extendedDueAt: v.optional(v.number()),
+            /** Set `true` when a failed erasure stopped before its tombstone, so it erased nothing. Absent or `false` blocks exports. */
+            nothingErased: v.optional(v.boolean()),
             reason: v.optional(v.string()),
             receivedAt: v.number(),
             /** The id the package hands out. Stored as a column so the app's table row id stays the app's own. */

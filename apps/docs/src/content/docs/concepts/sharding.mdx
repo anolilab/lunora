@@ -261,6 +261,18 @@ export { ShardRegistryDO } from "./lunora/_generated/shardRegistry.js";
 
 `lunora dev` adds the binding and migration for you once the class is exported.
 
+The registry decides which shards every fan-out reaches, so it only answers
+requests signed with `LUNORA_RELAY_SECRET` and refuses all of them while that
+secret is unset. Set the same value on the worker and on every Durable Object
+(it is one Worker secret). `lunora dev` generates it into `.dev.vars` for the app
+that exports `ShardRegistryDO`. For production run `lunora env push` or
+`wrangler secret put LUNORA_RELAY_SECRET`. A worker that only calls a registry
+another worker hosts needs no secret: it binds the host's `ShardRegistryEntrypoint`
+as a service binding (`lunora.config` `services`) and passes that binding as its
+registry. Without the secret on the host, a shard logs that its
+registration failed, and a fan-out over a `.shardBy()` table
+fails with an error naming `LUNORA_RELAY_SECRET`.
+
 Without a registry, those fan-outs refuse a `.shardBy()` table with a `400`
 naming it rather than quietly covering the default shard alone. Root and
 `.global()` tables don't need a registry.

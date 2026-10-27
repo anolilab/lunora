@@ -23,10 +23,12 @@ import { lunoraQueryKey } from "./query-key";
  * `usePreloadedQuery`.
  */
 
-// The TanStack options factory is transport-free, so it works server-side too:
-// `await queryClient.ensureQueryData(lunoraQueryOptions(serverClient, fn, args))`.
-export type { LunoraQueryOptions } from "./query-options";
-export { lunoraQueryOptions } from "./query-options";
+export type { ArgsOf, FunctionReference, Preloaded, ReturnOf } from "@lunora/client";
+// Re-exported so callers can do all server-side data loading from one import.
+// `preloadQuery`/`preloadedQueryResult` are the explicit-token flow; `dehydrate`
+// is a pure serializer (server-safe); `HydrationBoundary` carries its own client
+// boundary from TanStack, so re-exporting it here is just a convenience pass-through.
+export { preloadedQueryResult, preloadQuery } from "@lunora/client";
 
 /**
  * Run a query on the server and seed `queryClient` with the result under the
@@ -107,12 +109,10 @@ export const fetchAction = async <F extends FunctionReference>(
     callOptions: ServerCallOptions = {},
 ): Promise<ReturnOf<F>> => createServerClient(options).action<F>(function_, args, { shardKey: callOptions.shardKey });
 
-export type { ArgsOf, FunctionReference, Preloaded, ReturnOf } from "@lunora/client";
-// Re-exported so callers can do all server-side data loading from one import.
-// `preloadQuery`/`preloadedQueryResult` are the explicit-token flow; `dehydrate`
-// is a pure serializer (server-safe); `HydrationBoundary` carries its own client
-// boundary from TanStack, so re-exporting it here is just a convenience pass-through.
-export { preloadedQueryResult, preloadQuery } from "@lunora/client";
+// The TanStack options factory is transport-free, so it works server-side too:
+// `await queryClient.ensureQueryData(lunoraQueryOptions(serverClient, fn, args))`.
+export type { LunoraQueryOptions } from "@lunora/client/query";
+export { lunoraQueryOptions } from "@lunora/client/query";
 // `createServerClient`/`ServerClientOptions` are sourced from `@lunora/client/ssr`, the
 // framework-neutral home of the server contract, so there is one implementation
 // shared across every adapter. They are re-exported (not re-implemented) here so

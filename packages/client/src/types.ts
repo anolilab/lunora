@@ -415,6 +415,24 @@ export interface LunoraClientOptions {
      * `/api/auth` (matching `@lunora/auth`'s `DEFAULT_AUTH_BASE_PATH`).
      */
     authBasePath?: string;
+
+    /**
+     * Whether sockets present the `setAuthToken` bearer on the upgrade. Turn it on
+     * when the session is a bearer and not a cookie on the API's origin — an
+     * external identity provider's JWT (Clerk, WorkOS, …) or a cross-origin API.
+     *
+     * A browser cannot set `Authorization` on a WebSocket, so the bearer is
+     * offered as a `Sec-WebSocket-Protocol` entry (`lunora.bearer.<base64url>`),
+     * never in the URL; the worker reads it for `resolveIdentity` only.
+     * `@lunora/react-native` turns this on by default on native, where the bearer
+     * also rides an `Authorization` header (the header wins).
+     *
+     * A sign-in from signed-out then reconnects the shard sockets cold, and a
+     * refreshed bearer bounces them warm, so the server sees the current token.
+     * The default `false` keeps cookie-session sockets (and their live values)
+     * alone.
+     */
+    authTokenOnUpgrade?: boolean;
     bookmarkStorage?: BookmarkStorage;
 
     /**
@@ -1316,10 +1334,16 @@ export interface GlobalTablePage {
 /**
  * One equality constraint a facet-value click adds to the global browser's view
  * (`column = value`). `value` is the raw stored scalar the facet returned, sent
- * as-is and bound server-side, so it never injects SQL.
+ * as-is and bound server-side, so it never injects SQL. The server accepts only
+ * `eq` on a top-level column and rejects `operator` or `path` values it cannot
+ * compile, so the browser never silently gets an equality it did not ask for.
  */
 export interface GlobalFilterClause {
     column: string;
+    /** Must be absent or `"eq"`; the server rejects any other operator. */
+    operator?: string;
+    /** Must be absent or empty; the server rejects a nested path. */
+    path?: string[];
     value: unknown;
 }
 

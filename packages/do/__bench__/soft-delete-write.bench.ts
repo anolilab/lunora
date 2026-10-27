@@ -38,8 +38,8 @@ beforeAll(async () => {
 describe("write throughput — soft delete", () => {
     bench("soft delete + restore round-trip (rank-companion drop + re-add)", async () => {
         // delete() → soft delete (marker UPDATE, rank entry dropped, onWrite delete)
-        await writer.delete(SEED_ID, "scores");
+        await writer.delete("scores", SEED_ID);
         // restore() → clears the marker + force-re-inserts the rank entry
-        await writer.restore?.(SEED_ID, "scores");
+        await writer.restore?.("scores", SEED_ID);
     });
 });

@@ -172,7 +172,7 @@ ${tableDefinitions.join("\n")}
 
         for (const row of rows) {
             if (row.createdAt < args.before) {
-                await ctx.db.delete(row._id);
+                await ctx.db.delete("${table}", row._id);
             }
         }
 

@@ -31,7 +31,7 @@ export const byStripeId = internalQuery.input({ stripeId: v.string() }).query(as
 });
 
 export const applyStripeSync = internalMutation.input({ id: v.id("customers"), remote: v.object({ plan: v.string() }) }).mutation(async ({ ctx, args }) => {
-    await ctx.db.patch(args.id, { plan: args.remote.plan });
+    await ctx.db.patch("customers", args.id, { plan: args.remote.plan });
 });
 ```
 

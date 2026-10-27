@@ -111,7 +111,7 @@ That covers the common case of copying a field down from a parent:
 
 ```ts
 up: async (doc, ctx) => {
-    const thread = await ctx.db.get(String(doc.threadId), "threads");
+    const thread = await ctx.db.get("threads", String(doc.threadId));
 
     return thread ? { ...doc, userId: thread.userId } : undefined;
 },

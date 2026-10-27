@@ -19,6 +19,8 @@ interface CompilerLike {
         afterCompile: AsyncTapHook<CompilationLike>;
         beforeCompile: AsyncTapHook<unknown>;
     };
+    modifiedFiles?: ReadonlySet<string>;
+    removedFiles?: ReadonlySet<string>;
     watchMode?: boolean;
 }
 ```

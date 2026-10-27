@@ -81,7 +81,112 @@ describe(buildModelMessages, () => {
             history: [{ content: "", role: "assistant", seq: 0, toolCalls: [{ id: "c", input: {}, name: "t" }] }],
         });
 
-        expect(messages).toHaveLength(1);
+        // The second message is the synthetic result pairing the dangling call.
+        expect(messages).toHaveLength(2);
         expect(messages[0]?.content).toStrictEqual([{ input: {}, toolCallId: "c", toolName: "t", type: "tool-call" }]);
+    });
+
+    it("pairs a tool call the interrupted run never answered with a synthetic result", () => {
+        const messages = buildModelMessages({
+            history: [
+                { content: "do both", role: "user", seq: 0 },
+                {
+                    content: "",
+                    role: "assistant",
+                    seq: 1,
+                    toolCalls: [
+                        { id: "call_1", input: {}, name: "first" },
+                        { id: "call_2", input: {}, name: "second" },
+                    ],
+                },
+                { content: "done", role: "tool", seq: 2, toolCallId: "call_1", toolName: "first" },
+            ],
+        });
+
+        expect(messages.filter((message) => message.role === "tool")).toHaveLength(2);
+        expect(messages[1]?.role).toBe("assistant");
+        expect(messages[2]).toStrictEqual({
+            content: [{ output: { type: "text", value: "done" }, toolCallId: "call_1", toolName: "first", type: "tool-result" }],
+            role: "tool",
+        });
+        expect(messages[3]).toStrictEqual({
+            content: [
+                {
+                    output: { type: "text", value: "Tool call outcome unknown: the run was interrupted before its result was recorded." },
+                    toolCallId: "call_2",
+                    toolName: "second",
+                    type: "tool-result",
+                },
+            ],
+            role: "tool",
+        });
+    });
+
+    it("pairs a call whose only tool row is an awaiting-approval placeholder", () => {
+        const messages = buildModelMessages({
+            history: [
+                { content: "delete it", role: "user", seq: 0 },
+                { content: "", role: "assistant", seq: 1, toolCalls: [{ id: "call_a", input: {}, name: "remove" }] },
+                { content: "", role: "tool", seq: 2, status: "awaiting_approval", toolCallId: "call_a", toolName: "remove" },
+            ],
+        });
+
+        const results = messages.filter((message) => message.role === "tool");
+
+        expect(results).toHaveLength(1);
+        expect(results[0]).toStrictEqual({
+            content: [
+                {
+                    output: { type: "text", value: "Tool call is awaiting approval and has not run." },
+                    toolCallId: "call_a",
+                    toolName: "remove",
+                    type: "tool-result",
+                },
+            ],
+            role: "tool",
+        });
+    });
+
+    it("pairs a call whose only tool row is an interrupted awaiting-secret marker", () => {
+        const messages = buildModelMessages({
+            history: [
+                { content: "store my key", role: "user", seq: 0 },
+                { content: "", role: "assistant", seq: 1, toolCalls: [{ id: "call_s", input: {}, name: "requestKey" }] },
+                { content: "Awaiting a secret", role: "tool", seq: 2, status: "awaiting_secret", toolCallId: "call_s", toolName: "requestKey" },
+            ],
+        });
+
+        const results = messages.filter((message) => message.role === "tool");
+
+        expect(results).toHaveLength(1);
+        expect(results[0]?.content).toStrictEqual([
+            {
+                output: { type: "text", value: "Tool call outcome unknown: the run was interrupted before its result was recorded." },
+                toolCallId: "call_s",
+                toolName: "requestKey",
+                type: "tool-result",
+            },
+        ]);
+    });
+
+    it("does not let an earlier turn's result answer a later turn that reuses the call id", () => {
+        const messages = buildModelMessages({
+            history: [
+                { content: "", role: "assistant", seq: 0, toolCalls: [{ id: "call_1", input: {}, name: "first" }] },
+                { content: "done", role: "tool", seq: 1, toolCallId: "call_1", toolName: "first" },
+                { content: "again", role: "user", seq: 2 },
+                { content: "", role: "assistant", seq: 3, toolCalls: [{ id: "call_1", input: {}, name: "first" }] },
+            ],
+        });
+
+        expect(messages.map((message) => message.role)).toStrictEqual(["assistant", "tool", "user", "assistant", "tool"]);
+        expect(messages[4]?.content).toStrictEqual([
+            {
+                output: { type: "text", value: "Tool call outcome unknown: the run was interrupted before its result was recorded." },
+                toolCallId: "call_1",
+                toolName: "first",
+                type: "tool-result",
+            },
+        ]);
     });
 });

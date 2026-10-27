@@ -53,7 +53,7 @@ describe("ctx-db patchIf (shard-local)", () => {
         const result = await writer.patchIf("messages", id, { patch: { text: "edited" }, where: { text: "hello" } });
 
         expect(result).toStrictEqual({ applied: true, doc: expect.objectContaining({ _id: id, authorId: "a1", text: "edited" }) });
-        await expect(writer.get(id)).resolves.toStrictEqual(expect.objectContaining({ text: "edited" }));
+        await expect(writer.get("messages", id)).resolves.toStrictEqual(expect.objectContaining({ text: "edited" }));
         expect(deltas.map((delta) => delta.op)).toStrictEqual(["update"]);
     });
 
@@ -68,7 +68,7 @@ describe("ctx-db patchIf (shard-local)", () => {
         const result = await writer.patchIf("messages", id, { patch: { text: "edited" }, where: { text: "something else" } });
 
         expect(result).toStrictEqual({ applied: false, doc: expect.objectContaining({ _id: id, text: "hello" }) });
-        await expect(writer.get(id)).resolves.toStrictEqual(expect.objectContaining({ text: "hello" }));
+        await expect(writer.get("messages", id)).resolves.toStrictEqual(expect.objectContaining({ text: "hello" }));
         expect(deltas).toHaveLength(0);
     });
 
@@ -107,7 +107,9 @@ describe("ctx-db patchIf (shard-local)", () => {
         );
 
         expect(results.filter((result) => result.applied)).toHaveLength(1);
-        await expect(writer.get(id)).resolves.toStrictEqual(expect.objectContaining({ text: results.find((result) => result.applied)?.doc?.["text"] }));
+        await expect(writer.get("messages", id)).resolves.toStrictEqual(
+            expect.objectContaining({ text: results.find((result) => result.applied)?.doc?.["text"] }),
+        );
     });
 
     it("rejects an unknown table", async () => {

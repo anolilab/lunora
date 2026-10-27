@@ -21,7 +21,7 @@ const fakeWriter = (existing: ReadonlySet<string>, refuseInsert: (id: string) =>
 
     const writer = {
         delete: () => Promise.resolve(),
-        get: (id: string) => {
+        get: (_table: string, id: string) => {
             calls.get.push(id);
 
             return Promise.resolve(existing.has(id) ? { _id: id } : null);
@@ -39,7 +39,7 @@ const fakeWriter = (existing: ReadonlySet<string>, refuseInsert: (id: string) =>
 
             return Promise.resolve(id);
         },
-        replace: (id: string) => {
+        replace: (_table: string, id: string) => {
             calls.replace.push(id);
 
             return Promise.resolve();

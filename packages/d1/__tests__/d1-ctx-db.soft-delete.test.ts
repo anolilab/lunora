@@ -65,12 +65,12 @@ describe("d1 ctx-db soft delete", () => {
         const writer = setup();
 
         await seedTodos(writer);
-        await writer.delete("t2", "todos");
+        await writer.delete("todos", "t2");
 
         expect(ids(await writer.findMany("todos", {}))).toStrictEqual(["t1", "t3"]);
         await expect(writer.count("todos")).resolves.toBe(2);
 
-        const row = await writer.get("t2", "todos");
+        const row = await writer.get("todos", "t2");
 
         expect(row?.["deletedAt"]).toBe(FIXED_CLOCK);
         expect(row?.["title"]).toBe("two");
@@ -82,7 +82,7 @@ describe("d1 ctx-db soft delete", () => {
         const writer = setup();
 
         await seedTodos(writer);
-        await writer.delete("t2", "todos");
+        await writer.delete("todos", "t2");
 
         expect(ids(await writer.findMany("todos", { includeDeleted: true }))).toStrictEqual(["t1", "t2", "t3"]);
     });
@@ -93,9 +93,9 @@ describe("d1 ctx-db soft delete", () => {
         const writer = setup();
 
         await seedTodos(writer);
-        await writer.delete("t2", "todos");
+        await writer.delete("todos", "t2");
 
-        await writer.patch("t2", { deletedAt: null }, "todos");
+        await writer.patch("todos", "t2", { deletedAt: null });
 
         await expect(writer.count("todos")).resolves.toBe(3);
     });
@@ -106,9 +106,9 @@ describe("d1 ctx-db soft delete", () => {
         const writer = setup();
 
         await seedTodos(writer);
-        await writer.delete("t3", "todos", { hard: true });
+        await writer.delete("todos", "t3", { hard: true });
 
-        await expect(writer.get("t3", "todos")).resolves.toBeNull();
+        await expect(writer.get("todos", "t3")).resolves.toBeNull();
         expect(ids(await writer.findMany("todos", { includeDeleted: true }))).toStrictEqual(["t1", "t2"]);
     });
 
@@ -120,7 +120,7 @@ describe("d1 ctx-db soft delete", () => {
         await writer.insert("projects", { _id: "p1", name: "Project" }, { allowExplicitId: true });
         await seedTodos(writer);
 
-        await writer.delete("p1", "projects");
+        await writer.delete("projects", "p1");
 
         await expect(writer.count("projects")).resolves.toBe(0);
         await expect(writer.count("todos")).resolves.toBe(0);

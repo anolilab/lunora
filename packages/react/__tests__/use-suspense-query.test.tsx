@@ -45,6 +45,23 @@ describe("useSuspenseQuery", () => {
         expect(screen.queryByTestId("fallback")).toBeNull();
     });
 
+    it("resolves a cold mount on a live client, whose subscription cannot attach while suspended", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient(
+            () => {
+                return { count: 1 };
+            },
+            { live: true },
+        );
+
+        render(<App client={mock.asClient} />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe("1");
+        });
+    });
+
     it("keeps following pushed values after the first frame", async () => {
         expect.hasAssertions();
 

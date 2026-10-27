@@ -372,6 +372,8 @@ interface EditableFilter {
         unknown
     ];
     operator: FilterOperator;
+    path?: string;
+    pathSegments?: string[];
     value: string;
 }
 ```
@@ -443,6 +445,7 @@ interface FileBrowserProps {
 interface FilterClause {
     column: string;
     operator: FilterOperator;
+    path?: string[];
     value?: unknown;
 }
 ```
@@ -450,7 +453,7 @@ interface FilterClause {
 ### `FilterOperator` (type)
 
 ```ts
-type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
+type FilterOperator = "contains" | "eq" | "gt" | "gte" | "has" | "lt" | "lte" | "ne";
 ```
 
 ### `FunctionCallStat` (interface)
@@ -1617,12 +1620,27 @@ const MESSAGE_IDS: readonly [
     "Idle",
     "Import",
     "Import (writes rows)?",
-    "Import stopped after {rows} rows: {message}. The counts below cover completed chunks only; the failed chunk may also have written rows.",
+    "Import file",
+    "Couldn't read the columns of {table}: {message}",
+    "Import stopped after {rows} rows: {message}. The counts below cover completed chunks only. The chunk from line {line} may have written rows: check the table for rows from line {line} onward before importing again, or delete the written rows first and then import the whole file.",
+    "Import stopped after {rows} rows: {message}. The counts below cover those rows. Rows from line {line} onward were not sent: do not import the whole file again, import from that line onward, or delete the written rows first and then import the whole file.",
     "Inserted {inserted}, {conflicts} conflicts, {errors} errors.",
     "Interactive OpenAPI reference and copy-paste snippets for your functions.",
     "Invalid JSON args: {message}",
     "Invalid JSON: {message}",
     "Invalid NDJSON: {message}",
+    "Invalid CSV: {message}",
+    "The CSV has no data rows after the header.",
+    "The header “{name}” appears more than once.",
+    "Header column {column} is empty.",
+    "CSV rows have no table column, so choose the table they go into.",
+    "Choose a table",
+    "Checking {total} rows before writing…",
+    "Nothing was written, because some rows would be refused. Fix the rows listed below and import again.",
+    "The shard refused {count} rows, so the rest of the file was not sent. Nothing was written. Fix the rows listed below and import again.",
+    "The shard refused {count} rows, so the rest of the file was not sent. {written} rows were already written, so do not import the whole file again. Import the refused rows and any rows from line {line} onward, or delete the written rows first and then import the whole file.",
+    "This shard predates import checks, so it would write the file while checking it. Nothing was sent. Update the app and import again.",
+    "Target table",
     "ip",
     "Jobs queued with runAfter / runAt will appear here.",
     "JSON",
@@ -1631,6 +1649,15 @@ const MESSAGE_IDS: readonly [
     "key prefix (optional)",
     "Level filter",
     "line {line} ({table}): {message}",
+    "line {line}: expected {expected} cells, found {found}.",
+    "line {line}: text follows a closing quote.",
+    "line {line}: a quoted field is never closed.",
+    "line {line}: column “{column}” holds “{value}”, which a number column cannot store exactly. Store a whole number past 9007199254740991 in a bigint column.",
+    "line {line}: column “{column}” must be a number, got “{value}”.",
+    "line {line}: column “{column}” must be true or false, got “{value}”.",
+    "line {line}: column “{column}” must be an integer, got “{value}”.",
+    "line {line}: column “{column}” holds an integer longer than the import can send.",
+    "line {line}: column “{column}” must be an ISO-8601 date or epoch milliseconds of at least 11 digits, got “{value}”.",
     "List",
     "Live",
     "Live — changes stream in automatically",
@@ -2062,6 +2089,7 @@ const MESSAGE_IDS: readonly [
     "Copy",
     "Copied",
     "Cell value",
+    "Filter by this value",
     "Close",
     "Form",
     "Invalid JSON",
@@ -2861,6 +2889,10 @@ const MESSAGE_IDS: readonly [
     "Clear table ({total})",
     "Clear table",
     "Shard: root",
+    "has",
+    "Nested field path",
+    "nested path, e.g. geo.city",
+    "value (\"10\" in quotes matches text)",
     "Shard: {shardKey} — rows in other shards are not touched.",
     "{column} has a unique index — the same value cannot be set on {total} rows."
 ];

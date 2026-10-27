@@ -112,6 +112,7 @@ interface DeployCommandOptions {
     allowSchemaDrift?: boolean;
     apiSpec?: ApiSpec;
     bundleMetaPath?: string;
+    celldToolchain?: (options: CelldToolchainProbeOptions) => Promise<CelldToolchainProbe>;
     clientBuildEnvironment?: string;
     clientBuildOutputJson?: boolean;
     clientBuildRan?: boolean;
@@ -227,6 +228,7 @@ interface DevCommandOptions {
     waitForInterrupt?: (logger: Logger) => Promise<number>;
     worker?: boolean;
     workerPort?: number;
+    writeCelldProjection?: typeof writeCelldDevProjection;
 }
 ```
 
@@ -377,6 +379,7 @@ interface IndexSnapshot {
 interface InitCommandOptions {
     add?: string;
     allowUnsafeSource?: boolean;
+    auth?: string;
     ci?: CiProvider;
     cwd?: string;
     dryRun?: boolean;
@@ -392,7 +395,7 @@ interface InitCommandOptions {
     name?: string;
     overlayBaseFrom?: string;
     packageManagerProbe?: PackageManagerProbe;
-    prompt?: Pick<OfferDeps, "multiSelect" | "select" | "text">;
+    prompt?: Partial<Pick<OfferDeps, "selectAuth">> & Pick<OfferDeps, "multiSelect" | "select" | "text">;
     ref?: string;
     registryFrom?: string;
     registrySource?: string;
@@ -898,6 +901,34 @@ Re-exported from `@lunora/config` — signature tracked at its source.
 const validatorKindToSqlType: (kind: string) => ColumnSnapshot["sqlType"];
 ```
 
+## `@lunora/cli/cli`
+
+### `COMMANDS` (const)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
+### `CommandName` (type)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
+### `REGISTERED_COMMAND_NAMES` (const)
+
+```ts
+const REGISTERED_COMMAND_NAMES: ReadonlyArray<string>;
+```
+
+### `RunCliOptions` (interface)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
+### `VERSION` (const)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
+### `runCli` (const)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
 ## Referenced internal declarations
 
 Not exported, and reachable only through a signature above. Their members
@@ -908,6 +939,12 @@ public API and is gated as one. Listed once per package, sorted by name.
 
 ```ts
 type ApiSpec = NonNullable<CodegenOptions["apiSpec"]>;
+```
+
+### `AuthChoice` (type)
+
+```ts
+type AuthChoice = ExternalAuthProvider | "lunora" | "none";
 ```
 
 ### `AuthUiItem` (type)
@@ -1061,10 +1098,17 @@ interface ExportCommandData {
 }
 ```
 
+### `ExternalAuthProvider` (type)
+
+```ts
+type ExternalAuthProvider = "auth0" | "clerk" | "workos";
+```
+
 ### `FeatureApply` (interface)
 
 ```ts
 interface FeatureApply {
+    externalAuth?: ExternalAuthProvider;
     label: string;
     names: ReadonlyArray<string>;
     transformManifest?: OfferTransformManifest;
@@ -1192,6 +1236,7 @@ interface ListRemoteSecretsInputs {
     cwd: string;
     env?: string;
     runner?: SecretListRunner;
+    target?: string;
     temporary?: boolean;
 }
 ```
@@ -1229,6 +1274,7 @@ type LongLivedSpawner = (descriptor: LongLivedDescriptor, onLine: (line: string,
 ```ts
 interface OfferDeps {
     applyAll: (plans: ReadonlyArray<FeatureApply>) => Promise<boolean>;
+    auth?: AuthChoice;
     interactive: boolean;
     logger: Logger;
     multiSelect: (message: string, options: ReadonlyArray<{
@@ -1248,6 +1294,13 @@ interface OfferDeps {
     }>, settings?: {
         default?: FeatureItem;
     }) => Promise<FeatureItem | undefined>;
+    selectAuth: (message: string, options: ReadonlyArray<{
+        description?: string;
+        label: string;
+        value: AuthChoice;
+    }>, settings?: {
+        default?: AuthChoice;
+    }) => Promise<AuthChoice | undefined>;
     text: (message: string, settings?: {
         default?: string;
         placeholder?: string;

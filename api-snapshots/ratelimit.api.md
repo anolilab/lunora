@@ -76,7 +76,7 @@ type RateLimitConfigMap<Names extends string = string> = Record<Names, RateLimit
 
 ```ts
 interface RateLimitDatabase extends RateLimitDatabaseReader {
-    delete: <T extends string>(id: Id<T>) => Promise<void>;
+    delete: <T extends string>(table: T, id: Id<T>) => Promise<void>;
     findMany?: (table: string, args: {
         limit?: number;
         orderBy?: Record<string, "asc" | "desc">[];

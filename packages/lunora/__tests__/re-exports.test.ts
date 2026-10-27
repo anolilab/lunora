@@ -101,6 +101,7 @@ const PACKAGE_OPT_OUT = new Map<string, string>([
     ["dispatch", "internal, not published"],
     ["fingerprint", "add-on — zero-dep error grouping, installed directly when used"],
     ["hyperdrive", "add-on — installed directly when used"],
+    ["jwt-auth", "add-on — installed directly when used"],
     ["lunora", "the umbrella itself"],
     ["mail", "add-on — installed directly when used"],
     ["mcp", "add-on — installed directly when used"],

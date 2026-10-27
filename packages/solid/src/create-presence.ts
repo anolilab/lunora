@@ -1,6 +1,7 @@
 import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 import { createSignal } from "solid-js";
 
+import { assertPresenceInterval } from "../../../shared/presence-interval";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./context";
 import { onMounted } from "./solid-compat";
@@ -71,6 +72,8 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
 ): CreatePresenceResult<L> => {
     const client = useLunora();
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
+
+    assertPresenceInterval(intervalMs);
 
     const sessionId = options.sessionId ?? randomSessionId();
 

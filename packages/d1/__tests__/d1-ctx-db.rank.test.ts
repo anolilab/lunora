@@ -95,12 +95,12 @@ describe("d1 rankIndex parity", () => {
         await writer.insert("messages", { _creationTime: 100, _id: "m1", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
         await writer.insert("messages", { _creationTime: 200, _id: "m2", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
 
-        await writer.patch("m2", { channelId: "c2" });
+        await writer.patch("messages", "m2", { channelId: "c2" });
 
         await expect(writer.rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 1 });
         await expect(writer.rank("messages", "byChannel", { row: "m2" })).resolves.toEqual({ position: 1, total: 1 });
 
-        await writer.delete("m1");
+        await writer.delete("messages", "m1");
 
         await expect(writer.rank("messages", "byChannel", { row: "m1" })).resolves.toBeNull();
     });

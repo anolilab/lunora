@@ -77,7 +77,7 @@ export const move = mutation
         const neighbours = cards.filter((row) => row._id !== id);
         const position = Math.max(0, Math.min(index, neighbours.length));
 
-        await ctx.db.patch(id, { order: midpoint(neighbours[position - 1]?.order ?? null, neighbours[position]?.order ?? null), status: column });
+        await ctx.db.patch("tasks", id, { order: midpoint(neighbours[position - 1]?.order ?? null, neighbours[position]?.order ?? null), status: column });
     });
 ```
 

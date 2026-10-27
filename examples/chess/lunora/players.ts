@@ -63,7 +63,7 @@ export const claim = mutation
 
         if (existing) {
             if (displayName && displayName !== existing.displayName) {
-                await ctx.db.patch(existing._id, { displayName });
+                await ctx.db.patch("profiles", existing._id, { displayName });
             }
 
             return;

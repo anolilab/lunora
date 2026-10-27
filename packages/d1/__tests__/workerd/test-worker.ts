@@ -180,7 +180,7 @@ const patchIfRace = async (database: D1Database, rounds: number): Promise<{ appl
 
         applied.push(results.filter((result) => result?.applied === true).length);
         // eslint-disable-next-line no-await-in-loop -- read back after the round settles
-        const row = await counterWriter(database).get(id);
+        const row = await counterWriter(database).get("counters", id);
 
         values.push(row?.["value"]);
     }
@@ -245,7 +245,7 @@ export default {
                 optAny: null,
                 untyped: "$lunora.wire$42",
             });
-            const read = (await db.get(id)) ?? {};
+            const read = (await db.get("enc", id)) ?? {};
             const columns = await env.DB.prepare(`SELECT name, type FROM pragma_table_info('enc')`).all<{ name: string; type: string }>();
 
             return json({

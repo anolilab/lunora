@@ -57,7 +57,7 @@ export const list = query
 
 export const get = query
     .input({ id: v.id("feedback") })
-    .query(async ({ args: { id }, ctx }): Promise<Document_<"feedback"> | null> => (await ctx.db.get(id)) ?? null);
+    .query(async ({ args: { id }, ctx }): Promise<Document_<"feedback"> | null> => (await ctx.db.get("feedback", id)) ?? null);
 
 export const comments = query.input({ feedbackId: v.id("feedback") }).query(async ({ args: { feedbackId }, ctx }): Promise<Document_<"comments">[]> => {
     const rows = await ctx.db
@@ -100,7 +100,7 @@ export const setStatus = mutation
     .input({ id: v.id("feedback"), status: feedbackStatus })
     .mutation(async ({ args: { id, status }, ctx }): Promise<void> => {
         ctx.log.info("feedback status changed", { id, status });
-        await ctx.db.patch(id, { status });
+        await ctx.db.patch("feedback", id, { status });
     });
 
 /**
@@ -115,7 +115,7 @@ export const toggleVote = mutation
     .use(rateLimit(limiter, "write", byCaller))
     .input({ feedbackId: v.id("feedback"), voterEmail: v.string().max(254) })
     .mutation(async ({ args: { feedbackId, voterEmail }, ctx }): Promise<{ voted: boolean }> => {
-        const post = await ctx.db.get(feedbackId);
+        const post = await ctx.db.get("feedback", feedbackId);
 
         if (!post) {
             throw new LunoraError("NOT_FOUND", "feedback not found");
@@ -127,15 +127,15 @@ export const toggleVote = mutation
             .first();
 
         if (existing) {
-            await ctx.db.delete(existing._id);
-            await ctx.db.patch(feedbackId, { upvoteCount: Math.max(0, post.upvoteCount - 1) });
+            await ctx.db.delete("votes", existing._id);
+            await ctx.db.patch("feedback", feedbackId, { upvoteCount: Math.max(0, post.upvoteCount - 1) });
             ctx.log.info("vote withdrawn", { feedbackId });
 
             return { voted: false };
         }
 
         await ctx.db.insert("votes", { feedbackId, voterEmail });
-        await ctx.db.patch(feedbackId, { upvoteCount: post.upvoteCount + 1 });
+        await ctx.db.patch("feedback", feedbackId, { upvoteCount: post.upvoteCount + 1 });
         ctx.log.info("vote cast", { feedbackId });
 
         return { voted: true };
@@ -151,7 +151,7 @@ export const addComment = mutation
         isOfficial: v.optional(v.boolean()),
     })
     .mutation(async ({ args: { authorEmail, authorName, content, feedbackId, isOfficial }, ctx }): Promise<Id<"comments">> => {
-        const post = await ctx.db.get(feedbackId);
+        const post = await ctx.db.get("feedback", feedbackId);
 
         if (!post) {
             throw new LunoraError("NOT_FOUND", "feedback not found");
@@ -159,7 +159,7 @@ export const addComment = mutation
 
         const id = await ctx.db.insert("comments", { authorEmail, authorName, content, feedbackId, isOfficial: isOfficial ?? false });
 
-        await ctx.db.patch(feedbackId, { commentCount: post.commentCount + 1 });
+        await ctx.db.patch("feedback", feedbackId, { commentCount: post.commentCount + 1 });
         ctx.log.info("comment added", { feedbackId, id });
 
         return id;
@@ -177,15 +177,15 @@ export const remove = mutation
             .withIndex("by_feedback_and_voter", (q) => q.eq("feedbackId", id))
             .collect();
 
-        await Promise.all(votes.map(async (vote) => ctx.db.delete(vote._id)));
+        await Promise.all(votes.map(async (vote) => ctx.db.delete("votes", vote._id)));
 
         const rows = await ctx.db
             .query("comments")
             .withIndex("by_feedback", (q) => q.eq("feedbackId", id))
             .collect();
 
-        await Promise.all(rows.map(async (comment) => ctx.db.delete(comment._id)));
+        await Promise.all(rows.map(async (comment) => ctx.db.delete("comments", comment._id)));
 
         ctx.log.info("feedback removed", { comments: rows.length, id, votes: votes.length });
-        await ctx.db.delete(id);
+        await ctx.db.delete("feedback", id);
     });

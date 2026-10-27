@@ -2,7 +2,7 @@ import type { CallExpression, Node as TsNode } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { singleHopInitializer } from "../../argument-taint";
-import { bindingKeyName, isConstDeclaration, memberAccessOf, unwrapExpression } from "../ast";
+import { bindingKeyName, descendantsOfKind, isConstDeclaration, memberAccessOf, unwrapExpression } from "../ast";
 import { declarationOf } from "../attribution";
 import { isServerImport } from "../callee";
 import { contextSurfacePathOf } from "../context-root";
@@ -259,7 +259,7 @@ const completesBeforeNextStatement = (call: TsNode): boolean => Node.isAwaitExpr
 const provenBefore = (handler: TsNode, position: number): Set<string> => {
     const proven = new Set<string>();
 
-    for (const statement of handler.getDescendantsOfKind(SyntaxKind.IfStatement)) {
+    for (const statement of descendantsOfKind(handler, SyntaxKind.IfStatement)) {
         if (statement.getEnd() <= position && runsUnconditionally(statement, handler) && endsWithThrow(statement.getThenStatement())) {
             for (const field of provenFields(statement.getExpression())) {
                 proven.add(field);
@@ -267,7 +267,7 @@ const provenBefore = (handler: TsNode, position: number): Set<string> => {
         }
     }
 
-    for (const call of handler.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(handler, SyntaxKind.CallExpression)) {
         if (call.getEnd() <= position && completesBeforeNextStatement(call) && runsUnconditionally(call, handler)) {
             for (const field of assertedFields(call)) {
                 proven.add(field);

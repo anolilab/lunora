@@ -12,19 +12,19 @@ describe("discoverOwnerFieldWrites: ctx rows changed after they are read", () =>
     // A value ROOTED in the impl's `ctx` is server-scoped, even when `args`
     // feeds the query; a helper's result is not.
     it.each([
-        ["a destructured `ctx.db.get` row", `const { ownerId } = await ctx.db.get(args.postId);\n        await ${insert("ownerId")}; // @write`],
-        ["a member of a `ctx.db.get` row", `const post = await ctx.db.get(args.postId);\n        await ${insert("post.ownerId")}; // @write`],
+        ["a destructured `ctx.db.get` row", `const { ownerId } = await ctx.db.get("posts", args.postId);\n        await ${insert("ownerId")}; // @write`],
+        ["a member of a `ctx.db.get` row", `const post = await ctx.db.get("posts", args.postId);\n        await ${insert("post.ownerId")}; // @write`],
         [
             "rows from a `let` bound to `ctx.db`",
             `let rows = await ctx.db.query("m").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect();\n        await Promise.all(rows.map((r) => ${insert("r.userId")})); // @write`,
         ],
         [
             "rows from `Promise.all` over `ctx.db.get`",
-            `const rows = await Promise.all(args.ids.map((id) => ctx.db.get(id)));\n        for (const r of rows) {\n            await ${insert("r.ownerId")}; // @write\n        }`,
+            `const rows = await Promise.all(args.ids.map((id) => ctx.db.get("posts", id)));\n        for (const r of rows) {\n            await ${insert("r.ownerId")}; // @write\n        }`,
         ],
         [
             "`Object.values` of a row",
-            `const row = await ctx.db.get(args.id);\n        for (const member of Object.values(row.members)) {\n            await ${insert("member")}; // @write\n        }`,
+            `const row = await ctx.db.get("posts", args.id);\n        for (const member of Object.values(row.members)) {\n            await ${insert("member")}; // @write\n        }`,
         ],
         [
             "ctx.db rows filtered on args",
@@ -33,7 +33,7 @@ describe("discoverOwnerFieldWrites: ctx rows changed after they are read", () =>
         // A call whose result is its callback's return value stays server-scoped while that value is the row's.
         [
             "a `then` returning the row's field",
-            `const owner = await ctx.db.get(args.id).then((row) => row.ownerId);\n        await ${insert("owner")}; // @write`,
+            `const owner = await ctx.db.get("posts", args.id).then((row) => row.ownerId);\n        await ${insert("owner")}; // @write`,
         ],
         [
             "a `find` over ctx.db rows",
@@ -59,9 +59,12 @@ describe("discoverOwnerFieldWrites: ctx rows changed after they are read", () =>
         // A ctx-rooted receiver does not make a callback's return value server-scoped.
         [
             "a `then` falling back to args",
-            `const owner = await ctx.db.get(args.id).then((org) => org?.ownerId ?? args.targetUserId);\n        await ${insert("owner")}; // @write`,
+            `const owner = await ctx.db.get("posts", args.id).then((org) => org?.ownerId ?? args.targetUserId);\n        await ${insert("owner")}; // @write`,
         ],
-        ["a `catch` returning args", `const owner = await ctx.db.get(args.id).catch(() => args.targetUserId);\n        await ${insert("owner")}; // @write`],
+        [
+            "a `catch` returning args",
+            `const owner = await ctx.db.get("posts", args.id).catch(() => args.targetUserId);\n        await ${insert("owner")}; // @write`,
+        ],
         [
             "a `map` over ctx.db rows returning args",
             `const ids = (await ctx.db.query("t").collect()).map(() => args.targetUserId);\n        for (const id of ids) {\n            await ${insert("id")}; // @write\n        }`,
@@ -120,7 +123,7 @@ describe("discoverOwnerFieldWrites: ctx rows changed after they are read", () =>
     // followed through `const` aliases, `for…of` variables, iterating
     // callbacks and nested functions, and failing closed on any call this
     // cannot read.
-    const read = `const row = await ctx.db.get(args.postId);`;
+    const read = `const row = await ctx.db.get("posts", args.postId);`;
 
     it.each([
         ["a write through a `const` alias", `${read}\n        const alias = row;\n        alias.ownerId = args.targetUserId;`],
@@ -148,7 +151,7 @@ describe("discoverOwnerFieldWrites: ctx rows changed after they are read", () =>
         ["a template tag handed args", `${read}\n        normalize\`\${row}\${args.targetUserId}\`;`],
         [
             "a destructured element written later",
-            `const { meta } = await ctx.db.get(args.postId);\n        meta.ownerId = args.targetUserId;\n        await ${insert("meta.ownerId")}; // @write`,
+            `const { meta } = await ctx.db.get("posts", args.postId);\n        meta.ownerId = args.targetUserId;\n        await ${insert("meta.ownerId")}; // @write`,
         ],
     ])("reports a ctx row's owner after %s", (_label, body) => {
         expect.assertions(2);

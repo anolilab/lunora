@@ -5,7 +5,7 @@ import type { FunctionReference } from "@lunora/client";
 
 export interface ApiTypes {
     draws: {
-        composed: FunctionReference<"action", {}, unknown[]>;
+        composed: FunctionReference<"action", {}, number[][]>;
         twice: FunctionReference<"mutation", {}, number[]>;
     };
 }

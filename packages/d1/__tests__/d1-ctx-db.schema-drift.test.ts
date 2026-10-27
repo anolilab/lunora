@@ -129,7 +129,7 @@ describe("d1 ctx-db reshapes an existing .global() table", () => {
         // as a failure: an added column is nullable whatever the field declares,
         // because `ADD COLUMN … NOT NULL` without a default is rejected outright
         // on a non-empty table.
-        const original = await v2.get("p1");
+        const original = await v2.get("posts", "p1");
 
         expect(original?.["title"]).toBe("first");
     });

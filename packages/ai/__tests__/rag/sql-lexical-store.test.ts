@@ -52,6 +52,40 @@ describe("sqlLexicalStore", () => {
         expect(matches[0]?.text).toBe("the qwerty token lives here");
     });
 
+    it("reads no metadata for a search without a filter, and still filters with one", async () => {
+        expect.assertions(3);
+
+        const { close, exec } = open();
+        const statements: string[] = [];
+
+        opened.push(close);
+
+        const lexical = sqlLexicalStore({
+            exec: (sql, parameters) => {
+                statements.push(sql);
+
+                return exec(sql, parameters);
+            },
+        });
+
+        await lexical.index([chunk("a#0", "the qwerty token lives here", { tenant: "x" }), chunk("b#0", "qwerty again", { tenant: "y" })], {});
+
+        // The postings query is the one that joins term rows to documents.
+        const postings = (): string[] => statements.filter((sql) => sql.includes("t.term IN"));
+
+        statements.length = 0;
+        await lexical.search("qwerty", { topK: 5 });
+
+        expect(postings().some((sql) => sql.includes("d.metadata"))).toBe(false);
+
+        statements.length = 0;
+
+        const filtered = await lexical.search("qwerty", { filter: { tenant: "x" }, topK: 5 });
+
+        expect(postings().some((sql) => sql.includes("d.metadata"))).toBe(true);
+        expect(filtered.map((match) => match.id)).toStrictEqual(["a#0"]);
+    });
+
     it("ranks the same way the in-memory store does", async () => {
         expect.assertions(1);
 

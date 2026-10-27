@@ -164,6 +164,8 @@ export const ERROR_CATALOG = {
     SHARD_TIMEOUT: { status: 504, title: "Shard timeout" },
     /** A fan-out shard call answered with a non-2xx status; the status is in the message, the body is not. */
     SHARD_HTTP_ERROR: { status: 502, title: "Shard HTTP error" },
+    /** A shard running an older build cannot check import rows without writing them, so the dry run was refused before sending any. */
+    SHARD_DRY_RUN_UNSUPPORTED: { status: 501, title: "Shard cannot dry-run an import" },
     /** The shard could not write a subscription's attachment to storage, so the subscription was refused. */
     SUBSCRIPTION_PERSIST_FAILED: { status: 500, title: "Subscription persist failed" },
     /** A connection asked for more concurrent subscriptions than the shard allows. */
@@ -563,6 +565,8 @@ export const ERROR_CATALOG = {
     BAD_ROW: { status: 400, title: "Malformed import row" },
     BAD_SUBSCRIPTION_ARGS: { status: 400, title: "Invalid subscription arguments" },
     BATCH_LIMIT_EXCEEDED: { status: 400, title: "Batch limit exceeded" },
+    /** An `onDelete` cascade / `set null` would touch more holder rows than one delete may (`CASCADE_MAX_ROWS` in `@lunora/shard-engine`). */
+    CASCADE_LIMIT: { status: 400, title: "Cascade limit exceeded" },
     CROSS_SHARD_RANK_UNSUPPORTED: { status: 400, title: "Cross-shard rank() is unsupported" },
 
     /**
@@ -605,6 +609,7 @@ export const ERROR_CATALOG = {
     FORBIDDEN_ORIGIN: { status: 403, title: "Origin forbidden" },
     FORBIDDEN_SHARD: { status: 403, title: "Shard access forbidden" },
     FORBIDDEN_TOPIC: { status: 403, title: "Live topic publish forbidden" },
+    GLOBAL_DRY_RUN_UNSUPPORTED: { status: 400, title: "Global table dry run not supported" },
     GLOBAL_NOT_CONFIGURED: { status: 400, title: "Global table import not configured" },
     INVALID_INPUT: { status: 400, title: "Invalid input" },
     /** A caller-supplied `RunOptions.id` that is not a safe key segment. NOT internal: the message is fixed guidance about the caller's own argument, and withholding it would leave them guessing at a 400. */

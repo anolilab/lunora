@@ -75,6 +75,15 @@ describe("dataViewParams", () => {
         expect(searchToDataView({ order: "createdAt:sideways" }).orderBy).toBeUndefined();
     });
 
+    it("keeps an eq filter on a NULL value through the URL round-trip", () => {
+        expect.assertions(2);
+
+        const search = dataViewToSearch(searchToDataView({ filters: JSON.stringify([{ column: "note", operator: "eq", value: null }]) }));
+
+        expect(search.filters).toBe(JSON.stringify([{ column: "note", operator: "eq", value: null }]));
+        expect(searchToDataView(search).filters).toStrictEqual([{ column: "note", operator: "eq", value: null }]);
+    });
+
     it("drops malformed filters, keeping the valid ones", () => {
         expect.assertions(1);
 
@@ -86,6 +95,40 @@ describe("dataViewParams", () => {
         ]);
 
         expect(searchToDataView({ filters }).filters).toEqual([{ column: "status", operator: "eq", value: "error" }]);
+    });
+
+    it("keeps a has clause and a nested path through the URL round-trip", () => {
+        expect.assertions(1);
+
+        const filters = [
+            { column: "tags", operator: "has", value: "blue" },
+            { column: "address", operator: "eq", path: ["geo", "city"], value: "Berlin" },
+        ];
+
+        expect(searchToDataView(dataViewToSearch(searchToDataView({ filters: JSON.stringify(filters) }))).filters).toStrictEqual(filters);
+    });
+
+    it("drops a clause whose path is not a list of field names, rather than keeping it on the parent field", () => {
+        expect.assertions(1);
+
+        const filters = JSON.stringify([
+            { column: "address", operator: "eq", path: "city", value: "Berlin" },
+            { column: "address", operator: "eq", path: ["city", 2], value: "Berlin" },
+            { column: "status", operator: "eq", value: "active" },
+        ]);
+
+        expect(searchToDataView({ filters }).filters).toStrictEqual([{ column: "status", operator: "eq", value: "active" }]);
+    });
+
+    it("keeps a clause with an empty path segment, so the server refuses it instead of a reload dropping the filter", () => {
+        expect.assertions(1);
+
+        const filters = [
+            { column: "address", operator: "eq", path: [""], value: "Berlin" },
+            { column: "address", operator: "eq", path: ["geo", ""], value: "Berlin" },
+        ];
+
+        expect(searchToDataView({ filters: JSON.stringify(filters) }).filters).toStrictEqual(filters);
     });
 
     it("tolerates non-JSON filters", () => {

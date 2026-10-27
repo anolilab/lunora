@@ -37,6 +37,19 @@ export default defineSchema({
 });
 `;
 
+/** The answer to the `dryRun` POST that precedes an import: a worker that honours the flag writes nothing and echoes it. */
+const checkResponse = (): Awaited<ReturnType<StreamingFetchLike>> => {
+    return {
+        body: null,
+        json: async () => {
+            return { conflicts: 0, dryRun: true, errors: [], inserted: {} };
+        },
+        ok: true,
+        status: 200,
+        text: async () => "",
+    };
+};
+
 let workDir: string;
 
 const writeSchema = (): void => {
@@ -111,6 +124,43 @@ describe("lunora seed", () => {
         expect([...tables]).toEqual(["users"]);
     });
 
+    it("deals a table-level unique index read from the schema, so a through table repeats no pair", async () => {
+        expect.assertions(4);
+
+        mkdirSync(join(workDir, "lunora"), { recursive: true });
+        writeFileSync(
+            join(workDir, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable } from "@lunora/server";
+import { v } from "@lunora/values";
+
+export default defineSchema({
+    authors: defineTable({ name: v.string() }),
+    books: defineTable({ title: v.string() }),
+    authorBooks: defineTable({ authorId: v.id("authors"), bookId: v.id("books") }).index("by_pair", ["authorId", "bookId"], { unique: true }),
+});
+`,
+            "utf8",
+        );
+        vi.spyOn(process.stdout, "write").mockReturnValue(true);
+
+        const result = await runSeedCommand({ count: 4, cwd: workDir, dryRun: true, logger: silentLogger(), table: "authorBooks" });
+        const rows = result.ndjson
+            .split("\n")
+            .filter((line) => line.trim().length > 0)
+            .map((line) => JSON.parse(line) as { doc: Record<string, unknown>; table: string });
+        const links = rows.filter((row) => row.table === "authorBooks");
+        const sorted = (values: string[]): string[] => values.toSorted((left, right) => left.localeCompare(right));
+        const linked = (column: string): string[] => sorted(links.map((row) => String(row.doc[column])));
+        const parents = (table: string): string[] => sorted(rows.filter((row) => row.table === table).map((row) => String(row.doc._id)));
+
+        expect(links).toHaveLength(4);
+        expect(new Set(links.map((row) => `${String(row.doc.authorId)}|${String(row.doc.bookId)}`)).size).toBe(4);
+        // Four authors and four books are seeded alongside, and four links take each parent once. A random
+        // draw repeats a parent in most runs, and a repeat fails both checks whichever pair the planner picks.
+        expect(linked("authorId")).toStrictEqual(parents("authors"));
+        expect(linked("bookId")).toStrictEqual(parents("books"));
+    });
+
     it("rejects an unknown --table", async () => {
         expect.assertions(1);
 
@@ -128,6 +178,11 @@ describe("lunora seed", () => {
 
         const calls: { body: string; url: string }[] = [];
         const fetchImpl: StreamingFetchLike = async (url, init) => {
+            // A `dryRun` POST is the check before the import: it writes nothing and is not one of the batches.
+            if (new URL(url).searchParams.get("dryRun") === "true") {
+                return checkResponse();
+            }
+
             const body = typeof init?.body === "string" ? init.body : new TextDecoder().decode(init?.body);
 
             calls.push({ body, url });
@@ -174,7 +229,11 @@ describe("lunora seed", () => {
 
         const logger = silentLogger();
         const warnSpy = vi.spyOn(logger, "warn");
-        const fetchImpl: StreamingFetchLike = async () => {
+        const fetchImpl: StreamingFetchLike = async (url) => {
+            if (new URL(url).searchParams.get("dryRun") === "true") {
+                return checkResponse();
+            }
+
             return {
                 body: null,
                 // The import path reports every row as an already-existing-id conflict.
@@ -250,7 +309,11 @@ describe("lunora seed", () => {
         mkdirSync(statePath, { recursive: true });
         writeFileSync(join(statePath, "stale.sqlite"), "old", "utf8");
 
-        const fetchImpl: StreamingFetchLike = async () => {
+        const fetchImpl: StreamingFetchLike = async (url) => {
+            if (new URL(url).searchParams.get("dryRun") === "true") {
+                return checkResponse();
+            }
+
             return {
                 body: null,
                 json: async () => {

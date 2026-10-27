@@ -258,10 +258,17 @@ const validateRow = (schema: SchemaLike, table: string, document: Record<string,
 
 interface ImportGlobalArgs {
     /**
+     * Check the rows and report their shape errors, writing nothing. The conflict
+     * probe and the insert are skipped, so an `_id` already in use and a foreign-key
+     * or unique failure are only found by a real import.
+     */
+    dryRun?: boolean;
+
+    /**
      * Optional direct exec handle to the same D1 database the writer targets.
      * When supplied, the conflict pre-probe issues a single
      * `SELECT 1 FROM <table> WHERE id = ? LIMIT 1` against the row's declared
-     * table instead of falling back to `writer.get(id)`, which scans every
+     * table instead of falling back to an unscoped id probe, which scans every
      * global table looking for the id. Strongly recommended for large schemas
      * — the writer-fallback is O(N tables) per row.
      */
@@ -277,9 +284,9 @@ interface D1ExecLike {
 
 /**
  * Probe whether `explicitId` already exists in `table`. Prefers a direct
- * table+id `SELECT` when an exec handle is available (avoids the writer.get()
- * fallback's per-row N-table scan). A probe error is swallowed — the writer's
- * insert path will surface any hard error instead.
+ * table+id `SELECT` when an exec handle is available; otherwise it reads the same
+ * table through the writer. A probe error is swallowed — the writer's insert path
+ * will surface any hard error instead.
  */
 const explicitIdConflicts = async (writer: DatabaseWriterLike, exec: D1ExecLike | undefined, table: string, explicitId: string): Promise<boolean> => {
     try {
@@ -289,7 +296,7 @@ const explicitIdConflicts = async (writer: DatabaseWriterLike, exec: D1ExecLike 
             return probe.length > 0;
         }
 
-        const existing = await writer.get(explicitId);
+        const existing = await writer.get(table, explicitId);
 
         return existing !== null;
     } catch {
@@ -298,7 +305,8 @@ const explicitIdConflicts = async (writer: DatabaseWriterLike, exec: D1ExecLike 
     }
 };
 
-type RowOutcome = { error: ImportError; kind: "error" } | { inserted: string; kind: "inserted" } | { kind: "conflict" } | { kind: "skip" };
+type RowOutcome =
+    { error: ImportError; kind: "error" } | { inserted: string; kind: "inserted" } | { kind: "checked" } | { kind: "conflict" } | { kind: "skip" };
 
 /** Resolve one import row to a single outcome, isolating the per-row branching from the accumulation loop. */
 const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, args: ImportGlobalArgs, row: ExportRow, line: number): Promise<RowOutcome> => {
@@ -349,6 +357,11 @@ const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, args
 
     if (failure !== undefined) {
         return { error: { code: "VALIDATION_ERROR", line, message: failure, table }, kind: "error" };
+    }
+
+    // A dry run stops at the shape: the conflict probe and the insert are what it must not do.
+    if (args.dryRun === true) {
+        return { kind: "checked" };
     }
 
     const explicitId = typeof decoded["_id"] === "string" ? decoded["_id"] : undefined;

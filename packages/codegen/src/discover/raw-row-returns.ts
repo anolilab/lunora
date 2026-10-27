@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { singleHopInitializer } from "../argument-taint";
 import type { RawRowReturnIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath, unwrapExpression } from "./ast";
+import { descendantsOfKind, listLunoraSourceFiles, lunoraRelativePath, unwrapExpression } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { chainHasStep, chainUsesWrappedCall } from "./builder-chain";
 import { isDatabaseAccessor } from "./database-calls";
@@ -136,7 +136,7 @@ const handlerReturnExpressions = (handler: InspectableHandler): TsNode[] => {
 
     const expressions: TsNode[] = [];
 
-    for (const statement of handler.getDescendantsOfKind(SyntaxKind.ReturnStatement)) {
+    for (const statement of descendantsOfKind(handler, SyntaxKind.ReturnStatement)) {
         const enclosing = statement.getFirstAncestor(
             (ancestor) => Node.isArrowFunction(ancestor) || Node.isFunctionExpression(ancestor) || Node.isFunctionDeclaration(ancestor),
         );

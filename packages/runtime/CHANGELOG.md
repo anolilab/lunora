@@ -1,3 +1,112 @@
+## @lunora/runtime [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.243...@lunora/runtime@1.0.0-alpha.244) (2026-10-27)
+
+### Features
+
+* first-class external auth (Clerk, WorkOS, any OIDC JWT) ([#1356](https://github.com/anolilab/lunora/issues/1356)) ([8833879](https://github.com/anolilab/lunora/commit/883387960f8352f70d07edfa3e0c0c5d560ef7bc))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.252
+
+## @lunora/runtime [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.242...@lunora/runtime@1.0.0-alpha.243) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.175
+* **@lunora/do:** upgraded to 1.0.0-alpha.251
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.163
+
+## @lunora/runtime [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.241...@lunora/runtime@1.0.0-alpha.242) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.136
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/observability:** upgraded to 1.0.0-alpha.174
+* **@lunora/do:** upgraded to 1.0.0-alpha.250
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.162
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.96
+
+## @lunora/runtime [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.240...@lunora/runtime@1.0.0-alpha.241) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.173
+* **@lunora/do:** upgraded to 1.0.0-alpha.249
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.161
+
+## @lunora/runtime [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.239...@lunora/runtime@1.0.0-alpha.240) (2026-10-26)
+
+### Features
+
+* **studio:** filter a table by a cell value, including NULL ([#1318](https://github.com/anolilab/lunora/issues/1318)) ([e5c3f4b](https://github.com/anolilab/lunora/commit/e5c3f4bff3d4335ba33de46952c0039e9d057f4c))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.172
+* **@lunora/do:** upgraded to 1.0.0-alpha.248
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.160
+
+## @lunora/runtime [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.238...@lunora/runtime@1.0.0-alpha.239) (2026-10-26)
+
+### Features
+
+* **studio:** import a CSV file into a table ([#1321](https://github.com/anolilab/lunora/issues/1321)) ([360930a](https://github.com/anolilab/lunora/commit/360930a9edc00a56f90c5cdf6a9d3218e428aeea))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.135
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/observability:** upgraded to 1.0.0-alpha.171
+* **@lunora/do:** upgraded to 1.0.0-alpha.247
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.159
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.95
+
+## @lunora/runtime [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.237...@lunora/runtime@1.0.0-alpha.238) (2026-10-25)
+
+### Bug Fixes
+
+* **config:** celld audit fixes ([#1283](https://github.com/anolilab/lunora/issues/1283)) ([6fd7854](https://github.com/anolilab/lunora/commit/6fd78547928d41d3569ba71cf94683dac7f49b94))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.134
+* **@lunora/observability:** upgraded to 1.0.0-alpha.170
+* **@lunora/platform:** upgraded to 1.0.0-alpha.75
+* **@lunora/do:** upgraded to 1.0.0-alpha.246
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.158
+
+## @lunora/runtime [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.236...@lunora/runtime@1.0.0-alpha.237) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.169
+* **@lunora/do:** upgraded to 1.0.0-alpha.245
+
+## @lunora/runtime [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.235...@lunora/runtime@1.0.0-alpha.236) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.133
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/observability:** upgraded to 1.0.0-alpha.168
+* **@lunora/do:** upgraded to 1.0.0-alpha.244
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.157
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.94
+
 ## @lunora/runtime [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.234...@lunora/runtime@1.0.0-alpha.235) (2026-10-24)
 
 

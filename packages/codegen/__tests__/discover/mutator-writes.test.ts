@@ -125,7 +125,7 @@ export const renameChannel = defineMutator({
 
 export const archiveChannel = defineMutator({
     server: async (ctx, args) => {
-        const row = await ctx.db.get(args.id);
+        const row = await ctx.db.get("posts", args.id);
         await ctx.db.replace(args.id, { ...row, archived: true });
     },
 });

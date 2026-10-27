@@ -5,7 +5,7 @@ import type { ArrowFunction, FunctionExpression, Node as TsNode, ObjectLiteralEx
 import { Node, Project, SyntaxKind } from "ts-morph";
 
 import type { ConfigCallIR } from "../ir";
-import { listSecurityScanFiles, objectLiteralFromCallbackBody, propertyKeyName } from "./ast";
+import { descendantsOfKind, listSecurityScanFiles, objectLiteralFromCallbackBody, propertyKeyName } from "./ast";
 import { calleeName } from "./callee";
 
 /**
@@ -115,7 +115,7 @@ const readCallbackArgument = (argument: TsNode | undefined): ConfigCallEvidence 
 const configCallsInSourceFile = (sourceFile: SourceFile, relativePath: string): ConfigCallIR[] => {
     const found: ConfigCallIR[] = [];
 
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
         const name = calleeName(call.getExpression());
 
         if (name === undefined) {
@@ -129,7 +129,7 @@ const configCallsInSourceFile = (sourceFile: SourceFile, relativePath: string): 
         }
     }
 
-    for (const construction of sourceFile.getDescendantsOfKind(SyntaxKind.NewExpression)) {
+    for (const construction of descendantsOfKind(sourceFile, SyntaxKind.NewExpression)) {
         const name = calleeName(construction.getExpression());
 
         if (name === undefined || !CONSTRUCTOR_CALLEES.has(name)) {
@@ -177,7 +177,7 @@ const viteConfigCalls = (projectRoot: string): ConfigCallIR[] => {
         }).createSourceFile(name, readFileSync(filePath, "utf8"));
         const rows: ConfigCallIR[] = [];
 
-        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+        for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
             if (calleeName(call.getExpression()) !== VITE_PLUGIN_CALLEE) {
                 continue;
             }

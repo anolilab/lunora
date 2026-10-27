@@ -91,6 +91,23 @@ describe("createPresence (Solid)", () => {
         vi.useRealTimers();
     });
 
+    it("throws a RangeError for a non-positive intervalMs", () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+
+        expect(() =>
+            render(
+                () => {
+                    createPresence("room-1", { heartbeat: HEARTBEAT, intervalMs: 0, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+
+                    return <div />;
+                },
+                { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+            ),
+        ).toThrow(RangeError);
+    });
+
     it("heartbeats on mount and again on each interval tick", async () => {
         const fake = createPresenceFakeClient();
 

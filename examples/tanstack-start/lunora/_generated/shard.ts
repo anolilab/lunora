@@ -798,18 +798,18 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // A single-row `writeRow` delete never carries it, so it keeps the
             // table's declared `.softDelete()` behaviour.
             if (args.op === "delete") {
-                await writer.delete(args.id ?? "", args.table, { hard: args.hard === true });
+                await writer.delete(args.table, args.id ?? "", { hard: args.hard === true });
 
                 return { id: args.id ?? null, op: "delete" };
             }
 
             if (args.op === "replace") {
-                await writer.replace(args.id ?? "", args.doc ?? {}, args.table);
+                await writer.replace(args.table, args.id ?? "", args.doc ?? {});
 
                 return { id: args.id ?? null, op: "replace" };
             }
 
-            await writer.patch(args.id ?? "", args.doc ?? {}, args.table);
+            await writer.patch(args.table, args.id ?? "", args.doc ?? {});
 
             return { id: args.id ?? null, op: "patch" };
         }
@@ -848,7 +848,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         }
 
         protected override async runShardImport(args: RunShardImportArgs): Promise<ImportShardResult> {
-            this.ensureMigrated();
+            // A dry run checks row shapes and never writes. Migrating first would write the schema ledger and create tables on a cold shard.
+            if (args.dryRun !== true) {
+                this.ensureMigrated();
+            }
 
             const writer = this.adminWriter();
 
@@ -949,6 +952,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             }
 
             this.blockedUniqueIndexes = runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, deferBlockedUniqueIndexes: true, schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT });
+            this.invalidateCompanionMemo();
             this.migrated = this.blockedUniqueIndexes.length === 0;
             this.migrationRetryAt = now + BLOCKED_MIGRATION_RETRY_MS;
         }

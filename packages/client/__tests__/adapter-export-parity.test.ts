@@ -192,13 +192,13 @@ const REQUIRED_SURFACE: Record<string, Record<AdapterName, Requirement>> = {
     // The SSE-style HTTP-stream hook. Shipped for React only so far — nobody
     // has ported it. This is a real, still-open gap (not a framework-shape
     // difference like authGates), tracked separately from this spike; see
-    // plan 231 for adapter-drift follow-ups.
+    // plan 052 (the HTTP-SSE stream design) for the adapter follow-up.
     httpStream: {
-        angular: { gap: "not yet ported — React-only today; see plan 231", name: "httpStream" },
+        angular: { gap: "not yet ported — React-only today; see plan 052", name: "httpStream" },
         react: { name: "useHttpStream" },
-        solid: { gap: "not yet ported — React-only today; see plan 231", name: "createHttpStream" },
-        svelte: { gap: "not yet ported — React-only today; see plan 231", name: "httpStream" },
-        vue: { gap: "not yet ported — React-only today; see plan 231", name: "useHttpStream" },
+        solid: { gap: "not yet ported — React-only today; see plan 052", name: "createHttpStream" },
+        svelte: { gap: "not yet ported — React-only today; see plan 052", name: "httpStream" },
+        vue: { gap: "not yet ported — React-only today; see plan 052", name: "useHttpStream" },
     },
     hydratePreloaded: {
         angular: { name: "hydratePreloaded" },

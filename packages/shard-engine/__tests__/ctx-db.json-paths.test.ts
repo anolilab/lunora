@@ -189,13 +189,13 @@ describe("dotted paths into an object column", () => {
 
             const { writer } = await seed();
 
-            await writer.patch("a", { "profile.plan": "team" });
+            await writer.patch("users", "a", { "profile.plan": "team" });
 
-            const row = await writer.get("a");
+            const row = await writer.get("users", "a");
 
             expect(row?.["profile"]).toStrictEqual({ address: { city: "Berlin" }, age: 30, flags: { beta: true }, plan: "team" });
 
-            const row_b = await writer.get("b");
+            const row_b = await writer.get("users", "b");
 
             expect(row_b?.["profile"]).toStrictEqual({ plan: "free" });
         });
@@ -205,9 +205,9 @@ describe("dotted paths into an object column", () => {
 
             const { writer } = await seed();
 
-            await writer.patch("e", { "profile.address.city": "Paris" });
+            await writer.patch("users", "e", { "profile.address.city": "Paris" });
 
-            const row_e = await writer.get("e");
+            const row_e = await writer.get("users", "e");
 
             expect(row_e?.["profile"]).toStrictEqual({ address: { city: "Paris" } });
         });
@@ -217,9 +217,9 @@ describe("dotted paths into an object column", () => {
 
             const { writer } = await seed();
 
-            await writer.patch("b", { "profile.age": 41, "profile.flags.beta": false });
+            await writer.patch("users", "b", { "profile.age": 41, "profile.flags.beta": false });
 
-            const row_b = await writer.get("b");
+            const row_b = await writer.get("users", "b");
 
             expect(row_b?.["profile"]).toStrictEqual({ age: 41, flags: { beta: false }, plan: "free" });
         });
@@ -229,7 +229,7 @@ describe("dotted paths into an object column", () => {
 
             const { writer } = await seed();
 
-            await writer.patch("c", { "profile.age": 25 });
+            await writer.patch("users", "c", { "profile.age": 25 });
 
             expect(idsOf(await writer.findMany("users", { where: { "profile.age": { gt: 20 } } }))).toStrictEqual(["a", "c"]);
         });
@@ -241,10 +241,10 @@ describe("dotted paths into an object column", () => {
 
             const applied = await writer.patchIf?.("users", "a", { patch: { "profile.plan": "via-if" }, where: { name: "a" } });
 
-            await writer.patchMany?.([{ id: "b", patch: { "profile.plan": "via-many" } }]);
+            await writer.patchMany?.("users", [{ id: "b", patch: { "profile.plan": "via-many" } }]);
 
-            const first = await writer.get("a");
-            const second = await writer.get("b");
+            const first = await writer.get("users", "a");
+            const second = await writer.get("users", "b");
 
             expect(applied?.applied).toBe(true);
             expect(first?.["profile"]).toMatchObject({ age: 30, plan: "via-if" });
@@ -256,9 +256,9 @@ describe("dotted paths into an object column", () => {
 
             const { writer } = await seed();
 
-            await writer.patch("a", { "settings.theme": "dark" });
+            await writer.patch("users", "a", { "settings.theme": "dark" });
 
-            const row = await writer.get("a");
+            const row = await writer.get("users", "a");
 
             expect(row?.["settings"]).toStrictEqual({ theme: "dark" });
         });
@@ -269,8 +269,8 @@ describe("dotted paths into an object column", () => {
             const { writer } = await seed();
             const overlap = { "profile.address": { city: "x" }, "profile.address.city": "y" };
 
-            await expect(writer.patch("a", overlap as never)).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
-            await expect(writer.patch("a", Object.fromEntries(Object.entries(overlap).toReversed()) as never)).rejects.toMatchObject({
+            await expect(writer.patch("users", "a", overlap as never)).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+            await expect(writer.patch("users", "a", Object.fromEntries(Object.entries(overlap).toReversed()) as never)).rejects.toMatchObject({
                 code: "VALIDATION_ERROR",
             });
         });
@@ -280,7 +280,7 @@ describe("dotted paths into an object column", () => {
 
             const { writer } = await seed();
 
-            await writer.patch("b", { "profile.plan": "pro" });
+            await writer.patch("users", "b", { "profile.plan": "pro" });
 
             expect(idsOf(await writer.findMany("users", { where: { "profile.plan": "pro" } }))).toStrictEqual(["a", "b", "c"]);
         });
@@ -298,9 +298,9 @@ describe("dotted paths into an object column", () => {
 
             const { writer } = await seed();
 
-            await expect(writer.patch("a", patch as never)).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+            await expect(writer.patch("users", "a", patch as never)).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
 
-            const row_a = await writer.get("a");
+            const row_a = await writer.get("users", "a");
 
             expect(row_a?.["profile"]).toStrictEqual(ROWS["a"]?.["profile"]);
         });
@@ -312,23 +312,23 @@ describe("dotted paths into an object column", () => {
             const baseline = readCdcCursor(harness.sql);
 
             // Someone else edits a different key of the same object, then the caller's late write lands.
-            await writer.patch("a", { "profile.age": 31 });
+            await writer.patch("users", "a", { "profile.age": 31 });
             setBaseline(baseline);
-            await writer.patch("a", { "profile.plan": "team" });
+            await writer.patch("users", "a", { "profile.plan": "team" });
             setBaseline(undefined);
 
-            const afterSibling = await writer.get("a");
+            const afterSibling = await writer.get("users", "a");
 
             expect(afterSibling?.["profile"]).toMatchObject({ age: 31, plan: "team" });
 
             // The same leaf edited underneath it is stale: the late write is dropped.
             const second = readCdcCursor(harness.sql);
 
-            await writer.patch("a", { "profile.plan": "theirs" });
+            await writer.patch("users", "a", { "profile.plan": "theirs" });
             setBaseline(second);
-            await writer.patch("a", { "profile.plan": "mine" });
+            await writer.patch("users", "a", { "profile.plan": "mine" });
 
-            const afterSameLeaf = await writer.get("a");
+            const afterSameLeaf = await writer.get("users", "a");
 
             expect(afterSameLeaf?.["profile"]).toMatchObject({ plan: "theirs" });
         });
@@ -343,11 +343,11 @@ describe("dotted paths into an object column", () => {
             // a and c are "pro" in the fixture.
             await expect(writer.rank("users", "pros", { row: "a" })).resolves.toStrictEqual({ position: 1, total: 2 });
 
-            await writer.patch("b", { "profile.plan": "pro" });
+            await writer.patch("users", "b", { "profile.plan": "pro" });
 
             await expect(writer.rank("users", "pros", { row: "b" })).resolves.toStrictEqual({ position: 2, total: 3 });
 
-            await writer.patch("a", { "profile.plan": "free" });
+            await writer.patch("users", "a", { "profile.plan": "free" });
 
             await expect(writer.rank("users", "pros", { row: "a" })).resolves.toBeNull();
             await expect(writer.rank("users", "pros", { row: "b" })).resolves.toStrictEqual({ position: 1, total: 2 });

@@ -89,7 +89,7 @@ export const publicProfile = query
     .input({ userId: v.id("users") })
     .output(v.object({ name: v.string(), avatarUrl: v.optional(v.string()) }))
     .query(async ({ ctx, args: { userId } }) => {
-        const user = await ctx.db.get(userId);
+        const user = await ctx.db.get("users", userId);
 
         return { name: user!.name, avatarUrl: user!.avatarUrl };
     });

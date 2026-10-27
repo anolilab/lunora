@@ -91,7 +91,7 @@ describe("createSqlCtxDb — a NUL in the stored row on Postgres", () => {
 
         const { db, writes } = open("postgres");
 
-        await expect(db.patch("d1", { code: "nul" }, "docs")).rejects.toThrow(/NUL/u);
+        await expect(db.patch("docs", "d1", { code: "nul" })).rejects.toThrow(/NUL/u);
         expect(writes()).toHaveLength(0);
     });
 
@@ -109,7 +109,7 @@ describe("createSqlCtxDb — a NUL in the stored row on Postgres", () => {
 
         const { db, writes } = open("postgres");
 
-        await db.patch("d1", { clean: `a${NUL}b` }, "docs");
+        await db.patch("docs", "d1", { clean: `a${NUL}b` });
 
         expect(writes()).toHaveLength(1);
     });
@@ -119,7 +119,7 @@ describe("createSqlCtxDb — a NUL in the stored row on Postgres", () => {
 
         const { db, writes } = open("postgres");
 
-        await expect(db.replace("d1", { clean: "c", code: "nul", label: "l" }, "docs")).rejects.toThrow(/NUL/u);
+        await expect(db.replace("docs", "d1", { clean: "c", code: "nul", label: "l" })).rejects.toThrow(/NUL/u);
         expect(writes()).toHaveLength(0);
     });
 
@@ -128,7 +128,7 @@ describe("createSqlCtxDb — a NUL in the stored row on Postgres", () => {
 
         const { db, writes } = open("postgres", [{ ...stored, label: `a${NUL}b` }]);
 
-        await db.patch("d1", { code: "ok" }, "docs");
+        await db.patch("docs", "d1", { code: "ok" });
 
         expect(writes()).toHaveLength(1);
     });

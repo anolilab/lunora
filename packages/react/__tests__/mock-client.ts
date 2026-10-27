@@ -45,7 +45,16 @@ interface SubEntry {
     ref: string;
 }
 
-const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): MockClientHooks => {
+/**
+ * `live: true` gives the client a `WebSocket` implementation, so query hooks
+ * resolve from the first `emit` instead of `queryImpl` over HTTP. The default
+ * models a client with no socket: every hook falls back to `query`.
+ * `follower: true` models a `crossTabSync` tab that is not the leader.
+ */
+const createMockClient = (
+    queryImpl?: (ref: string, args: unknown) => unknown,
+    { follower = false, live = false }: { follower?: boolean; live?: boolean } = {},
+): MockClientHooks => {
     const subs = new Set<SubEntry>();
     let authToken: string | null = null;
 
@@ -161,18 +170,24 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         // The identity store declares itself on attach; this mock has no gates
         // to arm, so it only has to exist.
         expectIdentityResolution: () => undefined,
+        expectsPush: () => true,
         getAuthToken: getAuthTokenFunction,
         getCurrentUser: getCurrentUserFunction,
+        getWebSocketImpl: () => (live ? WebSocket : undefined),
         mutation: mutationFunction,
         onAuthTokenChange: onAuthTokenChangeFunction,
         onConnectionStatus: onConnectionStatusFunction,
         identityEpoch: () => 0,
+        isCrossTabFollower: () => follower,
         onIdentityChange: (): Unsubscribe => () => undefined,
         // The PUBLIC getter the hooks read (`client.isReady`), not the private
         // `readyResolved` field behind it — this object is a plain literal cast
         // to `LunoraClient`, so naming the backing field left every consumer
         // reading `undefined` and the hydrated branch permanently untaken.
         isReady: true,
+        peekActiveQuerySnapshot: () => {
+            return { answered: false, present: false, value: undefined };
+        },
         peekHydratedQuery: () => undefined,
         peekHydratedQueryByKey: () => undefined,
         query: queryFunction,

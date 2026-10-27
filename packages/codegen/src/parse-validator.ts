@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, SpreadAssignment } from "ts-morph";
+import type { CallExpression, Expression, Identifier, ObjectLiteralExpression } from "ts-morph";
 import { Node, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
@@ -349,7 +349,8 @@ const parseValidator = (expression: Expression): ValidatorIR => {
 };
 
 /**
- * The fields `{ ...sharedArgs }` contributes, or `{}` when it cannot be read.
+ * The fields `{ ...sharedArgs }` or `v.object(sharedFields)` names, or `{}` when
+ * they cannot be read.
  *
  * Unreadable is deliberately NOT fatal. `defineSchema({ ...authTables(options) })`
  * is the documented way to consume `@lunora/auth`, and the record it spreads is
@@ -362,8 +363,8 @@ const parseValidator = (expression: Expression): ValidatorIR => {
  * the alias guard is released before the shape is parsed, so without it the two
  * literals recurse into each other until the stack gives out.
  */
-const parseSpreadShape = (property: SpreadAssignment): Record<string, ValidatorIR> => {
-    const spread = resolveObjectLiteral(property.getExpression());
+const parseResolvedShape = (expression: Expression): Record<string, ValidatorIR> => {
+    const spread = resolveObjectLiteral(expression);
 
     if (spread === undefined || spreadingShapes.has(spread)) {
         return {};
@@ -390,7 +391,7 @@ const parseObjectShape = (object: ObjectLiteralExpression): Record<string, Valid
         // Merged in source order, so spread semantics hold: a key written after
         // the spread wins, one written before it loses.
         if (Node.isSpreadAssignment(property)) {
-            Object.assign(out, parseSpreadShape(property));
+            Object.assign(out, parseResolvedShape(property.getExpression()));
 
             continue;
         }
@@ -542,7 +543,7 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>, call: Cal
         }
 
         case "object": {
-            return first && Node.isObjectLiteralExpression(first) ? { kind: "object", shape: parseObjectShape(first) } : { kind: "object", shape: {} };
+            return { kind: "object", shape: first && Node.isExpression(first) ? parseResolvedShape(first) : {} };
         }
 
         case "optional": {

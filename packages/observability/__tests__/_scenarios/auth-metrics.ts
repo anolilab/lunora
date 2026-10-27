@@ -2,12 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
     AUTH_METRICS_BUCKET_MS,
+    AUTH_METRICS_BUCKET_RETENTION,
     AUTH_METRICS_BUCKETS_TABLE,
     AUTH_METRICS_TABLE,
     ensureAuthMetricsTables,
     readAuthMetrics,
     recordAuthEvent,
 } from "../../src/auth-metrics";
+import { readFunctionMetricBuckets, recordFunctionMetric } from "../../src/function-metrics";
 import type { SqlHarness } from "../_helpers/sql-harness";
 
 /** The harness factory of the project running this scenario — see {@link runAuthMetricsScenarios}. */
@@ -146,6 +148,30 @@ const runAuthMetricsScenarios = (factory: () => SqlHarness): void => {
                 recordAuthEvent(database.sql, { outcome: "fail", ts: 1000 });
 
                 expect(readAuthMetrics(database.sql).failures).toBe(1);
+            } finally {
+                database.close();
+            }
+        });
+
+        it("a function path that is the empty string does not skip the auth trim", () => {
+            expect.assertions(2);
+
+            const database = createHarness();
+
+            try {
+                const stale = 0;
+                const recent = AUTH_METRICS_BUCKET_MS * (AUTH_METRICS_BUCKET_RETENTION + 10);
+
+                // Both recorders accumulate a stale bucket at the start of time.
+                recordAuthEvent(database.sql, { outcome: "ok", ts: stale });
+                recordFunctionMetric(database.sql, { durationMs: 10, errored: false, path: "", ts: stale });
+
+                // The function recorder claims the recent window first. A shared empty-string key would make the auth trim skip.
+                recordFunctionMetric(database.sql, { durationMs: 10, errored: false, path: "", ts: recent });
+                recordAuthEvent(database.sql, { outcome: "ok", ts: recent });
+
+                expect(readAuthMetrics(database.sql).history.map((bucket) => bucket.bucketMs)).toStrictEqual([recent]);
+                expect(readFunctionMetricBuckets(database.sql, "").buckets.map((bucket) => bucket.bucketMs)).toStrictEqual([recent]);
             } finally {
                 database.close();
             }

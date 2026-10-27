@@ -200,6 +200,10 @@ const ERROR_CATALOG: {
         readonly status: 502;
         readonly title: "Shard HTTP error";
     };
+    readonly SHARD_DRY_RUN_UNSUPPORTED: {
+        readonly status: 501;
+        readonly title: "Shard cannot dry-run an import";
+    };
     readonly SUBSCRIPTION_PERSIST_FAILED: {
         readonly status: 500;
         readonly title: "Subscription persist failed";
@@ -690,6 +694,10 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Batch limit exceeded";
     };
+    readonly CASCADE_LIMIT: {
+        readonly status: 400;
+        readonly title: "Cascade limit exceeded";
+    };
     readonly CROSS_SHARD_RANK_UNSUPPORTED: {
         readonly status: 400;
         readonly title: "Cross-shard rank() is unsupported";
@@ -723,6 +731,10 @@ const ERROR_CATALOG: {
     readonly FORBIDDEN_TOPIC: {
         readonly status: 403;
         readonly title: "Live topic publish forbidden";
+    };
+    readonly GLOBAL_DRY_RUN_UNSUPPORTED: {
+        readonly status: 400;
+        readonly title: "Global table dry run not supported";
     };
     readonly GLOBAL_NOT_CONFIGURED: {
         readonly status: 400;

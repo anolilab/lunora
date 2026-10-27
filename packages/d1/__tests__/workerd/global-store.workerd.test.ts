@@ -71,7 +71,8 @@ describe("global store (workerd)", () => {
 
         expect(result.applied).toStrictEqual(Array.from<number>({ length: 20 }).fill(1));
         expect(result.values).toStrictEqual(Array.from<number>({ length: 20 }).fill(1));
-    });
+        // 20 rounds of 12 serial D1 round trips: the default 5s budget is too tight on a shared CI runner.
+    }, 30_000);
 
     it("surfaces a primary-key collision on a pinned clientId as CONFLICT", async () => {
         expect.assertions(2);

@@ -12,11 +12,15 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import type { DiscoveryCache } from "../discovery-cache";
 import { lunoraLine } from "../log-line";
 import { validateWranglerProject } from "./wrangler-project";
 
 /** The project coordinates the validator needs. */
 interface AssertWranglerOptions {
+    /** Memoises the schema discovery, shared with binding inference. */
+    cache?: DiscoveryCache;
+
     /** Absolute path to the project root holding `wrangler.jsonc`. */
     projectRoot: string;
 
@@ -36,7 +40,7 @@ interface AssertWranglerOptions {
  * project that declares a `.global()` table or a container.
  */
 const assertWranglerSatisfiesSchema = (options: AssertWranglerOptions, warn: (message: string) => void, remedy: string): void => {
-    const result = validateWranglerProject({ projectRoot: options.projectRoot, schemaDir: options.schemaDir });
+    const result = validateWranglerProject({ cache: options.cache, projectRoot: options.projectRoot, schemaDir: options.schemaDir });
 
     if (!result.wranglerPath) {
         throw new LunoraError(

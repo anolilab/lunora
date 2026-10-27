@@ -21,6 +21,7 @@
  */
 import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 
 import type { CapabilityKey, ServiceBindingIR, SourceCapabilitySignals } from "@lunora/codegen";
 import {
@@ -36,6 +37,7 @@ import {
 } from "@lunora/codegen";
 // `worker-entry.ts` lexes the entry's exports; the lexer's wasm must be initialised first.
 import { init as initLexer } from "es-module-lexer";
+import type { SourceFile } from "ts-morph";
 import { Project } from "ts-morph";
 
 import type { AgentIR } from "./agent-info";
@@ -51,6 +53,15 @@ import { PACKAGE_SECRETS_REGISTRY } from "./package-secrets-registry";
 import join from "./path";
 import type { QueueIR } from "./queue-info";
 import { discoverQueueInfo } from "./queue-info";
+import {
+    constructsEventLogClient,
+    EVENT_LOG_CLIENT,
+    EVENT_LOG_PACKAGE,
+    forwardsReplicaExport,
+    parseModule,
+    resolveBarrel,
+    runtimeSpecifiersOf,
+} from "./replica-export-graph";
 import type { SchemaInfo } from "./schema-info";
 import { discoverSchemaInfo } from "./schema-info";
 import type { DurableObjectSpec } from "./worker-entry";
@@ -182,6 +193,13 @@ const FLAG_PACKAGES: ReadonlyArray<readonly [CapabilityFlag, string]> = [
 const SECRET_SOURCE_FLAGS = [
     ["usesNotifyFcm", "@lunora/notify:fcm"],
     ["usesNotifyWebPush", "@lunora/notify:webPush"],
+    // `ShardRegistryDO` refuses unsigned requests, so an app with a registry needs
+    // `LUNORA_RELAY_SECRET` in `.dev.vars` and on deploy, with no package import to say so.
+    ["hostsShardRegistry", "@lunora/do:shardRegistry"],
+    // `EventLogDO` refuses every request without the same secret, and the app that exports it hosts the log.
+    ["hostsEventLog", "@lunora/replica:eventLog"],
+    // A worker that only constructs `EventLogDOClient` takes the host's value, so its line is a template, never minted.
+    ["usesEventLogClient", "@lunora/replica:eventLogClient"],
     // The secret store behind `requestSecretTool`. The tool's own import is the
     // signal, not `@lunora/agent`: an app that imports the package for something
     // else needs no key.
@@ -199,7 +217,7 @@ const SANDBOX_PACKAGES = ["@lunora/agent", "@lunora/agent/sandbox"] as const;
  * rejects (JSX, a mid-edit syntax error), which used to be parsed unconditionally.
  */
 const CAPABILITY_PACKAGE_PATTERN = new RegExp(
-    String.raw`["'\x60](?:${[...FLAG_PACKAGES.map(([, source]) => source), ...SANDBOX_PACKAGES].map((source) => escapeRegExp(source)).join("|")})["'\x60]`,
+    String.raw`["'\x60](?:${[...FLAG_PACKAGES.map(([, source]) => source), ...SANDBOX_PACKAGES, EVENT_LOG_PACKAGE].map((source) => escapeRegExp(source)).join("|")})["'\x60]`,
     "u",
 );
 
@@ -275,6 +293,12 @@ interface InferredBindings {
      */
     flagshipBinding?: string;
 
+    /** The worker entry exports `EventLogDO`, so the app mints the `LUNORA_RELAY_SECRET` the event log checks on every request. */
+    hostsEventLog: boolean;
+
+    /** The app hosts the registry (exports or binds `ShardRegistryDO`, or is merged with its module), so it mints the `LUNORA_RELAY_SECRET` its registry checks. */
+    hostsShardRegistry: boolean;
+
     /**
      * The schema's `.jurisdiction("…")`, when it declares one. Read by the binding
      * hints whose resource takes its residency at creation (Artifacts), so the
@@ -317,6 +341,8 @@ interface InferredBindings {
     usesBrowser: boolean;
     /** `@lunora/auth/cimd/workers` is imported → needs the `global_fetch_strictly_public` compatibility flag (no binding; `lunora doctor` checks it). */
     usesCimdWorkers: boolean;
+    /** The app constructs an `EventLogDOClient`, so it needs the `LUNORA_RELAY_SECRET` its host minted, hosting the log or not. */
+    usesEventLogClient: boolean;
     /** `lunora/flags.ts` declares a feature-flag provider (any OpenFeature provider — Flagship or custom). */
     usesFlags: boolean;
     /** `@lunora/hyperdrive` is imported or `ctx.sql` read (reconcile writes `{ binding: "HYPERDRIVE" }` with a placeholder `id`; `lunora deploy` swaps in the created config's). */
@@ -372,7 +398,10 @@ interface InferredBindings {
  * the two not driven by a package import, so they are added explicitly. A `Pick`
  * of {@link InferredBindings}, so a flag the result does not declare fails to compile.
  */
-type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesRequestSecretTool" | "usesWorkerLoader">;
+type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesEventLogClient" | "usesRequestSecretTool" | "usesWorkerLoader">;
+
+/** A capability scan and every file it read, so a later walk from the worker entry leaves those files alone. */
+type CapabilityScan = Capabilities & { scannedFiles: ReadonlySet<string> };
 
 /** A relative module specifier in an import or re-export: `from "./x"`, `from "../y"`. */
 const RELATIVE_IMPORT_PATTERN = /\bfrom\s+["']\.{1,2}\//u;
@@ -435,6 +464,42 @@ const schemaFacts = (projectRoot: string, schemaDirectory: string, cache?: Disco
 };
 
 /**
+ * The parse the last {@link scanCapabilities} left, for the project it scanned. A
+ * watch session scans on every codegen pass, and re-parsing every candidate file
+ * each time was most of the scan; a file is re-parsed only when its text changed,
+ * so nothing stale is ever read. Only the latest project is kept: a host scans one,
+ * and one that alternates re-parses on each switch, no worse than not caching.
+ */
+let lastScan: { project: Project; root: string } | undefined;
+
+/** The project {@link lastScan} keeps for `projectRoot`, replacing another root's. */
+const scanProjectOf = (projectRoot: string): Project => {
+    const root = resolve(projectRoot);
+
+    if (lastScan?.root !== root) {
+        lastScan = { project: new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true }), root };
+    }
+
+    return lastScan.project;
+};
+
+/** Parse `code` into `project` as `file`, unless the file is already there with exactly this text. */
+const parseIfChanged = (project: Project, file: string, code: string): void => {
+    if (project.getSourceFile(file)?.getFullText() !== code) {
+        project.createSourceFile(file, code, { overwrite: true });
+    }
+};
+
+/** Drop every file the last scan parsed and this one did not — a deleted file, or one no longer worth parsing. */
+const forgetUnscanned = (project: Project, scanned: ReadonlySet<SourceFile>): void => {
+    for (const sourceFile of project.getSourceFiles()) {
+        if (!scanned.has(sourceFile)) {
+            project.removeSourceFile(sourceFile);
+        }
+    }
+};
+
+/**
  * Scan every source file under `scanDirectories` and decide the capabilities.
  *
  * Each file worth parsing (see {@link CAPABILITY_PACKAGE_PATTERN}) contributes
@@ -447,10 +512,11 @@ const schemaFacts = (projectRoot: string, schemaDirectory: string, cache?: Disco
  * `src/`-only `browserTool` never registers the dispatcher and a `src/`-only
  * `jsCodeTool` never reaches the `workerLoaders` gate.
  */
-const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<string>, lunoraDirectory: string): Capabilities => {
+const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<string>, lunoraDirectory: string): CapabilityScan => {
     const lunoraRoot = join(projectRoot, lunoraDirectory);
-    const project = new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true });
+    const project = scanProjectOf(projectRoot);
     const candidates: { file: string; inLunora: boolean }[] = [];
+    const scannedFiles = new Set<string>();
     const lunoraFiles: SourceCapabilitySignals[] = [];
     const otherFiles: SourceCapabilitySignals[] = [];
     // One scope for the whole scan: a target a barrel reaches from several files is parsed once.
@@ -470,6 +536,8 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
         collectSourceFiles(absolute, files);
 
         for (const file of files) {
+            scannedFiles.add(file);
+
             const code = readFileSync(file, "utf8");
             const inLunora = isWithinDirectory(file, lunoraRoot);
 
@@ -478,13 +546,26 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
 
             // A `lunora/` file that imports a relative module can reach a capability through that module (a barrel that
             // re-exports the agent package's tool), so it is parsed even without a package name or context read there.
-            if (CAPABILITY_PACKAGE_PATTERN.test(code) || (inLunora && (mayReadCapabilityContext(code) || RELATIVE_IMPORT_PATTERN.test(code)))) {
-                // Registered now, while the program is not built, so the text is not kept for the signal pass.
-                project.createSourceFile(file, code, { overwrite: true });
+            // A file that names the client may import it from a barrel that is not a candidate, so it is parsed for that import too.
+            if (
+                CAPABILITY_PACKAGE_PATTERN.test(code) ||
+                code.includes(EVENT_LOG_CLIENT) ||
+                (inLunora && (mayReadCapabilityContext(code) || RELATIVE_IMPORT_PATTERN.test(code)))
+            ) {
+                // Registered now, while the program is not built, so the text is not kept for the signal pass. A file
+                // whose text is unchanged since the last scan keeps its parse — and with it codegen's per-file caches.
+                parseIfChanged(project, file, code);
+
                 candidates.push({ file, inLunora });
             }
         }
     }
+
+    // Forget what the last scan parsed and this one did not (a deleted file, or one no longer worth parsing), before any
+    // signal is read, so the project holds exactly this scan's file set.
+    // By identity, not by path string: ts-morph stores a standardized absolute path, which a relative root or a
+    // Windows spelling of `file` would never equal.
+    forgetUnscanned(project, new Set(candidates.map(({ file }) => project.getSourceFileOrThrow(file))));
 
     // Each file's signals come from `@lunora/codegen`'s own per-file probe over a parsed AST, so a type-only import, or a
     // `ctx.kv` inside a comment or a string, implies nothing here, exactly as it implies nothing to codegen. Every candidate
@@ -508,12 +589,14 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
     return {
         ...flags,
         needsD1: usesEnvDatabase,
+        usesEventLogClient: candidates.some(({ file }) => constructsEventLogClient(project.getSourceFileOrThrow(file))),
         usesRequestSecretTool: lunora.requestSecretTool,
         usesAi: used.has("ai") || usesEnvAi,
         // A sandbox `browserTool` provisions BROWSER even without a direct
         // `@lunora/browser` import: the browser op runs on the dispatcher's ctx.
         usesBrowser: used.has("browser") || lunora.sandboxTools.usesSandboxBrowser,
         usesWorkerLoader: lunora.sandboxTools.usesSandboxLoader,
+        scannedFiles,
     };
 };
 
@@ -628,6 +711,64 @@ const describeSignals = (
 };
 
 /**
+ * Whether the app hosts `ShardRegistryDO`: it exports or binds the class, or a merged app carries the
+ * registry in `LunoraDO`. codegen writes `shardRegistry.ts` for every `.shardBy()` schema, so the file's
+ * presence alone does not host the registry.
+ */
+const hostsShardRegistry = (durableObjects: ReadonlyArray<DurableObjectSpec>, generatedDirectory: string): boolean =>
+    durableObjects.some((object) => object.binding === "SHARD_REGISTRY") ||
+    (isMergedProject(generatedDirectory) && existsSync(join(generatedDirectory, "shardRegistry.ts")));
+
+/**
+ * Whether the worker entry constructs `EventLogDOClient`, in its own file or in a module it reaches through local imports. The entry can
+ * sit outside the scanned directories (a root-level `worker.ts`), and so can the modules it imports, while construction needs the secret
+ * wherever it is. A module `scanCapabilities` already read is a leaf: its constructions were counted there, and it is not parsed twice.
+ * Generated modules are leaves too, since codegen never emits a client construction. Imports are read from the TypeScript parse of each
+ * module, and a file only reaches the ts-morph parse when its text names the client or a capability package.
+ */
+const entryConstructsEventLogClient = (entryPath: string, scannedFiles: ReadonlySet<string>, generatedRoot: string): boolean => {
+    const project = new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true });
+    const pending = [entryPath];
+    const visited = new Set<string>();
+
+    for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
+        if (visited.has(file)) {
+            continue;
+        }
+
+        visited.add(file);
+
+        const source = parseModule(file);
+        const code = source.text;
+
+        if (
+            (CAPABILITY_PACKAGE_PATTERN.test(code) || code.includes(EVENT_LOG_CLIENT)) &&
+            constructsEventLogClient(project.createSourceFile(file, code, { overwrite: true }))
+        ) {
+            return true;
+        }
+
+        for (const specifier of runtimeSpecifiersOf(source)) {
+            const target = resolveBarrel(file, specifier);
+
+            if (target !== undefined && !scannedFiles.has(target) && !isWithinDirectory(target, generatedRoot)) {
+                pending.push(target);
+            }
+        }
+    }
+
+    return false;
+};
+
+/**
+ * Whether the worker entry hosts `EventLogDO`. A composed entry star-re-exports only the generated
+ * modules, so it never hosts the log by itself. A hand-written entry can reach the class through a
+ * barrel, so star re-exports are followed rather than reading only the entry's own export list.
+ */
+const hostsEventLog = (entry: ReturnType<typeof resolveWorkerEntry>): boolean =>
+    !entry.composed && entry.path !== undefined && forwardsReplicaExport(entry.path, "EventLogDO", undefined, new Set());
+
+/**
  * Scan a Lunora project and report which Cloudflare bindings its code implies.
  * Read-only: performs no writes. Binding provisioning is driven by the worker
  * entry's Durable Object exports plus the schema's D1 need; capability imports
@@ -639,8 +780,8 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const schemaDirectory = options.schemaDir ?? "lunora";
     const scanDirectories = options.scanDirs ?? DEFAULT_SCAN_DIRECTORIES;
 
-    const scan = (): Capabilities => scanCapabilities(options.projectRoot, scanDirectories, schemaDirectory);
-    const capabilities =
+    const scan = (): CapabilityScan => scanCapabilities(options.projectRoot, scanDirectories, schemaDirectory);
+    const { scannedFiles, ...capabilities } =
         options.cache === undefined ? scan() : options.cache.memo(`capabilities:${options.projectRoot}:${schemaDirectory}:${scanDirectories.join(",")}`, scan);
     const entry = resolveWorkerEntry(options.projectRoot);
     let durableObjects: DurableObjectSpec[];
@@ -682,6 +823,11 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const notifyChannels = notifyIr.error === undefined ? notifyIr.value : { hasFcm: true, hasWebPush: true };
     const flagshipBinding = flags?.provider === "flagship" && flags.mode === "binding" ? flags.bindingName : undefined;
 
+    const generatedRoot = join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY);
+    const hostsRegistry = hostsShardRegistry(durableObjects, generatedRoot);
+    const hostsLog = hostsEventLog(entry);
+    const entryUsesClient = !entry.composed && entry.path !== undefined && entryConstructsEventLogClient(entry.path, scannedFiles, generatedRoot);
+
     const signals = describeSignals(durableObjects, schema, capabilities, containers, workflows, agents);
 
     // A hand-written entry opts in by exporting `LunoraDO` itself; with the merge
@@ -717,6 +863,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         // The scanned flags first: `needsD1` below replaces the raw `env.DB` flag
         // with the schema-augmented value computed above.
         ...capabilities,
+        usesEventLogClient: capabilities.usesEventLogClient || entryUsesClient,
         agents,
         containers,
         durableObjects,
@@ -729,6 +876,8 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         usesFlags: flags !== undefined,
         usesNotifyFcm: notifyChannels?.hasFcm ?? false,
         usesNotifyWebPush: notifyChannels?.hasWebPush ?? false,
+        hostsEventLog: hostsLog,
+        hostsShardRegistry: hostsRegistry,
         workflows,
     };
 };

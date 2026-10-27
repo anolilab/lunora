@@ -3,6 +3,7 @@
 import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { assertPresenceInterval } from "../../../shared/presence-interval";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./lunora-provider";
 
@@ -93,6 +94,8 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     const client = useLunora();
 
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
+
+    assertPresenceInterval(intervalMs);
 
     // One session id per mount unless the caller pins one.
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `randomSessionId()` mints a fresh random id; it must run once per mount (keyed on `options.sessionId`), never per render, or every render would generate a new presence-row id. Keep the explicit `useMemo` so the identity is stable even if the compiler bails this function.

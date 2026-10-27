@@ -1,5 +1,5 @@
 /** The options `lunora dev` takes and the plan it builds — shared by the planner, the supervisor and the package API. */
-import type { ensureDevVariables, ensureDevVarsExample, fillDevSecrets, startCelldDevSession } from "@lunora/config";
+import type { ensureDevVariables, ensureDevVarsExample, fillDevSecrets, startCelldDevSession, writeCelldDevProjection } from "@lunora/config";
 import type { materializeDevWranglerConfig, materializeServiceDevConfigs, startLocalHyperdrive, WithheldBinding } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
@@ -131,6 +131,8 @@ interface DevCommandOptions {
     worker?: boolean;
     /** `wrangler dev` port. */
     workerPort?: number;
+    /** Writes the celld projection for a `--no-worker` run; injected in tests. */
+    writeCelldProjection?: typeof writeCelldDevProjection;
 }
 
 interface DevRemotePlan {

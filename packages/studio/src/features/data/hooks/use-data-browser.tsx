@@ -59,6 +59,8 @@ const toEditableFilters = (clauses: ReadonlyArray<FilterClause>): EditableFilter
     clauses.map((clause) => {
         return {
             column: clause.column,
+            path: (clause.path ?? []).join("."),
+            ...(clause.path === undefined || clause.path.length === 0 ? {} : { pathSegments: clause.path }),
             ...(clause.value === undefined ? {} : { literal: [clause.value] satisfies [unknown] }),
             operator: clause.operator,
             value: clause.value === undefined ? "" : facetValueText(clause.value),
@@ -75,7 +77,7 @@ const fromOrderBy = (orderBy: DataView["orderBy"]): SortingState => (orderBy ===
  * blob) — serializing a tuple instead means two equal clauses always produce
  * the same string, regardless of where they came from.
  */
-const filterClauseTuple = (clause: FilterClause): [string, string, unknown] => [clause.column, clause.operator, clause.value];
+const filterClauseTuple = (clause: FilterClause): [string, string, unknown, string[]] => [clause.column, clause.operator, clause.value, clause.path ?? []];
 
 /**
  * Serialize the fields a data-browser view is keyed on (shard / search /
@@ -809,11 +811,14 @@ const useDataBrowser = ({
     // filter bar, but pins the facet's OWN value as the row's literal: the text
     // is only what the box displays, and re-deriving a value from it is what let
     // a facet's count disagree with the rows the click returned. Replaces any
-    // existing clause for the same column so repeated clicks don't stack.
+    // existing plain clause for the same column so repeated clicks don't stack. A
+    // nested-path or `has` row on that column tests another value, so it is kept.
     const facetFilter = (column: string, value: unknown): void => {
         const row: EditableFilter = { column, literal: [facetFilterValue(value)], operator: "eq", value: facetValueText(value) };
+        const replaces = (clause: EditableFilter): boolean =>
+            clause.column === column && clause.operator !== "has" && clause.pathSegments === undefined && (clause.path ?? "").trim() === "";
 
-        setFilters((current) => [...current.filter((clause) => clause.column !== column), row]);
+        setFilters((current) => [...current.filter((clause) => !replaces(clause)), row]);
         setOffset(0);
     };
 
@@ -1399,4 +1404,4 @@ const useDataBrowser = ({
  */
 export type { DataBrowserModel };
 export type { FacetState } from "./use-facets";
-export { useDataBrowser };
+export { serializeView, useDataBrowser };

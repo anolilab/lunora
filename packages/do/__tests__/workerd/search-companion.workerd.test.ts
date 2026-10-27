@@ -79,8 +79,8 @@ describe("durable object fts5 search companion on workerd", () => {
                 const writer = createShardCtxDb({ schema: schemaWith([INDEX]), sql: exec });
 
                 reset();
-                await writer.patch("d00005", { body: "changed text" });
-                await writer.delete("d00007");
+                await writer.patch("docs", "d00005", { body: "changed text" });
+                await writer.delete("docs", "d00007");
                 measured = rowsRead();
             });
 
@@ -130,8 +130,8 @@ describe("durable object fts5 search companion on workerd", () => {
 
             const writer = createShardCtxDb({ schema: staged, sql: exec });
 
-            await writer.patch("a", { body: "cherry common" });
-            await writer.delete("b");
+            await writer.patch("docs", "a", { body: "cherry common" });
+            await writer.delete("docs", "b");
 
             expect(companionRows(sql, "a")).toBe(1);
             expect(companionRows(sql, "b")).toBe(0);

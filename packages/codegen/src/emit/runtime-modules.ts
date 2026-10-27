@@ -1,4 +1,4 @@
-import type { CronJobIR, TableIR, VectorIndexIR } from "../ir";
+import type { CronJobIR, JurisdictionIR, TableIR, VectorIndexIR } from "../ir";
 import { isShardByTable } from "../ir";
 import { baseSpecifiers, GENERATED_HEADER } from "./shared";
 
@@ -75,12 +75,18 @@ export { SchedulerDO } from "@lunora/scheduler";
  * the same signal — so none of the three can disagree about whether the app has
  * a registry.
  */
-const emitShardRegistry = (tables: ReadonlyArray<Pick<TableIR, "shardMode">>, useUmbrella: boolean): string => {
+const emitShardRegistry = (tables: ReadonlyArray<Pick<TableIR, "shardMode">>, useUmbrella: boolean, jurisdiction?: JurisdictionIR): string => {
     if (!tables.some((table) => isShardByTable(table))) {
         return "";
     }
 
-    return `${GENERATED_HEADER}/**
+    // Schema `.jurisdiction("…")` pins the entrypoint's registry to the same region as the shards that register with it.
+    const registryJurisdiction = jurisdiction ? JSON.stringify(jurisdiction) : "undefined";
+
+    return `${GENERATED_HEADER}import { WorkerEntrypoint } from "cloudflare:workers";
+import { hostedShardRegistry } from "${baseSpecifiers(useUmbrella).do}";
+
+/**
  * The \`ShardRegistryDO\` Durable Object class — the live set of shard keys per
  * \`.shardBy()\` table, which cross-shard export, CDC sync and migrations fan out
  * to. Re-exported so a worker entry can forward it (wrangler binds only what the
@@ -94,6 +100,30 @@ const emitShardRegistry = (tables: ReadonlyArray<Pick<TableIR, "shardMode">>, us
  * worker entry does both whenever this module exists.
  */
 export { ShardRegistryDO } from "${baseSpecifiers(useUmbrella).do}";
+
+/**
+ * The registry's RPC surface. A worker that calls a registry this worker hosts binds
+ * this class with a service binding (\`services: [{ binding, service, entrypoint:
+ * "ShardRegistryEntrypoint" }]\`), so it needs no secret: the binding is the capability.
+ * The host signs its own calls into the registry with its \`LUNORA_RELAY_SECRET\`.
+ */
+export class ShardRegistryEntrypoint extends WorkerEntrypoint<{ SHARD_REGISTRY: unknown; LUNORA_RELAY_SECRET?: string }> {
+    public register(table: string, shardKey: string): Promise<void> {
+        return hostedShardRegistry(this.env, ${registryJurisdiction}).register(table, shardKey);
+    }
+
+    public unregister(table: string, shardKey: string): Promise<void> {
+        return hostedShardRegistry(this.env, ${registryJurisdiction}).unregister(table, shardKey);
+    }
+
+    public listShardKeys(table: string): Promise<string[]> {
+        return hostedShardRegistry(this.env, ${registryJurisdiction}).listShardKeys(table);
+    }
+
+    public snapshot(): Promise<Record<string, string[]>> {
+        return hostedShardRegistry(this.env, ${registryJurisdiction}).snapshot();
+    }
+}
 `;
 };
 

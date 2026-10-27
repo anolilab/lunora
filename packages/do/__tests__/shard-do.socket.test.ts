@@ -122,6 +122,41 @@ describe("shardDO socket routes", () => {
         expect(socketCalls(shard)).toHaveLength(0);
     });
 
+    it("closes a route upgrade whose forwarded credential already expired with 4001, so onOpen never runs as that user", async () => {
+        expect.assertions(3);
+
+        const sockets: FakeSocket[] = [];
+        const server = new FakeSocket();
+        const globalWithPair = globalThis as { WebSocketPair?: unknown };
+        const original = globalWithPair.WebSocketPair;
+
+        globalWithPair.WebSocketPair = function WebSocketPair() {
+            return { 0: {}, 1: server } as unknown;
+        };
+
+        const shard = makeShard(sockets, CHAT_ROUTE);
+
+        try {
+            // A browser cannot read a refused handshake, so the socket opens and is closed with the code the client
+            // refreshes on. `new Response(null, { status: 101 })` throws under Node after that.
+            await shard.fetch(
+                new Request("https://shard.internal/chat", {
+                    headers: { Upgrade: "websocket", "x-lunora-identity-exp": String(Date.now() - 1000), "x-lunora-userid": "user-1" },
+                }),
+            );
+        } catch (error) {
+            if (!(error instanceof RangeError)) {
+                throw error;
+            }
+        } finally {
+            globalWithPair.WebSocketPair = original;
+        }
+
+        expect(server.closes).toStrictEqual([{ code: 4001, reason: "token_expired" }]);
+        expect(server.deserializeAttachment()).not.toHaveProperty("socketPath");
+        expect(socketCalls(shard)).toHaveLength(0);
+    });
+
     it("accepts a verified upgrade, stamps the route, and fires onOpen", async () => {
         expect.assertions(4);
 

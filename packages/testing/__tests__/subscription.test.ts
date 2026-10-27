@@ -25,7 +25,7 @@ const addTag = mutation.input({ name: v.string() }).mutation(async ({ args, ctx 
 const deleteAllMessages = mutation.mutation(async ({ ctx }) => {
     const rows = await ctx.db.query("messages").collect();
 
-    await ctx.db.deleteMany((rows as { _id: string }[]).map((r) => r._id) as unknown as Parameters<typeof ctx.db.deleteMany>[0]);
+    await ctx.db.deleteMany("messages", (rows as { _id: string }[]).map((r) => r._id) as unknown as Parameters<typeof ctx.db.deleteMany>[1]);
 });
 
 const list = query.query(async ({ ctx }) => ctx.db.query("messages").collect());

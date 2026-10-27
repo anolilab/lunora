@@ -469,7 +469,7 @@ export interface LintContext {
     mutators?: ReadonlyArray<AdvisorMutatorDeclaration>;
 
     /**
-     * Whole-row `ctx.db.replace(id, document)` writes lifted from custom
+     * Whole-row `ctx.db.replace("table", id, document)` writes lifted from custom
      * mutators' authoritative `server` impls (the `mutator_full_row_replace`
      * input). Each `replace` overwrites the entire row, clobbering a concurrent
      * edit to a different column on a synced table. Supplied by the codegen

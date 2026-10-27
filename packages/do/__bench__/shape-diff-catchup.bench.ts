@@ -68,7 +68,7 @@ const buildRepeatedWriteShard = async (changes: number, distinctRows: number): P
 
     for (let index = distinctRows; index < changes; index += 1) {
         // eslint-disable-next-line no-await-in-loop -- sequential re-writes lengthen the RANGE without widening the key set
-        await writer.patch(`m${String(index % distinctRows)}`, { text: body(index) });
+        await writer.patch("messages", `m${String(index % distinctRows)}`, { text: body(index) });
     }
 
     return sql;

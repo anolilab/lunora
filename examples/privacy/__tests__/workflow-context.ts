@@ -7,7 +7,7 @@ import type { WorkflowRunContext } from "@lunora/workflow";
 
 /** The in-memory tombstone store: the namespace surface the app's port reads, and the keys it holds. */
 interface TombstoneNamespaceDouble {
-    readonly get: () => { add: (key: string, erasedAt: number) => Promise<void>; keys: () => Promise<string[]> };
+    readonly get: () => { add: (key: string, erasedAt: number) => Promise<void>; has: (key: string) => Promise<boolean>; keys: () => Promise<string[]> };
     readonly idFromName: (name: string) => string;
     readonly keys: Map<string, number>;
 }
@@ -19,6 +19,7 @@ const tombstoneNamespace = (): TombstoneNamespaceDouble => {
         add: async (key: string, erasedAt: number) => {
             keys.set(key, erasedAt);
         },
+        has: async (key: string) => keys.has(key),
         keys: async () => [...keys.keys()],
     };
 

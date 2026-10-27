@@ -1,0 +1,6 @@
+# Copy to `.dev.vars` (gitignored) before `pnpm dev`. Read by the Worker.
+# Your WorkOS client id (Dashboard → API keys). Not a secret; it names the JWKS
+# the AuthKit access tokens are verified against.
+WORKOS_CLIENT_ID=client_replace-me
+# Optional: your custom auth domain, when configured (it then issues the tokens).
+# WORKOS_AUTH_DOMAIN=auth.example.com

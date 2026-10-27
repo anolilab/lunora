@@ -1,70 +1,44 @@
 import { LunoraError } from "@lunora/errors";
-import type { JWTVerifyGetKey } from "jose";
 import { createRemoteJWKSet, errors, jwtVerify } from "jose";
 
-import { DEFAULT_COOKIE, DEFAULT_HEADER, readToken } from "./read-token";
-import type { AccessClaims, AccessJwtFallbackOptions, RequestVerifyOptions, VerifyAccessJwtOptions } from "./types";
+import type { JwtVerifierOf, JwtVerifierOptionsOf } from "../../../shared/jwt-verify";
+import { cookieToken, createJwtVerification, firstToken, headerToken } from "../../../shared/jwt-verify";
+import type { AccessClaims, AccessJwtFallbackOptions, AccessKeySet, RequestVerifyOptions, VerifyAccessJwtOptions } from "./types";
+
+const { httpsOrigin, jwtVerifier, verifyJwt } = createJwtVerification<AccessKeySet, AccessClaims>({
+    fail: (message) => new LunoraError("INTERNAL", message),
+    jose: {
+        createRemoteJWKSet,
+        errors,
+        // `jose` overloads `jwtVerify` per key kind; the union is one of the two at runtime.
+        jwtVerify: async (token, key, options) => jwtVerify<AccessClaims>(token, key as Parameters<typeof jwtVerify>[1], options),
+    },
+    name: "@lunora/cloudflare-access",
+});
 
 /** Cloudflare Access publishes its signing keys at this path under the team domain. */
 const CERTS_PATH = "/cdn-cgi/access/certs";
 
+/** Default header Cloudflare Access sets on every proxied request. */
+const DEFAULT_HEADER = "cf-access-jwt-assertion";
+
+/** Default cookie Access sets on top-level browser navigations. */
+const DEFAULT_COOKIE = "CF_Authorization";
+
 /** Leading `http(s)://` scheme, stripped when normalizing a configured team domain. */
 const SCHEME_PREFIX = /^https?:\/\//i;
-
-/** Strip trailing `/` characters without a backtracking regex. */
-const stripTrailingSlashes = (value: string): string => {
-    let end = value.length;
-
-    while (end > 0 && value[end - 1] === "/") {
-        end -= 1;
-    }
-
-    return value.slice(0, end);
-};
 
 /**
  * Normalize a configured team domain to the canonical Access issuer URL.
  *
  * Accepts a short team name (`acme`), a host (`acme.cloudflareaccess.com`), or a
- * full URL, and always returns an `https://` origin with no trailing slash. A
+ * full URL, and always returns a lowercased `https://` origin with no path. A
  * bare name with no dot is expanded to the `cloudflareaccess.com` host.
  */
 const accessIssuer = (teamDomain: string): string => {
-    const trimmed = stripTrailingSlashes(teamDomain.trim().replace(SCHEME_PREFIX, ""));
+    const host = teamDomain.trim().replace(SCHEME_PREFIX, "").split("/")[0] ?? "";
 
-    if (trimmed.length === 0) {
-        throw new LunoraError("INTERNAL", '@lunora/cloudflare-access: `teamDomain` is required (e.g. "acme" or "acme.cloudflareaccess.com")');
-    }
-
-    // A bare name (no dot) is the team subdomain; expand to the full host. Parse
-    // through `URL` so a full-URL input keeps only its origin (a stray path like
-    // `…/foo` is dropped, not folded into the issuer) and the host is lowercased
-    // — hostnames are case-insensitive, so a differently-cased env value must
-    // still produce the canonical issuer the `iss` claim is matched against.
-    const candidate = trimmed.includes(".") ? `https://${trimmed}` : `https://${trimmed}.cloudflareaccess.com`;
-    const host = new URL(candidate).host.toLowerCase();
-
-    return `https://${host}`;
-};
-
-/**
- * Cache one remote JWKS getter per issuer for the lifetime of the isolate. The
- * getter itself (from `jose`) holds the fetched keys with a built-in cooldown
- * and refetches on an unknown `kid` (key rotation), so a single instance per
- * issuer is both correct and the recommended usage — re-creating it per request
- * would defeat that cache and hammer the certs endpoint.
- */
-const jwksByIssuer = new Map<string, JWTVerifyGetKey>();
-
-const remoteJwks = (issuer: string): JWTVerifyGetKey => {
-    let getter = jwksByIssuer.get(issuer);
-
-    if (getter === undefined) {
-        getter = createRemoteJWKSet(new URL(`${issuer}${CERTS_PATH}`));
-        jwksByIssuer.set(issuer, getter);
-    }
-
-    return getter;
+    return httpsOrigin(host.includes(".") || host.length === 0 ? host : `${host}.cloudflareaccess.com`, "teamDomain");
 };
 
 /**
@@ -91,19 +65,18 @@ const normalizeAudiences = (aud: VerifyAccessJwtOptions["aud"]): string[] => {
     return audiences;
 };
 
-/**
- * Eagerly validate the static, construction-time verify options so a misconfigured
- * deployment fails fast at factory build time instead of degrading to
- * silent-anonymous on every request. `createAccessResolver` / `accessAdminGate`
- * call this once when built: `teamDomain` must resolve to a valid Access issuer
- * and `aud` must be a non-empty tag. The per-request catch in {@link verifyRequest}
- * then covers only genuine token-verification failures, not config mistakes — a
- * broken deployment throws here at startup rather than resolving every caller to
- * anonymous with zero signal.
- */
-const assertVerifyOptions = (options: VerifyAccessJwtOptions): void => {
-    accessIssuer(options.teamDomain);
-    normalizeAudiences(options.aud);
+/** The shared verify options for an Access application: RS256 against the team JWKS, its issuer, its AUD tags. */
+const jwtOptions = (options: VerifyAccessJwtOptions): JwtVerifierOptionsOf<AccessKeySet> => {
+    const issuer = accessIssuer(options.teamDomain);
+
+    return {
+        algorithms: ["RS256"],
+        audience: normalizeAudiences(options.aud),
+        clockTolerance: options.clockToleranceSec,
+        issuer,
+        jwksUrl: `${issuer}${CERTS_PATH}`,
+        keySet: options.keySet,
+    };
 };
 
 /**
@@ -114,7 +87,8 @@ const assertVerifyOptions = (options: VerifyAccessJwtOptions): void => {
  * Returns a fully-configured verify config when both `teamDomain` and `aud` are
  * supplied, `undefined` when neither key is present at all (run
  * platform-identity-only, with no `Cf-Access-Jwt-Assertion` fallback), and throws
- * otherwise.
+ * otherwise. Validating here makes a misconfigured deployment fail at factory
+ * build time instead of degrading to silent-anonymous on every request.
  *
  * **Presence of the key is the signal, not its value.** `createAccessResolver()`
  * and `createAccessResolver({ mapClaims })` name neither key and mean "no JWT
@@ -146,7 +120,7 @@ const assertJwtFallbackOptions = (options: AccessJwtFallbackOptions | undefined)
 
     const verifyOptions = { ...options, aud, teamDomain };
 
-    assertVerifyOptions(verifyOptions);
+    jwtOptions(verifyOptions);
 
     return verifyOptions;
 };
@@ -165,26 +139,21 @@ const assertJwtFallbackOptions = (options: AccessJwtFallbackOptions | undefined)
  * `createAccessResolver` adapter does exactly this).
  * @param token The raw compact JWT (header value or cookie value).
  */
-const verifyAccessJwt = async (token: string, options: VerifyAccessJwtOptions): Promise<AccessClaims> => {
-    const issuer = accessIssuer(options.teamDomain);
+const verifyAccessJwt = async (token: string, options: VerifyAccessJwtOptions): Promise<AccessClaims> => verifyJwt(token, jwtOptions(options));
 
-    // `aud` scopes the token to *your* Access application; a missing/empty value
-    // is refused (see {@link normalizeAudiences}) so a cross-app token can never
-    // slip through. The throw is caught by the resolver/admin gate and fails
-    // closed.
-    const audiences = normalizeAudiences(options.aud);
-
-    const keySet = options.keySet ?? remoteJwks(issuer);
-
-    const { payload } = await jwtVerify(token, keySet as Parameters<typeof jwtVerify>[1], {
-        algorithms: ["RS256"],
-        audience: audiences,
-        clockTolerance: options.clockToleranceSec,
-        issuer,
+/**
+ * The request verifier for an Access application: the `Cf-Access-Jwt-Assertion`
+ * header (the assertion Cloudflare adds to every proxied request) first, then the
+ * `CF_Authorization` cookie (present on top-level browser navigations), verified
+ * by the JWT pipeline shared with `@lunora/jwt-auth`. `onError` fires for a present-but-invalid
+ * token, never for an absent one.
+ */
+const accessVerifier = (options: RequestVerifyOptions): JwtVerifierOf<AccessClaims> =>
+    jwtVerifier({
+        ...jwtOptions(options),
+        onError: options.onError,
+        token: firstToken(headerToken((options.headerName ?? DEFAULT_HEADER).toLowerCase()), cookieToken(options.cookieName ?? DEFAULT_COOKIE)),
     });
-
-    return payload;
-};
 
 /**
  * Read the Access JWT off a request and verify it. Returns the verified claims,
@@ -193,46 +162,14 @@ const verifyAccessJwt = async (token: string, options: VerifyAccessJwtOptions): 
  * `readPlatformIdentity` returns for the other authentication path so callers
  * treat the two uniformly.
  *
- * This is the package's one place that turns a *request* into verified claims:
- * header/cookie default resolution, the {@link readToken} read, the
- * {@link verifyAccessJwt} call, and the `onError`-observed fail-closed catch all
- * live here. `onError` fires for a present-but-invalid token, never for an
- * absent one.
- *
  * With `acceptExpired`, a token that failed ONLY on its `exp` still yields its
- * claims (their past `exp` included). `jose` checks the signature, then `iss`
- * and `aud`, before `exp`, so such a token is a genuine credential that has
- * lapsed — which the caller must be able to tell from "no identity" to answer
- * `TOKEN_EXPIRED` instead of running the request anonymous.
+ * claims (their past `exp` included), so the caller can answer `TOKEN_EXPIRED`
+ * instead of running the request anonymous.
  */
 const verifyRequest = async (request: Request, options: RequestVerifyOptions, acceptExpired = false): Promise<AccessClaims | undefined> => {
-    const headerName = (options.headerName ?? DEFAULT_HEADER).toLowerCase();
-    const cookieName = options.cookieName ?? DEFAULT_COOKIE;
-    const token = readToken(request, headerName, cookieName);
+    const verified = await accessVerifier(options)(request);
 
-    if (token === undefined) {
-        return undefined;
-    }
-
-    try {
-        return await verifyAccessJwt(token, options);
-    } catch (error) {
-        // The observer must not be able to turn a verification failure into a
-        // thrown request error — that would break the fail-closed "anonymous on
-        // invalid token" contract callers rely on. Swallow anything the hook
-        // itself throws; verification still resolves to `undefined` below.
-        try {
-            options.onError?.(error, request);
-        } catch {
-            /* ignore observer errors — fail closed regardless */
-        }
-
-        if (acceptExpired && error instanceof errors.JWTExpired && error.claim === "exp") {
-            return error.payload;
-        }
-
-        return undefined;
-    }
+    return verified === undefined || (verified.expired && !acceptExpired) ? undefined : verified.payload;
 };
 
 export { accessIssuer, assertJwtFallbackOptions, verifyAccessJwt, verifyRequest };

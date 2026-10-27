@@ -1,32 +1,43 @@
 import { LunoraError } from "@lunora/errors";
+import type { Validator } from "@lunora/values";
 
 import { copycat } from "./copycat";
 import type { Constraints } from "./generate-value";
-import { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, isTimestampField, NUMBER_RANGE, resolveRange } from "./generate-value";
+import { arrayLengths, BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, isEpochColumn, NUMBER_RANGE, resolveRange } from "./generate-value";
 import type { FieldSpec } from "./introspect";
-import { metaOf } from "./introspect";
+import { metaOf, unwrapOptional } from "./introspect";
 
 /**
  * How a `.unique()` column turns a row's ABSOLUTE index into a value no other
  * row will produce.
  *
- * Every arm is a function of the index alone, so uniqueness holds by
+ * Every arm but {@link redrawingDeal} is a function of the index alone, so uniqueness holds by
  * construction rather than by luck — including across the several calls
  * `indexOffset` exists to support. {@link UniqueDeal.capacity} is how many
  * distinct values the arm can produce; the planner refuses up front when a
  * batch asks for more, so an impossible schema fails with the column named
- * instead of as a raw UNIQUE-constraint error from the database.
+ * instead of as a raw UNIQUE-constraint error from the database. The redraw
+ * arm keeps the values it has taken, so its uniqueness is per plan and it has
+ * no capacity to check.
  */
 interface UniqueDeal {
     /** How many distinct values this column can yield. `Infinity` when unbounded. */
     capacity: number;
 
     /**
+     * Set on a composite-index member: that index's carriers in digit order, each with its own number
+     * of values. The tuple of any leading run of them is distinct for every row below the product of
+     * their capacities, which is what a later index sharing those columns can rely on.
+     */
+    chain?: ReadonlyArray<{ capacity: number; name: string }>;
+
+    /**
      * The value for one row.
      * @param index the row's absolute index, always below {@link UniqueDeal.capacity}.
      * @param generate produces the value the normal generator would have emitted; called only by the arms that build on it.
+     * `attempt` 0 is the row's own draw; a redraw passes a higher attempt to get a different value from the same cell.
      */
-    valueAt: (index: number, generate: () => unknown) => unknown;
+    valueAt: (index: number, generate: (attempt?: number) => unknown) => unknown;
 }
 
 /** Options {@link planUniqueDeal} needs beyond the column itself. */
@@ -36,8 +47,32 @@ interface UniqueDealOptions {
     table: string;
 }
 
-/** Slots a float column's range is divided into. Fixed (not derived from the row count) so two batches of the same table never land on the same value. */
+/** Most values a float column's range deals. Fixed (not derived from the row count) so two batches of the same table never land on the same value. */
 const FLOAT_SLOTS = 1_000_000;
+
+/** The width, in ulps, a float slot needs to stay distinct from its neighbour after rounding. */
+const FLOAT_SLOT_ULPS = 4;
+
+const FLOAT_VIEW = new DataView(new ArrayBuffer(8));
+const SIGN_BIT = 2n ** 63n;
+
+/**
+ * A double's place among all doubles in value order: its bit pattern, negated below zero. Consecutive keys
+ * are consecutive doubles, so a count of keys is a count of distinct values.
+ */
+const doubleKey = (value: number): bigint => {
+    FLOAT_VIEW.setFloat64(0, value);
+    const bits = FLOAT_VIEW.getBigUint64(0);
+
+    return bits >= SIGN_BIT ? -(bits - SIGN_BIT) : bits;
+};
+
+/** The double at a key {@link doubleKey} produced. */
+const doubleOfKey = (key: bigint): number => {
+    FLOAT_VIEW.setBigUint64(0, key < 0n ? SIGN_BIT - key : key);
+
+    return FLOAT_VIEW.getFloat64(0);
+};
 
 /** Spacing between two unique temporal values. A minute keeps a seeded month readable while still fitting 259,200 distinct rows in the generator's window. */
 const TIMESTAMP_STEP_MS = 60_000;
@@ -111,26 +146,59 @@ const uniquifyString = (value: string, index: number, constraints: Constraints):
     return `${value.slice(0, room)}${suffix}`;
 };
 
-/** A deal over a finite list of values, drawn without replacement in a fixed shuffled order. */
+/**
+ * A deal over a finite list of values, drawn without replacement in a fixed shuffled order. A repeated
+ * member (`v.union(v.literal("x"), v.literal("x"))`) is one value, so it must not count toward the capacity.
+ */
 const domainDeal = (domain: ReadonlyArray<unknown>, table: string, column: string): UniqueDeal => {
-    const order = shuffleDomain(domain, table, column);
+    const order = shuffleDomain([...new Set(domain)], table, column);
 
     return { capacity: order.length, valueAt: (index) => order[index % order.length] };
 };
 
 /**
- * A deal over a numeric range. Integer bounds are walked one step at a time;
- * fractional bounds (a float column) are divided into {@link FLOAT_SLOTS}
- * evenly-spaced values, since a real interval cannot be enumerated.
+ * A deal over a numeric range. Integer bounds are walked one exact step at a time
+ * (one, inside the safe-integer span); fractional bounds (a float column) are divided into {@link FLOAT_SLOTS}
+ * evenly-spaced values, unless the range is too narrow for that, when they are walked double by double.
  */
 const rangeDeal = (min: number, max: number): UniqueDeal => {
     if (Number.isInteger(min) && Number.isInteger(max)) {
-        const capacity = max - min + 1;
+        // Past 2^53 a double holds only multiples of a power-of-two spacing that doubles at each power of two. Dealing
+        // multiples of `step` keeps every value exact, and their count is the capacity.
+        let step = 1;
 
-        return { capacity, valueAt: (index) => min + (index % capacity) };
+        while (Math.max(Math.abs(min), Math.abs(max)) / step >= 2 ** 53) {
+            step *= 2;
+        }
+
+        const low = Math.ceil(min / step) * step;
+        const high = Math.floor(max / step) * step;
+
+        // No multiple of `step` lies inside the range. `min` is itself an exact integer in range, so dealing it alone is valid.
+        if (low > high) {
+            return { capacity: 1, valueAt: () => min };
+        }
+
+        const capacity = (high - low) / step + 1;
+
+        return { capacity, valueAt: (index) => low + (index % capacity) * step };
     }
 
-    return { capacity: FLOAT_SLOTS, valueAt: (index) => min + ((index % FLOAT_SLOTS) * (max - min)) / FLOAT_SLOTS };
+    if (min === max) {
+        return { capacity: 1, valueAt: () => min };
+    }
+
+    // A slot thinner than a few ulps of the range rounds two rows onto one number, so such a range is walked double by double.
+    const ulp = Math.max(Math.max(Math.abs(min), Math.abs(max)) * Number.EPSILON, Number.MIN_VALUE);
+
+    if ((max - min) / FLOAT_SLOTS >= FLOAT_SLOT_ULPS * ulp) {
+        return { capacity: FLOAT_SLOTS, valueAt: (index) => min + ((index % FLOAT_SLOTS) * (max - min)) / FLOAT_SLOTS };
+    }
+
+    const low = doubleKey(min);
+    const capacity = Number(doubleKey(max) - low) + 1;
+
+    return { capacity, valueAt: (index) => doubleOfKey(low + BigInt(index % capacity)) };
 };
 
 /**
@@ -161,6 +229,45 @@ const countingDeal: UniqueDeal = { capacity: Number.POSITIVE_INFINITY, valueAt: 
 const anonymousDeal: UniqueDeal = { capacity: Number.POSITIVE_INFINITY, valueAt: (_index, generate) => generate() };
 
 /**
+ * Redraws a generated value gets, after its first draw, before the plan refuses. A redraw hashes a
+ * different input for the same cell, so a collision that survives them all means the column's generated
+ * domain is too small for the rows, not that an unlucky draw repeated.
+ */
+const UNIQUE_REDRAW_LIMIT = 8;
+
+/**
+ * The deal for an index-only column the generator still makes but no index tag can make unique (a
+ * `.url()` string). Every value comes from the generator; one an earlier row of this plan already took
+ * is redrawn up to {@link UNIQUE_REDRAW_LIMIT} times, and the plan is refused past that rather than
+ * emitting a duplicate. The taken set is per plan, so values an earlier call already stored are not
+ * seen here; a later call can repeat one.
+ */
+const redrawingDeal = (table: string, column: string): UniqueDeal => {
+    const taken = new Set<unknown>();
+
+    return {
+        capacity: Number.POSITIVE_INFINITY,
+        valueAt: (_index, generate) => {
+            for (let attempt = 0; attempt <= UNIQUE_REDRAW_LIMIT; attempt += 1) {
+                const value = generate(attempt);
+
+                if (!taken.has(value)) {
+                    taken.add(value);
+
+                    return value;
+                }
+            }
+
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `@lunora/seed: cannot generate unique values for "${table}"."${column}" — the generator's draw and its ${String(UNIQUE_REDRAW_LIMIT)} redraws ` +
+                    `all collided with a value an earlier row already took. Supply "${column}" via \`overrides\` (\`{ ${table}: { ${column}: … } }\`).`,
+            );
+        },
+    };
+};
+
+/**
  * Pick the numeric deal for a column: the declared range when it has one (the
  * range is then a hard capacity the planner must refuse past), otherwise an
  * ascending count.
@@ -174,6 +281,21 @@ const anonymousDeal: UniqueDeal = { capacity: Number.POSITIVE_INFINITY, valueAt:
 const boundedNumeric = (constraints: Constraints, defaults: { max: number; min: number }, column: string): UniqueDeal => {
     if (constraints.maximum === undefined && constraints.minimum === undefined) {
         return countingDeal;
+    }
+
+    // Only an exclusive lower bound (`.positive()`): still an open range, so count up from the
+    // first whole number above it rather than shrinking the column to the default window.
+    if (constraints.maximum === undefined && constraints.minimumFromExclusive === true) {
+        // Below -2^53 `floor + 1` rounds back onto the bound, which the column forbids; the lowest
+        // safe integer is strictly above such a bound and is where `first + index` is injective.
+        const first = Math.max(Math.floor(constraints.exclusiveMinimum ?? 0) + 1, -Number.MAX_SAFE_INTEGER);
+
+        // Past 2^53 `first + index` repeats; `minimum` is the one value `constraintsOf` proved is above the bound.
+        if (first > Number.MAX_SAFE_INTEGER) {
+            return { capacity: 1, valueAt: () => constraints.minimum };
+        }
+
+        return { capacity: Number.POSITIVE_INFINITY, valueAt: (index) => first + index };
     }
 
     const { max, min } = resolveRange(constraints, defaults, column);
@@ -226,16 +348,25 @@ const stringCapacity = ({ format, maxLength }: Constraints): number => {
  * A column whose declared shape the tag would break is refused here instead of
  * being seeded with a value its own validator rejects on insert.
  */
-const stringDeal = (constraints: Constraints, table: string, column: string): UniqueDeal => {
-    if (constraints.pattern !== undefined) {
-        refuse(table, column, "the column is pattern-constrained, and an index-tagged value would no longer match it");
+/** Why an index tag would break this string column's declared shape, or `undefined` when tagging is safe. */
+const untaggableReason = ({ format, pattern }: Constraints): string | undefined => {
+    if (pattern !== undefined) {
+        return "the column is pattern-constrained, and an index-tagged value would no longer match it";
     }
 
     // `format: "email"` survives — the tag goes in the address's local part, and
     // a generator that produced no address at all gets one built around the tag.
     // Any other format (uri, uuid, date-time, …) would be invalidated by it.
-    if (constraints.format !== undefined && constraints.format !== "email") {
-        refuse(table, column, `the column declares format "${constraints.format}", which an index-tagged value would no longer satisfy`);
+    return format === undefined || format === "email"
+        ? undefined
+        : `the column declares format "${format}", which an index-tagged value would no longer satisfy`;
+};
+
+const stringDeal = (constraints: Constraints, table: string, column: string): UniqueDeal => {
+    const why = untaggableReason(constraints);
+
+    if (why !== undefined) {
+        refuse(table, column, why);
     }
 
     return {
@@ -259,14 +390,213 @@ const stringDeal = (constraints: Constraints, table: string, column: string): Un
  */
 const planUniqueFkDeal = (pool: ReadonlyArray<string>, table: string, column: string): UniqueDeal => domainDeal(pool, table, column);
 
+/** The members of a finite domain that the validator accepts; a `.check()` refinement can rule some out. */
+const acceptedBy = (validator: Validator, domain: ReadonlyArray<unknown>): ReadonlyArray<unknown> => domain.filter((value) => validator.safeParse(value).ok);
+
+/**
+ * Add `null` to a closed domain when the column is `.nullable()`: a SQL NULL is one more value the
+ * column can hold, so an array of `v.literal("x").nullable()` has `[null]` as a distinct element.
+ */
+const withNullable = (inner: Validator, domain: ReadonlyArray<unknown> | undefined): ReadonlyArray<unknown> | undefined =>
+    // eslint-disable-next-line unicorn/no-null -- null is the value a .nullable() validator accepts
+    domain === undefined || metaOf(inner).column?.notNull !== false ? domain : [...new Set([...domain, null])];
+
+/**
+ * Every value a validator can produce when that set is finite and known: an enum, a boolean, a
+ * literal, `null`, or a union of those. `undefined` when it is open (a string, a number, an id, …).
+ */
+const finiteDomain = (validator: Validator): ReadonlyArray<unknown> | undefined => {
+    const inner = unwrapOptional(validator);
+    const { enum: enumValues } = constraintsOf(inner);
+
+    if (Array.isArray(enumValues) && enumValues.length > 0) {
+        return withNullable(inner, [...new Set<unknown>(enumValues)]);
+    }
+
+    switch (inner.kind) {
+        case "boolean": {
+            return withNullable(inner, [false, true]);
+        }
+
+        case "literal": {
+            return withNullable(inner, [metaOf(inner).value]);
+        }
+
+        case "null": {
+            // eslint-disable-next-line unicorn/no-null -- null is the domain value of a v.null() member
+            return [null];
+        }
+
+        case "union": {
+            const domains = (metaOf(inner).members ?? []).map((member) => finiteDomain(member));
+
+            return withNullable(inner, domains.length > 0 && domains.every((domain) => domain !== undefined) ? [...new Set(domains.flat())] : undefined);
+        }
+
+        default: {
+            return undefined;
+        }
+    }
+};
+
+/**
+ * The values of {@link finiteDomain} that the validator accepts, so a `.check()` refinement is honoured.
+ * Applied where a column or element is dealt: that validator is the one that refines its members.
+ */
+const acceptedDomain = (validator: Validator): ReadonlyArray<unknown> | undefined => {
+    const domain = finiteDomain(validator);
+
+    return domain === undefined ? undefined : acceptedBy(validator, domain);
+};
+
+/**
+ * Most candidate arrays an array column lists to run its validator over. Past this many the deal stays
+ * arithmetic and checks each value it emits instead (see {@link arrayDeal}).
+ */
+const ARRAY_ENUMERATION_LIMIT = 65_536;
+
+/**
+ * How many arrays of at least `shortest` and at most `highest` items a finite element domain of `base`
+ * values admits; `Infinity` past the safe-integer range.
+ */
+const countArrays = (base: number, shortest: number, highest: number): number => {
+    // An empty element domain admits only `[]`.
+    if (base === 0) {
+        return shortest === 0 ? 1 : 0;
+    }
+
+    // One element value only ever forms one array per length.
+    if (base === 1) {
+        return Math.max(0, highest - shortest + 1);
+    }
+
+    let count = 0;
+
+    for (let length = shortest; length <= highest && count <= Number.MAX_SAFE_INTEGER; length += 1) {
+        count += base ** length;
+    }
+
+    return count > Number.MAX_SAFE_INTEGER ? Number.POSITIVE_INFINITY : count;
+};
+
+/**
+ * The `index`-th array of a finite element domain: shorter arrays first, and within a length the index read
+ * as base-`domain.length` digits picks the elements.
+ */
+const arrayAt = (domain: ReadonlyArray<unknown>, shortest: number, index: number): unknown[] => {
+    const base = domain.length;
+
+    if (base === 0) {
+        return [];
+    }
+
+    if (base === 1) {
+        return Array.from({ length: shortest + index }).fill(domain[0]);
+    }
+
+    let rest = index;
+    let length = shortest;
+
+    while (rest >= base ** length) {
+        rest -= base ** length;
+        length += 1;
+    }
+
+    return Array.from({ length }, (_, position) => domain[Math.floor(rest / base ** position) % base]);
+};
+
+/** A deal over an explicit list of values, dealt in order and wrapping past its end like the other finite deals. */
+const listDeal = (values: ReadonlyArray<unknown>): UniqueDeal => {
+    return { capacity: values.length, valueAt: (index) => (values.length === 0 ? undefined : values[index % values.length]) };
+};
+
+/**
+ * The arrays an array column can hold, as a deal. An open element type is the {@link anonymousDeal}: its
+ * arrays come from the per-cell hash and are distinct per row in practice. A FINITE element domain is
+ * counted and listed by length and then by element, and the column validator then keeps only the arrays it
+ * accepts, because a `.check()` on the array can refuse any of them. Past {@link ARRAY_ENUMERATION_LIMIT}
+ * the arrays are dealt by index and each value is checked as it is dealt.
+ */
+const arrayValuesDeal = (field: FieldSpec, constraints: Constraints, table: string): UniqueDeal => {
+    const element = metaOf(field.validator).inner;
+    const [lowest, generated] = arrayLengths(constraints, field.name);
+
+    // No element validator generates `[]` always.
+    if (element === undefined || generated <= 0) {
+        return listDeal(acceptedBy(field.validator, [[]]));
+    }
+
+    const domain = acceptedDomain(element);
+
+    if (domain === undefined) {
+        return anonymousDeal;
+    }
+
+    // The generator's own floor is one item when `minItems` is unset and its ceiling three when
+    // `maxItems` is; the schema admits the empty array and any length.
+    const shortest = constraints.minItems === undefined ? 0 : lowest;
+    const highest = constraints.maxItems === undefined || constraints.maxItems === Number.POSITIVE_INFINITY ? Number.POSITIVE_INFINITY : generated;
+    const count = countArrays(domain.length, shortest, highest);
+
+    if (count <= ARRAY_ENUMERATION_LIMIT) {
+        return listDeal(
+            acceptedBy(
+                field.validator,
+                Array.from({ length: count }, (_, index) => arrayAt(domain, shortest, index)),
+            ),
+        );
+    }
+
+    return {
+        capacity: count,
+        valueAt: (index) => {
+            const value = arrayAt(domain, shortest, index % count);
+
+            if (!field.validator.safeParse(value).ok) {
+                refuse(
+                    table,
+                    field.name,
+                    `the column's validator rejects the array dealt at row ${String(index)}, and too many arrays exist to check them all up front`,
+                );
+            }
+
+            return value;
+        },
+    };
+};
+
+/**
+ * The deal for an array column: the arrays {@link arrayValuesDeal} accepts, plus SQL NULL when the column is
+ * `.nullable()`. A unique index never compares a NULL, so NULL is one more distinct value after the arrays.
+ */
+const arrayDeal = (field: FieldSpec, constraints: Constraints, table: string): UniqueDeal => {
+    const deal = arrayValuesDeal(field, constraints, table);
+
+    // An open element type is returned as-is: composite planning recognises the {@link anonymousDeal} by identity.
+    if (!field.nullable || !Number.isFinite(deal.capacity)) {
+        return deal;
+    }
+
+    return {
+        capacity: deal.capacity + 1,
+        valueAt: (index, generate) => {
+            const slot = index % (deal.capacity + 1);
+
+            // eslint-disable-next-line unicorn/no-null -- NULL is the one value a nullable array column takes past its arrays
+            return slot === deal.capacity ? null : deal.valueAt(slot, generate);
+        },
+    };
+};
+
 /**
  * Decide how one `.unique()` column deals its values.
  *
  * A string column is the only shape whose value still comes from the normal
  * generator (the field-name heuristics are worth keeping); every other kind is
- * derived from the index directly. Kinds with no index-derivable form —
- * pattern- or format-constrained strings — are refused here rather than seeded
- * with a value the column's own validator would reject on insert.
+ * derived from the index directly. Kinds with no index-derivable form are refused
+ * here rather than seeded with a value the column's own validator would reject on
+ * insert — except a string an index tag would break, which an index-only column
+ * takes from the generator and redraws (see {@link redrawingDeal}).
  */
 const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDeal => {
     const { now, table } = options;
@@ -274,7 +604,7 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
     const enumValues = constraints.enum;
 
     if (Array.isArray(enumValues) && enumValues.length > 0) {
-        return domainDeal(enumValues, table, field.name);
+        return domainDeal(acceptedBy(field.validator, enumValues), table, field.name);
     }
 
     switch (field.kind) {
@@ -282,7 +612,17 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
         // the same tagging; it simply never carries string constraints.
         case "any":
         case "string": {
+            // An index-only column whose format an index tag would break is generated and redrawn on a
+            // collision. A pattern is left refused: the generator cannot produce a value matching one.
+            if (field.uniqueFromIndex && constraints.pattern === undefined && untaggableReason(constraints) !== undefined) {
+                return redrawingDeal(table, field.name);
+            }
+
             return stringDeal(constraints, table, field.name);
+        }
+
+        case "array": {
+            return arrayDeal(field, constraints, table);
         }
 
         case "bigint": {
@@ -290,7 +630,7 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
         }
 
         case "boolean": {
-            return domainDeal([false, true], table, field.name);
+            return domainDeal(acceptedBy(field.validator, [false, true]), table, field.name);
         }
 
         case "bytes": {
@@ -316,15 +656,19 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
 
         case "literal": {
             // A literal column accepts exactly one value, so a second unique row
-            // is impossible by definition. Declaring the capacity lets the
-            // planner say so with the row counts attached.
-            return { capacity: 1, valueAt: () => metaOf(field.validator).value };
+            // is impossible by definition, unless the column is nullable: NULL is
+            // then a second value. Declaring the capacity lets the planner say so
+            // with the row counts attached.
+            const { value } = metaOf(field.validator);
+
+            // eslint-disable-next-line unicorn/no-null -- NULL is the second value a nullable literal column takes
+            return domainDeal(field.nullable ? [value, null] : [value], table, field.name);
         }
 
         case "number": {
             // A time-named column with no declared bounds is epoch-ms, not a
             // quantity — the same rule the generator applies.
-            if (constraints.maximum === undefined && constraints.minimum === undefined && isTimestampField(field.name)) {
+            if (isEpochColumn(constraints, field.name)) {
                 return temporalDeal(now);
             }
 
@@ -336,19 +680,16 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
             // enum, and the very case `docs/index.mdx` names ("a three-literal
             // `v.union()` … is refused at plan time"). The generator picks a
             // member per row WITH replacement, so without a deal here eight rows
-            // over a two-literal union simply repeat and nothing refuses.
-            const members = metaOf(field.validator).members ?? [];
-            const literals = members.filter((member) => member.kind === "literal").map((member) => metaOf(member).value);
+            // over a two-literal union simply repeat and nothing refuses. Any union
+            // whose every member has a finite domain (booleans, enums, `null`, and
+            // nested unions of those) is closed the same way.
+            const domain = acceptedDomain(field.validator);
 
-            if (literals.length > 0 && literals.length === members.length) {
-                return domainDeal(literals, table, field.name);
-            }
-
-            return anonymousDeal;
+            return domain === undefined ? anonymousDeal : domainDeal(domain, table, field.name);
         }
 
         default: {
-            // `id`, `storage`, `array`, `object`, `record` — every one of these
+            // `id`, `storage`, `object`, `record` — every one of these
             // derives from the per-cell hash (a uuid, or a composite built from
             // uuids), so it is already distinct per row.
             return anonymousDeal;
@@ -356,5 +697,66 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
     }
 };
 
-export { planUniqueDeal, planUniqueFkDeal };
-export type { UniqueDeal };
+/** A non-foreign-key member a composite unique index can deal to make its rows distinct. */
+interface CompositeMemberDeal {
+    deal: UniqueDeal;
+    /** The dealt value replaces the generated one (an index tag, a counter, a time step) rather than picking from the column's own domain. */
+    rewrites: boolean;
+}
+
+/**
+ * How a non-foreign-key member of a composite unique index could carry the
+ * index's distinctness, or `undefined` when it cannot: a hash-derived value
+ * (array, object, record, storage, an open union) whose distinct-value count is
+ * unknown — `v.array(…).max(0)` is always `[]` — a string an index tag would
+ * break, or a column with at most one value.
+ */
+const planCompositeMemberDeal = (field: FieldSpec, options: UniqueDealOptions): CompositeMemberDeal | undefined => {
+    const constraints = constraintsOf(field.validator);
+    const tagged = (field.kind === "string" || field.kind === "any") && !(Array.isArray(constraints.enum) && constraints.enum.length > 0);
+
+    if (tagged && untaggableReason(constraints) !== undefined) {
+        return undefined;
+    }
+
+    const deal = planUniqueDeal(field, options);
+
+    if (deal === anonymousDeal || deal.capacity <= 1) {
+        return undefined;
+    }
+
+    return { deal, rewrites: tagged || !Number.isFinite(deal.capacity) };
+};
+
+/**
+ * Whether a non-foreign-key member keeps a per-row value the generator derives from the cell hash,
+ * which is distinct per row in practice but has no count the planner can prove: an `id`, storage id,
+ * array, object, record or open union, or a string whose format (a `.url()`) an index tag would
+ * break. A composite index holding one is left to the generator once its counted members run out,
+ * rather than refused. An array whose value is countable (see {@link arrayDeal}) is not one.
+ */
+const hasHashedValue = (field: FieldSpec, options: UniqueDealOptions): boolean => {
+    const constraints = constraintsOf(field.validator);
+
+    if (field.kind === "string" || field.kind === "any") {
+        return (
+            !(Array.isArray(constraints.enum) && constraints.enum.length > 0) &&
+            constraints.pattern === undefined &&
+            untaggableReason(constraints) !== undefined
+        );
+    }
+
+    return planUniqueDeal(field, options) === anonymousDeal;
+};
+
+/**
+ * Whether a member's closed domain holds `null` after its refinements. A unique index never compares a NULL,
+ * so a row that takes one can never collide with another; a composite index uses that to take rows past its
+ * counted combinations. A `.check()` that rejects NULL leaves it out, so the index must refuse instead.
+ */
+const admitsNull = (field: FieldSpec): boolean =>
+    // eslint-disable-next-line unicorn/no-null -- NULL is the value a unique index never compares
+    acceptedDomain(field.validator)?.includes(null) === true;
+
+export { admitsNull, hasHashedValue, planCompositeMemberDeal, planUniqueDeal, planUniqueFkDeal };
+export type { CompositeMemberDeal, UniqueDeal };

@@ -1,7 +1,7 @@
 import type { CallExpression, ObjectLiteralExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listSecurityScanFiles, objectLiteralFromCallbackBody, propertyInitializer } from "./ast";
+import { descendantsOfKind, listSecurityScanFiles, objectLiteralFromCallbackBody, propertyInitializer } from "./ast";
 import { calleeName } from "./callee";
 
 /** The runtime worker factory whose options object pins cron expressions. */
@@ -122,7 +122,7 @@ const discoverWorkerEntryCrons = (project: Project, lunoraDirectory: string): st
     for (const { filePath } of listSecurityScanFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
-        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+        for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
             found.push(...cronsFromCall(call));
         }
     }

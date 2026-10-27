@@ -29,9 +29,13 @@ erasure, and retention holds for records the law says to keep.
   tombstones, the retention archive purge and the operator surface.
 - The Studio has a Privacy requests tab. It appears only when the app declares
   `@lunora/privacy`.
-- Not finished: there is no end-to-end demo (`examples/privacy` has no sign-in, declares no
-  `authDataset` and does not use `retain()`; there is no payments dataset, only `retain()` with
-  the `de.voucher` rule bound to the app's own tables), the workerd suite for the storage paths
-  is not written, and registering the workflow handlers from the per-call factory has not been
-  checked against codegen (plan §4.2).
+- `examples/privacy` runs the whole surface: export and its signed download, erasure, cancel,
+  restore, a retained table (`invoices` under `de.voucher`), the sweep's expiry and purge, and
+  an `authDataset` over better-auth's `user`, `session` and `account` tables in D1. Its workerd
+  suite runs the lifecycle, the retention path, the expiry and the sign-in erasure over real
+  Durable Object SQLite and D1. The generated workflow entrypoints for the per-call handlers are
+  checked by a test.
+- Not finished: an admin retry of an export that includes the D1 sign-in tables is recorded as
+  failed. The retry runs inside a mutation, and a mutation has no D1 binding. Erasure retries
+  restart the workflow and are unaffected.
 - Not reviewed: every legal and tax value. See `docs/legal.mdx`.

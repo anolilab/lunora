@@ -55,6 +55,16 @@ interface CompilerLike {
     };
 
     /**
+     * Paths the watcher saw change since the last compilation; unset on a one-shot
+     * `run()` and on the first watch compilation. A change under a context
+     * dependency is reported as that directory, not the file.
+     */
+    modifiedFiles?: ReadonlySet<string>;
+
+    /** Paths the watcher saw removed since the last compilation; unset like `modifiedFiles`. */
+    removedFiles?: ReadonlySet<string>;
+
+    /**
      * `true` under `compiler.watch()`, `false` for a one-shot `compiler.run()`.
      *
      * Only ever read from INSIDE a hook callback. `apply()` runs during

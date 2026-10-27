@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DatabaseWriterLike, SchemaLike } from "../../src/ctx-db";
 import { backfillRankIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../../src/ctx-db";
 import { clearCompanionSignatures } from "../../src/ctx-db-companion-state";
-import { rankKeyFromDoc } from "../../src/rank";
+import { rankKeyFromDoc, rankTableName } from "../../src/rank";
 import type { RankIndexDefinitionLike } from "../../src/schema-types";
 import type { SqlHarness } from "../_helpers/sql-harness";
 
@@ -103,7 +103,7 @@ const runRankScenarios = (factory: () => SqlHarness): void => {
                 await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 50 }, { allowExplicitId: true });
                 await writer.insert("messages", { _id: "m2", archived: false, channelId: "c1", score: 100 }, { allowExplicitId: true });
 
-                const doc = await writer.get("m2");
+                const doc = await writer.get("messages", "m2");
 
                 await expect(writer.rank("messages", "leaderboard", { row: doc! })).resolves.toEqual({ position: 1, total: 2 });
             });
@@ -143,13 +143,13 @@ const runRankScenarios = (factory: () => SqlHarness): void => {
                 await expect(writer.rank("messages", "byChannel", { row: "m2" })).resolves.toEqual({ position: 2, total: 2 });
 
                 // Move m2 to channel c2 — position resets within c2; c1 now has just m1.
-                await writer.patch("m2", { channelId: "c2" });
+                await writer.patch("messages", "m2", { channelId: "c2" });
 
                 await expect(writer.rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 1 });
                 await expect(writer.rank("messages", "byChannel", { row: "m2" })).resolves.toEqual({ position: 1, total: 1 });
 
                 // Delete m1.
-                await writer.delete("m1");
+                await writer.delete("messages", "m1");
 
                 await expect(writer.rank("messages", "byChannel", { row: "m1" })).resolves.toBeNull();
                 await expect(writer.rank("messages", "byChannel", { row: "m2" })).resolves.toEqual({ position: 1, total: 1 });
@@ -169,7 +169,7 @@ const runRankScenarios = (factory: () => SqlHarness): void => {
                 await expect(writer.rank("messages", "activeByChannel", { row: "m3" })).resolves.toEqual({ position: 2, total: 2 });
 
                 // Archive m1 — drops out of the index; m3 now position 1 of 1.
-                await writer.patch("m1", { archived: true });
+                await writer.patch("messages", "m1", { archived: true });
 
                 await expect(writer.rank("messages", "activeByChannel", { row: "m1" })).resolves.toBeNull();
                 await expect(writer.rank("messages", "activeByChannel", { row: "m3" })).resolves.toEqual({ position: 1, total: 1 });
@@ -248,6 +248,36 @@ const runRankScenarios = (factory: () => SqlHarness): void => {
                 const writer2 = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: schemaWithRank, sql: harness.sql });
 
                 await expect(writer2.rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 1 });
+            });
+
+            it("rebuilds a companion larger than one insert chunk with every row in sort order", async () => {
+                expect.assertions(4);
+
+                const writer = setupWriter(makeSchema());
+                const total = 1200;
+
+                await writer.insertManyUnsafe?.(
+                    "messages",
+                    Array.from({ length: total }, (_, index) => {
+                        return { _id: `m${String(index)}`, archived: false, channelId: "c1", score: index };
+                    }),
+                    { allowExplicitId: true, limit: total },
+                );
+
+                const schemaWithRank = makeSchema(byScoreDesc);
+
+                runShardMigrations(harness.sql, schemaWithRank);
+                backfillRankIndexes(harness.sql, schemaWithRank);
+
+                const writer2 = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: schemaWithRank, sql: harness.sql });
+
+                expect(harness.raw(`SELECT COUNT(*) AS n FROM "${rankTableName("messages", "leaderboard")}"`)[0]?.["n"]).toBe(total);
+                await expect(writer2.rank("messages", "leaderboard", { row: `m${String(total - 1)}` })).resolves.toEqual({ position: 1, total });
+                await expect(writer2.rank("messages", "leaderboard", { row: "m0" })).resolves.toEqual({ position: total, total });
+
+                const page = await writer2.rankPage("messages", "leaderboard", { take: 3 });
+
+                expect(page.page.map((document_) => document_["_id"])).toEqual(["m1199", "m1198", "m1197"]);
             });
 
             it("rankPage walks the companion in declared sort order", async () => {
@@ -493,7 +523,7 @@ const runRankScenarios = (factory: () => SqlHarness): void => {
                     // eslint-disable-next-line no-await-in-loop -- sequential reads against one DB; assertions accumulate
                     const ranked = await writer.rank("messages", "leaderboard", { row: id });
                     // eslint-disable-next-line no-await-in-loop -- ditto
-                    const doc = await writer.get(id);
+                    const doc = await writer.get("messages", id);
                     const key = rankKeyFromDoc(byScoreDesc, doc!);
 
                     // eslint-disable-next-line no-await-in-loop -- ditto
@@ -709,15 +739,35 @@ const runRankScenarios = (factory: () => SqlHarness): void => {
             };
 
             await seed(schema);
-            await freshWriter(schema).delete("m3", "messages");
+            await freshWriter(schema).delete("messages", "m3");
             // Force the next touch to rebuild over a table holding a soft-deleted row.
             clearCompanionSignatures(harness.sql);
 
             await expect(freshWriter(schema).rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 2 });
 
-            await freshWriter(schema).restore!("m3", "messages");
+            await freshWriter(schema).restore!("messages", "m3");
 
             await expect(freshWriter(schema).rank("messages", "byChannel", { row: "m3" })).resolves.toEqual({ position: 3, total: 3 });
+        });
+
+        it("rebuilds every row of a table larger than one source page", async () => {
+            expect.assertions(1);
+
+            const schema = makeSchema(byChannelByCreation);
+            const total = 2500;
+
+            const ids = await setupWriter(schema).insertMany!(
+                "messages",
+                Array.from({ length: total }, () => {
+                    return { archived: false, channelId: "c1", score: 0 };
+                }),
+                { limit: total },
+            );
+
+            // Force the next touch to rebuild, reading the source in more than one page.
+            clearCompanionSignatures(harness.sql);
+
+            await expect(freshWriter(schema).rank("messages", "byChannel", { row: ids.at(-1)! })).resolves.toMatchObject({ total });
         });
     });
 };

@@ -76,9 +76,9 @@ describe("materializeExternalRows", () => {
         // update d2 + insert d4 + delete d3 = 3 changes.
         expect(applied).toBe(3);
 
-        await expect(writer.get("d2")).resolves.toMatchObject({ _id: "d2", title: "two-edited" });
-        await expect(writer.get("d4")).resolves.toMatchObject({ _id: "d4", title: "four" });
-        await expect(writer.get("d3")).resolves.toBeNull();
+        await expect(writer.get("documents", "d2")).resolves.toMatchObject({ _id: "d2", title: "two-edited" });
+        await expect(writer.get("documents", "d4")).resolves.toMatchObject({ _id: "d4", title: "four" });
+        await expect(writer.get("documents", "d3")).resolves.toBeNull();
 
         // The returned baseline reflects the post-tick membership (d1, d2, d4).
         expect([...nextBaseline.keys()].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["d1", "d2", "d4"]);
@@ -134,9 +134,9 @@ describe("materializeExternalRowsIncremental (upsert-only, plan 136)", () => {
         const { applied } = await materializeExternalRowsIncremental(writer, pulled, { table: "documents" });
 
         expect(applied).toBe(2);
-        await expect(writer.get("d1")).resolves.toMatchObject({ _id: "d1", title: "one" });
-        await expect(writer.get("d2")).resolves.toMatchObject({ _id: "d2", title: "two-edited" });
-        await expect(writer.get("d3")).resolves.toMatchObject({ _id: "d3", title: "three" });
+        await expect(writer.get("documents", "d1")).resolves.toMatchObject({ _id: "d1", title: "one" });
+        await expect(writer.get("documents", "d2")).resolves.toMatchObject({ _id: "d2", title: "two-edited" });
+        await expect(writer.get("documents", "d3")).resolves.toMatchObject({ _id: "d3", title: "three" });
     });
 
     it("skips a re-pulled boundary row whose content is unchanged (no spurious update/CDC)", async () => {
@@ -152,7 +152,7 @@ describe("materializeExternalRowsIncremental (upsert-only, plan 136)", () => {
         const { applied } = await materializeExternalRowsIncremental(writer, [{ _id: "d1", orgId: "org_1", title: "one" }], { table: "documents" });
 
         expect(applied).toBe(0);
-        await expect(writer.get("d1")).resolves.toMatchObject({ _id: "d1", title: "one" });
+        await expect(writer.get("documents", "d1")).resolves.toMatchObject({ _id: "d1", title: "one" });
         // No new CDC entry ⇒ no broadcast / re-embed for the unchanged row.
         expect(readCdcChanges(harness.sql).changes).toHaveLength(cdcBefore);
     });
@@ -171,8 +171,8 @@ describe("materializeExternalRowsIncremental (upsert-only, plan 136)", () => {
 
         await materializeExternalRowsIncremental(writer, pulled, { deletedIds: new Set(["d1"]), table: "documents" });
 
-        await expect(writer.get("d1")).resolves.toBeNull();
-        await expect(writer.get("d2")).resolves.toMatchObject({ _id: "d2", title: "two" });
+        await expect(writer.get("documents", "d1")).resolves.toBeNull();
+        await expect(writer.get("documents", "d2")).resolves.toMatchObject({ _id: "d2", title: "two" });
     });
 
     it("skips re-emitting a boundary tombstone whose row is already absent locally (no repeated delete, DO-05)", async () => {
@@ -188,7 +188,7 @@ describe("materializeExternalRowsIncremental (upsert-only, plan 136)", () => {
         const first = await materializeExternalRowsIncremental(writer, pulled, { deletedIds: new Set(["d1"]), table: "documents" });
 
         expect(first.applied).toBe(1);
-        await expect(writer.get("d1")).resolves.toBeNull();
+        await expect(writer.get("documents", "d1")).resolves.toBeNull();
 
         // Second tick re-pulls the SAME boundary tombstone (still `>= watermark`,
         // same as the content short-circuit's rationale) — d1 is already absent
@@ -196,7 +196,7 @@ describe("materializeExternalRowsIncremental (upsert-only, plan 136)", () => {
         const second = await materializeExternalRowsIncremental(writer, pulled, { deletedIds: new Set(["d1"]), table: "documents" });
 
         expect(second.applied).toBe(0);
-        await expect(writer.get("d1")).resolves.toBeNull();
+        await expect(writer.get("documents", "d1")).resolves.toBeNull();
     });
 });
 
@@ -251,8 +251,8 @@ describe("runExternalSourceTick — CDC delete pins to its own table (DO-02)", (
         // The pinned delete (`applyCdcChange` passing `change.table`) must only
         // ever reach "documents" — an unpinned delete would probe both tables in
         // declaration order and remove "otherTable"'s row instead (DO-02).
-        await expect(writer.get("dup1", "documents")).resolves.toBeNull();
-        await expect(writer.get("dup1", "otherTable")).resolves.toMatchObject({ note: "unrelated row, must survive" });
+        await expect(writer.get("documents", "dup1")).resolves.toBeNull();
+        await expect(writer.get("otherTable", "dup1")).resolves.toMatchObject({ note: "unrelated row, must survive" });
     });
 
     it("a sourced-table update never rewrites a same-id row living in a different table", async () => {
@@ -270,10 +270,10 @@ describe("runExternalSourceTick — CDC delete pins to its own table (DO-02)", (
         // whose replay is insert-then-replace. The replace must carry the table.
         await runExternalSourceTick(twoTableHarness.sql, writer, [{ _id: "dup1", orgId: "org_1", title: "after" }], { table: "documents" });
 
-        await expect(writer.get("dup1", "documents")).resolves.toMatchObject({ title: "after" });
-        await expect(writer.get("dup1", "otherTable")).resolves.toMatchObject({ note: "unrelated row, must survive" });
+        await expect(writer.get("documents", "dup1")).resolves.toMatchObject({ title: "after" });
+        await expect(writer.get("otherTable", "dup1")).resolves.toMatchObject({ note: "unrelated row, must survive" });
         // The documents shape must not have leaked into the otherTable row.
-        await expect(writer.get("dup1", "otherTable")).resolves.not.toHaveProperty("title");
+        await expect(writer.get("otherTable", "dup1")).resolves.not.toHaveProperty("title");
     });
 
     it("an incremental sourced-table tick never rewrites a same-id row living in a different table", async () => {
@@ -288,8 +288,8 @@ describe("runExternalSourceTick — CDC delete pins to its own table (DO-02)", (
         // row, so the PK collision routes it through the same replace fallback.
         await materializeExternalRowsIncremental(writer, [{ _id: "dup1", orgId: "org_1", title: "after" }], { table: "documents" });
 
-        await expect(writer.get("dup1", "documents")).resolves.toMatchObject({ title: "after" });
-        await expect(writer.get("dup1", "otherTable")).resolves.toMatchObject({ note: "unrelated row, must survive" });
+        await expect(writer.get("documents", "dup1")).resolves.toMatchObject({ title: "after" });
+        await expect(writer.get("otherTable", "dup1")).resolves.toMatchObject({ note: "unrelated row, must survive" });
     });
 });
 
@@ -346,8 +346,8 @@ describe("runExternalSourceTick (real baseline read from the table)", () => {
 
         // update d1 + insert d3 + delete d2 = 3.
         expect(applied).toBe(3);
-        await expect(writer.get("d1")).resolves.toMatchObject({ title: "one-edited" });
-        await expect(writer.get("d2")).resolves.toBeNull();
-        await expect(writer.get("d3")).resolves.toMatchObject({ title: "three" });
+        await expect(writer.get("documents", "d1")).resolves.toMatchObject({ title: "one-edited" });
+        await expect(writer.get("documents", "d2")).resolves.toBeNull();
+        await expect(writer.get("documents", "d3")).resolves.toMatchObject({ title: "three" });
     });
 });

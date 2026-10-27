@@ -1,3 +1,66 @@
+## @lunora/advisor [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.260...@lunora/advisor@1.0.0-alpha.261) (2026-10-26)
+
+### Features
+
+* **server:** require the table for ctx.db by-id reads and writes ([#1344](https://github.com/anolilab/lunora/issues/1344)) ([97244c5](https://github.com/anolilab/lunora/commit/97244c5eae27fb0c9ab19a71e7e0b50b02b13782))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.242
+
+## @lunora/advisor [1.0.0-alpha.260](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.259...@lunora/advisor@1.0.0-alpha.260) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/server:** upgraded to 1.0.0-alpha.241
+* **@lunora/values:** upgraded to 1.0.0-alpha.82
+
+## @lunora/advisor [1.0.0-alpha.259](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.258...@lunora/advisor@1.0.0-alpha.259) (2026-10-26)
+
+### Features
+
+* **server:** require the table in ctx.db.get(table, id) ([#1342](https://github.com/anolilab/lunora/issues/1342)) ([92cca06](https://github.com/anolilab/lunora/commit/92cca0604d33fc93db2ad49530572e8b99508f3b))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.240
+
+## @lunora/advisor [1.0.0-alpha.258](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.257...@lunora/advisor@1.0.0-alpha.258) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.239
+
+## @lunora/advisor [1.0.0-alpha.257](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.256...@lunora/advisor@1.0.0-alpha.257) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/server:** upgraded to 1.0.0-alpha.238
+* **@lunora/values:** upgraded to 1.0.0-alpha.81
+
+## @lunora/advisor [1.0.0-alpha.256](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.255...@lunora/advisor@1.0.0-alpha.256) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.237
+
+## @lunora/advisor [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.254...@lunora/advisor@1.0.0-alpha.255) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/server:** upgraded to 1.0.0-alpha.236
+* **@lunora/values:** upgraded to 1.0.0-alpha.80
+
 ## @lunora/advisor [1.0.0-alpha.254](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.253...@lunora/advisor@1.0.0-alpha.254) (2026-10-24)
 
 

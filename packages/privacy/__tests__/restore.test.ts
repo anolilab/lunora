@@ -99,6 +99,7 @@ describe("restore", () => {
             add: async () => {
                 throw new Error("tombstone store unavailable");
             },
+            has: async () => false,
             keys: async () => new Set(),
         };
         const { privacy, runErasureWorkflow, store } = build(failing);
@@ -114,6 +115,7 @@ describe("restore", () => {
             add: async () => {
                 throw new Error("tombstone store unavailable");
             },
+            has: async () => false,
             keys: async () => new Set(),
         };
         const { privacy, rows, runErasureWorkflow, store } = build(failing);

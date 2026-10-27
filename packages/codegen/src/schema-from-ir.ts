@@ -114,13 +114,17 @@ const schemaFromIr = (ir: SchemaIR): Schema => {
     const tables = Object.fromEntries(
         ir.tables.map((table) => [
             table.name,
-            { shape: Object.fromEntries(Object.entries(table.shape).map(([field, validator]) => [field, convertValidator(validator)])) },
+            {
+                indexes: table.indexes,
+                shape: Object.fromEntries(Object.entries(table.shape).map(([field, validator]) => [field, convertValidator(validator)])),
+            },
         ]),
     );
 
-    // The synthetic tables carry only the `shape` surface `@lunora/seed`'s
-    // introspection reads — never the full `TableDefinition` (indexes,
-    // relationMap, …) — so the cast through `unknown` is load-bearing.
+    // The synthetic tables carry only the `shape` and `indexes` surface
+    // `@lunora/seed`'s introspection reads (unique indexes are dealt) — never the
+    // full `TableDefinition` (relationMap, …) — so the cast through `unknown` is
+    // load-bearing.
     return { tables } as unknown as Schema;
 };
 

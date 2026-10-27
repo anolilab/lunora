@@ -86,18 +86,18 @@ export interface CrawlOptions {
     contentUse?: "full" | "reference";
     /** Purposes the crawl is for, checked against the site's Content Signals. Default: all three. */
     crawlPurposes?: ReadonlyArray<"ai-input" | "ai-train" | "search">;
-    /** Maximum link depth from the starting URL. */
+    /** Maximum link depth from the starting URL. Clamped to `maxCrawlDepth` (default 3), which is also the value sent when omitted. */
     depth?: number;
     /** Per-page output formats. Default `["html"]`. */
     formats?: ReadonlyArray<CrawlFormat>;
-    /** Maximum number of pages to crawl (Browser Run default 10, maximum 100,000). */
+    /** Maximum number of pages to crawl. Default 10 (Browser Run's own). Clamped to `maxCrawlPages` (default 100), omitted or not. */
     limit?: number;
     options?: {
         excludePatterns?: ReadonlyArray<string>;
-        /** Refused when `allowedHosts` is configured: the crawler would leave the allowlist. */
+        /** Refused when `allowedHosts` is configured (the crawler would leave the allowlist) and unless `allowPrivateTargets` is set. */
         includeExternalLinks?: boolean;
         includePatterns?: ReadonlyArray<string>;
-        /** Refused when `allowedHosts` is configured: subdomains are not exact allowlist matches. */
+        /** Refused when `allowedHosts` is configured (subdomains are not exact matches) and unless `allowPrivateTargets` is set. */
         includeSubdomains?: boolean;
     };
     /** `false` fetches HTML without executing JavaScript. Default `true`. */
@@ -470,6 +470,12 @@ export interface LunoraBrowserOptions {
      * error.
      */
     launch?: BrowserLaunchLike;
+
+    /** Ceiling for a crawl's `depth`. Default 3. */
+    maxCrawlDepth?: number;
+
+    /** Ceiling for a crawl's `limit` (pages). Default 100. */
+    maxCrawlPages?: number;
 
     /**
      * Best-effort DNS-rebinding re-check. When `true` (and `allowPrivateTargets`

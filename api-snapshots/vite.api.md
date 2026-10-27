@@ -223,13 +223,13 @@ const checkLunoraProxy: (proxy: Record<string, unknown> | undefined, label: stri
 ### `codegenPlugin` (const)
 
 ```ts
-const codegenPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
+const codegenPlugin: (options: ResolvedLunoraPluginOptions, discovery?: DiscoveryCache) => Plugin;
 ```
 
 ### `containerLogsPlugin` (const)
 
 ```ts
-const containerLogsPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
+const containerLogsPlugin: (options: ResolvedLunoraPluginOptions, discovery?: DiscoveryCache) => Plugin;
 ```
 
 ### `detectFramework` (const)
@@ -339,7 +339,7 @@ const withWorkerStartupHint: (plugins: ReadonlyArray<Plugin>) => Plugin[];
 ### `wranglerValidatorPlugin` (const)
 
 ```ts
-const wranglerValidatorPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
+const wranglerValidatorPlugin: (options: ResolvedLunoraPluginOptions, discovery?: DiscoveryCache) => Plugin;
 ```
 
 ## Referenced internal declarations

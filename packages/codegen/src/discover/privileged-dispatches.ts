@@ -2,7 +2,7 @@ import type { ArrowFunction, CallExpression, FunctionExpression, Identifier, Nod
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { PrivilegedDispatchIR } from "../ir";
-import { findObjectProperty, functionReferenceSegments, listLunoraSourceFiles, lunoraRelativePath, RUN_METHODS } from "./ast";
+import { descendantsOfKind, findObjectProperty, functionReferenceSegments, listLunoraSourceFiles, lunoraRelativePath, RUN_METHODS } from "./ast";
 import { callSiteScopeOf } from "./attribution";
 
 /**
@@ -282,7 +282,7 @@ const dispatchesInHandler = (handler: HandlerFunction, kind: "queue" | "workflow
 const dispatchesInSourceFile = (sourceFile: SourceFile, relativePath: string): PrivilegedDispatchIR[] => {
     const found: PrivilegedDispatchIR[] = [];
 
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
         const name = bareCalleeName(call);
 
         const configIndex = name === undefined ? undefined : HANDLER_FACTORIES.get(name);

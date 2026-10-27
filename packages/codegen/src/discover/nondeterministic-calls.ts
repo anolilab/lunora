@@ -2,7 +2,7 @@ import type { CallExpression, NewExpression, Node as TsNode, Project, SourceFile
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { NondeterministicCallIR } from "../ir";
-import { handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { descendantsOfKind, handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
@@ -158,7 +158,7 @@ const exportedProcedureHandler = (declaration: VariableDeclaration): ResolvedPro
 const callsInHandler = (procedure: ResolvedProcedure, file: string): NondeterministicCallIR[] => {
     const found: NondeterministicCallIR[] = [];
 
-    for (const callNode of procedure.handler.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const callNode of descendantsOfKind(procedure.handler, SyntaxKind.CallExpression)) {
         // A query's `ctx.random()` is an unkeyed `Math.random()` draw, so a live re-run can differ. A mutation's draw is replay-stable.
         const callee = procedure.kind === "query" && callNode.getExpression().getText() === "ctx.random" ? "ctx.random" : nondeterministicCalleeOf(callNode);
 
@@ -169,7 +169,7 @@ const callsInHandler = (procedure: ResolvedProcedure, file: string): Nondetermin
 
     // `new Date()` is a NewExpression, not a CallExpression — traverse it too so
     // wall-clock reads via the constructor are caught alongside `Date.now()`.
-    for (const newNode of procedure.handler.getDescendantsOfKind(SyntaxKind.NewExpression)) {
+    for (const newNode of descendantsOfKind(procedure.handler, SyntaxKind.NewExpression)) {
         const callee = nondeterministicNewOf(newNode);
 
         if (callee !== undefined) {
