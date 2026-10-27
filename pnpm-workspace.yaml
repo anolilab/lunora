@@ -127,7 +127,7 @@ overrides:
   # `dompurify@<=3.4.10` key no longer matched it, so 3.4.16 stayed installed.
   dompurify@<3.4.17: ^3.4.17
   esbuild@>=0.27.3 <0.28.1: ^0.28.1
-  fast-uri@>=3.0.0 <3.1.5: ^3.1.7
+  fast-uri@>=3.0.0 <3.1.5: ^3.1.9
   fast-xml-parser@<5.7.0: ^5.7.0
   hono@<4.12.34: ^4.13.7
   # react-native's `@react-native/community-cli-plugin` declares an OPTIONAL
