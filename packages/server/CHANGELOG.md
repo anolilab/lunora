@@ -1,3 +1,19 @@
+## @lunora/server [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.242...@lunora/server@1.0.0-alpha.243) (2026-10-27)
+
+### Bug Fixes
+
+* **server:** reject nested-path index fields with a coded error ([#1364](https://github.com/anolilab/lunora/issues/1364)) ([b2c3be9](https://github.com/anolilab/lunora/commit/b2c3be9f456208e1aa514bff1d1baf38f2371e54))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.153
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.164
+* **@lunora/values:** upgraded to 1.0.0-alpha.83
+* **@lunora/observability:** upgraded to 1.0.0-alpha.176
+* **@lunora/storage:** upgraded to 1.0.0-alpha.157
+
 ## @lunora/server [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.241...@lunora/server@1.0.0-alpha.242) (2026-10-26)
 
 ### Features
