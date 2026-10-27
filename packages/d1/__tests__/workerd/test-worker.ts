@@ -11,7 +11,7 @@ import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import type { D1DatabaseLike } from "../../src/d1-client";
 import { D1Client } from "../../src/d1-client";
 import type { D1Exec } from "../../src/d1-ctx-db";
-import { createD1CtxDb, readD1CdcChanges } from "../../src/d1-ctx-db";
+import { createD1CtxDb, readD1CdcChanges, sweepD1CdcRetention } from "../../src/d1-ctx-db";
 import { MigrationRunner } from "../../src/migration-runner";
 
 interface Env {
@@ -146,6 +146,41 @@ const cdcRewind = async (database: D1Database): Promise<Record<string, unknown>>
     };
 };
 
+const cdcRetention = async (database: D1Database): Promise<Record<string, unknown>> => {
+    const schema: SchemaLike = { tables: { notes: { indexes: [], shape: { body: col("string") }, shardMode: { kind: "global" } } } };
+    const exec = d1CtxExec(database);
+
+    await database.prepare(`DROP TABLE IF EXISTS notes`).run();
+    await database.prepare(`DROP TABLE IF EXISTS __cdc_log`).run();
+    await database.prepare(`DROP TABLE IF EXISTS __cdc_sweep`).run();
+
+    const db = createD1CtxDb({ cdc: true, exec, idGenerator: () => crypto.randomUUID(), schema });
+
+    await db.insert("notes", { body: "a" });
+    await db.insert("notes", { body: "b" });
+    await db.insert("notes", { body: "c" });
+
+    // The lowest `seq` carries a clock far ahead of the rows behind it, which
+    // must not hide their expiry from the sweep.
+    await database.prepare(`UPDATE __cdc_log SET ts = CASE seq WHEN 1 THEN 10000000 WHEN 2 THEN 100 ELSE 200 END`).run();
+
+    const remaining = async (): Promise<number[]> => {
+        const { results } = await database.prepare(`SELECT seq FROM __cdc_log ORDER BY seq`).all<{ seq: number }>();
+
+        return results.map((row) => row.seq);
+    };
+
+    // Cutoff 0: nothing has expired.
+    await sweepD1CdcRetention(exec, 1_000_000, 1_000_000);
+
+    const afterNoop = await remaining();
+
+    // Cutoff 1 000 000, a lease window later: seqs 2 and 3 have expired.
+    await sweepD1CdcRetention(exec, 1_000_000, 2_000_000);
+
+    return { afterNoop, afterSweep: await remaining() };
+};
+
 /** The `.global()` table the conditional-write routes write. */
 const counterSchema: SchemaLike = {
     tables: {
@@ -201,6 +236,7 @@ const clientIdCollision = async (database: D1Database): Promise<{ codes: (null |
 
 /** POST routes that take only the database and answer with JSON. */
 const DATABASE_ROUTES: Record<string, ((database: D1Database) => Promise<unknown>) | undefined> = {
+    "/cdc-retention": cdcRetention,
     "/cdc-rewind": cdcRewind,
     "/client-id-collision": clientIdCollision,
     "/patch-if-race": async (database) => patchIfRace(database, 20),

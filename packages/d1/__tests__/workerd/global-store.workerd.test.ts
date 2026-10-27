@@ -18,6 +18,9 @@
  * each other's read and write; `node:sqlite`'s synchronous calls never do. And
  * whether D1's primary-key refusal for a pinned `clientId` is one the dialect
  * maps to `CONFLICT`, which callers that key a row deterministically rely on.
+ *
+ * Whether the retention sweep's expiry probe, which goes through the `ts`
+ * index, finds expired rows behind a lowest-`seq` row stamped by a fast clock.
  */
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
@@ -62,6 +65,15 @@ describe("global store (workerd)", () => {
         expect(result.afterSweep).toBe("served");
         // And one holding a cursor the rewound timeline never issued is refused.
         expect(result.afterRestore).toBe("threw:CDC_TIMELINE_FORKED");
+    });
+
+    it("sweeps expired changelog rows that sit behind a future-dated head, and nothing when none expired", async () => {
+        expect.assertions(2);
+
+        const result = await post<{ afterNoop: number[]; afterSweep: number[] }>("/cdc-retention");
+
+        expect(result.afterNoop).toStrictEqual([1, 2, 3]);
+        expect(result.afterSweep).toStrictEqual([1]);
     });
 
     it("lets exactly one of ten interleaved conditional patches apply, on real D1", async () => {
