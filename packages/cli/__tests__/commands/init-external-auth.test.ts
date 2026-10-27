@@ -157,7 +157,7 @@ describe(parseAuthChoice, () => {
         const warnings: string[] = [];
 
         expect(parseAuthChoice("WorkOS", (message) => warnings.push(message))).toBe("workos");
-        expect(parseAuthChoice("okta", (message) => warnings.push(message))).toBeUndefined();
+        expect(parseAuthChoice("okta", (message) => warnings.push(message))).toBe("none");
         expect(warnings).toHaveLength(1);
     });
 });

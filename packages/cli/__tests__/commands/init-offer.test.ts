@@ -450,6 +450,28 @@ describe("offerRegistryExtras", () => {
             expect(ok).toBe(false);
         });
 
+        it("drops auth-ui from --add when --auth names an external provider", async () => {
+            expect.assertions(2);
+
+            const { applyAll, plans } = captureApplyAll();
+            const { lines, logger } = makeLogger();
+
+            const ok = await offerRegistryExtras(baseDeps({ applyAll, auth: "workos", logger, preselected: ["auth-ui"] }));
+
+            expect(plans().map((plan) => [...plan.names])).toStrictEqual([["auth-workos-jwt"]]);
+            expect([ok, lines.join("\n")]).toStrictEqual([false, expect.stringMatching(/ignoring `auth-ui` from --add/)]);
+        });
+
+        it("leaves auth-ui out of the feature question once an external provider is chosen", async () => {
+            expect.assertions(1);
+
+            const multiSelect = vi.fn<OfferDeps["multiSelect"]>(async () => []);
+
+            await offerRegistryExtras(baseDeps({ multiSelect, selectAuth: async () => "clerk" }));
+
+            expect(multiSelect.mock.calls[0]?.[1].map((option) => option.value)).not.toContain("auth-ui");
+        });
+
         it("maps --auth lunora onto the base auth item", async () => {
             expect.assertions(1);
 

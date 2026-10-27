@@ -67,6 +67,9 @@ const STACK_FEATURE_VALUES: ReadonlyArray<StackFeature> = STACK_FEATURE_OPTIONS.
 /** The interactive multi-select leaves `auth` out: the offer asks the auth choice first, on its own ({@link AUTH_CHOICE_OPTIONS}). */
 const MULTI_SELECT_OPTIONS = STACK_FEATURE_OPTIONS.filter((option) => option.value !== "auth");
 
+/** Features built on Lunora auth: `auth-ui`'s item requires the base `auth` item, so neither fits an external provider. */
+const LUNORA_AUTH_FEATURES: ReadonlySet<StackFeature> = new Set(["auth", "auth-ui"]);
+
 /** Map a feature value to the registry item it applies as (most are identity; `email` → the mail item). */
 const featureItem = (feature: StackFeature): string => (feature === "email" ? EMAIL_ITEM : feature);
 
@@ -308,11 +311,11 @@ const FEATURE_COLLECTORS: Partial<Record<StackFeature, (deps: OfferDeps, picked:
 const applyPreselected = async (deps: OfferDeps): Promise<boolean> => {
     const authPlan = externalAuthPlan(deps.auth);
     // An external provider and Lunora auth are one choice, as the interactive auth question makes them.
-    const conflicting = authPlan !== undefined && deps.preselected?.includes("auth") === true;
-    const preselected = (deps.preselected ?? []).filter((feature) => !conflicting || feature !== "auth");
+    const conflicting = authPlan === undefined ? [] : (deps.preselected ?? []).filter((feature) => LUNORA_AUTH_FEATURES.has(feature));
+    const preselected = (deps.preselected ?? []).filter((feature) => !conflicting.includes(feature));
 
-    if (conflicting) {
-        deps.logger.warn(`--auth ${String(deps.auth)} replaces Lunora auth; ignoring \`auth\` from --add.`);
+    for (const feature of conflicting) {
+        deps.logger.warn(`--auth ${String(deps.auth)} replaces Lunora auth; ignoring \`${feature}\` from --add.`);
     }
 
     if (deps.auth === "lunora" && !preselected.includes("auth")) {
@@ -327,7 +330,7 @@ const applyPreselected = async (deps: OfferDeps): Promise<boolean> => {
 
     const applied = await deps.applyAll(plans);
 
-    return applied && !refused && !conflicting;
+    return applied && !refused && conflicting.length === 0;
 };
 
 /**
@@ -358,9 +361,10 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<boolean> => {
     }
 
     const auth = deps.auth ?? (await deps.selectAuth("Which auth do you want?", AUTH_CHOICE_OPTIONS, { default: "none" })) ?? "none";
-    const selected = await deps.multiSelect("Which features do you want to add?", MULTI_SELECT_OPTIONS, { defaults: [] });
-    const picked = auth === "lunora" && !selected.includes("auth") ? ["auth" as const, ...selected] : selected;
     const chosenAuthPlan = externalAuthPlan(auth);
+    const options = chosenAuthPlan === undefined ? MULTI_SELECT_OPTIONS : MULTI_SELECT_OPTIONS.filter((option) => !LUNORA_AUTH_FEATURES.has(option.value));
+    const selected = await deps.multiSelect("Which features do you want to add?", options, { defaults: [] });
+    const picked = auth === "lunora" && !selected.includes("auth") ? ["auth" as const, ...selected] : selected;
 
     if (picked.length === 0 && chosenAuthPlan === undefined) {
         return true;

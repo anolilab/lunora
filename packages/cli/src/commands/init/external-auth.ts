@@ -72,12 +72,15 @@ const EXTERNAL_AUTH: Readonly<Record<ExternalAuthProvider, ExternalAuthSpec>> = 
     },
     workos: {
         clientSnippet: [
-            "// @workos-inc/authkit-react: const { getAccessToken, user } = useAuth();",
+            "// @workos-inc/authkit-react: const { getAccessToken, isLoading, user } = useAuth();",
+            "// In a useEffect over [client, getAccessToken, isLoading, user?.id]:",
+            "if (isLoading) return;",
+            "if (!user) return client.setAuthToken(null);",
             "const fetchToken = () => getAccessToken().catch((error) => {",
             "    if (error instanceof LoginRequiredError) return null; // signed out",
             "    throw error;",
             "});",
-            "const stop = setAuthTokenProvider(client, fetchToken, { subject: user.id });",
+            "return setAuthTokenProvider(client, fetchToken, { subject: user.id });",
         ].join("\n"),
         envVars: ["WORKOS_CLIENT_ID"],
         identity: "workosIdentity",
@@ -88,8 +91,8 @@ const EXTERNAL_AUTH: Readonly<Record<ExternalAuthProvider, ExternalAuthSpec>> = 
 
 const isExternalAuthProvider = (choice: AuthChoice): choice is ExternalAuthProvider => Object.hasOwn(EXTERNAL_AUTH, choice);
 
-/** Parse `--auth`; an unknown value warns and resolves `undefined` (no auth applied). */
-const parseAuthChoice = (raw: string, warn: (message: string) => void): AuthChoice | undefined => {
+/** Parse `--auth`; an unknown value warns and resolves `none`, so the interactive auth question is skipped as the warning says. */
+const parseAuthChoice = (raw: string, warn: (message: string) => void): AuthChoice => {
     const value = raw.trim().toLowerCase();
 
     if ((AUTH_CHOICES as ReadonlyArray<string>).includes(value)) {
@@ -98,7 +101,7 @@ const parseAuthChoice = (raw: string, warn: (message: string) => void): AuthChoi
 
     warn(`init: unknown --auth "${raw}" — expected ${AUTH_CHOICES.join(" | ")}; skipping auth.`);
 
-    return undefined;
+    return "none";
 };
 
 /**
