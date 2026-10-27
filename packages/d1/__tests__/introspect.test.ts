@@ -61,6 +61,8 @@ describe("d1 introspect", () => {
         // An external table with a real FK constraint (better-auth emits these) — its
         // ref must surface via PRAGMA foreign_key_list so the diagram can draw the edge.
         harness.ddl(`CREATE TABLE "session" ("id" TEXT PRIMARY KEY, "token" TEXT, "userId" TEXT REFERENCES "user" ("id") ON DELETE CASCADE)`);
+        // better-auth's one-time tokens live in a generically named `value` column.
+        harness.ddl(`CREATE TABLE "verification" ("id" TEXT PRIMARY KEY, "identifier" TEXT, "value" TEXT)`);
         // Internal/companion tables that must never surface.
         harness.ddl(`CREATE TABLE "_cf_KV" ("k" TEXT, "v" BLOB)`);
         harness.ddl(`CREATE TABLE "organizations__agg_byActive" ("__key__" TEXT, "__value__" REAL)`);
@@ -73,6 +75,7 @@ describe("d1 introspect", () => {
         await harness.exec.run(`INSERT INTO "organizations" VALUES ('o1', 1, 'Acme', 1), ('o2', 2, 'Globex', 0)`, []);
         await harness.exec.run(`INSERT INTO "plans" VALUES ('p1', 1, 'free')`, []);
         await harness.exec.run(`INSERT INTO "user" VALUES ('u1', 'ada@example.com', 'super-secret-hash')`, []);
+        await harness.exec.run(`INSERT INTO "verification" VALUES ('v1', 'ada@example.com', 'one-time-token-value')`, []);
     });
 
     afterEach(() => {
@@ -88,6 +91,7 @@ describe("d1 introspect", () => {
                 { name: "plans", rowCount: 1 },
                 { name: "session", rowCount: 0 },
                 { name: "user", rowCount: 1 },
+                { name: "verification", rowCount: 1 },
             ]);
         });
     });
@@ -237,6 +241,23 @@ describe("d1 introspect", () => {
             await expect(
                 readGlobalTablePage(harness.exec, schema, { filters: [{ column: "passwordHash", value: "wrong-guess" }], table: "user" }),
             ).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+        });
+
+        it("redacts a token column by table (verification.value) that no column-name pattern catches", async () => {
+            expect.assertions(4);
+
+            const page = await readGlobalTablePage(harness.exec, schema, { table: "verification" });
+
+            expect(page.rows[0]).toEqual({ id: "v1", identifier: "ada@example.com", value: "•••" });
+            expect(JSON.stringify(page.rows)).not.toContain("one-time-token-value");
+
+            await expect(
+                readGlobalTablePage(harness.exec, schema, { filters: [{ column: "value", value: "one-time-token-value" }], table: "verification" }),
+            ).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+
+            const facet = await facetGlobalColumn(harness.exec, schema, { column: "value", table: "verification" });
+
+            expect(facet.values).toEqual([{ count: 1, value: "•••" }]);
         });
 
         it("allows an eq filter on a non-sensitive external column", async () => {

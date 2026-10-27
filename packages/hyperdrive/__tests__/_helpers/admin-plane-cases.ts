@@ -248,6 +248,21 @@ const externalTablesCase = (target: AdminPlaneTarget) => async (): Promise<void>
     await expect(introspector.readTablePage({ table: "ext_posts" })).resolves.toMatchObject({ refs: { user_id: "ext_users" } });
 };
 
+const keylessTablePagingCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
+    // The first column ties on every row and the heap order (descending `n`) disagrees with the
+    // tiebreak, so only an ORDER BY over every column returns the rows in a stable, page-safe order.
+    await target.query("CREATE TABLE ext_log (kind VARCHAR(8), n INTEGER)");
+    await target.query("INSERT INTO ext_log (kind, n) VALUES ('x', 3), ('x', 2), ('x', 1)");
+
+    const introspector = createHyperdriveGlobalIntrospector(target.engine, target.exec, schema);
+    const pages = [
+        await introspector.readTablePage({ limit: 2, offset: 0, table: "ext_log" }),
+        await introspector.readTablePage({ limit: 2, offset: 2, table: "ext_log" }),
+    ];
+
+    expect(pages.flatMap((page) => page.rows.map((row) => row["n"]))).toStrictEqual([1, 2, 3]);
+};
+
 const cdcCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
     // No changelog yet is "nothing has changed", not an error, and the cursor stays put.
     await expect(readHyperdriveGlobalCdc(target.engine, target.exec, { sinceSeq: 7 })).resolves.toStrictEqual({ changes: [], cursor: 7 });
@@ -280,6 +295,7 @@ const adminPlaneCases = (target: AdminPlaneTarget): [string, () => Promise<void>
     ["keyset-pages an export past one batch", pagingCase(target)],
     ["pages, filters and facets a schema table for the studio browser", introspectorCase(target)],
     ["shows external tables keyed by their own primary key, with secrets masked and foreign keys named", externalTablesCase(target)],
+    ["pages a keyless external table in a stable order even when its first column ties", keylessTablePagingCase(target)],
     ["reads and replays the global changelog", cdcCase(target)],
 ];
 

@@ -22,8 +22,6 @@
  * real physical columns.
  */
 
-/* eslint-disable no-restricted-syntax -- `sql\`…\`` here is the drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
-
 import { LunoraError } from "@lunora/errors";
 import type { SchemaLike } from "@lunora/shard-engine";
 import { isInternalTableName } from "@lunora/shard-engine";
@@ -213,6 +211,26 @@ const catalog = {
 const SENSITIVE_COLUMN = /password|secret|token|hash|salt|credential/iu;
 
 /**
+ * Token-bearing columns whose NAME looks innocent, keyed by table. better-auth
+ * stores its one-time tokens in `verification.value`, which no name pattern can
+ * catch without masking every `value` column in every table. Names are compared
+ * lower-cased with `_` removed, so `two_factor`/`twoFactor` and
+ * `backup_codes`/`backupCodes` both hit.
+ */
+const SENSITIVE_TABLE_COLUMNS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+    ["apikey", new Set(["key"])],
+    ["jwks", new Set(["privatekey"])],
+    ["twofactor", new Set(["backupcodes"])],
+    ["verification", new Set(["value"])],
+]);
+
+const normaliseName = (name: string): string => name.toLowerCase().replaceAll("_", "");
+
+/** Whether an external table's column is masked: by name pattern, or by being a known token column of that table. */
+const isRedactedColumn = (table: string, column: string): boolean =>
+    SENSITIVE_COLUMN.test(column) || SENSITIVE_TABLE_COLUMNS.get(normaliseName(table))?.has(normaliseName(column)) === true;
+
+/**
  * The schema definition that describes THIS D1 table, or `undefined` when the
  * table is not one the schema stores here.
  *
@@ -378,7 +396,7 @@ const buildEqPredicate = (
         // value matched, bypassing the '•••' redaction. Reject it, mirroring the
         // facet path's masked-bucket collapse. Declared `.global()` tables (whose
         // values are not redacted) intentionally bypass this guard.
-        if (globalTableDefinition(schema, table) === undefined && SENSITIVE_COLUMN.test(filter.column)) {
+        if (globalTableDefinition(schema, table) === undefined && isRedactedColumn(table, filter.column)) {
             throw new LunoraError("FORBIDDEN", `cannot filter on a redacted column: ${filter.column}`, { status: 403 });
         }
 
@@ -411,7 +429,7 @@ const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknow
     const redacted: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(row)) {
-        redacted[key] = value !== null && value !== undefined && SENSITIVE_COLUMN.test(key) ? "•••" : value;
+        redacted[key] = value !== null && value !== undefined && isRedactedColumn(table, key) ? "•••" : value;
     }
 
     return redacted;
@@ -497,6 +515,7 @@ const listSqlGlobalTables = async (exec: SqlContextExec, schema: SchemaLike, dia
  */
 const pageOrderKey = async (exec: SqlContextExec, dialect: SqlDialect, schema: SchemaLike, table: string, columns: ReadonlyArray<string>): Promise<SQL> => {
     if (globalTableDefinition(schema, table) !== undefined) {
+        // eslint-disable-next-line no-restricted-syntax -- `sql` is the drizzle tagged-template builder, not a string conversion
         return sql`${sql.identifier("id")}`;
     }
 
@@ -510,15 +529,22 @@ const pageOrderKey = async (exec: SqlContextExec, dialect: SqlDialect, schema: S
     }
 
     if (columns.includes("id")) {
+        // eslint-disable-next-line no-restricted-syntax -- `sql` is the drizzle tagged-template builder, not a string conversion
         return sql`${sql.identifier("id")}`;
     }
 
     // SQLite: a composite key orders by no single column; `rowid` is stable and
     // every ordinary table has one (a `WITHOUT ROWID` table always declares a
-    // primary key, so it took the branch above). Postgres/MySQL have no rowid —
-    // ponytail: a keyless external table there is ordered by its first column,
-    // which is not unique; add a full-column ORDER BY if paging such tables matters.
-    return dialect.name === "sqlite" ? sql.raw("rowid") : sql`${sql.identifier(columns[0] ?? "id")}`;
+    // primary key, so it took the branch above). Postgres/MySQL have no rowid, so
+    // a keyless external table is ordered by every column: ordering by one
+    // column alone leaves ties in an undefined order, and OFFSET pages would
+    // then overlap or skip rows. Rows equal in every column are indistinguishable.
+    return dialect.name === "sqlite"
+        ? sql.raw("rowid")
+        : sql.join(
+              columns.map((name) => sql.identifier(name)),
+              sql`, `,
+          );
 };
 
 /**
@@ -617,7 +643,7 @@ const facetSqlGlobalColumn = async (
 
     // Faceting a sensitive column on an external table would expose the very
     // values the page browser redacts — collapse it to one masked bucket instead.
-    if (globalTableDefinition(schema, table) === undefined && SENSITIVE_COLUMN.test(column)) {
+    if (globalTableDefinition(schema, table) === undefined && isRedactedColumn(table, column)) {
         const total = await countRows(exec, dialect, table, where);
 
         return { truncated: false, values: total === 0 ? [] : [{ count: total, value: "•••" }] };
