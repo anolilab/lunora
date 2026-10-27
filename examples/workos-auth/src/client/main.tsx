@@ -4,8 +4,8 @@ import { LunoraClient } from "lunorash/client";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import { App } from "./App.js";
-import { WorkOsTokenBridge } from "./workos-token-bridge.js";
+import { App } from "./App";
+import { WorkOsTokenBridge } from "./workos-token-bridge";
 
 const clientId = import.meta.env.VITE_WORKOS_CLIENT_ID as string | undefined;
 const apiHostname = import.meta.env.VITE_WORKOS_API_HOSTNAME as string | undefined;

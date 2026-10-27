@@ -4,8 +4,8 @@ import { LunoraClient } from "lunorash/client";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import { App } from "./App.js";
-import { ClerkTokenBridge } from "./clerk-token-bridge.js";
+import { App } from "./App";
+import { ClerkTokenBridge } from "./clerk-token-bridge";
 
 const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
 
