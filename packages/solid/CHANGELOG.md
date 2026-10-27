@@ -1,3 +1,15 @@
+## @lunora/solid [1.0.0-alpha.263](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.262...@lunora/solid@1.0.0-alpha.263) (2026-10-27)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.257
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.175
+
 ## @lunora/solid [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.261...@lunora/solid@1.0.0-alpha.262) (2026-10-27)
 
 
