@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useState } from "react";
 
 import { useT } from "../i18n/i18n-context";
 import type { ThemePreference } from "../lib/theme";
@@ -54,10 +54,16 @@ const MoonIcon = (): ReactElement => (
 );
 
 // The animated indicator pulls in `motion` (~130 KiB), so it loads on demand
-// instead of in the static first-load closure. Until it lands, the fallback
-// paints the same box without the spring — the indicator only animates between
-// segments, so nothing is lost on first paint.
-const ThemeIndicator = lazy(() => import("./theme-indicator"));
+// instead of in the static first-load closure. A failed chunk fetch resolves to
+// the plain box rather than throwing into the app-level boundary: the indicator
+// only animates between segments, so losing it costs nothing else.
+const StaticIndicator = ({ className }: { readonly className: string }): ReactElement => <span className={className} />;
+
+const ThemeIndicator = lazy(() =>
+    import("./theme-indicator").catch(() => {
+        return { default: StaticIndicator };
+    }),
+);
 
 const INDICATOR_CLASS = "absolute inset-0 rounded-md border border-muted-foreground/40 bg-background/40";
 
@@ -76,6 +82,8 @@ const OPTIONS: ReadonlyArray<{ readonly Icon: () => ReactElement; readonly value
 const ThemeToggle = (): ReactElement => {
     const { theme, setTheme } = useTheme();
     const t = useT();
+    // Until the first change, the static box stands in, so a page load does not fetch the motion chunk.
+    const [hasInteracted, setHasInteracted] = useState(false);
 
     const label: Record<ThemePreference, string> = {
         dark: t("Dark theme"),
@@ -104,17 +112,21 @@ const ThemeToggle = (): ReactElement => {
                         data-testid={`dash-app-theme-${value}`}
                         key={value}
                         onClick={() => {
+                            setHasInteracted(true);
                             setTheme(value);
                         }}
                         role="radio"
                         title={label[value]}
                         type="button"
                     >
-                        {active && (
-                            <Suspense fallback={<span className={INDICATOR_CLASS} />}>
-                                <ThemeIndicator className={INDICATOR_CLASS} />
-                            </Suspense>
-                        )}
+                        {active &&
+                            (hasInteracted ? (
+                                <Suspense fallback={<span className={INDICATOR_CLASS} />}>
+                                    <ThemeIndicator className={INDICATOR_CLASS} />
+                                </Suspense>
+                            ) : (
+                                <span className={INDICATOR_CLASS} />
+                            ))}
                         <span className="relative">
                             <Icon />
                         </span>

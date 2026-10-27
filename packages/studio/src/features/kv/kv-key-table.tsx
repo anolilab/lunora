@@ -1,4 +1,5 @@
 import type { KvKeyEntry } from "@lunora/client";
+import type { Rect, Virtualizer } from "@tanstack/react-virtual";
 import { observeElementOffset, useVirtualizer } from "@tanstack/react-virtual";
 import type { MouseEvent, ReactElement } from "react";
 import { useRef } from "react";
@@ -10,10 +11,9 @@ import flooredRectObserver from "../../lib/virtual-rect";
 import { formatExpiration } from "./kv-fields";
 
 /**
- * Height of one key row: a single-line, `whitespace-nowrap` cell around a
- * checkbox, so every row is the same height and rows are not measured. Spacers
- * use the same figure, so the layout stays self-consistent even if a theme
- * shifts the real height by a pixel; the overscan absorbs the difference.
+ * Height of one key row. Every data row is pinned to this height (a 16px
+ * checkbox plus cell padding renders within it), so the virtualizer's offsets
+ * match what is on screen and rows never need measuring.
  */
 const ROW_HEIGHT = 33;
 
@@ -37,6 +37,65 @@ const scrollParentOf = (node: Element | null): Element | null => {
     }
 
     return document.scrollingElement;
+};
+
+const isDocumentScroll = (instance: Virtualizer<Element, Element>): boolean => instance.scrollElement === document.scrollingElement;
+
+/**
+ * Offset observer for a list that scrolls with the document. The element
+ * observer would listen on `<html>`, which never receives viewport scroll
+ * events, so the window is the scroll target and the list's offset is how far
+ * its body has scrolled above the window top.
+ */
+const observeDocumentOffset = (
+    instance: Virtualizer<Element, Element>,
+    callback: (offset: number, isScrolling: boolean) => void,
+    bodyOf: () => HTMLElement | null,
+): (() => void) | undefined => {
+    const win = instance.targetWindow;
+
+    if (!win) {
+        return undefined;
+    }
+
+    const report = (isScrolling: boolean): void => {
+        callback(Math.max(0, -(bodyOf()?.getBoundingClientRect().top ?? 0)), isScrolling);
+    };
+    const onScroll = (): void => {
+        report(true);
+    };
+    const onScrollEnd = (): void => {
+        report(false);
+    };
+
+    report(false);
+    win.addEventListener("scroll", onScroll, { passive: true });
+    win.addEventListener("scrollend", onScrollEnd);
+
+    return () => {
+        win.removeEventListener("scroll", onScroll);
+        win.removeEventListener("scrollend", onScrollEnd);
+    };
+};
+
+/** Rect for a document-scrolling list: the window viewport, not `<html>`, which spans the whole page. */
+const observeDocumentRect = (instance: Virtualizer<Element, Element>, callback: (rect: Rect) => void): (() => void) | undefined => {
+    const win = instance.targetWindow;
+
+    if (!win) {
+        return undefined;
+    }
+
+    const handler = (): void => {
+        callback({ height: win.innerHeight, width: win.innerWidth });
+    };
+
+    handler();
+    win.addEventListener("resize", handler);
+
+    return () => {
+        win.removeEventListener("resize", handler);
+    };
 };
 
 interface KvKeyTableProps {
@@ -74,13 +133,16 @@ const KvKeyTable = ({ allSelected, bulkSelected, keys, onSelectKey, onToggleAll,
         // viewport top — read from layout on each scroll, so content above that
         // grows or shrinks never leaves the window misaligned.
         observeElementOffset: (instance, callback) =>
-            observeElementOffset(instance, (_offset, isScrolling) => {
-                const scroller = instance.scrollElement;
-                const body = bodyRef.current;
+            isDocumentScroll(instance)
+                ? observeDocumentOffset(instance, callback, () => bodyRef.current)
+                : observeElementOffset(instance, (_offset, isScrolling) => {
+                      const scroller = instance.scrollElement;
+                      const body = bodyRef.current;
 
-                callback(scroller && body ? Math.max(0, scroller.getBoundingClientRect().top - body.getBoundingClientRect().top) : 0, isScrolling);
-            }),
-        observeElementRect: (instance, callback) => flooredRectObserver(instance, callback, FALLBACK_VIEWPORT),
+                      callback(scroller && body ? Math.max(0, scroller.getBoundingClientRect().top - body.getBoundingClientRect().top) : 0, isScrolling);
+                  }),
+        observeElementRect: (instance, callback) =>
+            isDocumentScroll(instance) ? observeDocumentRect(instance, callback) : flooredRectObserver(instance, callback, FALLBACK_VIEWPORT),
         overscan: 12,
     });
     const virtualRows = virtualizer.getVirtualItems();
@@ -110,6 +172,7 @@ const KvKeyTable = ({ allSelected, bulkSelected, keys, onSelectKey, onToggleAll,
                             data-testid={`kv-key-row-${entry.name}`}
                             key={entry.name}
                             onClick={onSelectKey}
+                            style={{ height: ROW_HEIGHT }}
                         >
                             <TableCell
                                 onClick={(event) => {
