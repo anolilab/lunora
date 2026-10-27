@@ -68,6 +68,35 @@ describe(setAuthTokenProvider, () => {
         stop();
     });
 
+    it("refreshes a token with only seconds left before its exp, and an expired one after 5 s", async () => {
+        expect.assertions(3);
+
+        // On a whole second, so `exp` (whole seconds) leaves exactly the lifetime given.
+        vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+
+        const { client } = fakeClient();
+        const lifetimes = [4, -10, 60];
+        const fetchToken = vi.fn<() => Promise<string>>(async () => jwt(nowSeconds() + (lifetimes.shift() ?? 60), "short"));
+
+        const stop = setAuthTokenProvider(client, fetchToken);
+
+        // 4 s left: refreshed at 2 s, before exp.
+        await vi.advanceTimersByTimeAsync(2000);
+
+        expect(fetchToken).toHaveBeenCalledTimes(2);
+
+        // That one came back already expired: no retry before 5 s.
+        await vi.advanceTimersByTimeAsync(4999);
+
+        expect(fetchToken).toHaveBeenCalledTimes(2);
+
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect(fetchToken).toHaveBeenCalledTimes(3);
+
+        stop();
+    });
+
     it("waits at most a day for a token that expires far in the future", async () => {
         expect.assertions(2);
 
