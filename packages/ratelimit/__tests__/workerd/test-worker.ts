@@ -260,11 +260,7 @@ class RateLimitDO extends DurableObject<Env> {
     /** The planner's detail lines for the sweep's DELETE, as the store runs it. */
     public sqlSweepPlan(): string[] {
         return this.ctx.storage.sql
-            .exec<{ detail: string }>(
-                `EXPLAIN QUERY PLAN DELETE FROM "_lunora_rate_limits" WHERE k IN (SELECT k FROM "_lunora_rate_limits" WHERE ts <= ? AND value >= 0 ORDER BY ts LIMIT ?)`,
-                0,
-                1,
-            )
+            .exec<{ detail: string }>(`EXPLAIN QUERY PLAN SELECT k FROM "_lunora_rate_limits" WHERE ts <= ? AND value >= 0 ORDER BY ts LIMIT ?`, 0, 1)
             .toArray()
             .map((row) => row.detail);
     }

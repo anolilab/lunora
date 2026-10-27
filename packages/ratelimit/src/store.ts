@@ -130,14 +130,14 @@ const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
         },
         // The `value >= 0` must stay literal so the planner can use the partial index.
         // The limit is a bound parameter, not inlined. Ownership is checked in JS, so a
-        // row another limiter wrote is never deleted.
+        // row another limiter wrote is never deleted. The owned keys go to one DELETE as
+        // a JSON array: one statement text however many rows, instead of one per row.
         sweep: (olderThanTs, limit, owns) => {
             const candidates = runSql<{ k: string }>(sql, `SELECT k FROM "${table}" WHERE ts <= ? AND value >= 0 ORDER BY ts LIMIT ?`, olderThanTs, limit);
+            const owned = candidates.map(({ k }) => k).filter((k) => owns?.(k) !== false);
 
-            for (const { k } of candidates) {
-                if (owns?.(k) !== false) {
-                    runSql(sql, `DELETE FROM "${table}" WHERE k = ?`, k);
-                }
+            if (owned.length > 0) {
+                runSql(sql, `DELETE FROM "${table}" WHERE k IN (SELECT value FROM json_each(?))`, JSON.stringify(owned));
             }
         },
         get: (storageKey) => {

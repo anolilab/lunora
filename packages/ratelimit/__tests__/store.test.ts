@@ -214,4 +214,31 @@ describe("sql store retention sweep (real node:sqlite)", () => {
 
         expect(keys()).toHaveLength(1);
     });
+
+    it("deletes only owned rows, in one DELETE however many expired", async () => {
+        expect.assertions(2);
+
+        const statements: string[] = [];
+        const { exec } = harness.sql;
+        const store = createSqlStore({
+            sql: {
+                exec: <Row = Record<string, unknown>>(query: string, ...params: unknown[]) => {
+                    statements.push(query);
+
+                    return exec<Row>(query, ...params);
+                },
+            },
+        });
+
+        for (const key of ["mine:a", "mine:b", "theirs:c", "mine:d"]) {
+            // eslint-disable-next-line no-await-in-loop -- sequential writes keep the fixture deterministic
+            await store.set(key, { ts: 1, value: 1 });
+        }
+
+        statements.length = 0;
+        await store.sweep?.(500, 32, (k) => k.startsWith("mine:"));
+
+        expect(keys()).toEqual(["theirs:c"]);
+        expect(statements.filter((query) => query.startsWith("DELETE"))).toHaveLength(1);
+    });
 });
