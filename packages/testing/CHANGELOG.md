@@ -1,3 +1,19 @@
+## @lunora/testing [1.0.0-alpha.310](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.309...@lunora/testing@1.0.0-alpha.310) (2026-10-27)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.254
+* **@lunora/mail:** upgraded to 1.0.0-alpha.127
+* **@lunora/server:** upgraded to 1.0.0-alpha.244
+* **@lunora/observability:** upgraded to 1.0.0-alpha.177
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.175
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.165
+
 ## @lunora/testing [1.0.0-alpha.309](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.308...@lunora/testing@1.0.0-alpha.309) (2026-10-27)
 
 
