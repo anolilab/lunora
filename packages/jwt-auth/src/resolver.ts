@@ -1,6 +1,7 @@
 import type { JWTPayload } from "jose";
 
 import type { ExecutionContextLike } from "../../../shared/execution-context";
+import { withoutExpiryClaims } from "../../../shared/jwt-verify";
 import type { JwtVerifierOptions } from "./verify";
 import { jwtVerifier, nonEmpty } from "./verify";
 
@@ -56,7 +57,7 @@ const toIdentity = (payload: JWTPayload, claims: JwtIdentityResolverOptions["cla
         return ANONYMOUS;
     }
 
-    return { ...extra, ...(typeof payload.exp === "number" ? { exp: payload.exp + clockTolerance } : {}), userId };
+    return { ...withoutExpiryClaims(extra), ...(typeof payload.exp === "number" ? { exp: payload.exp + clockTolerance } : {}), userId };
 };
 
 /**

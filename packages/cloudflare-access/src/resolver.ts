@@ -1,5 +1,5 @@
 import type { ExecutionContextLike } from "../../../shared/execution-context";
-import { nonEmpty } from "../../../shared/jwt-verify";
+import { nonEmpty, withoutExpiryClaims } from "../../../shared/jwt-verify";
 import { readIdentityGroups, rolesForGroups } from "./identity-groups";
 import readPlatformIdentity from "./platform-identity";
 import type { AccessClaims, CreateAccessResolverOptions, ResolvedAccessIdentity, ResolvedIdentityLike, ResolveIdentityFunction } from "./types";
@@ -60,7 +60,7 @@ const toIdentity = (claims: AccessClaims, options?: CreateAccessResolverOptions)
         ...(claims.exp === undefined ? {} : { exp: claims.exp }),
         ...(claims.groups === undefined ? {} : { groups: claims.groups }),
         ...(roles === undefined ? {} : { roles }),
-        ...overrides,
+        ...withoutExpiryClaims(overrides),
         userId,
     };
 };

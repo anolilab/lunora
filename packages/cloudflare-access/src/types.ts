@@ -180,7 +180,9 @@ export interface CreateAccessResolverOptions extends AccessJwtFallbackOptions {
      * `userId` and the runtime can answer `TOKEN_EXPIRED` for it.
      *
      * It is merged OVER the `roles` claim {@link CreateAccessResolverOptions.roles}
-     * mints, so returning `roles` here replaces the mapped set outright.
+     * mints, so returning `roles` here replaces the mapped set outright. `exp`
+     * and `expiresAtMs` are ignored: only the verified token's `exp` sets the
+     * identity's expiry.
      */
     mapClaims?: (claims: AccessClaims) => Record<string, unknown>;
 

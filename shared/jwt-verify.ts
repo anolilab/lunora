@@ -104,6 +104,16 @@ interface VerifiedJwtOf<Claims> {
 /** Reads the request's token and verifies it; `undefined` for no token or a token that failed verification. */
 type JwtVerifierOf<Claims> = (request: Request) => Promise<VerifiedJwtOf<Claims> | undefined>;
 
+/** The identity keys the runtime reads an expiry from (`expiresAtMs` first). */
+const EXPIRY_CLAIMS = new Set(["exp", "expiresAtMs"]);
+
+/**
+ * Mapped identity claims without the expiry keys: only the verified token's own `exp` may set them, or a mapper
+ * returning a later `expiresAtMs` would keep a lapsed token authenticated.
+ */
+const withoutExpiryClaims = (claims: Record<string, unknown>): Record<string, unknown> =>
+    Object.fromEntries(Object.entries(claims).filter(([key]) => !EXPIRY_CLAIMS.has(key)));
+
 /** Narrow a claim to a non-empty string; `""` and anything that is not a string are absent. */
 const nonEmpty = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 
@@ -362,4 +372,4 @@ const createJwtVerification = <Key, Claims extends JwtClaims>({
 };
 
 export type { JwtVerifierOf, JwtVerifierOptionsOf, TokenSource, VerifiedJwtOf };
-export { bearerToken, cookieToken, createJwtVerification, firstToken, headerToken, nonEmpty };
+export { bearerToken, cookieToken, createJwtVerification, firstToken, headerToken, nonEmpty, withoutExpiryClaims };

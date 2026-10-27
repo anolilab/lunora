@@ -122,6 +122,23 @@ describe(jwtIdentityResolver, () => {
         await expect(mapped(request({ authorization: `Bearer ${await sign({ blocked: true, sub: "u" })}` }))).resolves.toBeNull();
     });
 
+    it("never lets mapped claims set the identity's expiry", async () => {
+        expect.assertions(2);
+
+        const exp = Math.floor(Date.now() / 1000) + 60;
+        const mapped = jwtIdentityResolver({
+            claims: () => {
+                return { exp: exp + 86_400, expiresAtMs: Date.now() + 86_400_000 };
+            },
+            issuer: ISSUER,
+            keySet: createLocalJWKSet(jwks),
+        });
+        const identity = await mapped(request({ authorization: `Bearer ${await sign({ sub: "u" }, { exp })}` }));
+
+        expect(identity?.exp).toBe(exp);
+        expect(identity).not.toHaveProperty("expiresAtMs");
+    });
+
     it("reads a cookie when the token source falls back to one", async () => {
         expect.assertions(1);
 
