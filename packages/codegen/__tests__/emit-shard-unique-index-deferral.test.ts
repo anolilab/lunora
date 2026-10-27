@@ -152,7 +152,7 @@ describe("emitShard — blocked unique index retry", () => {
             thrown = error;
         }
 
-        expect((thrown as { code?: unknown }).code).toBe("UNIQUE_INDEX_DUPLICATES");
+        expect(thrown).toMatchObject({ code: "UNIQUE_INDEX_DUPLICATES" });
     });
 
     it("does not rescan on every refused call, only once per retry interval", () => {

@@ -27,6 +27,7 @@
                         "PAYLOAD_TOO_LARGE",
                         "TOO_MANY_REQUESTS",
                         "UNAUTHORIZED",
+                        "UNIQUE_INDEX_DUPLICATES",
                         "UNPROCESSABLE",
                         "VALIDATION_ERROR"
                       ],

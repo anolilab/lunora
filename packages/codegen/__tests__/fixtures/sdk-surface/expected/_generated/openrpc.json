@@ -102,12 +102,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
@@ -238,12 +245,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
@@ -374,12 +388,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
@@ -521,12 +542,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
@@ -676,12 +704,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
@@ -838,12 +873,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
@@ -977,12 +1019,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
@@ -1119,12 +1168,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
@@ -1279,12 +1335,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
@@ -1461,12 +1524,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
@@ -1597,12 +1667,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
@@ -1739,12 +1816,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
@@ -1887,12 +1971,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
@@ -2026,12 +2117,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
@@ -2168,12 +2266,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
@@ -2304,12 +2409,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
@@ -2486,12 +2598,19 @@
         {
           "code": -32013,
           "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32014,
+          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32014,
+          "code": -32015,
           "data": {
             "code": "VALIDATION_ERROR"
           },
