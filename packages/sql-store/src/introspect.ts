@@ -171,7 +171,7 @@ const catalog = {
         } else if (dialect.name === "mysql") {
             query = sql`SELECT column_name AS ${sql.identifier("from")}, referenced_table_name AS ${sql.identifier("table")} FROM information_schema.key_column_usage WHERE table_schema = DATABASE() AND table_name = ${table} AND referenced_table_name IS NOT NULL`;
         } else {
-            query = sql`SELECT kcu.column_name AS ${sql.identifier("from")}, ccu.table_name AS ${sql.identifier("table")} FROM information_schema.table_constraints AS tc JOIN information_schema.key_column_usage AS kcu ON kcu.constraint_name = tc.constraint_name AND kcu.constraint_schema = tc.constraint_schema JOIN information_schema.constraint_column_usage AS ccu ON ccu.constraint_name = tc.constraint_name AND ccu.constraint_schema = tc.constraint_schema WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = current_schema() AND tc.table_name = ${table}`;
+            query = sql`SELECT kcu.column_name AS ${sql.identifier("from")}, ccu.table_name AS ${sql.identifier("table")} FROM information_schema.table_constraints AS tc JOIN information_schema.key_column_usage AS kcu ON kcu.constraint_name = tc.constraint_name AND kcu.constraint_schema = tc.constraint_schema AND kcu.table_schema = tc.table_schema AND kcu.table_name = tc.table_name JOIN information_schema.constraint_column_usage AS ccu ON ccu.constraint_name = tc.constraint_name AND ccu.constraint_schema = tc.constraint_schema WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = current_schema() AND tc.table_name = ${table}`;
         }
 
         const rows = await queryAll(exec, dialect, query);

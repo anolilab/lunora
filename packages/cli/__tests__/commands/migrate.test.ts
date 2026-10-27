@@ -1345,6 +1345,7 @@ describe("lunora migrate d1-to-hyperdrive | hyperdrive-to-d1", () => {
                 logger,
                 out: join(dir, "dump.ndjson"),
                 replace,
+                tables: "settings",
                 toToken: "target-token",
                 toUrl: "https://old.example.com",
                 yes: true,
@@ -1376,6 +1377,24 @@ describe("lunora migrate d1-to-hyperdrive | hyperdrive-to-d1", () => {
             expect(checks.map((url) => new URL(url).searchParams.get("onConflict"))).toStrictEqual(["replace"]);
         });
 
+        it("refuses --replace without --tables, before exporting anything", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = vi.fn<StreamingFetchLike>();
+            const result = await runMigrateBackendCommand({
+                direction: "hyperdrive-to-d1",
+                fetchImpl,
+                fromUrl: "https://new.example.com",
+                logger: silentLogger(),
+                replace: true,
+                toUrl: "https://old.example.com",
+                yes: true,
+            });
+
+            expect(result.error).toContain("--replace needs --tables");
+            expect(fetchImpl).not.toHaveBeenCalled();
+        });
+
         it("refuses --replace against a worker that would ignore it, before writing anything", async () => {
             expect.assertions(3);
 
@@ -1397,6 +1416,7 @@ describe("lunora migrate d1-to-hyperdrive | hyperdrive-to-d1", () => {
                 logger: silentLogger(),
                 out: join(dir, "dump.ndjson"),
                 replace: true,
+                tables: "settings",
                 toToken: "target-token",
                 toUrl: "https://old.example.com",
                 yes: true,

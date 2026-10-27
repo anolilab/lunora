@@ -723,7 +723,7 @@ interface MigrateBackendOptions {
     prod?: boolean;
     /** Overwrite rows the target already holds instead of reporting them as conflicts. */
     replace?: boolean;
-    /** Comma-separated `.global()` tables to move; omit to move every global table. */
+    /** Comma-separated `.global()` tables to move; omit to move every global table (required with `replace`). */
     tables?: string;
     toToken?: string;
     /** Target deployment. Defaults to `--url`/localhost. */
@@ -789,6 +789,17 @@ const runMigrateBackendCommand = async (options: MigrateBackendOptions): Promise
     // self-migration this refuses — the guard used to skip that case.
     if (fromUrl === toUrl) {
         const error = `source and target are the same deployment — pass distinct --from-url and --to-url so the ${source} export and ${target} import don't run against one database`;
+
+        logger.error(error);
+
+        return { bytes: 0, code: EXIT_CODE.USAGE, error, exported: 0, imported: 0, replaced: 0 };
+    }
+
+    // An export with no table list also carries every shard-local table, so `--replace` would overwrite
+    // the target's shard rows with the source's copies. This command promises to move `.global()` data only.
+    if (options.replace === true && (options.tables === undefined || options.tables.trim() === "")) {
+        const error =
+            "--replace needs --tables naming the .global() tables to move: an export without a table list also carries shard-local rows, and --replace would overwrite them in the target";
 
         logger.error(error);
 

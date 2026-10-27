@@ -304,7 +304,7 @@ const runBackupRestore = async (options: BackupCommandOptions, destination: Back
         // Plain snapshot import — the off-platform / portable restore. For in-place
         // time-travel to an arbitrary moment in the last 30 days, use native PITR
         // (`lunora backup pitr` / the studio) rather than replaying a snapshot.
-        return { code: result.code, entry: matched, restored: result.inserted };
+        return { code: result.code, entry: matched, restored: result.inserted + (result.replaced ?? 0) };
     } finally {
         await snapshot.release().catch((error: unknown) => {
             options.logger.warn(`backup: could not clean up the downloaded snapshot (${error instanceof Error ? error.message : String(error)})`);
