@@ -323,7 +323,7 @@ describe("kvBrowser", () => {
             vi.fn(function ResizeObserverStub(callback: () => void) {
                 callbacks.push(callback);
 
-                return { disconnect: vi.fn(), observe: vi.fn(), unobserve: vi.fn() };
+                return { disconnect: vi.fn<() => void>(), observe: vi.fn<(target: Element) => void>(), unobserve: vi.fn<(target: Element) => void>() };
             }),
         );
 
@@ -353,5 +353,48 @@ describe("kvBrowser", () => {
         });
 
         await expect(screen.findByTestId("kv-key-row-key:0500")).resolves.toBeDefined();
+    });
+
+    it("re-reads the window when a banner mounts above the key table after it was set up", async () => {
+        // A banner mounted later is not among the siblings resize-observed at setup, so only the
+        // child-list change can tell the table that its body moved.
+        expect.assertions(2);
+
+        vi.stubGlobal(
+            "ResizeObserver",
+            // eslint-disable-next-line prefer-arrow-callback -- the stub is called with `new`, which an arrow function cannot be
+            vi.fn(function ResizeObserverStub() {
+                return { disconnect: vi.fn<() => void>(), observe: vi.fn<(target: Element) => void>(), unobserve: vi.fn<(target: Element) => void>() };
+            }),
+        );
+
+        // jsdom has no scrolling element, so the table would never observe an offset at all.
+        Object.defineProperty(document, "scrollingElement", { configurable: true, value: document.documentElement });
+
+        const seed: Record<string, { value: string }> = {};
+
+        for (let index = 0; index < 2000; index += 1) {
+            seed[`key:${String(index).padStart(4, "0")}`] = { value: "v" };
+        }
+
+        render(renderBrowser(createMockClient({ kvNamespaces: [{ binding: "CACHE" }], kvSeed: { CACHE: seed } })));
+
+        await screen.findByTestId("kv-key-row-key:0000");
+
+        expect(screen.queryByTestId("kv-key-row-key:0500")).toBeNull();
+
+        vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+            top: -500 * 33,
+        } as DOMRect);
+
+        const banner = document.createElement("p");
+
+        act(() => {
+            document.body.prepend(banner);
+        });
+
+        await expect(screen.findByTestId("kv-key-row-key:0500")).resolves.toBeDefined();
+
+        banner.remove();
     });
 });

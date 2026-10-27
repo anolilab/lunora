@@ -40,24 +40,52 @@ const scrollParentOf = (node: Element | null): Element | null => {
 };
 
 /**
- * Calls `onChange` when anything laid out above `body` (up to `boundary`) resizes. Moving the table
- * without a scroll event leaves the virtualizer's offset stale, so the offset is re-read from layout.
+ * Calls `onChange` when anything laid out above `body` (up to `boundary`) resizes, mounts or
+ * unmounts. Moving the table without a scroll event leaves the virtualizer's offset stale, so the
+ * offset is re-read from layout. A banner mounted later (a load or bulk error) is not among the
+ * siblings observed at setup, so child-list changes on the ancestors re-collect them.
  */
 const observeContentAbove = (body: Element | null, boundary: Element | null, onChange: () => void): (() => void) | undefined => {
     if (body === null || typeof ResizeObserver === "undefined") {
         return undefined;
     }
 
-    const observer = new ResizeObserver(onChange);
+    const resizeObserver = new ResizeObserver(onChange);
+    const ancestors: Element[] = [];
 
     for (let node: Element | null = body; node !== null && node !== boundary; node = node.parentElement) {
-        for (let sibling = node.previousElementSibling; sibling !== null; sibling = sibling.previousElementSibling) {
-            observer.observe(sibling);
+        ancestors.push(node);
+    }
+
+    const observeSiblings = (): void => {
+        resizeObserver.disconnect();
+
+        for (const node of ancestors) {
+            for (let sibling = node.previousElementSibling; sibling !== null; sibling = sibling.previousElementSibling) {
+                resizeObserver.observe(sibling);
+            }
+        }
+    };
+
+    observeSiblings();
+
+    const mutationObserver =
+        typeof MutationObserver === "undefined"
+            ? undefined
+            : new MutationObserver(() => {
+                  observeSiblings();
+                  onChange();
+              });
+
+    for (const node of ancestors) {
+        if (node.parentElement !== null) {
+            mutationObserver?.observe(node.parentElement, { childList: true });
         }
     }
 
     return () => {
-        observer.disconnect();
+        mutationObserver?.disconnect();
+        resizeObserver.disconnect();
     };
 };
 
