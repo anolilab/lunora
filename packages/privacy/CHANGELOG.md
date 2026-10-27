@@ -1,3 +1,48 @@
+## @lunora/privacy [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.35...@lunora/privacy@1.0.0-alpha.36) (2026-10-27)
+
+### ⚠ BREAKING CHANGES
+
+* an evaluation error in `@lunora/auth` or a spec module now surfaces on
+the first event (every request 500s) instead of failing the upload; the pre-deploy
+smoke-load covers lazy builds only. `serverQuery` on the composed app is async, so a
+synchronous throw while building the worker arrives as a rejected promise. The codegen
+result gains `generated.authModule`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* perf(privacy): load the archive writers on the first export
+
+`definePrivacy` reaches `export.ts`, which imported `archive.ts` statically, and that
+module imports `@cantoo/pdf-lib` (with culori, fflate, html-entities and an HTML parser
+behind it; pdf-lib declares no `sideEffects`, so none of it tree-shakes). Every Worker that
+declares a privacy policy therefore evaluated about 1.5 MB of PDF and ZIP code at startup,
+although only `assembleExport`, already async and run inside a workflow step, uses it.
+It now loads `./archive` with `import()` there; the manifest, ZIP and PDF it builds are
+unchanged.
+
+`@lunora/privacy` bundled alone with the workerd conditions (esbuild metafile, static
+edges only): 659 modules / 2,491 KiB -> 303 modules / 938 KiB. Importing that bundle in
+a fresh Node process, 11 runs, median / min: 27.2 / 26.8 ms -> 16.2 / 13.8 ms. The first
+export run per isolate pays the load instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(plans): record the generated-app cheap levers in plan 490
+
+### Performance Improvements
+
+* cut Worker startup CPU (refs [#1166](https://github.com/anolilab/lunora/issues/1166)) ([#1352](https://github.com/anolilab/lunora/issues/1352)) ([12dc5a4](https://github.com/anolilab/lunora/commit/12dc5a4a0f469b4c9c67754ca715e8fcffdfba5c)), closes [#1165](https://github.com/anolilab/lunora/issues/1165) [#1165](https://github.com/anolilab/lunora/issues/1165) [#1175](https://github.com/anolilab/lunora/issues/1175)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.244
+* **@lunora/auth:** upgraded to 1.0.0-alpha.237
+
 ## @lunora/privacy [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.34...@lunora/privacy@1.0.0-alpha.35) (2026-10-27)
 
 
