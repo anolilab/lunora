@@ -246,7 +246,7 @@ registry_items:
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
 
-# The auth-ui → registry/auth-ui-* copy-sync check.
+# The auth-ui → registry/auth-ui-* copy-sync check, and the ratelimit copies (including the one the CLI overlay embeds).
 registry_sync:
     - "packages/auth-ui/**"
     - "registry/**"
@@ -254,6 +254,7 @@ registry_sync:
     - "scripts/sync-ratelimit-copies.mjs"
     - "templates/*/lunora/ratelimit/**"
     - "examples/*/lunora/ratelimit/**"
+    - "packages/cli/src/commands/init/overlay/apply.ts"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
 
