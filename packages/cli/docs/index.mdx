@@ -94,6 +94,8 @@ lunora seed [--table <t>] [--count n]   # deterministic fake data from schema.ts
             [--seed n] [--dry-run] [--reset] [--format json]
 lunora shards prune [--tables <a,b>]    # drop empty shards from the shard registry
             [--dry-run] [--format json]
+lunora workflow <create|send-event> ... # start a workflow instance / send it an event
+            [--id <id>] [--params <json>] [--payload <json>] [--format json]
 lunora introspect [--url <u>] [--tables <t1,t2>]  # scaffold schema.ts from an
                   [--schema <s>] [--no-procedures] # existing Postgres/MySQL DB
                   [--format json]
@@ -1431,6 +1433,24 @@ Each shard checks its own rows, so a shard written during the prune keeps (or
 regains) its entry. A shard the prune cannot reach keeps its entry too, and the
 command exits `1` so you can re-run it. Needs a registry: an app without
 `.shardRegistry(...)` gets a `400`. See [Sharding](/docs/concepts/sharding#the-shard-registry).
+
+### `lunora workflow`
+
+Starts a workflow instance or delivers an event to a waiting one, through the same
+admin operations the Studio Workflows panel uses. The target workflow is the export
+name in `lunora/workflows.ts`.
+
+```bash
+lunora workflow create onboarding --params '{"userId":"u1"}'   # start an instance
+lunora workflow create onboarding --id user-u1                 # ... under an explicit id
+lunora workflow send-event onboarding user-u1 approved --payload '{"by":"ada"}'
+```
+
+`create` prints the new instance id and its initial status. `send-event` takes the
+instance id and the event type positionally; the type must match a
+`defineWorkflowEvent` declared in `lunora/`, and `lunora:`-prefixed types are
+reserved. Both need the admin token (`--token`, `LUNORA_ADMIN_TOKEN`, or `.dev.vars`
+for a local target) and exit non-zero when the worker refuses the call.
 
 ### `lunora introspect`
 
