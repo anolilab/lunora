@@ -102,23 +102,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:clear",
@@ -245,23 +245,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:count",
@@ -388,23 +388,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:create",
@@ -542,23 +542,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:detail",
@@ -704,23 +704,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:find",
@@ -873,23 +873,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:labels",
@@ -1019,23 +1019,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:match",
@@ -1168,23 +1168,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:page",
@@ -1335,23 +1335,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:pick",
@@ -1524,23 +1524,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:self",
@@ -1667,23 +1667,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:stats",
@@ -1816,23 +1816,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:summary",
@@ -1971,23 +1971,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:tags",
@@ -2117,23 +2117,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:totals",
@@ -2266,23 +2266,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:type",
@@ -2409,23 +2409,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "ledger:balances",
@@ -2598,23 +2598,23 @@
         {
           "code": -32013,
           "data": {
-            "code": "UNIQUE_INDEX_DUPLICATES"
-          },
-          "message": "UNIQUE_INDEX_DUPLICATES"
-        },
-        {
-          "code": -32014,
-          "data": {
             "code": "UNPROCESSABLE"
           },
           "message": "UNPROCESSABLE"
         },
         {
-          "code": -32015,
+          "code": -32014,
           "data": {
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "ledger:charge",

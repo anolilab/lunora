@@ -1180,6 +1180,17 @@ describe("runDoctor", () => {
             expect(finding?.fix).toContain("redact_query_string");
         });
 
+        it("names traces, not request logs, when only traces are on", async () => {
+            expect.assertions(2);
+
+            seed(workdir, wranglerWith({ observability: { enabled: false, traces: { enabled: true } } }));
+
+            const finding = redactionFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }));
+
+            expect(finding?.message).toContain("traces keep query strings");
+            expect(finding?.message).not.toContain("request logs");
+        });
+
         it("names each env whose own block keeps query strings", async () => {
             expect.assertions(2);
 

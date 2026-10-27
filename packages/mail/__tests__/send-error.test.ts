@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import createMailer from "../src/create-mailer";
+import { isRetryableProviderError } from "../src/provider-transport";
 import { consumeQueuedSend } from "../src/queue";
 import { isRetryableMailError, MailSendError } from "../src/send-error";
 
@@ -11,6 +12,16 @@ describe("mail send classification", () => {
         expect(isRetryableMailError(new MailSendError({ retryable: true }))).toBe(true);
         expect(isRetryableMailError(new MailSendError({ retryable: false }))).toBe(false);
         expect(isRetryableMailError(new Error("unclassified"))).toBe(false);
+    });
+
+    it("reads the provider status from a wrapped cause", () => {
+        expect.assertions(3);
+
+        const wrap = (cause: Error): Error => new Error("send failed", { cause });
+
+        expect(isRetryableProviderError(wrap(Object.assign(new Error("refused"), { code: "403" })))).toBe(false);
+        expect(isRetryableProviderError(wrap(Object.assign(new Error("busy"), { code: 503 })))).toBe(true);
+        expect(isRetryableProviderError(wrap(new Error("socket reset")))).toBe(true);
     });
 
     it("treats a transport error it did not classify as retryable, without leaking its text", async () => {

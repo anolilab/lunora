@@ -14,7 +14,7 @@ import type { Finding } from "./handler";
  * block is the reconciled default, which redacts, so it is never flagged.
  */
 const keepsQueryStrings = (observability: WranglerObservability | undefined): boolean => {
-    if (observability === undefined || observability.redact_query_string === true) {
+    if (!observability || observability.redact_query_string === true) {
         return false;
     }
 
@@ -23,8 +23,15 @@ const keepsQueryStrings = (observability: WranglerObservability | undefined): bo
     return logs.enabled || traces.enabled;
 };
 
+/** Which enabled signals persist the request URL, named so a trace-only block is not told its logs leak. */
+const leakingSignals = (observability: WranglerObservability | undefined): string => {
+    const { logs, traces } = resolveObservabilitySampling(observability);
+
+    return [logs.enabled && "request logs", traces.enabled && "traces"].filter(Boolean).join(" and ");
+};
+
 /**
- * WARN (`observability-query-unredacted`) when request logging is on without
+ * WARN (`observability-query-unredacted`) when request logging or tracing is on without
  * `redact_query_string`. Auth links carry their secret in the query (`?token=`),
  * and Workers Logs stores the request URL as received, so each emailed token is
  * persisted. Lunora writes the flag into a new block; an existing block keeps
@@ -36,14 +43,17 @@ const checkQueryStringRedaction = (parsed: WranglerConfig | undefined, findings:
     }
 
     const scopes: string[] = [];
+    const signals = new Set<string>();
 
     if (keepsQueryStrings(parsed.observability)) {
         scopes.push("top level");
+        signals.add(leakingSignals(parsed.observability));
     }
 
     for (const [name, environment] of Object.entries(parsed.env ?? {})) {
         if (keepsQueryStrings(environment.observability)) {
             scopes.push(`env.${name}`);
+            signals.add(leakingSignals(environment.observability));
         }
     }
 
@@ -55,7 +65,7 @@ const checkQueryStringRedaction = (parsed: WranglerConfig | undefined, findings:
         code: "observability-query-unredacted",
         fix: 'Set "redact_query_string": true in each observability block listed above in wrangler.jsonc. Lunora never changes a value you set.',
         level: "warn",
-        message: `request logs keep query strings (redact_query_string is not true) for ${scopes.join(", ")}. Emailed auth links carry their token in the query, so that token is stored with the request URL.`,
+        message: `${[...signals].join(" / ")} keep query strings (redact_query_string is not true) for ${scopes.join(", ")}. Emailed auth links carry their token in the query, so that token is stored with the request URL.`,
     });
 };
 

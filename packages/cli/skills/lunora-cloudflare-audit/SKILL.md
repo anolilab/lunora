@@ -47,7 +47,7 @@ alerts setup` from an audit. Show the change and get explicit approval first.
 
     `lunora doctor` reports `paid-product-bound` (a metered binding is declared:
     Workers AI, Browser, Images), `observability-full-sampling`,
-    `observability-query-unredacted` (request logs keep the `?token=` in auth links),
+    `observability-query-unredacted` (request logs or traces keep the `?token=` in auth links),
     `r2-lifecycle-unset`, `cpu-limit-missing` and `do-class-budget-*`.
     `lunora advisor` lint ids are listed below.
 

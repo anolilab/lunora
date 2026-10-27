@@ -88,7 +88,20 @@ const isRetryableProviderError = (rawError: unknown): boolean => {
         return true;
     }
 
-    const code = "code" in rawError ? rawError.code : undefined;
+    // `@visulima/email` wraps a callback's failure as a `cause`, so the status can sit one or more levels down.
+    let code: unknown;
+
+    for (let current: unknown = rawError, depth = 0; current instanceof Error && depth < 5; current = current.cause, depth += 1) {
+        const candidate = "code" in current ? current.code : undefined;
+
+        if (httpStatusOf(candidate) !== undefined) {
+            code = candidate;
+            break;
+        }
+
+        code ??= candidate;
+    }
+
     const status = httpStatusOf(code);
 
     if (status !== undefined && status >= 100 && status <= 599) {

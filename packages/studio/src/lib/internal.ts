@@ -7,7 +7,13 @@ const ownHint = (hint: unknown): ReadonlyArray<string> | undefined => {
         return [hint];
     }
 
-    return Array.isArray(hint) ? hint.filter((line): line is string => typeof line === "string") : undefined;
+    if (!Array.isArray(hint)) {
+        return undefined;
+    }
+
+    const lines = hint.filter((line): line is string => typeof line === "string");
+
+    return lines.length > 0 ? lines : undefined;
 };
 
 /** A resolved hint as the one string a surface renders: a string as is, lines joined. */
