@@ -8,11 +8,11 @@ import type { Id } from "./dataModel.js";
 
 export interface ApiTypes {
     requests: {
-        cancelRequest: FunctionReference<"mutation", { requestId: string }, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: RequestStatus; type: RequestType }>;
-        downloadLink: FunctionReference<"mutation", { requestId: string }, unknown>;
-        myRequests: FunctionReference<"query", {}, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: RequestStatus; type: RequestType }[]>;
-        requestErasure: FunctionReference<"mutation", {}, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: RequestStatus; type: RequestType }>;
-        requestExport: FunctionReference<"mutation", {}, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: RequestStatus; type: RequestType }>;
+        cancelRequest: FunctionReference<"mutation", { requestId: string }, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;
+        downloadLink: FunctionReference<"mutation", { requestId: string }, string>;
+        myRequests: FunctionReference<"query", {}, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }[]>;
+        requestErasure: FunctionReference<"mutation", {}, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;
+        requestExport: FunctionReference<"mutation", {}, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;
     };
     tasks: {
         addTask: FunctionReference<"mutation", { title: string }, Id<"tasks">>;
