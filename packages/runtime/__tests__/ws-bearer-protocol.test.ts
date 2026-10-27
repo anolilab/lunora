@@ -143,4 +143,28 @@ describe("ws upgrade — bearer offered as a Sec-WebSocket-Protocol", () => {
         expect(forwarded.headers.get("x-lunora-userid")).toBeNull();
         expect(forwarded.headers.get("sec-websocket-protocol")).toBe("lunora");
     });
+
+    it("authenticates a voice socket from the subprotocol bearer and strips it before the voice DO", async () => {
+        expect.assertions(4);
+
+        const { forwarded, namespace } = recordingShard();
+        const worker = createWorker({
+            authorizeShard: ({ identity }) => identity?.userId === "alice",
+            resolveIdentity,
+            shardDO: namespace,
+            voiceAgents: { support: namespace },
+        });
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/voice/support?threadKey=t1", {
+                headers: { "sec-websocket-protocol": `lunora, ${bearerProtocol("user:alice")}`, upgrade: "websocket" },
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        expect(forwarded[0]?.headers.get("x-lunora-userid")).toBe("alice");
+        expect(forwarded[0]?.headers.get("sec-websocket-protocol")).toBe("lunora");
+        expect(forwarded[0]?.headers.get("authorization")).toBeNull();
+    });
 });
