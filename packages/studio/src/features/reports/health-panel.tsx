@@ -243,6 +243,122 @@ const authSeries = (auth: AuthMetrics | null | undefined): { attempts: number[];
     };
 };
 
+/** The banner's verdict line and its explanation for each overall level. */
+const statusCopy = (overall: SloLevel, t: ReturnType<typeof useT>): { description: string; label: string } => {
+    if (overall === "crit") {
+        return { description: t("One or more service levels are breached."), label: t("Critical") };
+    }
+
+    if (overall === "warn") {
+        return { description: t("Some service levels need attention."), label: t("Degraded") };
+    }
+
+    return { description: t("All service levels are within target."), label: t("All systems healthy") };
+};
+
+/** The at-a-glance verdict plus headline throughput, error rate and connection state. */
+const HealthStatusBanner = ({
+    errorLevel,
+    liveError,
+    metricsError,
+    overall,
+    requestSeries,
+    totals,
+}: {
+    readonly errorLevel: SloLevel;
+    readonly liveError: string | undefined;
+    readonly metricsError: null | string;
+    readonly overall: SloLevel;
+    readonly requestSeries: ReadonlyArray<number>;
+    readonly totals: SloTotals | null;
+}): ReactElement => {
+    const t = useT();
+    const { description: statusDescription, label: statusLabel } = statusCopy(overall, t);
+
+    return (
+        <Card className="gap-0 py-0">
+            <div className="flex flex-wrap items-center justify-between gap-4 p-4">
+                <div className="flex items-center gap-3">
+                    <span aria-hidden="true" className={cn("flex size-10 shrink-0 items-center justify-center rounded-full", LEVEL_RING[overall])}>
+                        <span className={cn("size-3 rounded-full", LEVEL_DOT[overall])} />
+                    </span>
+                    <div className="grid leading-tight">
+                        <span className="text-sm font-semibold text-foreground" data-testid="hl-status">
+                            {statusLabel}
+                        </span>
+                        <span className="text-[13px] text-muted-foreground">{statusDescription}</span>
+                    </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-4">
+                    <div className="text-end">
+                        <div className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">{t("Requests")}</div>
+                        <div className="flex items-center justify-end gap-2">
+                            {requestSeries.length >= 2 && (
+                                <Sparkline
+                                    ariaLabel={t("Requests over time")}
+                                    className="h-6 w-20 text-foreground"
+                                    series={requestSeries}
+                                    testId="hl-spark-requests"
+                                />
+                            )}
+                            <span className="text-lg font-semibold tabular-nums text-foreground" data-testid="hl-requests">
+                                {(totals?.requests ?? 0).toString()}
+                            </span>
+                        </div>
+                    </div>
+                    <span aria-hidden="true" className="h-9 w-px bg-border" />
+                    <div className="text-end">
+                        <div className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">{t("Error rate")}</div>
+                        <div className={cn("text-lg font-semibold tabular-nums", LEVEL_TEXT[errorLevel])} data-testid="hl-error-rate">
+                            {totals === null ? "—" : ratePercent(totals.errors, totals.requests)}
+                        </div>
+                    </div>
+                    <span aria-hidden="true" className="h-9 w-px bg-border" />
+                    <div className="flex items-center gap-2">
+                        <ConnectionBadge />
+                        <LiveError message={liveError} prefix="hl" />
+                    </div>
+                </div>
+            </div>
+            {metricsError !== null && (
+                <div className="border-t border-border bg-destructive/5 px-4 py-2 text-sm text-destructive" data-testid="hl-metrics-error" role="alert">
+                    {metricsError}
+                </div>
+            )}
+            {metricsError === null && totals?.historyTruncated === true && (
+                <div className="border-t border-border bg-warning/5 px-4 py-2 text-sm text-muted-foreground" data-testid="hl-history-truncated">
+                    {t("Showing a partial request/error history — one or more shards have more data than the trend chart can display.")}
+                </div>
+            )}
+        </Card>
+    );
+};
+
+/** Every shard key the studio remembers having browsed. */
+const ShardsSeenCard = ({ shards }: { readonly shards: ReadonlyArray<string> }): ReactElement => {
+    const t = useT();
+
+    return (
+        <Card className="gap-0 py-0">
+            <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+                <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Shards seen")}</span>
+                <Badge data-testid="hl-shard-count" variant="outline">
+                    {shards.length}
+                </Badge>
+            </header>
+            {shards.length > 0 && (
+                <ul className="flex flex-wrap gap-1.5 p-4">
+                    {shards.map((shard) => (
+                        <li data-testid="hl-shard" key={shard}>
+                            <Badge variant="secondary">{shard}</Badge>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </Card>
+    );
+};
+
 /**
  * App-level health & SLO overview. On top of the original single-shard snapshot
  * (recent errors, request/error counts, shards seen) it composes the
@@ -408,78 +524,17 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
     const backlogLevel: SloLevel = scheduler === null ? "ok" : countLevel(scheduler.backlog, BACKLOG_WARN, BACKLOG_CRIT);
     const overall = worstLevel([errorLevel, authLevel, backlogLevel, migration.level]);
 
-    let statusLabel: string;
-    let statusDescription: string;
-
-    if (overall === "crit") {
-        statusLabel = t("Critical");
-        statusDescription = t("One or more service levels are breached.");
-    } else if (overall === "warn") {
-        statusLabel = t("Degraded");
-        statusDescription = t("Some service levels need attention.");
-    } else {
-        statusLabel = t("All systems healthy");
-        statusDescription = t("All service levels are within target.");
-    }
-
     return (
         <div className="flex flex-col gap-6" data-testid="lunora-health">
             {/* Overall status banner — the at-a-glance verdict plus headline throughput. */}
-            <Card className="gap-0 py-0">
-                <div className="flex flex-wrap items-center justify-between gap-4 p-4">
-                    <div className="flex items-center gap-3">
-                        <span aria-hidden="true" className={cn("flex size-10 shrink-0 items-center justify-center rounded-full", LEVEL_RING[overall])}>
-                            <span className={cn("size-3 rounded-full", LEVEL_DOT[overall])} />
-                        </span>
-                        <div className="grid leading-tight">
-                            <span className="text-sm font-semibold text-foreground" data-testid="hl-status">
-                                {statusLabel}
-                            </span>
-                            <span className="text-[13px] text-muted-foreground">{statusDescription}</span>
-                        </div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-4">
-                        <div className="text-end">
-                            <div className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">{t("Requests")}</div>
-                            <div className="flex items-center justify-end gap-2">
-                                {trend.requests.length >= 2 && (
-                                    <Sparkline
-                                        ariaLabel={t("Requests over time")}
-                                        className="h-6 w-20 text-foreground"
-                                        series={trend.requests}
-                                        testId="hl-spark-requests"
-                                    />
-                                )}
-                                <span className="text-lg font-semibold tabular-nums text-foreground" data-testid="hl-requests">
-                                    {(totals?.requests ?? 0).toString()}
-                                </span>
-                            </div>
-                        </div>
-                        <span aria-hidden="true" className="h-9 w-px bg-border" />
-                        <div className="text-end">
-                            <div className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">{t("Error rate")}</div>
-                            <div className={cn("text-lg font-semibold tabular-nums", LEVEL_TEXT[errorLevel])} data-testid="hl-error-rate">
-                                {totals === null ? "—" : ratePercent(totals.errors, totals.requests)}
-                            </div>
-                        </div>
-                        <span aria-hidden="true" className="h-9 w-px bg-border" />
-                        <div className="flex items-center gap-2">
-                            <ConnectionBadge />
-                            <LiveError message={liveError} prefix="hl" />
-                        </div>
-                    </div>
-                </div>
-                {metricsError !== null && (
-                    <div className="border-t border-border bg-destructive/5 px-4 py-2 text-sm text-destructive" data-testid="hl-metrics-error" role="alert">
-                        {metricsError}
-                    </div>
-                )}
-                {metricsError === null && totals?.historyTruncated === true && (
-                    <div className="border-t border-border bg-warning/5 px-4 py-2 text-sm text-muted-foreground" data-testid="hl-history-truncated">
-                        {t("Showing a partial request/error history — one or more shards have more data than the trend chart can display.")}
-                    </div>
-                )}
-            </Card>
+            <HealthStatusBanner
+                errorLevel={errorLevel}
+                liveError={liveError}
+                metricsError={metricsError}
+                overall={overall}
+                requestSeries={trend.requests}
+                totals={totals}
+            />
 
             {/* Service-level KPIs — status-coloured, with trend sparklines. */}
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" data-testid="hl-slo">
@@ -522,24 +577,7 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
             {/* Functions by error rate + recent errors, side by side. */}
             <HealthDigest errorCount={recentErrors.length} logsError={logsError} topErrors={topErrors} worstFunctions={worstFunctions} />
 
-            {/* Shards seen. */}
-            <Card className="gap-0 py-0">
-                <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-                    <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Shards seen")}</span>
-                    <Badge data-testid="hl-shard-count" variant="outline">
-                        {recentShards.length}
-                    </Badge>
-                </header>
-                {recentShards.length > 0 && (
-                    <ul className="flex flex-wrap gap-1.5 p-4">
-                        {recentShards.map((shard) => (
-                            <li data-testid="hl-shard" key={shard}>
-                                <Badge variant="secondary">{shard}</Badge>
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </Card>
+            <ShardsSeenCard shards={recentShards} />
         </div>
     );
 };

@@ -201,6 +201,41 @@ describe("metricsPanel", () => {
         expect(screen.queryByTestId("mt-sparkline-empty")).toBeNull();
     });
 
+    it("drops the previous shard's sparkline when a snapshot from another shard lands", async () => {
+        expect.hasAssertions();
+
+        const mock = createClient();
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("mt-stats");
+        await waitFor(() => {
+            if (mock.subscribe.mock.calls.length === 0) {
+                throw new Error("not subscribed yet");
+            }
+        });
+
+        act(() => {
+            mock.emit(ADMIN_FUNCTIONS.getMetrics, { ...METRICS, requests: 15 });
+        });
+        await waitFor(() => {
+            expect(screen.getByTestId("mt-requests").textContent).toBe("15");
+        });
+        act(() => {
+            mock.emit(ADMIN_FUNCTIONS.getMetrics, { ...METRICS, requests: 20 });
+        });
+        await screen.findByTestId("mt-sparkline");
+
+        // Higher counters on another shard must not extend the first shard's series.
+        act(() => {
+            mock.emit(ADMIN_FUNCTIONS.getMetrics, { ...METRICS, requests: 500, shard: "tenant-b" });
+        });
+
+        await screen.findByTestId("mt-sparkline-empty");
+
+        expect(screen.queryByTestId("mt-sparkline")).toBeNull();
+    });
+
     it("surfaces a rejected admin subscription as a live-unavailable notice", async () => {
         expect.assertions(2);
 

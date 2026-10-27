@@ -43,6 +43,105 @@ interface PermissionsPlaygroundProps {
 
 const formatValue = (value: unknown): string => (value === undefined ? "undefined" : JSON.stringify(value, jsonRowReplacer, 2));
 
+/** A probe's verdict: allowed (with the result), denied, not run, or an error that is no access verdict. */
+const ProbeOutcomeView = ({ outcome }: { readonly outcome: ProbeOutcome }): ReactElement => {
+    const t = useT();
+
+    if (outcome.kind === "allowed") {
+        return (
+            <div className="flex flex-col gap-2" data-testid="pp-outcome-allowed">
+                <Badge variant="secondary">{t("Allowed")}</Badge>
+                <pre className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs" data-testid="pp-result">
+                    {formatValue(outcome.value)}
+                </pre>
+            </div>
+        );
+    }
+
+    if (outcome.kind === "denied") {
+        return (
+            <div className="flex flex-col gap-2" data-testid="pp-outcome-denied">
+                <Badge variant="destructive">{t("Denied")}</Badge>
+                <pre
+                    className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs text-destructive"
+                    data-testid="pp-denied"
+                    role="alert"
+                >
+                    {outcome.message}
+                </pre>
+            </div>
+        );
+    }
+
+    if (outcome.kind === "errored") {
+        return (
+            <div className="flex flex-col gap-2" data-testid="pp-outcome-errored">
+                <Badge variant="outline">{t("Errored")}</Badge>
+                <p className="text-sm text-muted-foreground">
+                    {t("The call failed for a reason that is not an access verdict, so it says nothing about the policy.")}
+                </p>
+                <pre className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs" data-testid="pp-errored" role="alert">
+                    {outcome.message}
+                </pre>
+            </div>
+        );
+    }
+
+    return (
+        <div className="flex flex-col gap-2" data-testid="pp-outcome-invalid">
+            <Badge variant="outline">{t("Not run")}</Badge>
+            <p className="text-sm text-muted-foreground" data-testid="pp-invalid" role="status">
+                {outcome.message}
+            </p>
+        </div>
+    );
+};
+
+/** The run button — behind a confirmation when the function writes — and the identity it runs as. */
+const ProbeRunControls = ({
+    disabled,
+    executesWrites,
+    functionPath,
+    onRun,
+    running,
+    userId,
+}: {
+    readonly disabled: boolean;
+    readonly executesWrites: boolean;
+    readonly functionPath: string;
+    readonly onRun: () => void;
+    readonly running: boolean;
+    readonly userId: string;
+}): ReactElement => {
+    const t = useT();
+    const label = running ? t("Probing…") : t("Run probe");
+
+    return (
+        <div className="flex items-center gap-2">
+            {executesWrites ? (
+                // A mutation or action really executes under the forged identity — guard it.
+                <ConfirmButton
+                    confirmLabel={t("This will execute `{functionPath}` as user `{userId}`.", { functionPath, userId })}
+                    disabled={disabled}
+                    onConfirm={onRun}
+                    testId="pp-run"
+                >
+                    {label}
+                </ConfirmButton>
+            ) : (
+                <Button data-testid="pp-run" disabled={disabled} onClick={onRun} type="button">
+                    {label}
+                </Button>
+            )}
+            {userId !== "" && (
+                <Badge data-testid="pp-as-badge" variant="secondary">
+                    {t("as {userId}", { userId })}
+                </Badge>
+            )}
+        </div>
+    );
+};
+
 /**
  * The Permissions Playground — pick a registered function and an identity
  * (userId), then run it under that forged identity via the existing admin
@@ -271,31 +370,14 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
                     />
                 </div>
 
-                <div className="flex items-center gap-2">
-                    {executesWrites ? (
-                        // A mutation or action really executes under the forged identity — guard it.
-                        <ConfirmButton
-                            confirmLabel={t("This will execute `{functionPath}` as user `{userId}`.", {
-                                functionPath: effectivePath,
-                                userId: runAsUserId.trim(),
-                            })}
-                            disabled={runDisabled}
-                            onConfirm={runOnce}
-                            testId="pp-run"
-                        >
-                            {running ? t("Probing…") : t("Run probe")}
-                        </ConfirmButton>
-                    ) : (
-                        <Button data-testid="pp-run" disabled={runDisabled} onClick={runOnce} type="button">
-                            {running ? t("Probing…") : t("Run probe")}
-                        </Button>
-                    )}
-                    {runAsUserId.trim() !== "" && (
-                        <Badge data-testid="pp-as-badge" variant="secondary">
-                            {t("as {userId}", { userId: runAsUserId.trim() })}
-                        </Badge>
-                    )}
-                </div>
+                <ProbeRunControls
+                    disabled={runDisabled}
+                    executesWrites={executesWrites}
+                    functionPath={effectivePath}
+                    onRun={runOnce}
+                    running={running}
+                    userId={runAsUserId.trim()}
+                />
             </div>
 
             {argsError !== null && (
@@ -304,48 +386,7 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
                 </p>
             )}
 
-            {outcome !== null && outcome.kind === "allowed" && (
-                <div className="flex flex-col gap-2" data-testid="pp-outcome-allowed">
-                    <Badge variant="secondary">{t("Allowed")}</Badge>
-                    <pre className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs" data-testid="pp-result">
-                        {formatValue(outcome.value)}
-                    </pre>
-                </div>
-            )}
-
-            {outcome !== null && outcome.kind === "invalid" && (
-                <div className="flex flex-col gap-2" data-testid="pp-outcome-invalid">
-                    <Badge variant="outline">{t("Not run")}</Badge>
-                    <p className="text-sm text-muted-foreground" data-testid="pp-invalid" role="status">
-                        {outcome.message}
-                    </p>
-                </div>
-            )}
-
-            {outcome !== null && outcome.kind === "errored" && (
-                <div className="flex flex-col gap-2" data-testid="pp-outcome-errored">
-                    <Badge variant="outline">{t("Errored")}</Badge>
-                    <p className="text-sm text-muted-foreground">
-                        {t("The call failed for a reason that is not an access verdict, so it says nothing about the policy.")}
-                    </p>
-                    <pre className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs" data-testid="pp-errored" role="alert">
-                        {outcome.message}
-                    </pre>
-                </div>
-            )}
-
-            {outcome !== null && outcome.kind === "denied" && (
-                <div className="flex flex-col gap-2" data-testid="pp-outcome-denied">
-                    <Badge variant="destructive">{t("Denied")}</Badge>
-                    <pre
-                        className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs text-destructive"
-                        data-testid="pp-denied"
-                        role="alert"
-                    >
-                        {outcome.message}
-                    </pre>
-                </div>
-            )}
+            {outcome !== null && <ProbeOutcomeView outcome={outcome} />}
         </div>
     );
 };
