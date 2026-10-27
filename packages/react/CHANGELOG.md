@@ -1,3 +1,13 @@
+## @lunora/react [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.266...@lunora/react@1.0.0-alpha.267) (2026-10-27)
+
+### Performance Improvements
+
+* **react:** skip foreign cache events in usePaginatedQuery ([#1371](https://github.com/anolilab/lunora/issues/1371)) ([1956a48](https://github.com/anolilab/lunora/commit/1956a487f0a1f7f105ad1e6d503676d2afce55c8))
+
+### Code Refactoring
+
+* **client:** host the framework-neutral auth and query-options cores ([#1358](https://github.com/anolilab/lunora/issues/1358)) ([861397a](https://github.com/anolilab/lunora/commit/861397afe2b363999bbcd1400d6a0190715c6fee))
+
 ## @lunora/react [1.0.0-alpha.266](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.265...@lunora/react@1.0.0-alpha.266) (2026-10-26)
 
 
