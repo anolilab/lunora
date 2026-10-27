@@ -1,3 +1,15 @@
+## @lunora/angular [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.240...@lunora/angular@1.0.0-alpha.241) (2026-10-27)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.257
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.175
+
 ## @lunora/angular [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.239...@lunora/angular@1.0.0-alpha.240) (2026-10-27)
 
 
