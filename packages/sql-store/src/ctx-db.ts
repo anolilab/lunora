@@ -1033,16 +1033,6 @@ const runSqlCdcMigration = async (exec: SqlCtxExec, dialect: SqlDialect): Promis
         unique: false,
     });
 
-    // Lets the retention sweep ask "has anything expired?" with a seek. `seq`
-    // order cannot answer it: writers stamp `ts` with their own clocks, so the
-    // lowest `seq` is not the oldest `ts`.
-    await createIndexIfNotExists(exec, dialect, {
-        columns: sql`${sql.identifier("ts")}`,
-        name: CDC_LOG_TABLE_TS_INDEX,
-        table: CDC_LOG_TABLE,
-        unique: false,
-    });
-
     // The sweep lease. One row, and it is the whole of the cross-shard
     // coordination: see {@link sweepSqlCdcRetention}.
     await queryRun(
@@ -1131,7 +1121,24 @@ const sweepSqlCdcRetention = async (exec: SqlCtxExec, dialect: SqlDialect, reten
 
     // The DELETE below walks the log in `seq` order, so with nothing expired it
     // reads every row to delete none. This probe answers the same question
-    // through the `ts` index.
+    // through a `ts` index; `seq` order cannot, because writers stamp `ts` with
+    // their own clocks and the lowest `seq` is not the oldest `ts`.
+    //
+    // The index is ensured here rather than in the CDC migration: only a store
+    // with retention reads it, and the migration is memoised per provisioning
+    // scope, so a store that enables retention later would never get it there.
+    // Once per lease window, so the repeat is a no-op round trip a minute. On
+    // Postgres it builds concurrently so an upgrade does not stall writers
+    // behind a build over a long log; a build that fails part-way leaves an
+    // invalid index, which only costs the probe its seek.
+    await createIndexIfNotExists(exec, dialect, {
+        columns: sql`${sql.identifier("ts")}`,
+        concurrently: true,
+        name: CDC_LOG_TABLE_TS_INDEX,
+        table: CDC_LOG_TABLE,
+        unique: false,
+    });
+
     const expired = await queryAll(
         exec,
         dialect,

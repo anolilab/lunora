@@ -263,6 +263,20 @@ describe("createSqlCtxDb — the changed-tables poll", () => {
         expect({ ...harness.database.prepare(`SELECT COUNT(*) AS n FROM "__cdc_log"`).get() }).toStrictEqual({ n: LOG_ROWS });
     });
 
+    it("leaves the log without a ts index until a retention sweep runs", async () => {
+        // Only the sweep's probe reads it; a log kept forever should not pay for it on every append.
+        expect.assertions(2);
+
+        const tsIndex = (): unknown =>
+            harness.database.prepare(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'index' AND name = '__cdc_log_ts'`).get()?.["n"];
+
+        expect(tsIndex()).toBe(0);
+
+        await sweepSqlCdcRetention(harness.exec, dialect, 10_000, 9999);
+
+        expect(tsIndex()).toBe(1);
+    });
+
     it("still deletes the expired rows", async () => {
         expect.assertions(1);
 
