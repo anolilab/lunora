@@ -1537,6 +1537,10 @@ const SCHEDULE_OUTBOX_BATCH = 32;
  * rebalance, short enough that a job the scheduler will never accept (a caller
  * error it refuses as `INVALID_INPUT`) stops costing alarms and starts being a
  * reported fact instead.
+ *
+ * A `retry.forever` call is not parked here: it is retried at the ladder's last
+ * rung for as long as the scheduler keeps failing, and this count is only where
+ * the one warning that it is still waiting gets logged.
  */
 const SCHEDULE_OUTBOX_MAX_ATTEMPTS = 8;
 
@@ -1558,6 +1562,91 @@ const SCHEDULE_OUTBOX_FIRST_RETRY_MS = 5000;
 /** The ladder's rung for `attempts` failures so far, flattening at its last entry. */
 const scheduleOutboxBackoffFor = (attempts: number): number =>
     SCHEDULE_OUTBOX_BACKOFF_MS[Math.min(attempts, SCHEDULE_OUTBOX_BACKOFF_MS.length - 1)] ?? SCHEDULE_OUTBOX_FIRST_RETRY_MS;
+
+/**
+ * The attempt count after one more failure. Saturates rather than overflowing: a
+ * `retry.forever` entry is never parked, so its count has no other ceiling.
+ */
+const nextScheduleOutboxAttempt = (attempts: number): number => Math.min(Number.MAX_SAFE_INTEGER, attempts + 1);
+
+const isScheduleOutboxTarget = (target: unknown): boolean => {
+    if (typeof target === "string") {
+        return target.length > 0;
+    }
+
+    if (!isPlainObject(target)) {
+        return false;
+    }
+
+    if (typeof target["__lunoraRef"] === "string") {
+        return target["__lunoraRef"].length > 0;
+    }
+
+    return (
+        target["isLunoraWorkflow"] === true &&
+        typeof target["className"] === "string" &&
+        target["className"].length > 0 &&
+        (target["name"] === undefined || typeof target["name"] === "string")
+    );
+};
+
+/**
+ * Read one stored call back, or `undefined` when it cannot be replayed. Checked
+ * field by field rather than cast: under the default policy a malformed entry
+ * would at worst cost eight attempts, but a `retry.forever` one would never park,
+ * so an envelope that can never become a job has to be recognised up front.
+ */
+const parseScheduleOutboxEnvelope = (envelopeJson: string): { args: unknown; envelope: ScheduleOutboxEnvelope } | undefined => {
+    try {
+        const parsed: unknown = JSON.parse(envelopeJson);
+
+        if (
+            !isPlainObject(parsed) ||
+            !Object.hasOwn(parsed, "args") ||
+            typeof parsed["when"] !== "number" ||
+            !Number.isFinite(parsed["when"]) ||
+            (parsed["options"] !== undefined && !isPlainObject(parsed["options"])) ||
+            !isScheduleOutboxTarget(parsed["target"])
+        ) {
+            return undefined;
+        }
+
+        const args = decodeWire(parsed["args"]);
+
+        if (args !== undefined && !isPlainObject(args)) {
+            return undefined;
+        }
+
+        return { args, envelope: parsed as unknown as ScheduleOutboxEnvelope };
+    } catch {
+        return undefined;
+    }
+};
+
+const retriesForever = (envelope: ScheduleOutboxEnvelope): boolean => {
+    const retry = envelope.options?.["retry"];
+
+    return isPlainObject(retry) && retry["forever"] === true;
+};
+
+/**
+ * Why a failed attempt ends custody, or `undefined` to retry it. A `retry.forever`
+ * entry parks only on a refusal no retry can change; anything else parks once the
+ * attempt ceiling is reached.
+ */
+const scheduleOutboxParkReason = (error: unknown, forever: boolean, attempts: number): string | undefined => {
+    if (forever) {
+        return isLunoraError(error) && (error.code === "INVALID_INPUT" || error.code === "INVALID_SCHEDULE_ID")
+            ? `the scheduler refused the stored call: ${error.code}`
+            : undefined;
+    }
+
+    if (attempts >= SCHEDULE_OUTBOX_MAX_ATTEMPTS) {
+        return `${String(SCHEDULE_OUTBOX_MAX_ATTEMPTS)} attempts all failed — last: ${error instanceof Error ? error.message : String(error)}`;
+    }
+
+    return undefined;
+};
 
 /**
  * How long a PARKED outbox entry is kept. A job that exhausted its attempts is
@@ -6779,7 +6868,9 @@ abstract class ShardDO {
      * config to read, so it reports `undefined` and the tier stays dormant. The
      * generated subclass overrides it with the app's configured scheduler —
      * and only when one is configured, so a shard whose `ctx.scheduler` is the
-     * throwing stub does not retry against a stub eight times before parking.
+     * throwing stub does not retry against a stub eight times before parking. A
+     * `retry.forever` entry stays in custody with backoff while no scheduler is
+     * configured, so a deploy that restores one picks it up.
      * @returns the scheduler to retry through, or `undefined` when this shard has none
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the generated subclass returns `config.scheduler?.(env)`
@@ -6801,13 +6892,14 @@ abstract class ShardDO {
      * twice. A refusal and an acceptance are therefore both "the scheduler has
      * it", and both end custody.
      *
-     * The bound is {@link SCHEDULE_OUTBOX_MAX_ATTEMPTS}: a job the scheduler will
-     * never accept stops costing alarms and becomes a reported fact instead —
-     * parked, logged at `error` with its id and target, and kept for
-     * {@link SCHEDULE_OUTBOX_RETENTION_MS} so an operator can see what was
-     * promised and never enqueued. The queue is bounded on both sides: the
-     * ceiling stops live entries accumulating, the retention sweep stops parked
-     * ones doing so. The sweep rides whatever tick reaches this tier, so a shard
+     * The default bound is {@link SCHEDULE_OUTBOX_MAX_ATTEMPTS}: a job the
+     * scheduler will never accept stops costing alarms and becomes a reported
+     * fact instead — parked, logged at `error` with its id and target, and kept
+     * for {@link SCHEDULE_OUTBOX_RETENTION_MS} so an operator can see what was
+     * promised and never enqueued. A call made with `retry.forever` opts out of
+     * that ceiling: it stays live, paced by the ladder's last rung, until the
+     * scheduler accepts it or refuses it as invalid. The retention sweep only
+     * ever drops parked rows. The sweep rides whatever tick reaches this tier, so a shard
      * holding ONLY parked entries keeps them until something else wakes it —
      * which is the right trade: they are one row per genuinely lost job, not a
      * loop that grows on its own.
@@ -15513,32 +15605,32 @@ abstract class ShardDO {
 
     /**
      * One outbox attempt: replay the stored call, then either end custody or push
-     * the entry out along {@link SCHEDULE_OUTBOX_BACKOFF_MS} — parking it once the
-     * ladder runs out.
+     * the entry out along {@link SCHEDULE_OUTBOX_BACKOFF_MS}. The default policy
+     * parks once the ladder runs out; `retry.forever` keeps a valid call live.
      *
      * An envelope that will not parse is parked immediately rather than retried:
      * no number of attempts turns malformed JSON into a job, and the log line is
      * the only useful output left.
      */
     private async retryScheduleOutboxEntry(sql: SqlExec, scheduler: SchedulerLike | undefined, entry: ScheduleOutboxRow, trace?: TraceRefLike): Promise<void> {
-        const attempts = entry.attempts + 1;
-        let envelope: ScheduleOutboxEnvelope | undefined;
+        const attempts = nextScheduleOutboxAttempt(entry.attempts);
+        const stored = parseScheduleOutboxEnvelope(entry.envelopeJson);
 
-        try {
-            envelope = JSON.parse(entry.envelopeJson) as ScheduleOutboxEnvelope;
-        } catch {
-            envelope = undefined;
+        if (stored === undefined) {
+            this.parkScheduleOutboxEntry(sql, entry.id, attempts, undefined, "its stored payload is unreadable", trace);
+
+            return;
         }
 
-        if (scheduler === undefined || envelope === undefined) {
-            this.parkScheduleOutboxEntry(
-                sql,
-                entry.id,
-                attempts,
-                envelope?.target,
-                scheduler === undefined ? "no scheduler is configured on this shard" : "its stored payload is unreadable",
-                trace,
-            );
+        const { envelope } = stored;
+        const forever = retriesForever(envelope);
+
+        if (scheduler === undefined) {
+            if (forever) {
+                this.deferScheduleOutboxEntry(sql, entry.id, attempts, true, trace);
+            } else {
+                this.parkScheduleOutboxEntry(sql, entry.id, attempts, envelope.target, "no scheduler is configured on this shard", trace);
+            }
 
             return;
         }
@@ -15550,7 +15642,7 @@ abstract class ShardDO {
             await (scheduler.runAt as (timestampMs: number, target: never, args: never, options?: never) => Promise<string>)(
                 envelope.when,
                 envelope.target as never,
-                decodeWire(envelope.args) as never,
+                stored.args as never,
                 { ...envelope.options, id: entry.id } as never,
             );
 
@@ -15565,20 +15657,32 @@ abstract class ShardDO {
                 return;
             }
 
-            if (attempts >= SCHEDULE_OUTBOX_MAX_ATTEMPTS) {
-                this.parkScheduleOutboxEntry(
-                    sql,
-                    entry.id,
-                    attempts,
-                    envelope.target,
-                    `${String(SCHEDULE_OUTBOX_MAX_ATTEMPTS)} attempts all failed — last: ${error instanceof Error ? error.message : String(error)}`,
-                    trace,
-                );
+            const parkReason = scheduleOutboxParkReason(error, forever, attempts);
 
-                return;
+            if (parkReason === undefined) {
+                this.deferScheduleOutboxEntry(sql, entry.id, attempts, forever, trace);
+            } else {
+                this.parkScheduleOutboxEntry(sql, entry.id, attempts, envelope.target, parkReason, trace);
             }
+        }
+    }
 
-            deferScheduleOutbox(sql, entry.id, attempts, Date.now() + scheduleOutboxBackoffFor(attempts));
+    /**
+     * Push one entry out along the ladder. A `retry.forever` entry that reaches
+     * the attempts a default entry would have parked at says so once, at `warn`:
+     * past that point nothing else reports that the job is still not enqueued.
+     */
+    private deferScheduleOutboxEntry(sql: SqlExec, id: string, attempts: number, forever: boolean, trace?: TraceRefLike): void {
+        deferScheduleOutbox(sql, id, attempts, Date.now() + scheduleOutboxBackoffFor(attempts));
+
+        if (forever && attempts === SCHEDULE_OUTBOX_MAX_ATTEMPTS) {
+            this.logs.push({
+                functionPath: "scheduler:outbox",
+                level: "warn",
+                message: `deferred schedule ${id} is still waiting for the scheduler after ${String(attempts)} attempts. Its mutation committed; custody keeps retrying (retry.forever).`,
+                timestamp: Date.now(),
+                traceId: trace?.traceId,
+            });
         }
     }
 

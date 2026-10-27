@@ -910,6 +910,10 @@ const createReferenceHost = (): ReferenceHost => {
         schedule: async (functionPath, args, options) => {
             assertOpen("schedule a job");
 
+            if (options?.retry?.forever === true) {
+                throw new Error("reference host: retry.forever is unsupported; this host requires a finite retry budget");
+            }
+
             const id = nextJobId();
             let scheduledFor: number;
 

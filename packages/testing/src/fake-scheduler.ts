@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 import { assertScheduleDelay, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS, TERMINAL_RETENTION_MS } from "@lunora/scheduler";
-import type { ScheduledJob, ScheduledJobView, Scheduler } from "@lunora/server";
+import type { RetryPolicy, ScheduledJob, ScheduledJobView, Scheduler } from "@lunora/server";
 import { decodeWire, encodeWire } from "@lunora/wire";
 
 /** A pending job entry in the fake scheduler queue. */
@@ -264,12 +264,17 @@ const createFakeScheduler = (
 
         list: () => Promise.resolve([...pending.values()]),
 
-        // The fourth parameter is `@lunora/scheduler`'s `RunOptions`; only `id` is
-        // meaningful to this fake. It is not on the public `Scheduler` ctx type and
-        // deliberately stays off it — the only caller is `@lunora/server`'s
-        // deferred-schedule facade, which needs the id decided before the call is
-        // made so a mutation handler can be handed it synchronously.
-        runAfter: (delayMs: number, target: Parameters<Scheduler["runAfter"]>[1], args?: Record<string, unknown>, options?: { id?: string }) => {
+        // The fourth parameter is `@lunora/scheduler`'s `RunOptions`. `id` is the
+        // deferred-schedule facade's (it decides the id before the call is made, so
+        // a mutation handler can be handed it synchronously) and is deliberately off
+        // the public `Scheduler` type. `retry` is accepted but not modelled: every
+        // job here walks the default budget, as documented on `createFakeScheduler`.
+        runAfter: (
+            delayMs: number,
+            target: Parameters<Scheduler["runAfter"]>[1],
+            args?: Record<string, unknown>,
+            options?: { id?: string; retry?: RetryPolicy },
+        ) => {
             // The same guard `@lunora/scheduler`'s `createScheduler().runAfter`
             // runs before the call reaches the DO — imported, not restated, so a
             // test cannot pass on a delay production refuses.
@@ -280,7 +285,12 @@ const createFakeScheduler = (
             return Promise.resolve(id);
         },
 
-        runAt: (timestampMs: number, target: Parameters<Scheduler["runAt"]>[1], args?: Record<string, unknown>, options?: { id?: string }) => {
+        runAt: (
+            timestampMs: number,
+            target: Parameters<Scheduler["runAt"]>[1],
+            args?: Record<string, unknown>,
+            options?: { id?: string; retry?: RetryPolicy },
+        ) => {
             const id = enqueue(timestampMs, targetPath(target), args, options?.id);
 
             return Promise.resolve(id);

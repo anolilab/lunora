@@ -15,9 +15,11 @@ Triggers, both backed by a `SchedulerDO` you mount once per app.
 `ctx.scheduler` is available on `MutationCtx` and `ActionCtx` (not on a
 read-only `QueryCtx`). It enqueues a function to run later:
 
-- `ctx.scheduler.runAfter(delayMs, target, args?)` runs after a delay.
-- `ctx.scheduler.runAt(timestampMs, target, args?)` runs at an absolute
+- `ctx.scheduler.runAfter(delayMs, target, args?, options?)` runs after a delay.
+- `ctx.scheduler.runAt(timestampMs, target, args?, options?)` runs at an absolute
   epoch-millisecond time.
+
+`options.retry` sets the job's [retry policy](#retry-policy).
 
 Both return the scheduled job's id (a string) so you can track or cancel it. The
 target is either a generated reference (`internal.notifications.notifySubscribers`,
@@ -122,6 +124,26 @@ retried, is logged at `error` naming its id and target, and is kept for a week s
 you can see what was promised and never enqueued. That is the one case where a
 scheduled job is dropped without the mutation being rolled back — and it is
 reported rather than silent.
+
+### Retry policy
+
+A job whose handler throws is retried by the `SchedulerDO`: five retries with
+exponential backoff from 30 seconds, then a dead-letter park. Pass a `retry`
+option as the fourth argument to change that for one job:
+
+```ts
+await ctx.scheduler.runAfter(0, internal.billing.syncInvoice, { invoiceId }, { retry: { maxAttempts: 10, maxMs: 600_000 } });
+```
+
+`retry.forever: true` keeps retrying instead of dead-lettering, for work that
+must eventually happen. Its delay stays between 1 second and 30 minutes whatever
+`baseMs`/`maxMs` say, and the same opt-in keeps it in the shard's custody past the
+eight attempts above: it is logged once at `warn` when it reaches that point and
+retried every 30 minutes after, until the scheduler accepts it. A call the
+scheduler refuses as invalid is still parked. A forever job can be cancelled once
+the scheduler holds it, not while it is waiting in custody. Only `SchedulerDO`
+hosts (Cloudflare and celld) support it; the Node scheduler host refuses it with
+`INVALID_INPUT`.
 
 ### Inspecting and cancelling
 

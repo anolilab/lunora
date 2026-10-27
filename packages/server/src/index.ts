@@ -215,6 +215,7 @@ export type {
     ScheduledJobState,
     ScheduledJobView,
     Scheduler,
+    ScheduleRunOptions,
     Schema,
     SearchFilterBuilder,
     SearchIndexDefinition,

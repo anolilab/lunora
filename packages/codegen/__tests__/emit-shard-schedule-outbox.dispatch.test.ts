@@ -24,6 +24,7 @@
  */
 import { DatabaseSync } from "node:sqlite";
 
+import { LunoraError } from "@lunora/errors";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LUNORA_FUNCTIONS } from "./fixtures/delta-sync/lunora/_generated/functions";
@@ -33,7 +34,7 @@ import { createShardDO } from "./fixtures/delta-sync/lunora/_generated/shard";
 interface TestCtx {
     db: { insert: (table: string, row: Record<string, unknown>) => Promise<unknown>; query: (table: string) => { collect: () => Promise<unknown[]> } };
     runMutation: (reference: { __lunoraRef: string }, args: Record<string, unknown>) => Promise<unknown>;
-    scheduler: { runAfter: (delayMs: number, target: unknown, args: unknown) => Promise<string> };
+    scheduler: { runAfter: (delayMs: number, target: unknown, args: unknown, options?: Record<string, unknown>) => Promise<string> };
 }
 
 /** One call the fake scheduler accepted. */
@@ -42,6 +43,9 @@ interface AcceptedJob {
     id: string | undefined;
     target: unknown;
 }
+
+/** Every option the fake scheduler was handed, accepted or not, in call order. */
+type ReceivedOptions = Record<string, unknown> | undefined;
 
 /**
  * The DO state the shard is constructed with. `transaction` is the host primitive
@@ -85,12 +89,20 @@ const createState = (): { run: (query: string, ...parameters: unknown[]) => unkn
 };
 
 interface Harness {
+    /** Make the scheduler throw `error` on every call until reset with `setReachable(true)`. */
+    failWith: (error: Error) => void;
+    /** Shard log lines pushed for `functionPath`. */
+    logs: (functionPath: string) => { level: string; message: string }[];
     /** Make every live entry due now, so the retry ladder can be driven without waiting it out. */
     makeDue: () => void;
     /** Every entry still in `__schedule_outbox`, oldest first. */
     outbox: () => { attempts: number; dead: number; id: string }[];
+    /** Options the scheduler was handed on each call. */
+    received: ReceivedOptions[];
     /** Drive the outbox retry tier the shared poll alarm runs. */
     retry: () => Promise<number | undefined>;
+    /** Run raw SQL against the shard's store. */
+    run: (query: string, ...parameters: unknown[]) => unknown;
     /** Jobs the scheduler accepted. */
     scheduled: AcceptedJob[];
     /** Flip the scheduler between "unreachable" and "healthy". */
@@ -102,13 +114,16 @@ interface Harness {
     };
 }
 
-const createHarness = (): Harness => {
+const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => {
     const scheduled: AcceptedJob[] = [];
-    let reachable = true;
+    const received: ReceivedOptions[] = [];
+    let failure: Error | undefined;
 
     const accept = async (target: unknown, args: unknown, options?: { id?: string }): Promise<string> => {
-        if (!reachable) {
-            throw new Error("SchedulerDO unreachable");
+        received.push(options);
+
+        if (failure !== undefined) {
+            throw failure;
         }
 
         const id = options?.id ?? "minted";
@@ -119,16 +134,20 @@ const createHarness = (): Harness => {
     };
 
     const ShardClass = createShardDO({
-        scheduler: () => {
-            return {
-                cancel: async (): Promise<{ cancelled: boolean }> => {
-                    return { cancelled: false };
-                },
-                runAfter: async (_delayMs: number, target: unknown, args: unknown, options?: { id?: string }): Promise<string> => accept(target, args, options),
-                runAt: async (_timestampMs: number, target: unknown, args: unknown, options?: { id?: string }): Promise<string> =>
-                    accept(target, args, options),
-            };
-        },
+        scheduler:
+            (configuration.scheduler ?? true)
+                ? () => {
+                      return {
+                          cancel: async (): Promise<{ cancelled: boolean }> => {
+                              return { cancelled: false };
+                          },
+                          runAfter: async (_delayMs: number, target: unknown, args: unknown, options?: { id?: string }): Promise<string> =>
+                              accept(target, args, options),
+                          runAt: async (_timestampMs: number, target: unknown, args: unknown, options?: { id?: string }): Promise<string> =>
+                              accept(target, args, options),
+                      };
+                  }
+                : undefined,
     });
 
     const { run, state } = createState();
@@ -156,6 +175,16 @@ const createHarness = (): Harness => {
     const shard = new Probe(state, {}) as unknown as Harness["shard"] & { retry: () => Promise<number | undefined> };
 
     return {
+        failWith: (error: Error) => {
+            failure = error;
+        },
+        logs: (functionPath: string) =>
+            (shard as unknown as { logs: { entries: () => { functionPath: string; level: string; message: string }[] } }).logs
+                .entries()
+                .filter((entry) => entry.functionPath === functionPath)
+                .map((entry) => {
+                    return { level: entry.level, message: entry.message };
+                }),
         makeDue: () => {
             run("UPDATE __schedule_outbox SET next_attempt_at = 0 WHERE dead = 0");
         },
@@ -171,11 +200,13 @@ const createHarness = (): Harness => {
                 .map((row) => {
                     return { attempts: row.attempts, dead: row.dead, id: row.id };
                 }),
+        received,
         retry: () => shard.retry(),
+        run,
         scheduled,
         shard,
         setReachable: (next: boolean) => {
-            reachable = next;
+            failure = next ? undefined : new Error("SchedulerDO unreachable");
         },
     };
 };
@@ -212,6 +243,14 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
             } catch {
                 // swallowed, exactly as the documented action shape does
             }
+        });
+
+        register("outbox:orderPlacedForever", "mutation", async (ctx) => {
+            await ctx.db.insert("notes", { boardId: "b1", body: "forever", ownerId: "u1" });
+
+            const jobId = await ctx.scheduler.runAfter(0, { __lunoraRef: "outbox:charge" }, { orderId: "o-2" }, { retry: { forever: true } });
+
+            return { jobId, ok: true };
         });
 
         register("outbox:countNotes", "query", async (ctx) => {
@@ -431,5 +470,100 @@ describe("emitted shard — the schedule-rate budget on the real dispatch", () =
 
         expect(delays).toHaveLength(FAN_OUT);
         expect(delays.every((delayMs) => delayMs === 0)).toBe(true);
+    });
+});
+
+describe("emitted shard — a retry.forever deferred schedule", () => {
+    /** Drive `count` retry attempts, each made due first. */
+    const drive = async (harness: Harness, count: number): Promise<void> => {
+        for (let attempt = 0; attempt < count; attempt += 1) {
+            harness.makeDue();
+            // eslint-disable-next-line no-await-in-loop -- each attempt reads the row the previous one wrote
+            await harness.retry();
+        }
+    };
+
+    it("stays live past the attempt ceiling and warns once when it passes it", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlacedForever", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        await drive(harness, 12);
+
+        expect(harness.outbox()).toStrictEqual([{ attempts: 12, dead: 0, id: expect.any(String) }]);
+        expect(harness.logs("scheduler:outbox")).toStrictEqual([
+            { level: "warn", message: expect.stringContaining("still waiting for the scheduler after 8 attempts") },
+        ]);
+
+        // The policy travels with the replay, so the scheduler retries it the same way once it has it.
+        harness.setReachable(true);
+        await drive(harness, 1);
+
+        expect(harness.received.at(-1)).toStrictEqual({ id: expect.any(String), retry: { forever: true } });
+    });
+
+    it("parks on a refusal no retry can change", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.failWith(new LunoraError("INVALID_INPUT", "bad args"));
+
+        await expect(harness.shard.handleRpc("outbox:orderPlacedForever", {})).rejects.toThrow("bad args");
+
+        await drive(harness, 1);
+
+        expect(harness.outbox()).toStrictEqual([{ attempts: 1, dead: 1, id: expect.any(String) }]);
+        expect(harness.logs("scheduler:outbox")).toStrictEqual([
+            { level: "error", message: expect.stringContaining("the scheduler refused the stored call: INVALID_INPUT") },
+        ]);
+    });
+
+    it("waits in custody on a shard with no scheduler instead of parking", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness({ scheduler: false });
+
+        // The table is created by shard init, which the first dispatch runs.
+        await expect(harness.shard.handleRpc("outbox:countNotes", {})).resolves.toBe(0);
+
+        const envelope = JSON.stringify({ args: {}, options: { retry: { forever: true } }, target: { __lunoraRef: "outbox:charge" }, when: 0 });
+
+        harness.run(
+            "INSERT INTO __schedule_outbox (id, envelope_json, attempts, next_attempt_at, created_at, dead) VALUES (?, ?, 0, 0, ?, 0)",
+            "job-1",
+            envelope,
+            Date.now(),
+        );
+        await drive(harness, 3);
+
+        expect(harness.outbox()).toStrictEqual([{ attempts: 3, dead: 0, id: "job-1" }]);
+        expect(harness.logs("scheduler:outbox")).toStrictEqual([]);
+    });
+
+    it("parks a stored call that can never become a job", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        // The table is created by shard init, which the first dispatch runs.
+        await expect(harness.shard.handleRpc("outbox:countNotes", {})).resolves.toBe(0);
+
+        const envelope = JSON.stringify({ args: {}, options: { retry: { forever: true } }, target: { notAReference: true }, when: 0 });
+
+        harness.run(
+            "INSERT INTO __schedule_outbox (id, envelope_json, attempts, next_attempt_at, created_at, dead) VALUES (?, ?, 0, 0, ?, 0)",
+            "job-2",
+            envelope,
+            Date.now(),
+        );
+        await drive(harness, 1);
+
+        expect(harness.outbox()).toStrictEqual([{ attempts: 1, dead: 1, id: "job-2" }]);
+        expect(harness.received).toStrictEqual([]);
     });
 });

@@ -218,9 +218,9 @@ const probeScheduleOutbox = (sql: SqlExec): { dueAt: number | undefined; populat
 
 /**
  * Drop PARKED entries created before `olderThanTs` (millis). Live entries are
- * never trimmed — a job still being retried is not garbage — so the table is
- * bounded in both directions: by the attempt ceiling on one side and by this
- * retention sweep on the other.
+ * never trimmed — a job still being retried is not garbage. The attempt ceiling
+ * bounds live entries under the default policy; a `retry.forever` entry stays
+ * live until the scheduler accepts or refuses it.
  */
 const trimScheduleOutbox = (sql: SqlExec, olderThanTs: number): void => {
     runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)} WHERE dead = 1 AND created_at < ${olderThanTs}`);
