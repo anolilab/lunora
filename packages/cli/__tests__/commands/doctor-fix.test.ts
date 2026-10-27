@@ -117,6 +117,33 @@ describe("lunora doctor --fix", () => {
         expect(written).not.toContain(PLACEHOLDER);
     });
 
+    it("runs wrangler for an env-scoped placeholder with that environment, so its account is the one deploy uses", async () => {
+        expect.hasAssertions();
+
+        writeFileSync(
+            join(workdir, "wrangler.jsonc"),
+            `{
+    "name": "app",
+    "env": {
+        "staging": {
+            "d1_databases": [{ "binding": "DB", "database_name": "staging-db", "database_id": "${PLACEHOLDER}" }],
+        },
+    },
+}
+`,
+        );
+        const environments: (string | undefined)[] = [];
+        const runner = async (_args: ReadonlyArray<string>, _cwd: string, environment?: string) => {
+            environments.push(environment);
+
+            return { code: 0, stderr: "", stdout: "[]" };
+        };
+
+        await applyDoctorFixes({ configPath: join(workdir, "wrangler.jsonc"), cwd: workdir, dryRun: false, logger: silentLogger, runner });
+
+        expect(environments).toStrictEqual(["staging", "staging", "staging"]);
+    });
+
     it("points a placeholder D1 id at the existing database and keeps the config's comments", async () => {
         expect.hasAssertions();
 

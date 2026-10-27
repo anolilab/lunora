@@ -49,8 +49,12 @@ interface WranglerRunnerResult {
     stdout: string;
 }
 
-/** Runs `wrangler <args>` in the project. Injected in tests so no Cloudflare call is made. */
-type WranglerRunner = (args: ReadonlyArray<string>, cwd: string) => Promise<WranglerRunnerResult>;
+/**
+ * Runs `wrangler <args>` in the project. Injected in tests so no Cloudflare call is made.
+ * `environment` is the `env` block the call is for: wrangler takes that block's account
+ * from `CLOUDFLARE_ENV`, so a database is looked up and created in the right account.
+ */
+type WranglerRunner = (args: ReadonlyArray<string>, cwd: string, environment?: string) => Promise<WranglerRunnerResult>;
 
 interface DoctorFixOptions {
     /** The wrangler config the D1 placeholders live in, as `findWranglerFile` returns it. */
@@ -72,17 +76,26 @@ interface DoctorFixResult {
 
 interface D1Placeholder {
     binding: string;
+    /** The `env` block the placeholder sits in, or `undefined` at the top level. */
+    environment: string | undefined;
     name: string | undefined;
     /** Where the `database_id` sits in the config: the top level, or an `env` block's own array. */
     path: ReadonlyArray<string | number>;
 }
 
-const defaultRunner = async (args: ReadonlyArray<string>, cwd: string): Promise<WranglerRunnerResult> => {
+const defaultRunner = async (args: ReadonlyArray<string>, cwd: string, environment?: string): Promise<WranglerRunnerResult> => {
     // `wrangler` is a project dependency, so it runs through the project's package manager.
     const { args: execArgs, command } = toolchainExecArgs(detectPackageManager(cwd), { args, tool: "wrangler" });
 
     try {
-        const result = await defaultSpawner({ args: execArgs, captureStderr: true, captureStdoutSilently: true, command, cwd });
+        const result = await defaultSpawner({
+            args: execArgs,
+            captureStderr: true,
+            captureStdoutSilently: true,
+            command,
+            cwd,
+            ...(environment === undefined ? {} : { env: { CLOUDFLARE_ENV: environment } }),
+        });
 
         return { code: result.code, stderr: result.stderr ?? "", stdout: result.stdout ?? "" };
     } catch (error: unknown) {
@@ -95,8 +108,8 @@ const defaultRunner = async (args: ReadonlyArray<string>, cwd: string): Promise<
  * `undefined` when the list cannot be read, so a caller never creates a second
  * database because the first lookup failed.
  */
-const listD1Databases = async (runner: WranglerRunner, cwd: string): Promise<Map<string, string> | undefined> => {
-    const result = await runner(["d1", "list", "--json"], cwd);
+const listD1Databases = async (runner: WranglerRunner, cwd: string, environment: string | undefined): Promise<Map<string, string> | undefined> => {
+    const result = await runner(["d1", "list", "--json"], cwd, environment);
 
     if (result.code !== 0) {
         return undefined;
@@ -126,7 +139,7 @@ const listD1Databases = async (runner: WranglerRunner, cwd: string): Promise<Map
 };
 
 /** The placeholder entries of one `d1_databases` array, with the path that reaches it from the document root. */
-const placeholdersInScope = (databasesValue: unknown, prefix: ReadonlyArray<string>): D1Placeholder[] => {
+const placeholdersInScope = (databasesValue: unknown, prefix: ReadonlyArray<string>, environment: string | undefined): D1Placeholder[] => {
     const databases = Array.isArray(databasesValue) ? databasesValue : [];
 
     return databases.flatMap((entry, index): D1Placeholder[] => {
@@ -144,6 +157,7 @@ const placeholdersInScope = (databasesValue: unknown, prefix: ReadonlyArray<stri
         return [
             {
                 binding: typeof database.binding === "string" && database.binding !== "" ? database.binding : "<unnamed>",
+                environment,
                 path: [...prefix, "d1_databases", index],
                 name: typeof database.database_name === "string" && database.database_name !== "" ? database.database_name : undefined,
             },
@@ -158,14 +172,14 @@ const placeholdersInScope = (databasesValue: unknown, prefix: ReadonlyArray<stri
  */
 const placeholdersIn = (text: string): D1Placeholder[] => {
     const parsed = parseJsonc(text) as { d1_databases?: unknown; env?: Record<string, { d1_databases?: unknown } | undefined> } | undefined;
-    const scopes: { config: { d1_databases?: unknown } | undefined; prefix: ReadonlyArray<string> }[] = [
-        { config: parsed, prefix: [] },
+    const scopes: { config: { d1_databases?: unknown } | undefined; environment: string | undefined; prefix: ReadonlyArray<string> }[] = [
+        { config: parsed, environment: undefined, prefix: [] },
         ...Object.entries(parsed?.env ?? {}).map(([name, block]) => {
-            return { config: block, prefix: ["env", name] };
+            return { config: block, environment: name, prefix: ["env", name] };
         }),
     ];
 
-    return scopes.flatMap(({ config, prefix }) => placeholdersInScope(config?.d1_databases, prefix));
+    return scopes.flatMap(({ config, environment, prefix }) => placeholdersInScope(config?.d1_databases, prefix, environment));
 };
 
 /**
@@ -179,7 +193,7 @@ const resolveD1Id = async (
     runner: WranglerRunner,
     result: DoctorFixResult,
 ): Promise<string | undefined> => {
-    const existing = await listD1Databases(runner, options.cwd);
+    const existing = await listD1Databases(runner, options.cwd, placeholder.environment);
 
     if (existing === undefined) {
         result.skipped.push(
@@ -201,7 +215,7 @@ const resolveD1Id = async (
         return undefined;
     }
 
-    const created = await runner(["d1", "create", placeholder.name], options.cwd);
+    const created = await runner(["d1", "create", placeholder.name], options.cwd, placeholder.environment);
 
     if (created.code !== 0) {
         const reason = created.stderr.trim() || `exit ${String(created.code)}`;
@@ -212,7 +226,7 @@ const resolveD1Id = async (
     }
 
     // Read the id back from the list: the create output is prose, not a contract.
-    const listed = await listD1Databases(runner, options.cwd);
+    const listed = await listD1Databases(runner, options.cwd, placeholder.environment);
     const readBack = listed?.get(placeholder.name);
 
     if (readBack === undefined) {
