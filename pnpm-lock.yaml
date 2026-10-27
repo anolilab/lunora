@@ -3613,9 +3613,6 @@ importers:
       '@lunora/sql-store':
         specifier: workspace:*
         version: link:../sql-store
-      '@lunora/wire':
-        specifier: 1.0.0-alpha.3
-        version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
         version: 1.0.0-rc.5(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)(valibot@1.4.2(typescript@6.0.3))(zod@4.6.5)
@@ -3635,6 +3632,9 @@ importers:
       '@lunora/search-core':
         specifier: workspace:*
         version: link:../search-core
+      '@lunora/wire':
+        specifier: 1.0.0-alpha.3
+        version: link:../wire
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
