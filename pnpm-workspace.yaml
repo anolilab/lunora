@@ -866,7 +866,7 @@ catalogs:
     vite-imagetools: 12.0.1
     vite-plugin-svgr: 5.2.0
     vitest: 4.1.11
-    zod: 4.6.5
+    zod: 4.6.6
   auth:
     # EXACT-pinned (no caret). The whole better-auth family versions in lockstep —
     # the plugin packages peer on an exact `better-auth`/`@better-auth/core`
