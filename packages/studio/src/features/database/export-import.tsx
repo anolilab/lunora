@@ -581,7 +581,8 @@ const sendImport = async (
         // caller's catch, which keeps the structured errors above for display. Rows the shard accepted are already written, so the
         // message names how many and where a re-import has to resume; a whole-file re-import would write them twice.
         if (result.errors.length > 0) {
-            const written = insertedRowCount(total.inserted);
+            // An overwritten row has landed too, so it counts as written.
+            const written = insertedRowCount(total.inserted) + (total.replaced ?? 0);
 
             stop.refused = true;
 

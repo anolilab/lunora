@@ -282,6 +282,39 @@ describe("exportImportPanel", () => {
         ]);
     });
 
+    it("counts overwritten rows as written when an overwrite import is refused part-way", async () => {
+        // An overwrite has already landed, so "nothing was written" would send the operator back to re-import over it.
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference !== ADMIN_FUNCTIONS.importShard) {
+                    throw new Error(`unexpected ${reference}`);
+                }
+
+                const { dryRun } = args as ImportArgs;
+
+                return dryRun === true
+                    ? { ...checkPassed(), replaced: 0 }
+                    : {
+                          conflicts: 0,
+                          errors: [{ code: "VALIDATION", line: 2, message: "text must be a string", table: "messages" }],
+                          inserted: {},
+                          replaced: 1,
+                      };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(screen.getByTestId("ei-replace"));
+        importText('{"table":"messages","doc":{"__id__":"m1","text":"changed"}}\n{"table":"messages","doc":{"__id__":"m2","text":2}}');
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toContain("1 rows were already written");
+    });
+
     it("refuses an overwrite import to a shard that cannot replace, before sending a row", async () => {
         expect.assertions(2);
 
