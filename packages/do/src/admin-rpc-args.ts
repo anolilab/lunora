@@ -489,9 +489,10 @@ const RESERVED_WORKFLOW_EVENT_PREFIX = "lunora:";
 
 /**
  * Validate the `sendWorkflowEvent` admin-RPC payload. Requires non-empty
- * `exportName`, `id` and `type`, and refuses a reserved `lunora:` type; `payload`
- * is passed through untouched (the admin op has no event definition to parse it
- * against). Throws a 400 `LunoraError` on a bad shape.
+ * `exportName`, `id` and `type`, and refuses a reserved `lunora:` type. Only the shape is
+ * checked here: `payload` is returned as received, and `ShardDO.handleSendWorkflowEvent`
+ * validates it against the type's `defineWorkflowEvent` definition before sending. Throws a
+ * 400 `LunoraError` on a bad shape.
  */
 const parseSendWorkflowEventArgs = (args: Record<string, unknown>): SendWorkflowEventArgs => {
     const exportName = typeof args["exportName"] === "string" ? args["exportName"].trim() : "";
