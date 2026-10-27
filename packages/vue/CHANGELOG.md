@@ -1,3 +1,15 @@
+## @lunora/vue [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.293...@lunora/vue@1.0.0-alpha.294) (2026-10-27)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.257
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.175
+
 ## @lunora/vue [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.292...@lunora/vue@1.0.0-alpha.293) (2026-10-27)
 
 
