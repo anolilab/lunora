@@ -146,14 +146,15 @@ const KvKeyTable = ({ allSelected, bulkSelected, keys, onSelectKey, onToggleAll,
         overscan: 12,
     });
     const virtualRows = virtualizer.getVirtualItems();
+    const padTop = virtualRows[0]?.start ?? 0;
+    const padBottom = virtualizer.getTotalSize() - (virtualRows.at(-1)?.end ?? 0);
+
     // Sized from every loaded key, not the mounted window, so scrolling never widens the table.
     let longestKey = 0;
 
     for (const entry of keys) {
         longestKey = Math.max(longestKey, entry.name.length);
     }
-    const padTop = virtualRows[0]?.start ?? 0;
-    const padBottom = virtualizer.getTotalSize() - (virtualRows.at(-1)?.end ?? 0);
 
     return (
         <Table data-testid="kv-key-table">
