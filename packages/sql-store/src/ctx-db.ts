@@ -949,6 +949,8 @@ const assertGroupByReducibleBySql = (
 /** Single-row table holding the `.global()` sweep lease — the fleet's only retention coordination. */
 const CDC_SWEEP_TABLE = "__cdc_sweep";
 
+const CDC_LOG_TABLE_TS_INDEX = "__cdc_log_ts";
+
 /** The lease row's fixed key. One log, one sweeper, one row. */
 const CDC_SWEEP_ROW = "global";
 
@@ -1027,6 +1029,16 @@ const runSqlCdcMigration = async (exec: SqlCtxExec, dialect: SqlDialect): Promis
     await createIndexIfNotExists(exec, dialect, {
         columns: sql`${tablePrefix === undefined ? sql`${sql.identifier("table")}` : sql`${sql.identifier("table")}(${sql.raw(String(tablePrefix))})`}, ${sql.identifier("seq")}`,
         name: CDC_LOG_TABLE_SEQ_INDEX,
+        table: CDC_LOG_TABLE,
+        unique: false,
+    });
+
+    // Lets the retention sweep ask "has anything expired?" with a seek. `seq`
+    // order cannot answer it: writers stamp `ts` with their own clocks, so the
+    // lowest `seq` is not the oldest `ts`.
+    await createIndexIfNotExists(exec, dialect, {
+        columns: sql`${sql.identifier("ts")}`,
+        name: CDC_LOG_TABLE_TS_INDEX,
         table: CDC_LOG_TABLE,
         unique: false,
     });
@@ -1117,19 +1129,16 @@ const sweepSqlCdcRetention = async (exec: SqlCtxExec, dialect: SqlDialect, reten
 
     const cutoff = now - retentionMs;
 
-    // Without an index on `ts`, the DELETE below walks the log in `seq` order and,
-    // when nothing has expired, reads every row to find that out. `ts` follows
-    // `seq` up to writer clock skew, so the oldest row answers "anything expired?"
-    // with a primary-key seek. A row stamped earlier than an unexpired head waits
-    // for the head to expire: retention is a floor on what is kept, so it may
-    // keep a row a little longer, never drop one early.
-    const head = await queryAll(
+    // The DELETE below walks the log in `seq` order, so with nothing expired it
+    // reads every row to delete none. This probe answers the same question
+    // through the `ts` index.
+    const expired = await queryAll(
         exec,
         dialect,
-        sql`SELECT ${sql.identifier("ts")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("seq")} = (SELECT MIN(${sql.identifier("seq")}) FROM ${sql.identifier(CDC_LOG_TABLE)})`,
+        sql`SELECT 1 AS ${sql.identifier("hit")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("ts")} <= ${cutoff} LIMIT 1`,
     );
 
-    if (head.length === 0 || Number(head[0]?.["ts"]) > cutoff) {
+    if (expired.length === 0) {
         return;
     }
 
