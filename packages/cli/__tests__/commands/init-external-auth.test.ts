@@ -116,14 +116,35 @@ describe(wireExternalAuth, () => {
         expect(lines.join("\n")).toContain("composeIdentityResolvers([memoizeIdentity(workosIdentity(env)), <your resolver>])");
     });
 
-    it("puts the imports at the top of an entry without semicolons instead of after its first character", () => {
+    it("puts the imports after the last import of an entry without semicolons", () => {
         expect.assertions(1);
 
         writeFileSync(join(project, "src", "server.ts"), ENTRY.replaceAll(";\n", "\n"));
 
         wireExternalAuth(project, "clerk", silentLogger().logger);
 
-        expect(readFileSync(join(project, "src", "server.ts"), "utf8").startsWith('import { memoizeIdentity } from "lunorash/runtime";\n')).toBe(true);
+        expect(readFileSync(join(project, "src", "server.ts"), "utf8")).toContain(
+            'import { defineApp } from "../lunora/_generated/app.js"\nimport { memoizeIdentity } from "lunorash/runtime";\nimport { clerkIdentity }',
+        );
+    });
+
+    it("does not splice imports into the chain when the last import's semicolon is followed by a comment", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(project, "src", "server.ts"),
+            ENTRY.replace('from "../lunora/_generated/app.js";', 'from "../lunora/_generated/app.js"; // generated'),
+        );
+
+        wireExternalAuth(project, "clerk", silentLogger().logger);
+
+        const entry = readFileSync(join(project, "src", "server.ts"), "utf8");
+
+        expect(entry).toContain('from "../lunora/_generated/app.js"; // generated\nimport { memoizeIdentity } from "lunorash/runtime";\n');
+        // The chain stays intact: one `defineApp<Env>()` and the extend right before `.build()`.
+        expect(entry).toMatch(
+            /\.extend\(\(\) => \(\{ allowUnauthenticatedShardAccess: true \}\)\)\n {4}\/\/ Verify[^\n]*\n {4}\.extend\(\(env\) => \(\{ resolveIdentity: memoizeIdentity\(clerkIdentity\(env\)\) \}\)\)\n {4}\.build\(\);/u,
+        );
     });
 
     it("writes lunora.config.ts for a Vite-first app with no entry", () => {

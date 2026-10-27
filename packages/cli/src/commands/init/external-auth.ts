@@ -66,8 +66,11 @@ const EXTERNAL_AUTH: Readonly<Record<ExternalAuthProvider, ExternalAuthSpec>> = 
     },
     clerk: {
         clientSnippet: [
-            "// @clerk/react: const { getToken, isSignedIn, userId } = useAuth();",
-            "const stop = setAuthTokenProvider(client, getToken, { subject: userId });",
+            "// @clerk/react: const { getToken, isLoaded, isSignedIn, userId } = useAuth();",
+            "// In a useEffect over [client, getToken, isLoaded, isSignedIn, userId]:",
+            "if (!isLoaded) return;",
+            "if (!isSignedIn) return client.setAuthToken(null);",
+            "return setAuthTokenProvider(client, getToken, { subject: userId });",
         ].join("\n"),
         envVars: ["CLERK_PUBLISHABLE_KEY", "CLERK_AUTHORIZED_PARTIES"],
         identity: "clerkIdentity",
@@ -152,11 +155,6 @@ const identitySpecifier = (projectDirectory: string, fromFile: string, spec: Ext
     return `${target.startsWith(".") ? target : `./${target}`}.js`;
 };
 
-/**
- * Chain `.extend((env) => ({ resolveIdentity }))` onto the app's `defineApp()`
- * builder, at the end of the chain, and import what it uses. Returns the
- * patched file, or `undefined` when no candidate calls `defineApp()`.
- */
 /** What wiring did to the file it chose: wrote the resolver, found it already there, or found another `resolveIdentity` it must not replace. */
 interface ServerWiring {
     file: string;
@@ -165,6 +163,9 @@ interface ServerWiring {
 
 const RESOLVE_IDENTITY = /\bresolveIdentity\b/u;
 const MEMOIZE_IDENTITY = /\bmemoizeIdentity\b/u;
+
+/** An `import` statement through its module string and the rest of that line (a `;`, a trailing comment, or neither). */
+const IMPORT_STATEMENT = /^import[^"']*["'][^"'\n]*["'][^\n]*\n/u;
 
 /** The patched `candidate` source, or what stopped the patch; `undefined` when it builds no `defineApp()` chain. */
 const wireSource = (
@@ -195,14 +196,19 @@ const wireSource = (
     const memoizeImport = MEMOIZE_IDENTITY.test(source) ? "" : `import { memoizeIdentity } from "${runtimeModule(projectDirectory)}";\n`;
     const imports = `${memoizeImport}import { ${spec.identity} } from "${identitySpecifier(projectDirectory, candidate, spec)}";\n`;
 
-    // After the last import, so the file's own header comment stays first; at the top when no `;`-terminated import line is found.
+    // After the last import statement, so the file's own header comment stays first; at the top when none is found.
     const lastImport = source.lastIndexOf("\nimport ", start);
-    const importEnd = lastImport === -1 ? -1 : source.indexOf(";\n", lastImport);
-    const afterImports = importEnd === -1 ? 0 : importEnd + 2;
+    const statement = lastImport === -1 ? undefined : IMPORT_STATEMENT.exec(source.slice(lastImport + 1));
+    const afterImports = statement === undefined || statement === null ? 0 : lastImport + 1 + statement[0].length;
 
     return { outcome: "wired", patched: source.slice(0, afterImports) + imports + source.slice(afterImports, at) + extend + source.slice(at) };
 };
 
+/**
+ * Chain `.extend((env) => ({ resolveIdentity }))` onto the app's `defineApp()`
+ * builder, at the end of the chain, and import what it uses. Returns the file
+ * and what happened to it, or `undefined` when no candidate calls `defineApp()`.
+ */
 const wireEntry = (projectDirectory: string, spec: ExternalAuthSpec): ServerWiring | undefined => {
     for (const candidate of ENTRY_CANDIDATES) {
         const path = join(projectDirectory, candidate);
