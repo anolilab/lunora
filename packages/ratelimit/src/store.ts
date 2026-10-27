@@ -33,6 +33,15 @@ const createMemoryStore = (): RateLimitStore => {
                     break;
                 }
 
+                // An owned live entry ends the sweep instead of rotating to the end: every
+                // entry behind it was written later. Rotating it would cost a delete and a set
+                // per live key on every consume. ponytail: a window store keeps the window
+                // start as `ts`, so an expired entry can sit behind a live one; it waits at
+                // most one more retention horizon, until that entry leaves the front.
+                if (value.ts > olderThanTs && owns?.(storageKey) !== false) {
+                    break;
+                }
+
                 examined += 1;
                 map.delete(storageKey);
 
@@ -41,7 +50,7 @@ const createMemoryStore = (): RateLimitStore => {
                 // kept entry moves to the end, so it cannot stop the sweep from reaching the
                 // entries behind it. ponytail: a debt key stays until a consume rewrites it
                 // or reset; add a debt-aware bound if abandoned debts show up in memory profiles.
-                if (value.value < 0 || value.ts > olderThanTs || owns?.(storageKey) === false) {
+                if (value.value < 0 || owns?.(storageKey) === false) {
                     map.set(storageKey, value);
                 }
             }

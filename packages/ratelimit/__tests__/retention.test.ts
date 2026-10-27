@@ -109,6 +109,21 @@ describe("memory store sweep", () => {
         expect(store.get("debt")).toEqual({ ts: 1, value: -4 });
         expect(store.get("spent")).toBeUndefined();
     });
+
+    it("stops at the first owned live entry instead of examining the live keys behind it", async () => {
+        expect.assertions(2);
+
+        const store = createMemoryStore();
+
+        await Promise.all(Array.from({ length: 100 }, async (_, index) => store.set(`k${String(index)}`, { ts: 100, value: 1 })));
+
+        const owns = vi.fn<(storageKey: string) => boolean>(() => true);
+
+        await store.sweep?.(10, 32, owns);
+
+        expect(owns).toHaveBeenCalledTimes(1);
+        expect(store.get("k99")).toEqual({ ts: 100, value: 1 });
+    });
 });
 
 describe("limiter retention", () => {
