@@ -68,7 +68,7 @@ import {
 } from "./emit";
 import { emitServiceDeclarations } from "./emit/service-declarations";
 import { isSensitiveFunction } from "./emit/shared";
-import { emitApp } from "./emit-app";
+import { emitApp, emitAuthModule } from "./emit-app";
 import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type { AgentIR, FunctionIR, HttpRouteIR, MaskMetadataIR, MigrationIR, MutatorIR, ShapeIR, WorkflowIR } from "./ir";
 import { setStandardTypeResolver } from "./parse-validator";
@@ -770,6 +770,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // each fanned into both the DO-side `createShardDO` factory and the worker-side
     // `createWorker` options. Lives in generated code (not the dependency-free
     // `@lunora/runtime`) so it can import the add-on packages the app installed.
+    const authModuleContent = emitAuthModule(dependencies.has("@lunora/auth"));
     const appContent = emitApp({
         // Usage-only, never a dependency signal: each long-tail method's
         // parameter type reads `ShardConfig[configKey]` (e.g. `.kv()` reads
@@ -927,6 +928,8 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { content: shardRegistryContent, kind: "optional", name: "shardRegistry.ts" },
               { content: durableObjectsContent, kind: "optional", name: "durableObjects.ts" },
               { content: seedContent, kind: "optional", name: "seed.ts" },
+              // The `@lunora/auth` exports `app.ts` loads with `import()` on the first event.
+              { content: authModuleContent, kind: "optional", name: "authModule.ts" },
               { content: collectionsContent, kind: "optional", name: "collections.ts" },
               { files: serviceDeclarations, kind: "services" },
               // The `.json` is the portable artifact for external tooling; the `.ts` (same
@@ -984,6 +987,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
             agents: agentsContent,
             api: apiContent,
             app: appContent,
+            authModule: authModuleContent,
             collections: collectionsContent,
             containers: containersContent,
             crons: cronsContent,

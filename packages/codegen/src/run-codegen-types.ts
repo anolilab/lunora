@@ -161,6 +161,8 @@ export interface CodegenResult {
         api: string;
         /** Fluent worker-composition builder (`_generated/app.ts`) — `defineApp()`. Always written. */
         app: string;
+        /** The `@lunora/auth` exports the worker uses (`_generated/authModule.ts`), loaded by `app.ts` with `import()`; `""` (and not written) without `@lunora/auth`. */
+        authModule: string;
         /** Partial-replication collection factories (`_generated/collections.ts`); `""` (and not written) unless the project declares shapes and installs `@lunora/db`. */
         collections: string;
         /** Container DO classes (`_generated/containers.ts`); `""` (and not written) when no containers are declared. */

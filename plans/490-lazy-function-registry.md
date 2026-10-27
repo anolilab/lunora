@@ -1,8 +1,19 @@
 # Plan 490 — Lazy function registry (Worker startup CPU scales with procedure count)
 
 **Baseline:** `947c714aa` (2026-10-13); email-guard prerequisite re-checked against `3e8806fd3` (2026-10-14)
-**Status:** PARTIAL — the lazy registry shipped opt-in (`--lazy-functions`, #1236/#1239). The pre-deploy smoke-load of §7 (error timing) is `lunora build|deploy`'s default for lazy builds. Cheap levers and the §9 startup budget are still open. The
-email-guard prerequisite (§8) has shipped (#1159). Measurement scripts are not committed; §6 says
+**Status:** PARTIAL — the lazy registry shipped opt-in (`--lazy-functions`, #1236/#1239). The pre-deploy smoke-load of §7 (error timing) is `lunora build|deploy`'s default for lazy builds. The §9 startup budget shipped as `pnpm run worker-startup:check` (#1165). Cheap levers shipped: the
+`shard.ts` admin payloads parse on first use (#1175, §6 4(a)), and the generated `app.ts` loads
+`@lunora/auth` (through a generated `_generated/authModule.ts` that names the exports it uses) and
+the OpenAPI / OpenRPC / architecture documents with `import()` on the first event (§6 4(b)(c), §8;
+refs #1166). On a 1,000-procedure synthetic app that roughly halved `wrangler check startup` with
+`--lazy-functions` (median 55 → 28 ms) and cut about a quarter without it when auth is reached only
+through `defineApp().auth()` (50 → 37 ms); an eager app whose function modules import `@lunora/auth`
+themselves pays ~6 ms more (esbuild lazy-init wrappers, zod no longer tree-shaken). The same PR marks
+the `lunorash` entries and `@lunora/server/drizzle` side-effectful: esbuild drops the lazy-init call
+behind an `export *` in a `sideEffects: false` package, which crashed such builds at startup. Still open: the lazy registry as
+the default, lighter shared builders (§8 last paragraph), and extending the smoke-load to eager
+builds now that `authModule.ts` and the spec modules evaluate on the first event.
+The email-guard prerequisite (§8) has shipped (#1159). Measurement scripts are not committed; §6 says
 what to add.
 
 ## 0. Headline finding

@@ -1857,6 +1857,44 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
+## `@lunora/auth/worker`
+
+### `authDiscoveryPathsFor` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `createAuth` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `createAuthAdmin` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `createAuthAuditReader` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `createDoAuthWiring` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `d1Executor` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `handleAuthDiscoveryRequest` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `handleAuthRequest` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `lunoraD1Adapter` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
 ## Referenced internal declarations
 
 Not exported, and reachable only through a signature above. Their members

@@ -108,7 +108,7 @@ describe("architecture manifest", () => {
 
         expect(existsSync(generated("architecture.json"))).toBe(false);
         expect(existsSync(generated("architecture.ts"))).toBe(false);
-        expect(readFileSync(generated("app.ts"), "utf8")).not.toContain(`import { architecture } from "./architecture.js";`);
+        expect(readFileSync(generated("app.ts"), "utf8")).not.toContain(`import("./architecture.js")`);
     });
 
     it("groups nodes by module and draws call, schedule, read, write, enqueue, publish and subscribe edges", () => {
@@ -157,7 +157,7 @@ describe("architecture manifest", () => {
             tags: { description: string; name: string }[];
         };
 
-        expect(app).toContain(`import { architecture } from "./architecture.js";`);
+        expect(app).toContain(`architecture: (await import("./architecture.js")).architecture,`);
         expect(openApi.paths["/_lunora/rpc#chat_posts:feed"]?.post?.tags).toStrictEqual(["chat"]);
         expect(openApi.tags).toContainEqual({ description: "Channels and messages", name: "chat" });
     });

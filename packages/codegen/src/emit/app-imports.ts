@@ -108,24 +108,13 @@ const buildRuntimeImports = (options: ResolvedAppOptions): string[] => {
 
 /** Import lines — only what the enabled capabilities need. Add-ons via `@lunora/*`; the runtime via the umbrella subpath when the app depends on `lunora`. */
 const buildImportLines = (options: ResolvedAppOptions): string[] => {
-    const {
-        hasAccess,
-        hasAuth,
-        hasGlobal,
-        hasHyperdriveGlobal,
-        hasKvIntrospector,
-        hasQueue,
-        hasScheduler,
-        hasStorage,
-        hasWorkflow,
-        wantsOpenApi,
-        wantsOpenRpc,
-    } = options;
+    const { hasAccess, hasAuth, hasGlobal, hasHyperdriveGlobal, hasKvIntrospector, hasQueue, hasScheduler, hasStorage, hasWorkflow } = options;
     return [
         ...(hasAuth
             ? [
                   `import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";`,
-                  `import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";`,
+                  // Types only: `authModule.ts` is loaded with `import()` on the first event (`loadDeferredModules`).
+                  `import type * as LunoraAuthModule from "./authModule.js";`,
               ]
             : []),
         ...buildAccessImports(hasAccess, hasAuth),
@@ -164,9 +153,6 @@ const buildImportLines = (options: ResolvedAppOptions): string[] => {
                   `import { LUNORA_QUEUE_REGISTRY } from "./queues.js";`,
               ]
             : []),
-        ...(options.wantsArchitecture ? [`import { architecture } from "./architecture.js";`] : []),
-        ...(wantsOpenApi ? [`import { openApiSpec } from "./openapi.js";`] : []),
-        ...(wantsOpenRpc ? [`import { openRpcSpec } from "./openrpc.js";`] : []),
         `import { createShardDO } from "./shard.js";`,
         ...(hasLiveStreamMounts(options) ? [`import { liveStreamRouter } from "${options.useUmbrella ? "lunorash/server" : "@lunora/server"}";`] : []),
         ...(options.hasVectors ? [`import { LUNORA_VECTOR_INDEXES } from "./vectors.js";`] : []),

@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
-import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import type * as LunoraAuthModule from "./authModule.js";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import { createScheduler } from "@lunora/scheduler";
 import { createWorkflowsRestClient } from "@lunora/workflow";
@@ -11,7 +11,6 @@ import { createWorker, resolveLogArchiveFromEnv, memoizeIdentity } from "lunoras
 
 import { LUNORA_CRONS } from "./crons.js";
 import { LUNORA_FUNCTIONS } from "./functions.js";
-import { openApiSpec } from "./openapi.js";
 import { createShardDO } from "./shard.js";
 
 /** Read a value off the per-request `env`. Returns `undefined` to leave the capability unconfigured (its `ctx.*`/admin surface stays a clear-error stub). */
@@ -22,6 +21,23 @@ type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
 
 /** The identity memo per `env` object, owned by one assembled worker. */
 type IdentityMemoStore = WeakMap<object, ReturnType<typeof memoizeIdentity>>;
+
+/** What the worker reads only once a request arrives: loaded then, not at isolate startup (Cloudflare caps startup at 1 s of CPU). */
+interface DeferredModules {
+    auth: typeof LunoraAuthModule;
+    openApiSpec: unknown;
+}
+
+let deferredModules: Promise<DeferredModules> | undefined;
+
+/** Loads {@link DeferredModules} once per isolate; every entry that builds the worker awaits it first. */
+const loadDeferredModules = (): Promise<DeferredModules> =>
+    (deferredModules ??= (async (): Promise<DeferredModules> => {
+        return {
+            auth: await import("./authModule.js"),
+            openApiSpec: (await import("./openapi.js")).openApiSpec,
+        };
+    })());
 
 /** `.scheduler(...)` declaration — the `SchedulerDO` namespace. Backs `ctx.scheduler` AND the studio's scheduled-jobs view. The origin its callbacks dispatch back to is not declared here: the DO reads `env.LUNORA_ORIGIN_URL` at fire time, because a caller-supplied dispatch target would be an SSRF vector. */
 interface SchedulerDeclaration<Env> {
@@ -263,6 +279,7 @@ class AppBuilder<Env extends object> {
             // On a first boot against an unmigrated database this means better-auth's
             // eager schema check runs BEFORE the migration, so one
             // "the auth tables do not match…" line on a cold start is expected.
+            const { createAuth, lunoraD1Adapter } = (await loadDeferredModules()).auth;
             const requestAuth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
 
             // Loaded on first request, not at module evaluation: the migrator pulls in kysely and
@@ -286,24 +303,27 @@ class AppBuilder<Env extends object> {
                 throw error;
             }));
 
-        const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth, identityMemos));
+        const buildWorker = (env: Env, deferred: DeferredModules): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth, identityMemos, deferred));
 
         const composed: ComposedApp = {
             ShardDO,
             fetch: async (request: Request, rawEnv: unknown, context: ExecutionContextLike): Promise<Response> => {
                 const env = rawEnv as Env;
+                const deferred = await loadDeferredModules();
                 await ensureAuth(env);
-                worker ??= buildWorker(env);
+                worker ??= buildWorker(env, deferred);
 
                 return worker.fetch(request, rawEnv, context);
             },
             scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {
-                worker ??= buildWorker(rawEnv as Env);
+                const deferred = await loadDeferredModules();
+                worker ??= buildWorker(rawEnv as Env, deferred);
 
                 return worker.scheduled(controller, rawEnv, context);
             },
-            serverQuery: (request, rawEnv, reference, args, options) => {
-                worker ??= buildWorker(rawEnv as Env);
+            serverQuery: async (request, rawEnv, reference, args, options) => {
+                const deferred = await loadDeferredModules();
+                worker ??= buildWorker(rawEnv as Env, deferred);
 
                 return worker.serverQuery(request, rawEnv, reference, args, options);
             },
@@ -326,11 +346,11 @@ class AppBuilder<Env extends object> {
     }
 
     /** Fan the recorded declarations into the worker-side `createWorker` options. */
-    private buildWorkerOptions(env: Env, getAuth: () => LunoraAuth | null, identityMemos: IdentityMemoStore): WorkerOptions {
+    private buildWorkerOptions(env: Env, getAuth: () => LunoraAuth | null, identityMemos: IdentityMemoStore, deferred: DeferredModules): WorkerOptions {
         const options: WorkerOptions = {
             cronJobs: LUNORA_CRONS,
             functions: LUNORA_FUNCTIONS,
-            openApiSpec,
+            openApiSpec: deferred.openApiSpec,
             ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),
             routes: this.routeMap,
             shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),
@@ -378,6 +398,7 @@ class AppBuilder<Env extends object> {
         // Captured before the branch so the narrowing survives — reading
         // `this.authDeclaration.namespace` again below would be optional all over again.
         const authDeclaration = this.authDeclaration;
+        const { authDiscoveryPathsFor, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest } = deferred.auth;
         const authNamespace = authDeclaration?.namespace;
         const authD1 = authDeclaration?.d1;
 

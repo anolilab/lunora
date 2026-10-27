@@ -5,7 +5,6 @@
 import { encodeWire } from "@lunora/wire";
 
 import type { ManifestDataset } from "./archive";
-import { buildArchive, buildManifest, buildSummaryPdf } from "./archive";
 import { articlesFor } from "./articles";
 import type { Dataset } from "./dataset";
 import { requireTables, retainedTables } from "./dataset";
@@ -92,6 +91,10 @@ const assembleExport = async (
         });
     }
 
+    // Loaded here, not at module scope: the PDF and ZIP writers (pdf-lib and its fonts, fflate,
+    // culori, an HTML parser) are about 1.3 MB that only an export run needs, and every Worker
+    // that declares a privacy policy would otherwise evaluate them at startup.
+    const { buildArchive, buildManifest, buildSummaryPdf } = await import("./archive");
     const generatedAt = ports.now();
     const manifest = buildManifest({ datasets: manifestDatasets, generatedAt, subjectKey });
     const zip = buildArchive([...files, { data: JSON.stringify(manifest, undefined, 2), path: "manifest.json" }], generatedAt);

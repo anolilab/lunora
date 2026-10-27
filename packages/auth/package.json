@@ -104,6 +104,10 @@
             "types": "./dist/sql-store.d.ts",
             "import": "./dist/sql-store.mjs"
         },
+        "./worker": {
+            "types": "./dist/worker.d.ts",
+            "import": "./dist/worker.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {

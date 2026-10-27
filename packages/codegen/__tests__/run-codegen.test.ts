@@ -2209,7 +2209,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
         });
 
         it("emits app.ts with the .auth() method when @lunora/auth is a declared dependency", () => {
-            expect.assertions(5);
+            expect.assertions(6);
 
             writeFileSync(
                 join(workdir, "package.json"),
@@ -2220,9 +2220,10 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
             const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.app).toContain("public auth(");
-            expect(result.generated.app).toContain(
-                'import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
-            );
+            // Loaded on the first event, not at isolate startup: types only at module scope, and the
+            // loaded module imports from `@lunora/auth/worker`, so the barrel stays out of the `import()`.
+            expect(result.generated.app).toContain('import type * as LunoraAuthModule from "./authModule.js";');
+            expect(result.generated.authModule).toContain('lunoraD1Adapter } from "@lunora/auth/worker";');
             expect(result.generated.app).toContain("options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));");
             // The OAuth discovery documents (plan 461 B): served by the auth instance
             // as the worker's last matcher, after the app's own routes.

@@ -33,7 +33,7 @@
         "__assets__"
     ],
     "type": "module",
-    "sideEffects": false,
+    "sideEffects": true,
     "main": "./dist/index.mjs",
     "module": "./dist/index.mjs",
     "types": "./dist/index.d.ts",
