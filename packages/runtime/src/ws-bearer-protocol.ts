@@ -82,8 +82,11 @@ const selectLunoraProtocol = (upgrade: BearerUpgrade, response: Response): Respo
 
     headers.set("sec-websocket-protocol", LUNORA_WS_PROTOCOL);
 
+    // `webSocket` is a workerd-only `ResponseInit` field; a consumer type-checking this file against the DOM lib does not know it.
+    const init: ResponseInit & { webSocket: unknown } = { headers, status: 101, webSocket };
+
     // eslint-disable-next-line unicorn/no-null -- a 101 switching-protocols response has no body
-    return new Response(null, { headers, status: 101, webSocket });
+    return new Response(null, init);
 };
 
 export type { BearerUpgrade };
