@@ -425,7 +425,10 @@ const WorkflowsPanel = (): ReactElement => {
                 </div>
             )}
 
-            {workflows.length > 0 && <SendEventForm eventTypes={data?.eventTypes ?? []} exportName={selectedExportName} onSent={readInstance} />}
+            {/* Keyed by workflow: an instance id typed for one workflow must not carry over and address another's. */}
+            {workflows.length > 0 && (
+                <SendEventForm eventTypes={data?.eventTypes ?? []} exportName={selectedExportName} key={selectedExportName} onSent={readInstance} />
+            )}
 
             {instances.length > 0 && (
                 <div className="flex flex-col gap-3" data-testid="workflows-instances">

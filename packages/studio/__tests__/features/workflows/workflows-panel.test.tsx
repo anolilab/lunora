@@ -196,6 +196,21 @@ describe("workflowsPanel", () => {
         });
     });
 
+    it("clears the event form's instance id when the selected workflow changes", async () => {
+        // Kept, the id typed for one workflow would address a same-id instance of the next one.
+        expect.assertions(1);
+
+        render(renderPanel(createWorkflowsClient(METADATA)));
+
+        await screen.findByTestId("workflows-row-billing");
+
+        fireEvent.change(screen.getByTestId("workflows-start-select"), { target: { value: "orderPipeline" } });
+        fireEvent.change(screen.getByTestId("workflows-event-id"), { target: { value: "wf-1" } });
+        fireEvent.change(screen.getByTestId("workflows-start-select"), { target: { value: "billing" } });
+
+        expect(screen.getByTestId<HTMLInputElement>("workflows-event-id").value).toBe("");
+    });
+
     it("shows a failed refresh after a send in the event form, not the start form", async () => {
         expect.hasAssertions();
 
