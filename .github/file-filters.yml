@@ -255,6 +255,8 @@ registry_sync:
     - "templates/*/lunora/ratelimit/**"
     - "examples/*/lunora/ratelimit/**"
     - "packages/cli/src/commands/init/overlay/apply.ts"
+    # Root manifest: `lint:registry:sync` is defined there, so editing the gate runs it.
+    - "package.json"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
 
