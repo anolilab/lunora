@@ -6,11 +6,11 @@ const constructed = vi.hoisted(() => {
     return { count: 0, listFunctions: 0 };
 });
 
-vi.mock(import("@lunora/client"), async (importOriginal) => {
+vi.mock(import("@lunora/client/admin"), async (importOriginal) => {
     const original = await importOriginal();
 
-    class CountingClient extends original.LunoraClient {
-        public constructor(options: ConstructorParameters<typeof original.LunoraClient>[0]) {
+    class CountingClient extends original.LunoraAdminClient {
+        public constructor(options: ConstructorParameters<typeof original.LunoraAdminClient>[0]) {
             super(options);
             constructed.count += 1;
         }
@@ -22,7 +22,7 @@ vi.mock(import("@lunora/client"), async (importOriginal) => {
         return [];
     });
 
-    return { ...original, LunoraClient: CountingClient };
+    return { ...original, LunoraAdminClient: CountingClient };
 });
 
 const callBody = { id: 1, jsonrpc: "2.0", method: "tools/call", params: { arguments: {}, name: "lunora_list_functions" } };

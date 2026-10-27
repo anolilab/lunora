@@ -1,7 +1,7 @@
 import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, resolveAuthOptions } from "@lunora/auth";
 import { createInsufficientScopeError, jwt, mcp, mcpDiscoveryPaths, requireMcpAuth } from "@lunora/auth/plugins";
-import type { LunoraClient } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { getAuthTables } from "better-auth/db";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -53,13 +53,13 @@ interface Client {
 }
 
 /** Minimal mock exposing only the methods the tools touch. */
-const mockClient = (): LunoraClient =>
+const mockClient = (): LunoraAdminClient =>
     ({
         listFunctions: vi.fn<() => Promise<{ kind: string; path: string }[]>>(async () => [
             { kind: "query", path: "messages:list" },
             { kind: "mutation", path: "messages:send" },
         ]),
-    }) as unknown as LunoraClient;
+    }) as unknown as LunoraAdminClient;
 
 /**
  * Build a real auth instance over an in-memory adapter. `clientPrivileges`
@@ -192,13 +192,13 @@ describe("createAuthedMcpFetchHandler behind real better-auth", () => {
     });
 
     /** The documented wiring: the same `resource` passed to `mcp()` and `requireMcpAuth`. */
-    const documentedHandler = (server: (claims: McpAccessTokenClaims) => { allowWrites: boolean; client: LunoraClient }) =>
+    const documentedHandler = (server: (claims: McpAccessTokenClaims) => { allowWrites: boolean; client: LunoraAdminClient }) =>
         createAuthedMcpFetchHandler({
             protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"], resource: RESOURCE }),
             server,
         });
 
-    const byScope = vi.fn<(claims: McpAccessTokenClaims) => { allowWrites: boolean; client: LunoraClient }>((claims) => {
+    const byScope = vi.fn<(claims: McpAccessTokenClaims) => { allowWrites: boolean; client: LunoraAdminClient }>((claims) => {
         return { allowWrites: mcpTokenScopes(claims).has("lunora:write"), client: mockClient() };
     });
 

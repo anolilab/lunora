@@ -1,10 +1,10 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { settlePolls, useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, formatCell } from "../../lib/internal";
 import { AuthPager, useOwnedOffset } from "./auth-pager";
@@ -44,7 +44,7 @@ interface OrganizationDetailProps {
  * is HTTP-only with no live channel.
  */
 export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled }: OrganizationDetailProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [dialog, setDialog] = useState<DialogState>(null);

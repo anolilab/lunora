@@ -1,5 +1,4 @@
 import type { PipelineLogCursor, PipelineLogQuery, PipelineLogRow } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useEffect, useReducer, useRef, useState } from "react";
 
@@ -13,6 +12,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import useDebounced from "../../hooks/use-debounced";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_OBSERVABILITY_URL } from "../../lib/cf-links";
 import { errorCode, errorMessage, fireAndForget } from "../../lib/internal";
@@ -125,7 +125,7 @@ const ArchiveRow = ({ row }: { readonly row: PipelineLogRow }): ReactElement => 
  * rather than an error.
  */
 export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [pathPrefix, setPathPrefix] = useState<string>("");

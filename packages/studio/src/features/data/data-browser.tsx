@@ -1,10 +1,10 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useState } from "react";
 
 import { ShardInput } from "../../components/shard-input";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import useMirroredRef from "../../hooks/use-mirrored-ref";
+import useStudioClient from "../../hooks/use-studio-client";
 import type { ColumnMeta, FilterClause, TableIndexInfo, TableInfo, TablePage, TablesColumnsResult, TablesIndexesResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { usePersistedValue } from "../../lib/browser-storage";
@@ -220,7 +220,7 @@ const DataBrowserSidebarHeader = ({
  * tables (via the `__lunora_admin__:listTables` RPC), then pages through the
  * rows of whichever table is selected (`__lunora_admin__:readTablePage`).
  *
- * Both calls travel over the ordinary `useLunora` client transport; the
+ * Both calls travel over the `LunoraAdminClient` from `useStudioClient`; the
  * admin RPCs are intercepted inside the Durable Object and are gated by the
  * server's `LUNORA_ADMIN_TOKEN`. The host is responsible for configuring the
  * client's auth token — this component issues no credentials of its own.
@@ -398,7 +398,7 @@ export const DataBrowser = ({
     const [cascadePreviewRowId, setCascadePreviewRowId] = useState<null | string>(null);
     const { closeExpandedCell, closeInspect, expandedCell, inspecting, onExpandCell } = inspection;
 
-    const client = useLunora();
+    const client = useStudioClient();
 
     // The open table's declared columns, keyed by name — what the row editor reads
     // to pick a field widget. Sourced from the same `describeTables` read the

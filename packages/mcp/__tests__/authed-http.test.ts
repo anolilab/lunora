@@ -1,4 +1,4 @@
-import type { LunoraClient } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 import { describe, expect, it, vi } from "vitest";
 
 import type { McpAccessTokenClaims, McpAuthProtect } from "../src/authed-http";
@@ -7,10 +7,10 @@ import { DEFAULT_MAX_REQUEST_BYTES } from "../src/serve-stateless";
 import type { LunoraMcpServerOptions } from "../src/server";
 
 /** Minimal mock exposing only the methods the tools touch. */
-const mockClient = (): LunoraClient =>
+const mockClient = (): LunoraAdminClient =>
     ({
         listFunctions: vi.fn<() => Promise<{ kind: string; path: string }[]>>(async () => [{ kind: "query", path: "messages:list" }]),
-    }) as unknown as LunoraClient;
+    }) as unknown as LunoraAdminClient;
 
 /** A Streamable-HTTP client POSTs one JSON-RPC message and accepts JSON or SSE. */
 const mcpRequest = (body: unknown): Request =>
@@ -98,7 +98,7 @@ describe("createAuthedMcpFetchHandler", () => {
     it("refuses an unauthorized request with the RFC 9728 challenge, without building a server", async () => {
         expect.assertions(3);
 
-        const server = vi.fn<() => { client: LunoraClient }>(() => {
+        const server = vi.fn<() => { client: LunoraAdminClient }>(() => {
             return { client: mockClient() };
         });
         const handle = createAuthedMcpFetchHandler({ protect: fakeProtect(undefined), server });
@@ -107,7 +107,7 @@ describe("createAuthedMcpFetchHandler", () => {
         expect(response.status).toBe(401);
         expect(response.headers.get("www-authenticate")).toContain("resource_metadata=");
         // The load-bearing assertion: the gate short-circuits BEFORE the server
-        // factory runs, so an unauthenticated caller never causes a `LunoraClient`
+        // factory runs, so an unauthenticated caller never causes a `LunoraAdminClient`
         // holding the deployment's admin bearer to be constructed.
         expect(server).not.toHaveBeenCalled();
     });
@@ -132,7 +132,7 @@ describe("createAuthedMcpFetchHandler", () => {
         expect.assertions(1);
 
         const claims = { scope: "lunora:read", sub: "user_1" };
-        const server = vi.fn<() => { client: LunoraClient }>(() => {
+        const server = vi.fn<() => { client: LunoraAdminClient }>(() => {
             return { client: mockClient() };
         });
         const handle = createAuthedMcpFetchHandler({ protect: fakeProtect(claims), server });
@@ -163,7 +163,7 @@ describe("createAuthedMcpFetchHandler", () => {
     it("scopes write-tool exposure to the token's own scopes", async () => {
         expect.assertions(4);
 
-        const byScope = (claims: McpAccessTokenClaims): { allowWrites: boolean; client: LunoraClient } => {
+        const byScope = (claims: McpAccessTokenClaims): { allowWrites: boolean; client: LunoraAdminClient } => {
             return { allowWrites: mcpTokenScopes(claims).has("lunora:write"), client: mockClient() };
         };
 

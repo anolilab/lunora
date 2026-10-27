@@ -1,3 +1,4 @@
+import type { LunoraAdminClient } from "../admin/admin-client";
 import type { LunoraClient } from "../lunora-client";
 import type { AuthPage, AuthSession, AuthUser } from "../types";
 
@@ -37,7 +38,7 @@ interface AuthUsersListFilter {
 }
 
 /** Users, via the admin-gated `GET /_lunora/admin/auth/users` (`client.listAuthUsers`). */
-const authUsersList = (client: LunoraClient, filter: AuthUsersListFilter = {}): AdminAuthList<AuthUser> => {
+const authUsersList = (client: LunoraAdminClient, filter: AuthUsersListFilter = {}): AdminAuthList<AuthUser> => {
     const { filterField, filterValue, search, searchField, sortBy, sortDirection } = filter;
 
     return {
@@ -48,17 +49,17 @@ const authUsersList = (client: LunoraClient, filter: AuthUsersListFilter = {}): 
 };
 
 /** Organizations (better-auth `organization` plugin), via `client.listAuthOrganizations`. */
-const authOrganizationsList = (client: LunoraClient): AdminAuthList<Record<string, unknown>> => {
+const authOrganizationsList = (client: LunoraAdminClient): AdminAuthList<Record<string, unknown>> => {
     return { fetchPage: (limit) => client.listAuthOrganizations({ limit }), key: ["organizations"] };
 };
 
 /** Sign-up invitations (`inviteOnly` plugin), via `client.listAuthSignUpInvitations`. Rows are unfiltered and newest-first. */
-const authSignUpInvitationsList = (client: LunoraClient): AdminAuthList<Record<string, unknown>> => {
+const authSignUpInvitationsList = (client: LunoraAdminClient): AdminAuthList<Record<string, unknown>> => {
     return { fetchPage: (limit) => client.listAuthSignUpInvitations({ limit }), key: ["sign-up-invitations"] };
 };
 
 /** Auth sessions, optionally scoped to one user, via `client.listAuthSessions`. */
-const authSessionsList = (client: LunoraClient, options: { userId?: string } = {}): AdminAuthList<AuthSession> => {
+const authSessionsList = (client: LunoraAdminClient, options: { userId?: string } = {}): AdminAuthList<AuthSession> => {
     const { userId } = options;
 
     return { fetchPage: (limit) => client.listAuthSessions({ limit, userId }), key: ["sessions", { userId }] };

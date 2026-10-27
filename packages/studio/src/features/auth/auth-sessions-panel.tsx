@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -8,6 +7,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { fireAndForget, formatTimestamp } from "../../lib/internal";
 import { AuthPager } from "./auth-pager";
@@ -24,7 +24,7 @@ const SESSION_LIMIT = 200;
  */
 
 const AuthSessionsPanel = (): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     // The auth store is HTTP-only (no admin-RPC path), so it's a `useClientQuery`

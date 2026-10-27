@@ -1,5 +1,4 @@
 import type { FunctionReference } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import { decodeWire } from "@lunora/wire";
 import type { ChangeEvent, ReactElement } from "react";
 import { useEffect, useState } from "react";
@@ -11,6 +10,7 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Textarea } from "../../components/ui/textarea";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, dispatchByKind, errorMessage, fireAndForget, formatTimestamp, jsonRowReplacer } from "../../lib/internal";
@@ -299,7 +299,7 @@ const withRecordedRun = (previous: RunHistoryEntry[], run: RecordedRun): RunHist
 /**
  * Interactive runner for the registered functions: pick one, edit its JSON
  * arguments, optionally target a shard, then invoke it against the live
- * {@link useLunora} client and inspect the result or error.
+ * {@link useStudioClient} client and inspect the result or error.
  *
  * By default the function list is auto-discovered from the worker's
  * `/_lunora/admin/functions` endpoint; pass an explicit `functions` array to
@@ -308,7 +308,7 @@ const withRecordedRun = (previous: RunHistoryEntry[], run: RecordedRun): RunHist
  */
 export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false }: FunctionRunnerProps = {}): ReactElement => {
     const t = useT();
-    const client = useLunora();
+    const client = useStudioClient();
 
     const [discovered, setDiscovered] = useState<FunctionDescriptor[] | null>(null);
     const [discoverError, setDiscoverError] = useState<null | string>(null);

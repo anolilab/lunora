@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
 import { Fragment, useState } from "react";
 
@@ -15,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Textarea } from "../../components/ui/textarea";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useStudioClient from "../../hooks/use-studio-client";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import type { QueueMessageOutcome, QueueMessageRow, QueueMessagesResult, QueueMetadata, QueuesResult, ReplayQueueMessageResult } from "../../lib/admin";
@@ -40,7 +40,7 @@ const SEND_QUEUE_MESSAGE = adminRef(ADMIN_FUNCTIONS.sendQueueMessage);
  * get the message — a blind retry would duplicate it in the ones that did.
  */
 const sendToTargets = async (
-    client: ReturnType<typeof useLunora>,
+    client: ReturnType<typeof useStudioClient>,
     requests: ReadonlyArray<{ batch?: unknown[]; body?: unknown; delaySeconds?: number; exportName: string }>,
     t: TFunction,
 ): Promise<null | string> => {
@@ -415,6 +415,88 @@ const QueuesSendTab = ({
 };
 
 /**
+ * Validate the Send form: the body must be JSON (empty sends `null`), the delay a
+ * non-negative number of seconds (empty means none), and batch mode needs an array.
+ */
+const parseSendInput = (
+    bodyText: string,
+    delayText: string,
+    batchMode: boolean,
+    t: ReturnType<typeof useT>,
+): { body: unknown; delaySeconds: number | undefined } | { error: string } => {
+    let body: unknown = null;
+    const trimmedBody = bodyText.trim();
+
+    if (trimmedBody !== "") {
+        try {
+            body = JSON.parse(trimmedBody);
+        } catch {
+            return { error: t("Body must be valid JSON.") };
+        }
+    }
+
+    let delaySeconds: number | undefined;
+    const trimmedDelay = delayText.trim();
+
+    if (trimmedDelay !== "") {
+        const parsed = Number(trimmedDelay);
+
+        if (!Number.isFinite(parsed) || parsed < 0) {
+            return { error: t("Delay must be a non-negative number of seconds.") };
+        }
+
+        delaySeconds = parsed;
+    }
+
+    if (batchMode && !Array.isArray(body)) {
+        return { error: t("Batch mode needs a JSON array body — each element is enqueued as one message.") };
+    }
+
+    return { body, delaySeconds };
+};
+
+/** Names the queues with no dead-letter queue, and how many loaded messages were dead-lettered. */
+const QueueReliabilityWarning = ({
+    deadLetteredCount,
+    queuesWithoutDlq,
+}: {
+    readonly deadLetteredCount: number;
+    readonly queuesWithoutDlq: ReadonlyArray<QueueMetadata>;
+}): ReactElement => {
+    const t = useT();
+
+    return (
+        <Alert
+            icon={
+                <span aria-hidden="true" className="text-base leading-none">
+                    ⚠
+                </span>
+            }
+            testId="queues-dlq-warning"
+            variant="warning"
+        >
+            <div className="flex flex-col gap-1">
+                {queuesWithoutDlq.length > 0 && (
+                    <>
+                        <p className="font-medium">
+                            {t("No dead-letter queue on {queues}.", { queues: queuesWithoutDlq.map((queue) => queue.name).join(", ") })}
+                        </p>
+                        <p className="text-muted-foreground">{t("Exhausted messages are dropped after retries. Add a deadLetterQueue to capture them.")}</p>
+                    </>
+                )}
+                {deadLetteredCount > 0 && (
+                    <p className={queuesWithoutDlq.length > 0 ? "text-muted-foreground" : "font-medium"}>
+                        {deadLetteredCount === 1
+                            ? t("1 message was recently dead-lettered.")
+                            : t("{count} messages were recently dead-lettered.", { count: deadLetteredCount })}
+                    </p>
+                )}
+            </div>
+        </Alert>
+    );
+};
+
+/**
  * The Queues inspector — three tabs over the deployment's Cloudflare Queues.
  *
  * Declared: the `defineQueue` producers statically discovered by `@lunora/codegen` (export, deployed name, push/pull mode, binding, DLQ).
@@ -423,7 +505,7 @@ const QueuesSendTab = ({
  *
  * Send: enqueue a JSON body (optionally a batch, with an optional delay) to any declared producer, to exercise a consumer end to end.
  *
- * All three read/write reserved admin RPCs over the {@link useLunora} client, gated by the server's `LUNORA_ADMIN_TOKEN`.
+ * All three read/write reserved admin RPCs over the {@link useStudioClient} client, gated by the server's `LUNORA_ADMIN_TOKEN`.
  *
  * The tab bodies are extracted into sibling components so the panel stays small
  * and each tab is independently readable; state and actions live here and flow
@@ -436,7 +518,7 @@ const QueuesSendTab = ({
  */
 const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
     const messageLimit = limit ?? DEFAULT_MESSAGE_LIMIT;
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [tab, setTab] = useState<QueuesTab>("declared");
@@ -495,39 +577,15 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
             return;
         }
 
-        let body: unknown = null;
-        const trimmedBody = bodyText.trim();
+        const input = parseSendInput(bodyText, delayText, batchMode, t);
 
-        if (trimmedBody !== "") {
-            try {
-                body = JSON.parse(trimmedBody);
-            } catch {
-                setActionError(t("Body must be valid JSON."));
-
-                return;
-            }
-        }
-
-        let delaySeconds: number | undefined;
-        const trimmedDelay = delayText.trim();
-
-        if (trimmedDelay !== "") {
-            const parsed = Number(trimmedDelay);
-
-            if (!Number.isFinite(parsed) || parsed < 0) {
-                setActionError(t("Delay must be a non-negative number of seconds."));
-
-                return;
-            }
-
-            delaySeconds = parsed;
-        }
-
-        if (batchMode && !Array.isArray(body)) {
-            setActionError(t("Batch mode needs a JSON array body — each element is enqueued as one message."));
+        if ("error" in input) {
+            setActionError(input.error);
 
             return;
         }
+
+        const { body, delaySeconds } = input;
 
         setSending(true);
 
@@ -637,37 +695,7 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
 
             {error !== null && <ErrorAlert error={errorSource} testId="queues-error" />}
 
-            {showReliabilityWarning && (
-                <Alert
-                    icon={
-                        <span aria-hidden="true" className="text-base leading-none">
-                            ⚠
-                        </span>
-                    }
-                    testId="queues-dlq-warning"
-                    variant="warning"
-                >
-                    <div className="flex flex-col gap-1">
-                        {queuesWithoutDlq.length > 0 && (
-                            <>
-                                <p className="font-medium">
-                                    {t("No dead-letter queue on {queues}.", { queues: queuesWithoutDlq.map((queue) => queue.name).join(", ") })}
-                                </p>
-                                <p className="text-muted-foreground">
-                                    {t("Exhausted messages are dropped after retries. Add a deadLetterQueue to capture them.")}
-                                </p>
-                            </>
-                        )}
-                        {deadLetteredCount > 0 && (
-                            <p className={queuesWithoutDlq.length > 0 ? "text-muted-foreground" : "font-medium"}>
-                                {deadLetteredCount === 1
-                                    ? t("1 message was recently dead-lettered.")
-                                    : t("{count} messages were recently dead-lettered.", { count: deadLetteredCount })}
-                            </p>
-                        )}
-                    </div>
-                </Alert>
-            )}
+            {showReliabilityWarning && <QueueReliabilityWarning deadLetteredCount={deadLetteredCount} queuesWithoutDlq={queuesWithoutDlq} />}
 
             {tab === "declared" && <QueuesDeclaredTab loaded={queuesData !== undefined} queues={queues} />}
 

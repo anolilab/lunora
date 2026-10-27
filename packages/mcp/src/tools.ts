@@ -1,4 +1,5 @@
-import type { FunctionDescriptor, FunctionReference, LunoraClient } from "@lunora/client";
+import type { FunctionDescriptor, FunctionReference } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 import { LunoraError } from "@lunora/errors";
 
 import { callErrorTool, ERROR_TOOL_DEFINITIONS, ERROR_TOOL_NAMES } from "./error-tools";
@@ -10,7 +11,7 @@ import { readConfirmation, screenWriteConfirmation, WRITE_CONFIRMATION_PROPERTIE
 
 /**
  * The tool surface this MCP server exposes, and the router in front of it. Each
- * tool maps onto a method the `LunoraClient` already provides, so an AI agent
+ * tool maps onto a method the `LunoraAdminClient` already provides, so an AI agent
  * can introspect a deployment (functions, global tables) and invoke its
  * functions over HTTP RPC.
  *
@@ -214,9 +215,9 @@ interface FunctionsCacheEntry {
     promise: Promise<FunctionDescriptor[]>;
 }
 
-const functionsCache = new WeakMap<LunoraClient, FunctionsCacheEntry>();
+const functionsCache = new WeakMap<LunoraAdminClient, FunctionsCacheEntry>();
 
-const listFunctionsCached = (client: LunoraClient): Promise<FunctionDescriptor[]> => {
+const listFunctionsCached = (client: LunoraAdminClient): Promise<FunctionDescriptor[]> => {
     const now = Date.now();
     const cached = functionsCache.get(client);
 
@@ -246,7 +247,7 @@ const listFunctionsCached = (client: LunoraClient): Promise<FunctionDescriptor[]
  * can't reach internal/non-public function paths it invented, and can't run a
  * mutation/action through the query tool (or vice-versa). Throws on any mismatch.
  */
-const assertRunnable = async (client: LunoraClient, functionPath: string, expectedKind: "action" | "mutation" | "query"): Promise<FunctionDescriptor> => {
+const assertRunnable = async (client: LunoraAdminClient, functionPath: string, expectedKind: "action" | "mutation" | "query"): Promise<FunctionDescriptor> => {
     const functions = await listFunctionsCached(client);
     const descriptor: FunctionDescriptor | undefined = functions.find((function_) => function_.path === functionPath);
 
@@ -273,7 +274,7 @@ const assertRunnable = async (client: LunoraClient, functionPath: string, expect
  * call that would have failed anyway is worse than the error.
  */
 const screenWrite = async (
-    client: LunoraClient,
+    client: LunoraAdminClient,
     tool: string,
     kind: "action" | "mutation",
     run: { args: Record<string, unknown>; functionPath: string; shardKey: string | undefined },
@@ -294,7 +295,7 @@ const sensitiveArgumentNamesOf = (descriptor: FunctionDescriptor): string[] =>
     (descriptor.args ?? []).filter((argument) => argument.sensitive === true).map((argument) => argument.name);
 
 /** Dispatch a read-only tool: introspection and query, no gate. */
-const callReadOnlyTool = async (client: LunoraClient, name: string, input: Record<string, unknown>): Promise<ToolResult> => {
+const callReadOnlyTool = async (client: LunoraAdminClient, name: string, input: Record<string, unknown>): Promise<ToolResult> => {
     switch (name) {
         case "lunora_get_function_schema": {
             const functionPath = readFunctionPath(input);
@@ -334,7 +335,7 @@ const callReadOnlyTool = async (client: LunoraClient, name: string, input: Recor
  * two-step confirmation here, so "this server may write" and "this write was
  * reviewed" stay separate questions.
  */
-const callWriteTool = async (client: LunoraClient, name: string, input: Record<string, unknown>): Promise<ToolResult> => {
+const callWriteTool = async (client: LunoraAdminClient, name: string, input: Record<string, unknown>): Promise<ToolResult> => {
     if (name !== "lunora_run_action" && name !== "lunora_run_mutation") {
         throw new LunoraError("INTERNAL", `unknown write tool: ${name}`);
     }
@@ -410,7 +411,7 @@ interface ToolGateSpec {
  */
 interface ToolFamily {
     /** Dispatch a call this family owns. May throw; {@link callTool} turns that into an error result. */
-    call: (client: LunoraClient, name: string, input: Record<string, unknown>) => Promise<ToolResult> | ToolResult;
+    call: (client: LunoraAdminClient, name: string, input: Record<string, unknown>) => Promise<ToolResult> | ToolResult;
     definitions: ReadonlyArray<ToolDefinition>;
     /** Absent for the always-exposed tiers. */
     gate?: ToolGateSpec;
@@ -492,7 +493,7 @@ const toolDefinitions = (allowWrites: boolean, allowObservability = false, allow
  * shown.
  */
 const callTool = async (
-    client: LunoraClient,
+    client: LunoraAdminClient,
     name: string,
     input: Record<string, unknown>,
     allowWrites = false,

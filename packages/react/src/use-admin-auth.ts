@@ -1,6 +1,8 @@
 "use client";
 
 import type { AuthImpersonation, AuthPage, AuthSession, AuthUser, LunoraClient } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
+import { isLunoraAdminClient } from "@lunora/client/admin";
 import type { AdminAuthList, AuthUsersListFilter } from "@lunora/client/auth";
 import {
     ADMIN_AUTH_DEFAULT_PAGE_SIZE,
@@ -12,6 +14,7 @@ import {
     authUsersList,
     subscribeAdminAuthIdentity,
 } from "@lunora/client/auth";
+import { LunoraError } from "@lunora/errors";
 import { keepPreviousData, useMutation as useTanStackMutation, useQuery as useTanStackQuery } from "@tanstack/react-query";
 import { useState, useSyncExternalStore } from "react";
 
@@ -19,7 +22,7 @@ import { useLunora } from "./lunora-provider";
 
 // ── Prototype: reactive admin/organization auth hooks (plan 237) ──────────
 //
-// `LunoraClient` carries ~35 imperative auth-admin methods (`listAuthUsers`,
+// `LunoraAdminClient` carries ~35 imperative auth-admin methods (`listAuthUsers`,
 // `createAuthOrganization`, `impersonateAuthUser`, …) hit over `adminFetch` —
 // a plain `fetch()` call, entirely separate from the client's WS/live
 // transport (`ensureSocket`/`sendOn`/`subscribe`). `@lunora/studio`'s auth
@@ -72,6 +75,24 @@ interface AdminAuthListResult<T> {
     /** `AuthPage.total` — the server-reported row count across the whole collection, not just the current window. `undefined` before the first response. */
     readonly total: number | undefined;
 }
+
+/**
+ * The provider's client, which must be a `LunoraAdminClient`: the auth-admin
+ * methods live on that subclass (`@lunora/client/admin`) so an app that never
+ * administers auth does not ship them.
+ */
+const useAdminClient = (): LunoraAdminClient => {
+    const client = useLunora();
+
+    if (!isLunoraAdminClient(client)) {
+        throw new LunoraError(
+            "INTERNAL",
+            "The admin auth hooks need a LunoraAdminClient: construct the provider's client with `new LunoraAdminClient(...)` from `@lunora/client/admin`.",
+        );
+    }
+
+    return client;
+};
 
 /**
  * Shared list-read primitive: fetch a growing `{ limit }` window through
@@ -171,7 +192,7 @@ interface UseAuthUsersOptions extends AdminAuthQueryOptions, AuthUsersListFilter
  * this hook decides its own refresh cadence by calling `refetch()`.
  */
 const useAuthUsers = (options: UseAuthUsersOptions = {}): AdminAuthListResult<AuthUser> => {
-    const client = useLunora();
+    const client = useAdminClient();
     const { enabled, pageSize, ...filter } = options;
 
     return useAdminAuthList(client, authUsersList(client, filter), { enabled, pageSize });
@@ -193,7 +214,7 @@ type UseOrganizationsOptions = AdminAuthQueryOptions;
  * invalidation-on-mutate is wired in.
  */
 const useOrganizations = (options: UseOrganizationsOptions = {}): AdminAuthListResult<Record<string, unknown>> => {
-    const client = useLunora();
+    const client = useAdminClient();
     const { enabled, pageSize } = options;
 
     return useAdminAuthList(client, authOrganizationsList(client), { enabled, pageSize });
@@ -214,7 +235,7 @@ type UseSignUpInvitationsOptions = AdminAuthQueryOptions;
  * hooks do.
  */
 const useSignUpInvitations = (options: UseSignUpInvitationsOptions = {}): AdminAuthListResult<Record<string, unknown>> => {
-    const client = useLunora();
+    const client = useAdminClient();
     const { enabled, pageSize } = options;
 
     return useAdminAuthList(client, authSignUpInvitationsList(client), { enabled, pageSize });
@@ -237,7 +258,7 @@ interface UseAuthSessionsOptions extends AdminAuthQueryOptions {
  * stays a plain `client.*` call followed by this hook's `refetch()`.
  */
 const useAuthSessions = (options: UseAuthSessionsOptions = {}): AdminAuthListResult<AuthSession> => {
-    const client = useLunora();
+    const client = useAdminClient();
     const { enabled, pageSize, userId } = options;
 
     return useAdminAuthList(client, authSessionsList(client, { userId }), { enabled, pageSize });
@@ -288,7 +309,7 @@ interface UseImpersonateResult {
  * also renders `useAuthSessions` can call its `refetch()` explicitly.
  */
 const useImpersonate = (): UseImpersonateResult => {
-    const client = useLunora();
+    const client = useAdminClient();
 
     const mutation = useTanStackMutation<AuthImpersonation, Error, string>({
         mutationFn: (userId: string) => client.impersonateAuthUser({ userId }),

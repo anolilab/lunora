@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -9,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAuthConfig } from "../../hooks/use-auth-config";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { formatCell, formatTimestamp } from "../../lib/internal";
 import { AuthPager } from "./auth-pager";
@@ -32,7 +32,7 @@ const ORG_PAGE_SIZE = 100;
  * dashboard adapts to whatever plugins the deployment turned on.
  */
 const OrganizationsPanel = (): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
     const { config, ready } = useAuthConfig();
     const orgEnabled = config.capabilities.organization;

@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement, ReactNode } from "react";
 import { useState } from "react";
 
@@ -8,6 +7,7 @@ import { Label } from "../../components/ui/label";
 import { ModalShell } from "../../components/ui/modal-shell";
 import { Textarea } from "../../components/ui/textarea";
 import useAsyncSubmit from "../../hooks/use-async-submit";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { formatCell } from "../../lib/internal";
 import type { Row } from "./types";
@@ -119,7 +119,7 @@ const DialogForm = ({
 
 /** Create or edit an organization (name / slug / logo / metadata; `ownerId` seeds the owner member on create). */
 const OrgFormDialog = ({ mode, onClose, onDone, org }: { mode: "create" | "edit"; onClose: () => void; onDone: () => void; org?: Row }): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
     const { busy, error, run } = useAsyncSubmit();
 
@@ -225,7 +225,7 @@ const OrgFormDialog = ({ mode, onClose, onDone, org }: { mode: "create" | "edit"
 
 /** Directly add an existing user (by id) to an organization. */
 const MemberAddDialog = ({ onClose, onDone, organizationId }: { onClose: () => void; onDone: () => void; organizationId: string }): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
     const { busy, error, run } = useAsyncSubmit();
 
@@ -277,7 +277,7 @@ const MemberAddDialog = ({ onClose, onDone, organizationId }: { onClose: () => v
 
 /** Create a pending email invitation to an organization. */
 const MemberInviteDialog = ({ onClose, onDone, organizationId }: { onClose: () => void; onDone: () => void; organizationId: string }): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
     const { busy, error, run } = useAsyncSubmit();
 
@@ -330,7 +330,7 @@ const MemberInviteDialog = ({ onClose, onDone, organizationId }: { onClose: () =
 
 /** Change a member's role (comma-separate for multiple roles). */
 const MemberRoleDialog = ({ member, onClose, onDone }: { member: Row; onClose: () => void; onDone: () => void }): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
     const { busy, error, run } = useAsyncSubmit();
 
@@ -384,7 +384,7 @@ const TeamFormDialog = ({
     organizationId: string;
     team?: Row;
 }): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
     const { busy, error, run } = useAsyncSubmit();
 
@@ -428,7 +428,7 @@ const TeamFormDialog = ({
 
 /** Add an existing user (by id) to a team. */
 const TeamMemberAddDialog = ({ onClose, onDone, teamId }: { onClose: () => void; onDone: () => void; teamId: string }): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
     const { busy, error, run } = useAsyncSubmit();
 
@@ -481,7 +481,7 @@ const RoleFormDialog = ({
     organizationId: string;
     role?: Row;
 }): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
     const { busy, error, run } = useAsyncSubmit();
 

@@ -488,6 +488,7 @@ class LunoraClient {
     static createClientQuery<T>(key: string, defaultValue: T): ClientQueryRef<T>;
     readonly url: string;
     readonly wsUrl: string;
+    protected readonly adminHost: AdminHost;
     constructor(options: LunoraClientOptions);
     setAuthToken(token: string | null, subject?: string | null): void;
     getAuthToken(): string | null;
@@ -606,296 +607,7 @@ class LunoraClient {
         imported: number;
         queued: number;
     }>;
-    shardTraffic(table: string): Promise<ShardTrafficResult>;
-    listScheduledJobs(): Promise<ScheduleRecord[]>;
-    schedulerStatus(): Promise<SchedulerStatus>;
-    cancelScheduledJob(id: string): Promise<{
-        cancelled: boolean;
-    }>;
-    listDeadJobs(): Promise<ScheduleRecord[]>;
-    retryDeadJob(id: string): Promise<{
-        retried: boolean;
-    }>;
-    removeDeadJob(id: string): Promise<{
-        removed: boolean;
-    }>;
-    listWorkflowInstances(options: {
-        name: string;
-        page?: number;
-        perPage?: number;
-        status?: WorkflowInstanceStatus;
-    }): Promise<WorkflowInstancePage>;
-    getWorkflowInstance(options: {
-        id: string;
-        name: string;
-    }): Promise<WorkflowInstanceDetail>;
-    setWorkflowInstanceStatus(options: {
-        action: WorkflowInstanceAction;
-        id: string;
-        name: string;
-    }): Promise<{
-        status: WorkflowInstanceStatus;
-    }>;
     subscribeScheduledJobs(onJobs: (jobs: ScheduleRecord[]) => void): Unsubscribe;
-    listFunctions(): Promise<FunctionDescriptor[]>;
-    getCronJobs(): Promise<CronJobInfo[]>;
-    runCronJob(name: string): Promise<{
-        name: string;
-        ran: boolean;
-    }>;
-    fetchOpenApi(): Promise<Record<string, unknown>>;
-    fetchArchitecture(): Promise<Record<string, unknown>>;
-    fetchOpenRpc(): Promise<Record<string, unknown>>;
-    listStorageObjects(options?: {
-        bucket?: string;
-        cursor?: string;
-        limit?: number;
-        prefix?: string;
-    }): Promise<StorageListPage>;
-    deleteStorageObject(key: string, options?: {
-        bucket?: string;
-    }): Promise<{
-        deleted: boolean;
-        key: string;
-    }>;
-    listStorageBuckets(): Promise<string[]>;
-    uploadStorageObject(options: {
-        body: ArrayBuffer | Blob;
-        bucket?: string;
-        contentType?: string;
-        key: string;
-    }): Promise<{
-        etag?: string;
-        key: string;
-    }>;
-    signedStorageUrl(key: string, options?: {
-        bucket?: string;
-        expiresInSeconds?: number;
-    }): Promise<string>;
-    listGlobalTables(): Promise<GlobalTableInfo[]>;
-    readGlobalTablePage(options: {
-        filters?: GlobalFilterClause[];
-        limit?: number;
-        offset?: number;
-        table: string;
-    }): Promise<GlobalTablePage>;
-    facetGlobalColumn(options: {
-        column: string;
-        filters?: GlobalFilterClause[];
-        limit?: number;
-        table: string;
-    }): Promise<GlobalFacetResult>;
-    listVectorIndexes(): Promise<VectorIndexSummary[]>;
-    queryVectorIndex(options: {
-        name: string;
-        text: string;
-        topK?: number;
-    }): Promise<VectorQueryMatch[]>;
-    queryLogArchive(query?: PipelineLogQuery): Promise<PipelineLogPage>;
-    listKvNamespaces(): Promise<KvNamespaceSummary[]>;
-    listKvKeys(options: {
-        cursor?: string;
-        limit?: number;
-        namespace: string;
-        prefix?: string;
-    }): Promise<KvKeyListResult>;
-    getKvValue(options: {
-        key: string;
-        namespace: string;
-    }): Promise<KvValueResult>;
-    putKvValue(options: {
-        expiration?: number;
-        expirationTtl?: number;
-        key: string;
-        metadata?: unknown;
-        namespace: string;
-        value: string;
-    }): Promise<void>;
-    deleteKvKey(options: {
-        key: string;
-        namespace: string;
-    }): Promise<void>;
-    listAuthUsers(options?: {
-        filterField?: string;
-        filterValue?: string;
-        limit?: number;
-        offset?: number;
-        search?: string;
-        searchField?: string;
-        sortBy?: string;
-        sortDirection?: "asc" | "desc";
-    }): Promise<AuthPage<AuthUser>>;
-    createAuthUser(input: {
-        data?: Record<string, unknown>;
-        email: string;
-        name: string;
-        password?: string;
-        role?: string | string[];
-    }): Promise<AuthUser>;
-    setAuthUserRole(input: {
-        role: string | string[];
-        userId: string;
-    }): Promise<AuthUser>;
-    banAuthUser(input: {
-        expiresInSeconds?: number;
-        reason?: string;
-        userId: string;
-    }): Promise<AuthUser>;
-    unbanAuthUser(input: {
-        userId: string;
-    }): Promise<AuthUser>;
-    setAuthUserPassword(input: {
-        newPassword: string;
-        userId: string;
-    }): Promise<void>;
-    removeAuthUser(input: {
-        userId: string;
-    }): Promise<void>;
-    impersonateAuthUser(input: {
-        userId: string;
-    }): Promise<AuthImpersonation>;
-    revokeAuthSession(input: {
-        sessionId: string;
-    }): Promise<void>;
-    revokeAuthUserSessions(input: {
-        userId: string;
-    }): Promise<void>;
-    getAuthCapabilities(): Promise<AuthCapabilities>;
-    updateAuthUser(input: {
-        data: Record<string, unknown>;
-        userId: string;
-    }): Promise<AuthUser>;
-    listAuthAccounts(input: {
-        userId: string;
-    }): Promise<Record<string, unknown>[]>;
-    unlinkAuthAccount(input: {
-        accountId: string;
-        userId: string;
-    }): Promise<void>;
-    listAuthPasskeys(input: {
-        userId: string;
-    }): Promise<Record<string, unknown>[]>;
-    deleteAuthPasskey(input: {
-        passkeyId: string;
-    }): Promise<void>;
-    disableAuthTwoFactor(input: {
-        userId: string;
-    }): Promise<void>;
-    listAuthOrganizations(options?: {
-        limit?: number;
-        offset?: number;
-    }): Promise<AuthPage<Record<string, unknown>>>;
-    listAuthOrgMembers(input: {
-        limit?: number;
-        offset?: number;
-        organizationId: string;
-    }): Promise<AuthPage<Record<string, unknown>>>;
-    listAuthOrgInvitations(input: {
-        limit?: number;
-        offset?: number;
-        organizationId: string;
-    }): Promise<AuthPage<Record<string, unknown>>>;
-    listAuthSignUpInvitations(options?: {
-        limit?: number;
-        offset?: number;
-    }): Promise<AuthPage<Record<string, unknown>>>;
-    createAuthSignUpInvitation(input: {
-        email: string;
-        expiresInSeconds?: number;
-        invitedBy?: string;
-    }): Promise<Record<string, unknown>>;
-    revokeAuthSignUpInvitation(input: {
-        email: string;
-    }): Promise<void>;
-    removeAuthOrgMember(input: {
-        memberId: string;
-    }): Promise<void>;
-    cancelAuthOrgInvitation(input: {
-        invitationId: string;
-    }): Promise<void>;
-    getAuthConfig(): Promise<AuthConfigInfo>;
-    createAuthOrganization(input: {
-        logo?: string;
-        metadata?: Record<string, unknown>;
-        name: string;
-        ownerId?: string;
-        slug?: string;
-    }): Promise<Record<string, unknown>>;
-    updateAuthOrganization(input: {
-        logo?: string;
-        metadata?: Record<string, unknown>;
-        name?: string;
-        organizationId: string;
-        slug?: string;
-    }): Promise<Record<string, unknown>>;
-    deleteAuthOrganization(input: {
-        organizationId: string;
-    }): Promise<void>;
-    addAuthOrgMember(input: {
-        organizationId: string;
-        role?: string;
-        userId: string;
-    }): Promise<Record<string, unknown>>;
-    inviteAuthOrgMember(input: {
-        email: string;
-        inviterId?: string;
-        organizationId: string;
-        role?: string;
-    }): Promise<Record<string, unknown>>;
-    setAuthOrgMemberRole(input: {
-        memberId: string;
-        role: string | string[];
-    }): Promise<Record<string, unknown>>;
-    listAuthOrgTeams(input: {
-        limit?: number;
-        offset?: number;
-        organizationId: string;
-    }): Promise<AuthPage<Record<string, unknown>>>;
-    createAuthOrgTeam(input: {
-        name: string;
-        organizationId: string;
-    }): Promise<Record<string, unknown>>;
-    updateAuthOrgTeam(input: {
-        name: string;
-        teamId: string;
-    }): Promise<Record<string, unknown>>;
-    removeAuthOrgTeam(input: {
-        teamId: string;
-    }): Promise<void>;
-    listAuthOrgTeamMembers(input: {
-        limit?: number;
-        offset?: number;
-        teamId: string;
-    }): Promise<AuthPage<Record<string, unknown>>>;
-    addAuthOrgTeamMember(input: {
-        teamId: string;
-        userId: string;
-    }): Promise<Record<string, unknown>>;
-    removeAuthOrgTeamMember(input: {
-        teamMemberId: string;
-    }): Promise<void>;
-    listAuthOrgRoles(input: {
-        limit?: number;
-        offset?: number;
-        organizationId: string;
-    }): Promise<AuthPage<Record<string, unknown>>>;
-    createAuthOrgRole(input: {
-        organizationId: string;
-        permission: Record<string, string[]>;
-        role: string;
-    }): Promise<Record<string, unknown>>;
-    updateAuthOrgRole(input: {
-        permission: Record<string, string[]>;
-        roleId: string;
-    }): Promise<Record<string, unknown>>;
-    deleteAuthOrgRole(input: {
-        roleId: string;
-    }): Promise<void>;
-    listAuthSessions(options?: {
-        limit?: number;
-        offset?: number;
-        userId?: string;
-    }): Promise<AuthPage<AuthSession>>;
     subscribe<F extends FunctionReference>(function_: F, args: ArgsOf<F>, callback: (data: ReturnOf<F>) => void, options?: {
         onCheckpoint?: (watermark: SyncWatermark) => void;
         onError?: SubscriptionErrorCallback;
@@ -1952,6 +1664,310 @@ const setAuthTokenProvider: (client: LunoraClient, fetchToken: AuthTokenFetcher,
 const subscribeLiveTopic: (options: SubscribeLiveTopicOptions) => (() => void);
 ```
 
+## `@lunora/client/admin`
+
+### `LunoraAdminClient` (class)
+
+```ts
+class LunoraAdminClient extends LunoraClient {
+    shardTraffic(table: string): Promise<ShardTrafficResult>;
+    listScheduledJobs(): Promise<ScheduleRecord[]>;
+    schedulerStatus(): Promise<SchedulerStatus>;
+    cancelScheduledJob(id: string): Promise<{
+        cancelled: boolean;
+    }>;
+    listDeadJobs(): Promise<ScheduleRecord[]>;
+    retryDeadJob(id: string): Promise<{
+        retried: boolean;
+    }>;
+    removeDeadJob(id: string): Promise<{
+        removed: boolean;
+    }>;
+    listWorkflowInstances(options: {
+        name: string;
+        page?: number;
+        perPage?: number;
+        status?: WorkflowInstanceStatus;
+    }): Promise<WorkflowInstancePage>;
+    getWorkflowInstance(options: {
+        id: string;
+        name: string;
+    }): Promise<WorkflowInstanceDetail>;
+    setWorkflowInstanceStatus(options: {
+        action: WorkflowInstanceAction;
+        id: string;
+        name: string;
+    }): Promise<{
+        status: WorkflowInstanceStatus;
+    }>;
+    listFunctions(): Promise<FunctionDescriptor[]>;
+    getCronJobs(): Promise<CronJobInfo[]>;
+    runCronJob(name: string): Promise<{
+        name: string;
+        ran: boolean;
+    }>;
+    fetchOpenApi(): Promise<Record<string, unknown>>;
+    fetchArchitecture(): Promise<Record<string, unknown>>;
+    fetchOpenRpc(): Promise<Record<string, unknown>>;
+    listStorageObjects(options?: {
+        bucket?: string;
+        cursor?: string;
+        limit?: number;
+        prefix?: string;
+    }): Promise<StorageListPage>;
+    deleteStorageObject(key: string, options?: {
+        bucket?: string;
+    }): Promise<{
+        deleted: boolean;
+        key: string;
+    }>;
+    listStorageBuckets(): Promise<string[]>;
+    uploadStorageObject(options: {
+        body: ArrayBuffer | Blob;
+        bucket?: string;
+        contentType?: string;
+        key: string;
+    }): Promise<{
+        etag?: string;
+        key: string;
+    }>;
+    signedStorageUrl(key: string, options?: {
+        bucket?: string;
+        expiresInSeconds?: number;
+    }): Promise<string>;
+    listGlobalTables(): Promise<GlobalTableInfo[]>;
+    readGlobalTablePage(options: {
+        filters?: GlobalFilterClause[];
+        limit?: number;
+        offset?: number;
+        table: string;
+    }): Promise<GlobalTablePage>;
+    facetGlobalColumn(options: {
+        column: string;
+        filters?: GlobalFilterClause[];
+        limit?: number;
+        table: string;
+    }): Promise<GlobalFacetResult>;
+    listVectorIndexes(): Promise<VectorIndexSummary[]>;
+    queryVectorIndex(options: {
+        name: string;
+        text: string;
+        topK?: number;
+    }): Promise<VectorQueryMatch[]>;
+    queryLogArchive(query?: PipelineLogQuery): Promise<PipelineLogPage>;
+    listKvNamespaces(): Promise<KvNamespaceSummary[]>;
+    listKvKeys(options: {
+        cursor?: string;
+        limit?: number;
+        namespace: string;
+        prefix?: string;
+    }): Promise<KvKeyListResult>;
+    getKvValue(options: {
+        key: string;
+        namespace: string;
+    }): Promise<KvValueResult>;
+    putKvValue(options: {
+        expiration?: number;
+        expirationTtl?: number;
+        key: string;
+        metadata?: unknown;
+        namespace: string;
+        value: string;
+    }): Promise<void>;
+    deleteKvKey(options: {
+        key: string;
+        namespace: string;
+    }): Promise<void>;
+    listAuthUsers(options?: {
+        filterField?: string;
+        filterValue?: string;
+        limit?: number;
+        offset?: number;
+        search?: string;
+        searchField?: string;
+        sortBy?: string;
+        sortDirection?: "asc" | "desc";
+    }): Promise<AuthPage<AuthUser>>;
+    createAuthUser(input: {
+        data?: Record<string, unknown>;
+        email: string;
+        name: string;
+        password?: string;
+        role?: string | string[];
+    }): Promise<AuthUser>;
+    setAuthUserRole(input: {
+        role: string | string[];
+        userId: string;
+    }): Promise<AuthUser>;
+    banAuthUser(input: {
+        expiresInSeconds?: number;
+        reason?: string;
+        userId: string;
+    }): Promise<AuthUser>;
+    unbanAuthUser(input: {
+        userId: string;
+    }): Promise<AuthUser>;
+    setAuthUserPassword(input: {
+        newPassword: string;
+        userId: string;
+    }): Promise<void>;
+    removeAuthUser(input: {
+        userId: string;
+    }): Promise<void>;
+    impersonateAuthUser(input: {
+        userId: string;
+    }): Promise<AuthImpersonation>;
+    revokeAuthSession(input: {
+        sessionId: string;
+    }): Promise<void>;
+    revokeAuthUserSessions(input: {
+        userId: string;
+    }): Promise<void>;
+    getAuthCapabilities(): Promise<AuthCapabilities>;
+    updateAuthUser(input: {
+        data: Record<string, unknown>;
+        userId: string;
+    }): Promise<AuthUser>;
+    listAuthAccounts(input: {
+        userId: string;
+    }): Promise<Record<string, unknown>[]>;
+    unlinkAuthAccount(input: {
+        accountId: string;
+        userId: string;
+    }): Promise<void>;
+    listAuthPasskeys(input: {
+        userId: string;
+    }): Promise<Record<string, unknown>[]>;
+    deleteAuthPasskey(input: {
+        passkeyId: string;
+    }): Promise<void>;
+    disableAuthTwoFactor(input: {
+        userId: string;
+    }): Promise<void>;
+    listAuthOrganizations(options?: {
+        limit?: number;
+        offset?: number;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    listAuthOrgMembers(input: {
+        limit?: number;
+        offset?: number;
+        organizationId: string;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    listAuthOrgInvitations(input: {
+        limit?: number;
+        offset?: number;
+        organizationId: string;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    listAuthSignUpInvitations(options?: {
+        limit?: number;
+        offset?: number;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    createAuthSignUpInvitation(input: {
+        email: string;
+        expiresInSeconds?: number;
+        invitedBy?: string;
+    }): Promise<Record<string, unknown>>;
+    revokeAuthSignUpInvitation(input: {
+        email: string;
+    }): Promise<void>;
+    removeAuthOrgMember(input: {
+        memberId: string;
+    }): Promise<void>;
+    cancelAuthOrgInvitation(input: {
+        invitationId: string;
+    }): Promise<void>;
+    getAuthConfig(): Promise<AuthConfigInfo>;
+    createAuthOrganization(input: {
+        logo?: string;
+        metadata?: Record<string, unknown>;
+        name: string;
+        ownerId?: string;
+        slug?: string;
+    }): Promise<Record<string, unknown>>;
+    updateAuthOrganization(input: {
+        logo?: string;
+        metadata?: Record<string, unknown>;
+        name?: string;
+        organizationId: string;
+        slug?: string;
+    }): Promise<Record<string, unknown>>;
+    deleteAuthOrganization(input: {
+        organizationId: string;
+    }): Promise<void>;
+    addAuthOrgMember(input: {
+        organizationId: string;
+        role?: string;
+        userId: string;
+    }): Promise<Record<string, unknown>>;
+    inviteAuthOrgMember(input: {
+        email: string;
+        inviterId?: string;
+        organizationId: string;
+        role?: string;
+    }): Promise<Record<string, unknown>>;
+    setAuthOrgMemberRole(input: {
+        memberId: string;
+        role: string | string[];
+    }): Promise<Record<string, unknown>>;
+    listAuthOrgTeams(input: {
+        limit?: number;
+        offset?: number;
+        organizationId: string;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    createAuthOrgTeam(input: {
+        name: string;
+        organizationId: string;
+    }): Promise<Record<string, unknown>>;
+    updateAuthOrgTeam(input: {
+        name: string;
+        teamId: string;
+    }): Promise<Record<string, unknown>>;
+    removeAuthOrgTeam(input: {
+        teamId: string;
+    }): Promise<void>;
+    listAuthOrgTeamMembers(input: {
+        limit?: number;
+        offset?: number;
+        teamId: string;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    addAuthOrgTeamMember(input: {
+        teamId: string;
+        userId: string;
+    }): Promise<Record<string, unknown>>;
+    removeAuthOrgTeamMember(input: {
+        teamMemberId: string;
+    }): Promise<void>;
+    listAuthOrgRoles(input: {
+        limit?: number;
+        offset?: number;
+        organizationId: string;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    createAuthOrgRole(input: {
+        organizationId: string;
+        permission: Record<string, string[]>;
+        role: string;
+    }): Promise<Record<string, unknown>>;
+    updateAuthOrgRole(input: {
+        permission: Record<string, string[]>;
+        roleId: string;
+    }): Promise<Record<string, unknown>>;
+    deleteAuthOrgRole(input: {
+        roleId: string;
+    }): Promise<void>;
+    listAuthSessions(options?: {
+        limit?: number;
+        offset?: number;
+        userId?: string;
+    }): Promise<AuthPage<AuthSession>>;
+}
+```
+
+### `isLunoraAdminClient` (const)
+
+```ts
+const isLunoraAdminClient: (client: LunoraClient) => client is LunoraAdminClient;
+```
+
 ## `@lunora/client/auth`
 
 ### `ADMIN_AUTH_DEFAULT_PAGE_SIZE` (const)
@@ -2024,13 +2040,13 @@ const adminAuthListQueryKey: (identity: string | null, list: AdminAuthList<unkno
 ### `authOrganizationsList` (const)
 
 ```ts
-const authOrganizationsList: (client: LunoraClient) => AdminAuthList<Record<string, unknown>>;
+const authOrganizationsList: (client: LunoraAdminClient) => AdminAuthList<Record<string, unknown>>;
 ```
 
 ### `authSessionsList` (const)
 
 ```ts
-const authSessionsList: (client: LunoraClient, options?: {
+const authSessionsList: (client: LunoraAdminClient, options?: {
     userId?: string;
 }) => AdminAuthList<AuthSession>;
 ```
@@ -2038,13 +2054,13 @@ const authSessionsList: (client: LunoraClient, options?: {
 ### `authSignUpInvitationsList` (const)
 
 ```ts
-const authSignUpInvitationsList: (client: LunoraClient) => AdminAuthList<Record<string, unknown>>;
+const authSignUpInvitationsList: (client: LunoraAdminClient) => AdminAuthList<Record<string, unknown>>;
 ```
 
 ### `authUsersList` (const)
 
 ```ts
-const authUsersList: (client: LunoraClient, filter?: AuthUsersListFilter) => AdminAuthList<AuthUser>;
+const authUsersList: (client: LunoraAdminClient, filter?: AuthUsersListFilter) => AdminAuthList<AuthUser>;
 ```
 
 ### `getIdentityStore` (const)
@@ -2527,6 +2543,15 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `AdminHost` (interface)
+
+```ts
+interface AdminHost {
+    adminFetch: (path: string, method: "DELETE" | "GET" | "POST" | "PUT", payload?: ArrayBuffer | Blob | Record<string, unknown>, contentType?: string) => Promise<unknown>;
+    assertOpen: () => void;
+}
+```
 
 ### `CallRunnerSinks` (interface)
 

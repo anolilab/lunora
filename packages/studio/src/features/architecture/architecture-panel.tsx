@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import { useNavigate } from "@tanstack/react-router";
 import type { NodeProps, NodeTypes } from "@xyflow/react";
 import { Background, Controls, Handle, Position, ReactFlow } from "@xyflow/react";
@@ -15,6 +14,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import type { SpecFetchState } from "../../hooks/use-admin-spec";
 import { useAdminSpec } from "../../hooks/use-admin-spec";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { fireAndForget } from "../../lib/internal";
 import { cn } from "../../lib/utils";
@@ -245,7 +245,7 @@ const ArchitectureDiagram = ({ manifest }: { readonly manifest: ArchitectureMani
  */
 const ArchitecturePanel = ({ manifest: inlineManifest }: ArchitecturePanelProps): ReactElement => {
     const t = useT();
-    const client = useLunora();
+    const client = useStudioClient();
     const fetchArchitecture = () => client.fetchArchitecture();
     const state = useAdminSpec<ArchitectureManifest>(inlineManifest, fetchArchitecture, classifyManifest);
 

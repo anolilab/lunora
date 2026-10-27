@@ -1,4 +1,4 @@
-import type { LunoraClient } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 import { LunoraError } from "@lunora/errors";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -58,11 +58,11 @@ describe("errorFromThrown", () => {
     it("keeps the code and message of a coded rejection from the admin path", async () => {
         expect.assertions(1);
 
-        const { LunoraClient } = await import("@lunora/client");
+        const { LunoraAdminClient } = await import("@lunora/client/admin");
         const fetch = vi.fn<typeof globalThis.fetch>(async () =>
             Response.json({ error: { code: "FORBIDDEN", message: "admin token rejected" } }, { status: 403 }),
         );
-        const client = new LunoraClient({ fetch, url: "https://app.example" });
+        const client = new LunoraAdminClient({ fetch, url: "https://app.example" });
 
         const failure = await client.listFunctions().catch((error: unknown) => error);
 
@@ -170,7 +170,7 @@ describe("error results survive a real SDK client", () => {
         const query = vi.fn<() => Promise<never>>(async () => {
             throw new LunoraError("NOT_FOUND", "no such shard");
         });
-        const client = { listFunctions: vi.fn<() => Promise<unknown[]>>(async () => []), query } as unknown as LunoraClient;
+        const client = { listFunctions: vi.fn<() => Promise<unknown[]>>(async () => []), query } as unknown as LunoraAdminClient;
         const sdkClient = await connected(createLunoraMcpServer({ allowObservability: true, client, token: "admin-token" }));
         const result = await sdkClient.callTool({ arguments: {}, name: "lunora_get_logs" });
 

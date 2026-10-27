@@ -1,4 +1,5 @@
 import type { AuthImpersonation, AuthPage, AuthSession, AuthUser, LunoraClient } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 import { QueryClient } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import type { PropsWithChildren, ReactElement } from "react";
@@ -16,7 +17,7 @@ import { useAuthSessions, useAuthUsers, useImpersonate, useOrganizations } from 
  * `useMutation` use.
  */
 interface AdminAuthFakeClient {
-    asClient: LunoraClient;
+    asClient: LunoraAdminClient;
     currentIdentity: ReturnType<typeof vi.fn<() => string | null>>;
     deleteAuthOrganization: ReturnType<typeof vi.fn<(input: { organizationId: string }) => Promise<void>>>;
     getAuthToken: ReturnType<typeof vi.fn<() => null | string>>;
@@ -97,7 +98,7 @@ const createAdminAuthFakeClient = (): AdminAuthFakeClient => {
         query,
         setAuthToken,
         subscribe,
-    } as unknown as LunoraClient;
+    } as unknown as LunoraAdminClient;
 
     return {
         asClient,
@@ -137,6 +138,16 @@ const session = (id: string, userId: string): AuthSession => {
 };
 
 describe("useAuthUsers", () => {
+    it("names `LunoraAdminClient` when the provider holds a plain client", () => {
+        expect.assertions(1);
+
+        const plain = { currentIdentity: () => null, onAuthTokenChange: () => () => undefined } as unknown as LunoraClient;
+
+        vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+        expect(() => renderHook(() => useAuthUsers(), { wrapper: wrapper(plain) })).toThrow(/LunoraAdminClient/u);
+    });
+
     it("loads rows via client.listAuthUsers, never the live/batch transport", async () => {
         expect.hasAssertions();
 

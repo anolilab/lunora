@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { LunoraAdminClient } from "../src/admin/admin-client";
 import {
     adminAuthListHasMore,
     adminAuthListQueryKey,
@@ -9,11 +10,10 @@ import {
     authUsersList,
     subscribeAdminAuthIdentity,
 } from "../src/auth";
-import type { LunoraClient } from "../src/lunora-client";
 
 const page = { rows: [], total: 0 };
 
-/** The slice of `LunoraClient` the admin-list core touches, with listener sets the test can fire. */
+/** The slice of `LunoraAdminClient` the admin-list core touches, with listener sets the test can fire. */
 const fakeClient = () => {
     const tokenListeners = new Set<() => void>();
     const identityListeners = new Set<() => void>();
@@ -34,7 +34,7 @@ const fakeClient = () => {
         },
     };
 
-    return { client, identityListeners, lunora: client as unknown as LunoraClient, tokenListeners };
+    return { client, identityListeners, lunora: client as unknown as LunoraAdminClient, tokenListeners };
 };
 
 describe("admin auth list builders", () => {

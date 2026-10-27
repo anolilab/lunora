@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import { useNavigate, useRouter, useSearch } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
@@ -6,6 +5,7 @@ import { useEffect, useState } from "react";
 import type { StorageTier } from "../../components/storage-tier";
 import { TIER_META } from "../../components/storage-tier";
 import useMirroredRef from "../../hooks/use-mirrored-ref";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import type { DataViewSearch } from "../../lib/data-view-params";
 import { dataViewToSearch, searchToDataView } from "../../lib/data-view-params";
@@ -85,7 +85,7 @@ const onCopyLink = (): void => {
  * selection and re-open whatever the URL names.
  */
 export const TableEditor = ({ canGenerateRows = false, editable = false, initialShardKey }: TableEditorProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const navigate = useNavigate();
     const router = useRouter();
 

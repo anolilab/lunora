@@ -17,7 +17,7 @@
  * gets a connected server back, without importing the protocol SDK or
  * `@lunora/client` itself.
  */
-import { LunoraClient } from "@lunora/client";
+import { LunoraAdminClient } from "@lunora/client/admin";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
@@ -106,7 +106,7 @@ const NO_DEPLOYMENT_MESSAGE =
 const MAX_CLIENT_CACHE = 8;
 
 /**
- * Reuse one `LunoraClient` per `url|token` pair, shared by both the tool and
+ * Reuse one `LunoraAdminClient` per `url|token` pair, shared by both the tool and
  * resource surfaces (one instance built by {@link createLocalMcpServer} and
  * injected into both), so a tool call and a resource read against the same
  * deployment share one client instead of minting their own.
@@ -124,10 +124,10 @@ const MAX_CLIENT_CACHE = 8;
  * drops the map's reference; the in-flight call keeps its own reference to
  * the client alive.
  */
-const createClientCache = (fetchImplementation: typeof fetch | undefined): ((deployment: LocalDeployment) => LunoraClient) => {
-    const cache = new Map<string, LunoraClient>();
+const createClientCache = (fetchImplementation: typeof fetch | undefined): ((deployment: LocalDeployment) => LunoraAdminClient) => {
+    const cache = new Map<string, LunoraAdminClient>();
 
-    return (deployment: LocalDeployment): LunoraClient => {
+    return (deployment: LocalDeployment): LunoraAdminClient => {
         // Serialized rather than delimiter-joined: a `|` inside either value
         // would otherwise let two distinct pairs collide onto one client.
         const key = JSON.stringify([deployment.url, deployment.token ?? ""]);
@@ -137,7 +137,7 @@ const createClientCache = (fetchImplementation: typeof fetch | undefined): ((dep
             return cached;
         }
 
-        const client = new LunoraClient({ fetch: fetchImplementation, url: deployment.url });
+        const client = new LunoraAdminClient({ fetch: fetchImplementation, url: deployment.url });
 
         if (deployment.token !== undefined && deployment.token.length > 0) {
             client.setAuthToken(deployment.token);
@@ -181,7 +181,7 @@ const hasAdminToken = (deployment: LocalDeployment | undefined): boolean => depl
 const lazyDeploymentTools = (
     source: LocalDeploymentSource,
     allowWrites: boolean,
-    clientFor: (deployment: LocalDeployment) => LunoraClient,
+    clientFor: (deployment: LocalDeployment) => LunoraAdminClient,
 ): ReadonlyArray<McpTool> => {
     const resolve = typeof source === "function" ? source : (): LocalDeployment => source;
 
@@ -235,7 +235,7 @@ const OPENAPI_RESOURCE_URI = "lunora-spec:openapi";
 /** One deployment spec this server can offer as a resource, and how to fetch it. */
 interface SpecResourceEntry {
     description: string;
-    fetch: (client: LunoraClient) => Promise<Record<string, unknown>>;
+    fetch: (client: LunoraAdminClient) => Promise<Record<string, unknown>>;
     name: string;
     uri: string;
 }
@@ -280,7 +280,7 @@ const SPEC_RESOURCE_ENTRIES: ReadonlyArray<SpecResourceEntry> = [
  * endpoint but no spec configured still resolves 200 with an empty document,
  * so it stays listed — only a hard failure omits it.
  */
-const deploymentSpecResources = (source: LocalDeploymentSource, clientFor: (deployment: LocalDeployment) => LunoraClient): McpResourceProvider => {
+const deploymentSpecResources = (source: LocalDeploymentSource, clientFor: (deployment: LocalDeployment) => LunoraAdminClient): McpResourceProvider => {
     const resolve = typeof source === "function" ? source : (): LocalDeployment => source;
 
     /** The live document for `entry`, or `undefined` when the deployment can't serve it. */
@@ -364,7 +364,7 @@ const combineResourceProviders = (providers: ReadonlyArray<McpResourceProvider>)
  * without the cross-surface sharing that only matters once a resource
  * surface exists alongside it.
  */
-const localTools = (options: LocalMcpServerOptions, clientFor?: (deployment: LocalDeployment) => LunoraClient): ReadonlyArray<McpTool> => {
+const localTools = (options: LocalMcpServerOptions, clientFor?: (deployment: LocalDeployment) => LunoraAdminClient): ReadonlyArray<McpTool> => {
     const tools: McpTool[] = [];
     const index = buildDocsIndex(options);
 

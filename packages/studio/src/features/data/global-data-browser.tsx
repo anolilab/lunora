@@ -1,11 +1,11 @@
 import type { GlobalFacetResult, GlobalFilterClause, GlobalTableInfo, GlobalTablePage } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useMirroredRef from "../../hooks/use-mirrored-ref";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_D1_URL } from "../../lib/cf-links";
 import { facetFilterValue, fireAndForget } from "../../lib/internal";
@@ -63,7 +63,7 @@ export const GlobalDataBrowser = ({
     pageSize: initialPageSize = DEFAULT_PAGE_SIZE,
     schemaSwitch,
 }: GlobalDataBrowserProps = {}): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     // Seed from `initialTable` (a cross-tier ref jump from the Table editor) so the

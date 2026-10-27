@@ -2259,6 +2259,16 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+## `lunorash/client/admin`
+
+### `LunoraAdminClient` (class)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `isLunoraAdminClient` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ## `lunorash/client/auth`
 
 ### `ADMIN_AUTH_DEFAULT_PAGE_SIZE` (const)

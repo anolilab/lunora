@@ -1,4 +1,4 @@
-import type { LunoraClient } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 import type { CallToolResult, ListToolsResult } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it, vi } from "vitest";
@@ -109,7 +109,7 @@ describe("every tool a server exposes declares annotations (runtime)", () => {
             listFunctions: vi.fn<() => Promise<unknown[]>>(async () => []),
             listGlobalTables: vi.fn<() => Promise<unknown[]>>(async () => []),
             query: vi.fn<() => Promise<unknown>>(),
-        } as unknown as LunoraClient;
+        } as unknown as LunoraAdminClient;
         const tools = await listedTools(
             createLunoraMcpServer({
                 agents: [{ description: "Answers support questions", name: "support" }],
@@ -157,7 +157,7 @@ describe("tool errors carry structuredContent and a text block", () => {
         expect.assertions(4);
 
         const query = vi.fn<() => Promise<unknown>>();
-        const client = { listFunctions: vi.fn<() => Promise<unknown[]>>(async () => []), query } as unknown as LunoraClient;
+        const client = { listFunctions: vi.fn<() => Promise<unknown[]>>(async () => []), query } as unknown as LunoraAdminClient;
         const server = createLunoraMcpServer({ client });
         const result = (await handlerFor(
             server as unknown as { _requestHandlers: Map<string, unknown> },

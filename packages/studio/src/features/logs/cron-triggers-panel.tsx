@@ -1,5 +1,4 @@
 import type { CronJobInfo } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -9,6 +8,7 @@ import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useClientQuery } from "../../hooks/use-admin-query";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget } from "../../lib/internal";
 
@@ -49,7 +49,7 @@ const IDLE: RunState = { kind: "idle" };
  */
 
 const cronRunner = (
-    client: ReturnType<typeof useLunora>,
+    client: ReturnType<typeof useStudioClient>,
     loadCronJobs: CronTriggersPanelProps["loadCronJobs"],
     runCronJob: CronTriggersPanelProps["runCronJob"],
 ): ((name: string) => Promise<{ name: string; ran: boolean }>) | undefined => {
@@ -62,7 +62,7 @@ const cronRunner = (
 
 /** How to run a trigger, or `undefined` when the panel is read-only: the host's runner wins; otherwise the client can run what it also lists. A custom loader without a runner stays read-only. */
 export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPanelProps = {}): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [runStates, setRunStates] = useState<Record<string, RunState>>({});

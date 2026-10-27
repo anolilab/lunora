@@ -1,10 +1,10 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 
 import { EmptyState } from "../../components/ui/empty-state";
 import { Skeleton } from "../../components/ui/skeleton";
 import type { SpecFetchState } from "../../hooks/use-admin-spec";
 import { useAdminSpec } from "../../hooks/use-admin-spec";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import type { OpenRpcDocument } from "./openapi/openrpc-model";
 import { parseOpenRpc, rpcMethodsOf } from "./openapi/openrpc-model";
@@ -43,7 +43,7 @@ const classifyDocument = (spec: unknown): SpecFetchState<OpenRpcDocument> => {
  */
 const OpenRpcReferencePanel = ({ spec: inlineSpec }: OpenRpcReferencePanelProps): ReactElement => {
     const t = useT();
-    const client = useLunora();
+    const client = useStudioClient();
 
     const fetchOpenRpc = () => client.fetchOpenRpc();
     const state = useAdminSpec<OpenRpcDocument>(inlineSpec, fetchOpenRpc, classifyDocument);

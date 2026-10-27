@@ -1,5 +1,4 @@
 import type { KvKeyEntry } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useReducer, useState } from "react";
 
@@ -9,6 +8,7 @@ import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../../components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget } from "../../lib/internal";
 import KvCreateForm from "./kv-create-form";
@@ -166,7 +166,7 @@ const keyListReducer = (state: KeyListState, action: KeyListAction): KeyListStat
  * and bulk-deleting selected keys.
  */
 const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [state, dispatch] = useReducer(keyListReducer, INITIAL_KEY_LIST_STATE);

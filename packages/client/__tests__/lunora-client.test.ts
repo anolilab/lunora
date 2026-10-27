@@ -1,6 +1,7 @@
 import { decodeWire, encodeWire } from "@lunora/wire";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { LunoraAdminClient } from "../src/admin/admin-client";
 import { createClientQuery } from "../src/client-query-store";
 import { TabCoordinator } from "../src/cross-tab";
 import { isConflictError } from "../src/errors";
@@ -2963,7 +2964,7 @@ describe("lunoraClient", () => {
                 jsonResponse({ error: { code: "CONFLICT", message: "stale", why: "row moved" } }, { status: 409 }),
             );
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -2981,7 +2982,7 @@ describe("lunoraClient", () => {
                 jsonResponse({ error: { code: "CONFLICT", message: "stale", why: { nested: true } } }, { status: 409 }),
             );
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3001,7 +3002,7 @@ describe("lunoraClient", () => {
             const records = [{ args: {}, enqueuedAt: 1, functionPath: "email:send", id: "j1", scheduledFor: 2000 }];
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ records }));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3033,7 +3034,7 @@ describe("lunoraClient", () => {
             const stored = { args: encodeWire(args), enqueuedAt: 1, functionPath: "billing:settle", id: "j1", scheduledFor: 2000 };
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ records: [stored] }));
 
-            const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+            const client = new LunoraAdminClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
 
             client.setAuthToken("tkn");
 
@@ -3070,7 +3071,7 @@ describe("lunoraClient", () => {
                     : jsonResponse({ cursor: "dead:d99", records: page1, truncated: true });
             });
 
-            const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+            const client = new LunoraAdminClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
 
             client.setAuthToken("tkn");
 
@@ -3087,7 +3088,7 @@ describe("lunoraClient", () => {
         it("listScheduledJobs defaults to an empty array when records are absent", async () => {
             expect.assertions(1);
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: async () => jsonResponse({}),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3101,7 +3102,7 @@ describe("lunoraClient", () => {
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ cancelled: true }));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3124,7 +3125,7 @@ describe("lunoraClient", () => {
             const status = { backlog: 5, inFlight: 2, pools: [{ inFlight: 2, maxConcurrency: 3, name: "mail", queued: 5 }] };
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(status));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3146,7 +3147,7 @@ describe("lunoraClient", () => {
         it("schedulerStatus defaults absent fields to an empty backlog", async () => {
             expect.assertions(1);
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: async () => jsonResponse({}),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3158,7 +3159,7 @@ describe("lunoraClient", () => {
         it("scheduler admin surfaces the worker error envelope as a coded Error", async () => {
             expect.assertions(1);
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: async () => jsonResponse({ error: { code: "ADMIN_FORBIDDEN", message: "nope" } }, { status: 403 }),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3177,7 +3178,7 @@ describe("lunoraClient", () => {
             const page = { cursor: "c1", objects: [{ etag: "e1", key: "a.png", size: 10 }] };
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(page));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3198,7 +3199,7 @@ describe("lunoraClient", () => {
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ objects: [] }));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3218,7 +3219,7 @@ describe("lunoraClient", () => {
         it("listStorageObjects defaults objects to an empty array", async () => {
             expect.assertions(1);
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: async () => jsonResponse({}),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3232,7 +3233,7 @@ describe("lunoraClient", () => {
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ objects: [] }));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3250,7 +3251,7 @@ describe("lunoraClient", () => {
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ buckets: ["default", "media"] }));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3266,7 +3267,7 @@ describe("lunoraClient", () => {
         it("listStorageBuckets defaults to an empty array", async () => {
             expect.assertions(1);
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: async () => jsonResponse({}),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3280,7 +3281,7 @@ describe("lunoraClient", () => {
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ deleted: true, key: "avatars/a.png" }));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3303,7 +3304,7 @@ describe("lunoraClient", () => {
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ etag: "e9", key: "docs/r.txt" }));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3327,7 +3328,7 @@ describe("lunoraClient", () => {
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ key: "a.png", url: "https://cdn.example/a.png?sig=x" }));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3349,7 +3350,7 @@ describe("lunoraClient", () => {
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ key: "a.png", url: "https://cdn.example/a.png?sig=x" }));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3367,7 +3368,7 @@ describe("lunoraClient", () => {
         it("signedStorageUrl throws when the endpoint returns no url", async () => {
             expect.assertions(1);
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: async () => jsonResponse({ key: "a.png" }),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3389,7 +3390,7 @@ describe("lunoraClient", () => {
             ];
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ functions }));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3412,7 +3413,7 @@ describe("lunoraClient", () => {
             // `{"error": "..."}` an `Error` with no `code` — past every handler
             // an admin caller wrote.
             for (const slot of [null, "bad gateway", ["bad gateway"], 7]) {
-                const client = new LunoraClient({
+                const client = new LunoraAdminClient({
                     fetch: async () => jsonResponse({ error: slot }, { status: 502 }),
                     url: "https://app.example",
                     WebSocket: createMockWebSocket(),
@@ -3428,7 +3429,7 @@ describe("lunoraClient", () => {
         it("listFunctions defaults to an empty array when functions are absent", async () => {
             expect.assertions(1);
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: async () => jsonResponse({}),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3446,7 +3447,7 @@ describe("lunoraClient", () => {
             ];
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ jobs }));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3463,7 +3464,7 @@ describe("lunoraClient", () => {
         it("getCronJobs defaults to an empty array when jobs are absent", async () => {
             expect.assertions(1);
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: async () => jsonResponse({}),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3482,7 +3483,7 @@ describe("lunoraClient", () => {
             const tables = [{ name: "organizations", rowCount: 2 }];
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(tables));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3502,7 +3503,7 @@ describe("lunoraClient", () => {
             const page = { columns: ["_id"], rows: [{ _id: "o1" }], total: 1 };
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(page));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3531,7 +3532,7 @@ describe("lunoraClient", () => {
                 rows: [{ _id: "l1", blob: new Uint8Array([7, 8, 9]).buffer, cents: 9_007_199_254_740_993n }],
                 total: 1,
             });
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: async () => jsonResponse(page),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3549,7 +3550,7 @@ describe("lunoraClient", () => {
             const facet = encodeWire({ truncated: false, values: [{ count: 1, value: new Uint8Array([7, 8, 9]) }] });
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(facet));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3581,7 +3582,7 @@ describe("lunoraClient", () => {
             const indexes = [{ dimensions: 1024, field: "body", metric: "cosine", name: "by_body", table: "docs", vectorsCount: 42 }];
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ indexes }));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3598,7 +3599,7 @@ describe("lunoraClient", () => {
         it("listVectorIndexes defaults to an empty array when indexes are absent", async () => {
             expect.assertions(1);
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: async () => jsonResponse({}),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3613,7 +3614,7 @@ describe("lunoraClient", () => {
             const matches = [{ id: "row-1", metadata: { title: "hi" }, score: 0.9 }];
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ matches }));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3636,7 +3637,7 @@ describe("lunoraClient", () => {
             const page = { rows: [{ id: "u1" }], total: 1 };
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(page));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -3657,7 +3658,7 @@ describe("lunoraClient", () => {
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ rows: [], total: 0 }));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -6004,7 +6005,7 @@ describe("lunoraClient", () => {
             const page = { nextCursor: { ts: 1_699_999_000_000 }, rows: [{ functionPath: "messages:list", level: "error", message: "boom", ts: 1 }] };
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(page));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -6027,7 +6028,7 @@ describe("lunoraClient", () => {
             const cursor = { shard: "user-1", ts: 42 };
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ rows: [] }));
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: fetchMock,
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -6044,7 +6045,7 @@ describe("lunoraClient", () => {
         it("defaults to an empty rows array (and no cursor) when the worker omits them", async () => {
             expect.assertions(2);
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: async () => jsonResponse({}),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -6491,7 +6492,7 @@ describe("lunoraClient", () => {
         it("reports `deleted: false` when the worker omits the field", async () => {
             expect.assertions(1);
 
-            const client = new LunoraClient({
+            const client = new LunoraAdminClient({
                 fetch: async () => jsonResponse({ key: "a.txt" }),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),

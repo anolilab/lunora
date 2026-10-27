@@ -1,5 +1,5 @@
 /* eslint-disable sonarjs/deprecation -- the SDK marks the low-level `Server` @deprecated in favour of the high-level `McpServer`, but explicitly sanctions `Server` for "advanced use cases". Ours qualifies: we dispatch tools defined with plain JSON Schema and bridge structured results ourselves, which avoids McpServer's per-tool zod dependency. */
-import { LunoraClient } from "@lunora/client";
+import { LunoraAdminClient } from "@lunora/client/admin";
 import { LunoraError } from "@lunora/errors";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -71,10 +71,10 @@ interface LunoraMcpServerOptions {
     allowWrites?: boolean;
 
     /**
-     * Pre-built client (test injection). When omitted a `LunoraClient` is
+     * Pre-built client (test injection). When omitted a `LunoraAdminClient` is
      * created from `url`/`token`/`fetch`.
      */
-    client?: LunoraClient;
+    client?: LunoraAdminClient;
     /** `fetch` implementation; defaults to the ambient global. */
     fetch?: typeof fetch;
 
@@ -105,15 +105,23 @@ interface LunoraMcpServerOptions {
 }
 
 /**
- * Build the `LunoraClient` the tools dispatch against.
+ * Build the `LunoraAdminClient` the tools dispatch against.
  *
  * Exported for the HTTP handlers, which build one client for the lifetime of
  * the handler instead of one per request: `listFunctionsCached` in `./tools`
  * keys its memo on client identity, so a fresh client per request turns every
  * tool call back into two admin round trips.
  */
-const resolveClient = (options: LunoraMcpServerOptions): LunoraClient => {
+const resolveClient = (options: LunoraMcpServerOptions): LunoraAdminClient => {
     if (options.client !== undefined) {
+        // The type already says so; this catches a JS caller or a cast, which would
+        // otherwise fail on the first tool call with `listFunctions is not a function`.
+        // It probes the one admin method every tool needs rather than
+        // `isLunoraAdminClient`, so an injected stub need only carry what MCP calls.
+        if (typeof (options.client as Partial<LunoraAdminClient>).listFunctions !== "function") {
+            throw new LunoraError("INTERNAL", "createLunoraMcpServer needs a LunoraAdminClient (`@lunora/client/admin`), not a plain LunoraClient.");
+        }
+
         return options.client;
     }
 
@@ -128,7 +136,7 @@ const resolveClient = (options: LunoraMcpServerOptions): LunoraClient => {
         );
     }
 
-    const client = new LunoraClient({ fetch: options.fetch, url: options.url });
+    const client = new LunoraAdminClient({ fetch: options.fetch, url: options.url });
 
     client.setAuthToken(options.token);
 

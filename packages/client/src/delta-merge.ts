@@ -89,24 +89,39 @@ const isMutationDelta = (value: unknown): value is MutationDelta => {
  * @returns the merged rows, or `undefined` when the list isn't id-keyable or an insert/update carries no row
  */
 const mergeRows = (list: ReadonlyArray<unknown>, delta: MutationDelta): undefined | unknown[] => {
-    // Only merge when every element is an id-bearing object; a list of scalars
-    // (or rows without `_id`) has no stable key to splice against.
-    const rows: Record<string, unknown>[] = [];
+    const { key, op, row } = delta;
+
+    // One pass builds the new array and finds the first row with this id. Every
+    // delta runs this over the whole cached result, so it copies the list once.
+    const next: Record<string, unknown>[] = [];
+    let existingIndex = -1;
 
     for (const element of list) {
-        if (rowId(element) === undefined) {
+        const id = rowId(element);
+
+        // Only merge when every element is an id-bearing object; a list of scalars
+        // (or rows without `_id`) has no stable key to splice against.
+        if (id === undefined) {
             return undefined;
         }
 
-        rows.push(element as Record<string, unknown>);
+        if (id === key) {
+            // A delete drops every row with the id; a delete for a row this list never
+            // held is a legitimate no-op.
+            if (op === "delete") {
+                continue;
+            }
+
+            if (existingIndex === -1) {
+                existingIndex = next.length;
+            }
+        }
+
+        next.push(element as Record<string, unknown>);
     }
 
-    const { key, op, row } = delta;
-
     if (op === "delete") {
-        const next = rows.filter((existing) => existing[ID_FIELD] !== key);
-
-        return next.length === rows.length ? [...rows] : next;
+        return next;
     }
 
     // insert / update both need the new row body to splice in.
@@ -114,11 +129,8 @@ const mergeRows = (list: ReadonlyArray<unknown>, delta: MutationDelta): undefine
         return undefined;
     }
 
-    const next = [...rows];
-    const existingIndex = rows.findIndex((existing) => existing[ID_FIELD] === key);
-
     if (existingIndex === -1) {
-        next.splice(insertionIndexFor(rows, row), 0, row);
+        next.splice(insertionIndexFor(next, row), 0, row);
     } else {
         next[existingIndex] = row;
     }

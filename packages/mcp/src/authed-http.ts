@@ -74,7 +74,7 @@
  * omitted from `tools/list` *and* refused at dispatch for the former, because
  * `allowWrites` is resolved per request rather than per deployment.
  */
-import type { LunoraClient } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 import { LunoraError } from "@lunora/errors";
 
 import { isAgentToolName } from "./agent-tools";
@@ -243,7 +243,7 @@ const requiredScopes = (messages: ReadonlyArray<unknown>, server: LunoraMcpServe
  * {@link serveStateless}, exactly as the unprotected `createMcpFetchHandler`
  * does — the transport behaviour is identical, only the gate is new.
  *
- * A fixed `server` object names one deployment, so its `LunoraClient` is
+ * A fixed `server` object names one deployment, so its `LunoraAdminClient` is
  * resolved once and shared: the public-function registry memo in `./tools` is
  * keyed by client identity and never hits when each request builds its own. The
  * `(claims) => …` form decides the deployment and token per request, so it
@@ -265,8 +265,8 @@ const createAuthedMcpFetchHandler = (options: AuthedMcpFetchHandlerOptions): Mcp
     // The `(claims) => …` form yields url/token/fetch per request; reuse one client per
     // distinct triple so the function-list memo in `./tools` (keyed by client) can hit.
     // Insertion-ordered Map as an LRU: a hit is re-inserted, the oldest key is evicted.
-    const clients = new Map<string, { client: LunoraClient; fetch: LunoraMcpServerOptions["fetch"] }>();
-    const clientFor = (base: LunoraMcpServerOptions): LunoraClient => {
+    const clients = new Map<string, { client: LunoraAdminClient; fetch: LunoraMcpServerOptions["fetch"] }>();
+    const clientFor = (base: LunoraMcpServerOptions): LunoraAdminClient => {
         if (base.client !== undefined || base.url === undefined || base.token === undefined || base.token.length === 0) {
             return resolveClient(base);
         }

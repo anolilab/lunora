@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -9,6 +8,7 @@ import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useMirroredRef from "../../hooks/use-mirrored-ref";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import type { PitrBookmarkResult, PitrRestoreResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -71,13 +71,13 @@ const ResolvedTimeHint = ({ text }: { readonly text: string }): ReactElement | n
  * time, and (behind a confirm step) restores the shard to a time or an explicit
  * bookmark via the `__lunora_admin__:pitrRestore` RPC, surfacing the returned
  * undo bookmark so the restore can be reversed. All ops run over the
- * {@link useLunora} client and are gated by the server's `LUNORA_ADMIN_TOKEN`.
+ * {@link useStudioClient} client and are gated by the server's `LUNORA_ADMIN_TOKEN`.
  *
  * In-place recovery covers the last 30 days; for older or off-platform recovery
  * use the snapshot tier (`lunora backup` / the backup registry item).
  */
 export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
     const shardKey = initialShardKey ?? "";
     const shardKeyRef = useMirroredRef(shardKey);

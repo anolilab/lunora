@@ -1,7 +1,7 @@
-import { useLunora } from "@lunora/react";
 import { useState } from "react";
 
 import { useAdminQuery } from "../../../hooks/use-admin-query";
+import useStudioClient from "../../../hooks/use-studio-client";
 import type {
     AiAvailableResult,
     AssistantChartConfig,
@@ -73,7 +73,7 @@ interface SqlAssistant {
  * disappears rather than staying as a button that always fails.
  */
 const useSqlAssistant = (shardKey: string): SqlAssistant => {
-    const client = useLunora();
+    const client = useStudioClient();
 
     const [pendingByTask, setPendingByTask] = useState<Partial<Record<AssistantTaskKey, boolean>>>({});
     const [reasonByTask, setReasonByTask] = useState<Partial<Record<AssistantTaskKey, GenerateSqlDegradedReason>>>({});
