@@ -1,3 +1,22 @@
+## @lunora/cli [1.0.0-alpha.443](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.442...@lunora/cli@1.0.0-alpha.443) (2026-10-27)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+* **registry:** generate vendored ratelimit copies from the registry item ([#1357](https://github.com/anolilab/lunora/issues/1357)) ([5a9b159](https://github.com/anolilab/lunora/commit/5a9b15944a0f627e1a1c5d13b48f5bac083f4ca1)), closes [#1274](https://github.com/anolilab/lunora/issues/1274)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.263
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.364
+* **@lunora/config:** upgraded to 1.0.0-alpha.419
+* **@lunora/d1:** upgraded to 1.0.0-alpha.213
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.267
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.246
+* **@lunora/seed:** upgraded to 1.0.0-alpha.261
+* **@lunora/testing:** upgraded to 1.0.0-alpha.310
+
 ## @lunora/cli [1.0.0-alpha.442](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.441...@lunora/cli@1.0.0-alpha.442) (2026-10-27)
 
 ### Bug Fixes
