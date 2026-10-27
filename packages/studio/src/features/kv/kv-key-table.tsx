@@ -1,8 +1,8 @@
 import type { KvKeyEntry } from "@lunora/client";
 import type { Rect, Virtualizer } from "@tanstack/react-virtual";
 import { observeElementOffset, useVirtualizer } from "@tanstack/react-virtual";
-import type { MouseEvent, ReactElement } from "react";
-import { useRef } from "react";
+import type { KeyboardEvent, MouseEvent, ReactElement } from "react";
+import { useEffect, useRef } from "react";
 
 import { Checkbox } from "../../components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
@@ -119,6 +119,8 @@ interface KvKeyTableProps {
 const KvKeyTable = ({ allSelected, bulkSelected, keys, onSelectKey, onToggleAll, onToggleBulk, selectedKey }: KvKeyTableProps): ReactElement => {
     const t = useT();
     const bodyRef = useRef<HTMLTableSectionElement>(null);
+    // The key whose checkbox takes focus once its row mounts (see `onBodyKeyDown`).
+    const pendingFocus = useRef<null | { index: number; name: string }>(null);
 
     // react-doctor-disable-next-line react-hooks-js/incompatible-library -- TanStack Virtual returns functions the compiler refuses to memoize; the alternative is not using the library
     const virtualizer = useVirtualizer({
@@ -149,6 +151,53 @@ const KvKeyTable = ({ allSelected, bulkSelected, keys, onSelectKey, onToggleAll,
     const padTop = virtualRows[0]?.start ?? 0;
     const padBottom = virtualizer.getTotalSize() - (virtualRows.at(-1)?.end ?? 0);
 
+    /**
+     * Tab from the edge of the mounted window. Focusing a row scrolls it into view, which moves the window,
+     * but only on the next scroll event: a Tab pressed before then (key repeat) finds no next checkbox and
+     * focus leaves the table. Scroll one row instead and focus the key's checkbox once its row mounts; a
+     * Tab pressed before then steps on from that key, so none is lost.
+     * Scrolled directly, not with `scrollToIndex`: the virtualizer's offsets start at this table's body, not
+     * at the top of the scroll area, so it would scroll to the wrong place.
+     */
+    const onBodyKeyDown = (event: KeyboardEvent<HTMLTableSectionElement>): void => {
+        const row = event.key === "Tab" && event.target instanceof Element ? event.target.closest<HTMLElement>("[data-index]") : null;
+
+        if (row === null) {
+            return;
+        }
+
+        const step = event.shiftKey ? -1 : 1;
+        const index = (pendingFocus.current?.index ?? Number(row.dataset["index"])) + step;
+        const entry = keys[index];
+
+        if (entry === undefined || (pendingFocus.current === null && row.parentElement?.querySelector(`[data-index="${String(index)}"]`))) {
+            return;
+        }
+
+        event.preventDefault();
+        pendingFocus.current = { index, name: entry.name };
+
+        if (isDocumentScroll(virtualizer)) {
+            virtualizer.targetWindow?.scrollBy(0, step * ROW_HEIGHT);
+        } else {
+            virtualizer.scrollElement?.scrollBy(0, step * ROW_HEIGHT);
+        }
+    };
+
+    useEffect(() => {
+        const name = pendingFocus.current?.name;
+        const row =
+            name === undefined
+                ? undefined
+                : [...(bodyRef.current?.querySelectorAll<HTMLElement>("[data-key]") ?? [])].find((candidate) => candidate.dataset["key"] === name);
+        const checkbox = row?.querySelector<HTMLElement>('[data-testid^="kv-select-"]');
+
+        if (checkbox) {
+            pendingFocus.current = null;
+            checkbox.focus();
+        }
+    });
+
     // Sized from every loaded key, not the mounted window, so scrolling never widens the table.
     let longestKey = 0;
 
@@ -167,7 +216,7 @@ const KvKeyTable = ({ allSelected, bulkSelected, keys, onSelectKey, onToggleAll,
                     <TableHead>{t("Expiration")}</TableHead>
                 </TableRow>
             </TableHeader>
-            <TableBody ref={bodyRef}>
+            <TableBody onKeyDown={onBodyKeyDown} ref={bodyRef}>
                 {padTop > 0 && <tr aria-hidden="true" style={{ height: padTop }} />}
                 {virtualRows.map((virtualRow) => {
                     const entry = keys[virtualRow.index];
@@ -175,6 +224,7 @@ const KvKeyTable = ({ allSelected, bulkSelected, keys, onSelectKey, onToggleAll,
                     return entry === undefined ? null : (
                         <TableRow
                             className={entry.name === selectedKey ? "border-l-2 border-l-royal-amethyst bg-muted/50" : "cursor-pointer"}
+                            data-index={virtualRow.index}
                             data-key={entry.name}
                             data-testid={`kv-key-row-${entry.name}`}
                             key={entry.name}

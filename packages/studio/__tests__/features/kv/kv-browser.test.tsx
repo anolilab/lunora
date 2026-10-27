@@ -265,6 +265,29 @@ describe("kvBrowser", () => {
         await expect(screen.findByTestId("kv-empty")).resolves.toBeDefined();
     });
 
+    it("scrolls a Tab from the last mounted key on to the next key rather than out of the table", async () => {
+        // Focusing a row only moves the window on the next scroll event; a Tab pressed first found no next
+        // checkbox, and focus left the table.
+        expect.assertions(2);
+
+        const seed: Record<string, { value: string }> = {};
+
+        for (let index = 0; index < 200; index += 1) {
+            seed[`key:${String(index).padStart(4, "0")}`] = { value: "v" };
+        }
+
+        render(renderBrowser(createMockClient({ kvNamespaces: [{ binding: "CACHE" }], kvSeed: { CACHE: seed } })));
+
+        await screen.findByTestId("kv-key-row-key:0000");
+
+        const rows = screen.getAllByTestId(/^kv-key-row-/u);
+        const lastName = rows.at(-1)?.dataset["key"] as string;
+
+        // Inside the window the browser's own Tab order already has the next checkbox.
+        expect(fireEvent.keyDown(screen.getByTestId("kv-select-key:0000"), { key: "Tab" })).toBe(true);
+        expect(fireEvent.keyDown(screen.getByTestId(`kv-select-${lastName}`), { key: "Tab" })).toBe(false);
+    });
+
     it("mounts only a window of a long key list, while select-all still covers every key", async () => {
         expect.assertions(3);
 

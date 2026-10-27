@@ -1,9 +1,24 @@
 import { render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createStudioI18n, DEFAULT_LOCALE, useT } from "../../src/i18n/i18n-context";
 import { StudioI18nProvider } from "../../src/i18n/i18n-provider";
+
+const compiles = vi.hoisted(() => new Map<string, number>());
+
+vi.mock(import("@lingui/message-utils/compileMessage"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return {
+        ...actual,
+        compileMessage: (message: string) => {
+            compiles.set(message, (compiles.get(message) ?? 0) + 1);
+
+            return actual.compileMessage(message);
+        },
+    };
+});
 
 /** Exercises `useT` for both the source string and a named interpolation. */
 const Probe = (): ReactElement => {
@@ -17,6 +32,21 @@ const Probe = (): ReactElement => {
 };
 
 describe("studio i18n", () => {
+    it("keeps a string it still renders compiled once the cache is full", () => {
+        // Clearing the whole cache at its cap sent every string on screen back through the compiler, over and
+        // over in a long session.
+        expect.assertions(1);
+
+        const instance = createStudioI18n();
+
+        for (let index = 0; index < 10_001; index += 1) {
+            instance._("Data");
+            instance._(`cache filler ${String(index)}`);
+        }
+
+        expect(compiles.get("Data")).toBe(1);
+    });
+
     it("renders English source strings when no provider/translation is present", () => {
         expect.assertions(1);
 

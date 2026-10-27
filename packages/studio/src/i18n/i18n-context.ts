@@ -34,8 +34,12 @@ type CompiledMessage = ReturnType<typeof compileMessage>;
 
 const compiledMessages = new Map<string, CompiledMessage>();
 
-/** Entries kept before the cache is cleared, so replaced catalogs cannot grow it without limit. */
-const COMPILED_MESSAGE_LIMIT = 1000;
+/**
+ * Entries kept before the least recently used is evicted, so replaced catalogs cannot grow the cache without
+ * limit. Well above the English catalog (~1,500 ids) times a few loaded locales, so a long session that
+ * visits every panel never evicts a string it still renders.
+ */
+const COMPILED_MESSAGE_LIMIT = 10_000;
 
 /**
  * `compileMessage`, memoized per source string. Lingui does not cache: `i18n._`
@@ -51,13 +55,17 @@ const compileMessageCached = (message: string): CompiledMessage => {
     let compiled = compiledMessages.get(message);
 
     if (compiled === undefined) {
-        if (compiledMessages.size >= COMPILED_MESSAGE_LIMIT) {
-            compiledMessages.clear();
-        }
-
         compiled = compileMessage(message);
-        compiledMessages.set(message, compiled);
+
+        if (compiledMessages.size >= COMPILED_MESSAGE_LIMIT) {
+            compiledMessages.delete(compiledMessages.keys().next().value as string);
+        }
+    } else {
+        // Re-inserted so `Map` order is recency order and the eviction above takes the coldest string.
+        compiledMessages.delete(message);
     }
+
+    compiledMessages.set(message, compiled);
 
     return compiled;
 };
