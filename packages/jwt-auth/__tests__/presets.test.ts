@@ -142,9 +142,10 @@ describe(clerk, () => {
     });
 
     it("refuses an unauthorized azp and a pending session, and accepts a token without azp", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         await expect(resolveClerk(bearer(await sign({ azp: "https://evil.example.test", sub: "user_1" }, issuer)))).resolves.toBeNull();
+        await expect(resolveClerk(bearer(await sign({ azp: ["https://app.example.test"], sub: "user_1" }, issuer)))).resolves.toBeNull();
         await expect(resolveClerk(bearer(await sign({ sts: "pending", sub: "user_1" }, issuer)))).resolves.toBeNull();
         await expect(resolveClerk(bearer(await sign({ sub: "user_native" }, issuer)))).resolves.toMatchObject({ userId: "user_native" });
     });

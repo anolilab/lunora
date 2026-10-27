@@ -196,7 +196,7 @@ const clerkClaims =
             return ANONYMOUS;
         }
 
-        if (typeof payload.azp === "string" && !authorizedParties.includes(payload.azp)) {
+        if (payload.azp !== undefined && (typeof payload.azp !== "string" || !authorizedParties.includes(payload.azp))) {
             return ANONYMOUS;
         }
 
