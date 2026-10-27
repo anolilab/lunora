@@ -1655,6 +1655,14 @@ interface CompanionBackfill {
 const COMPANION_BACKFILL_WAIT_MS = 30_000;
 
 /**
+ * A companion's key in {@link companionBackfillsByScope}: a JSON tuple tagged with the kind, since index names
+ * may contain any separator a string key would use, and carrying the whole definition, so a writer built
+ * against a changed definition of the same index rebuilds it rather than trusting the old one's contents.
+ */
+const companionBackfillKey = (kind: "aggregate" | "rank", tableName: string, index: AggregateIndexDefinitionLike | RankIndexDefinitionLike): string =>
+    JSON.stringify([kind, tableName, index], (_, value: unknown) => (typeof value === "bigint" ? `${String(value)}n` : value));
+
+/**
  * The server `in` renderer, with one change for path values. Their items are SQL fragments (see
  * `serializeFieldValue`), which the column form's wide branch cannot unpack, so a list holding one goes to
  * {@link pathInList} whatever its length.
@@ -1977,11 +1985,15 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     /** Identifies this writer's rebuilds in the scope-shared map. */
     const backfillOwner = {};
 
-    const startBackfill = (key: string, rebuild: () => Promise<boolean>): Promise<boolean> => {
+    /**
+     * Each run is passed a check for whether it still owns `key`. A run that was replaced (or evicted) stops
+     * before its next companion write, so it cannot interleave its DELETE-then-INSERT with its replacement's.
+     */
+    const startBackfill = (key: string, rebuild: (superseded: () => boolean) => Promise<boolean>): Promise<boolean> => {
         const run = (async (): Promise<boolean> => {
             await ensureMigrated();
 
-            return await rebuild();
+            return await rebuild(() => backfills.get(key)?.run !== run);
         })();
         const entry: CompanionBackfill = { owner: backfillOwner, run, settled: false };
 
@@ -2004,8 +2016,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
     /**
      * Run `rebuild` once per scope for `key`; a rejected run is evicted so the
-     * next caller retries it. Keys are JSON tuples tagged with the companion
-     * kind: index names may contain any separator a string key would use.
+     * next caller retries it.
      *
      * Provisioning is awaited first. A `false` ("companion missing") is kept for
      * the life of the scope, so one recorded before provisioning created the
@@ -2014,7 +2025,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * A run another writer started and that has not settled is waited on for at
      * most {@link COMPANION_BACKFILL_WAIT_MS}, then replaced by this writer's own.
      */
-    const backfillOnce = async (key: string, rebuild: () => Promise<boolean>): Promise<boolean> => {
+    const backfillOnce = async (key: string, rebuild: (superseded: () => boolean) => Promise<boolean>): Promise<boolean> => {
         const cached = backfills.get(key);
 
         if (cached === undefined) {
@@ -2049,11 +2060,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const definition = schema.tables[tableName];
 
         for (const index of definition?.aggregateIndexes ?? []) {
-            backfills.delete(JSON.stringify(["aggregate", tableName, index.name]));
+            backfills.delete(companionBackfillKey("aggregate", tableName, index));
         }
 
         for (const index of definition?.rankIndexes ?? []) {
-            backfills.delete(JSON.stringify(["rank", tableName, index.name]));
+            backfills.delete(companionBackfillKey("rank", tableName, index));
         }
     };
 
@@ -2078,7 +2089,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * table's primary key) with a fixed batch size, so a large global table
      * never has to fit in a single result buffer.
      */
-    const rebuildCounter = async (tableName: string, index: AggregateIndexDefinitionLike): Promise<boolean> => {
+    const rebuildCounter = async (tableName: string, index: AggregateIndexDefinitionLike, superseded: () => boolean): Promise<boolean> => {
         const definition = schema.tables[tableName];
 
         if (!definition || !(await counterTableExists(tableName, index.name))) {
@@ -2104,6 +2115,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         const aggTable = aggregateTableName(tableName, index.name);
 
+        // A replaced run leaves the companion to its replacement; it still exists, so `true` stays accurate.
+        if (superseded()) {
+            return true;
+        }
+
         await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(aggTable)}`);
 
         const inserts: SQL[] = [];
@@ -2117,13 +2133,15 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         // One round trip for the whole backfill when the exec exposes `batch`
         // (rows are keyed by distinct `__key__`, so order across them doesn't
         // matter); a sequential `run()` loop otherwise.
-        await queryBatch(exec, dialect, inserts);
+        if (!superseded()) {
+            await queryBatch(exec, dialect, inserts);
+        }
 
         return true;
     };
 
     const ensureBackfilled = (tableName: string, index: AggregateIndexDefinitionLike): Promise<boolean> =>
-        backfillOnce(JSON.stringify(["aggregate", tableName, index.name]), () => rebuildCounter(tableName, index));
+        backfillOnce(companionBackfillKey("aggregate", tableName, index), (superseded) => rebuildCounter(tableName, index, superseded));
 
     /**
      * Reduce one group's extreme in JS, off the decoded rows, for a column
@@ -2469,7 +2487,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * before the next one is read, so neither the buffered `SQL` objects nor the
      * dispatched batch ever grows to the row count.
      */
-    const rebuildRankCompanion = async (tableName: string, index: RankIndexDefinitionLike): Promise<boolean> => {
+    const rebuildRankCompanion = async (tableName: string, index: RankIndexDefinitionLike, superseded: () => boolean): Promise<boolean> => {
         const definition = schema.tables[tableName];
 
         if (!definition || !(await rankTableExists(tableName, index.name))) {
@@ -2477,6 +2495,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         }
 
         const rankTable = rankTableName(tableName, index.name);
+
+        if (superseded()) {
+            return true;
+        }
 
         await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(rankTable)}`);
 
@@ -2497,13 +2519,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         let pending: SQL[] = [];
 
         const flush = async (): Promise<void> => {
-            if (pending.length === 0) {
-                return;
-            }
-
             const batch = pending;
 
             pending = [];
+
+            if (batch.length === 0 || superseded()) {
+                return;
+            }
 
             // Rows are keyed by distinct `__id__`, so order across a batch
             // doesn't matter; a `run()`-per-statement loop when the exec has no
@@ -2535,7 +2557,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
 
     const ensureRankBackfilled = (tableName: string, index: RankIndexDefinitionLike): Promise<boolean> =>
-        backfillOnce(JSON.stringify(["rank", tableName, index.name]), () => rebuildRankCompanion(tableName, index));
+        backfillOnce(companionBackfillKey("rank", tableName, index), (superseded) => rebuildRankCompanion(tableName, index, superseded));
 
     /** Pre-write hook: rebuild rank companions once per scope. */
     const ensureRankBackfilledForTable = async (tableName: string): Promise<void> => {

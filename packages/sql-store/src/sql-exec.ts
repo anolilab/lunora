@@ -441,10 +441,11 @@ const createIndexIfNotExists = async (
 /**
  * The oid of index `name` on `table`, or NULL. Looked up through the table rather than by the index's own
  * name, which `search_path` could resolve to a same-named index on another schema's table. `quote_ident`,
- * so a mixed-case table resolves as the DDL created it.
+ * so a mixed-case table resolves as the DDL created it; `::name`, so a name past 63 bytes is truncated as
+ * the DDL truncated it.
  */
 const postgresIndexOf = (table: string, name: string): SQL =>
-    sql`(SELECT ${sql.identifier("c")}.oid FROM pg_index ${sql.identifier("i")} JOIN pg_class ${sql.identifier("c")} ON ${sql.identifier("c")}.oid = ${sql.identifier("i")}.indexrelid WHERE ${sql.identifier("i")}.indrelid = to_regclass(quote_ident(${table})) AND ${sql.identifier("c")}.relname = ${name})`;
+    sql`(SELECT ${sql.identifier("c")}.oid FROM pg_index ${sql.identifier("i")} JOIN pg_class ${sql.identifier("c")} ON ${sql.identifier("c")}.oid = ${sql.identifier("i")}.indexrelid WHERE ${sql.identifier("i")}.indrelid = to_regclass(quote_ident(${table})) AND ${sql.identifier("c")}.relname = ${name}::name)`;
 
 /**
  * Drop an index if it exists. MySQL has no `DROP INDEX IF EXISTS` and names the

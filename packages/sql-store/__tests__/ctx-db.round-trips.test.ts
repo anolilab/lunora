@@ -218,6 +218,73 @@ describe("createSqlCtxDb — companion rebuilds", () => {
         }
     });
 
+    it("keeps a stalled rebuild that resumes from writing over its replacement", async () => {
+        // The replacement truncates and refills the companion; the stalled run's own DELETE and INSERTs landing
+        // afterwards would break its primary key or wipe the rows it wrote.
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        try {
+            const provisionScope = {};
+            let resume: (() => void) | undefined;
+            const { exec: recorded, statements } = recording(harness.exec);
+            const slow: SqlCtxExec = {
+                ...recorded,
+                all: async (query, parameters) => {
+                    if (isSourcePage(query) && resume === undefined) {
+                        await new Promise<void>((resolve) => {
+                            resume = resolve;
+                        });
+                    }
+
+                    return await recorded.all(query, parameters);
+                },
+            };
+            const stalled = createSqlCtxDb({ clock: () => 1, dialect, exec: slow, provisionScope, schema: companionSchema });
+            const first = stalled.count("notes", { org: "a" });
+
+            const next = createSqlCtxDb({ clock: () => 2, dialect, exec: harness.exec, provisionScope, schema: companionSchema });
+            const counted = next.count("notes", { org: "a" });
+
+            await vi.advanceTimersByTimeAsync(30_000);
+
+            await expect(counted).resolves.toBe(0);
+
+            statements.length = 0;
+            resume?.();
+            await first;
+
+            expect(statements.filter((statement) => isRebuild(statement) || statement.startsWith("INSERT"))).toStrictEqual([]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("rebuilds a companion whose definition changed under the same name", async () => {
+        // A writer built against the new definition would otherwise trust contents tallied under the old one.
+        expect.assertions(2);
+
+        const provisionScope = {};
+
+        await createSqlCtxDb({ clock: () => 1, dialect, exec: harness.exec, provisionScope, schema: companionSchema }).insert("notes", { org: "a", score: 1 });
+
+        const changed = {
+            tables: {
+                notes: {
+                    ...companionSchema.tables["notes"],
+                    aggregateIndexes: [{ by: ["org"], name: "count_by_org", on: "notes", op: "count", where: { org: "b" } }],
+                },
+            },
+        } as never;
+        const { exec, statements } = recording(harness.exec);
+        const writer = createSqlCtxDb({ clock: () => 2, dialect, exec, provisionScope, schema: changed });
+
+        await expect(writer.count("notes", { org: "b" })).resolves.toBe(0);
+
+        expect(statements.filter((statement) => isRebuild(statement))).toHaveLength(1);
+    });
+
     it("does not record a companion as missing when patchIf runs before provisioning", async () => {
         // patchIf reached the companion check without provisioning first, so on a
         // store that had not created the counter yet it recorded "missing" for the
@@ -414,7 +481,7 @@ describe("createSqlCtxDb — the changed-tables poll", () => {
             ...harness.exec,
             all: async (query, parameters) => {
                 if (query.includes("pg_index")) {
-                    lookups.push([...parameters]);
+                    lookups.push([...parameters, /relname = \?::name/u.test(query)]);
 
                     if (query.includes("::regclass::text")) {
                         ddl.push("lookup");
@@ -443,9 +510,10 @@ describe("createSqlCtxDb — the changed-tables poll", () => {
         await sweepSqlCdcRetention(exec, postgres, 10_000, 9999);
 
         expect(ddl).toStrictEqual(["state", "lookup", `DROP INDEX IF EXISTS "audit"."__cdc_log_ts"`, `CREATE INDEX CONCURRENTLY IF NOT EXISTS "__cdc_log_ts"`]);
+        // `::name`: Postgres truncates an index name past 63 bytes, so an untruncated comparison never matches.
         expect(lookups).toStrictEqual([
-            ["__cdc_log", "__cdc_log_ts"],
-            ["__cdc_log", "__cdc_log_ts"],
+            ["__cdc_log", "__cdc_log_ts", true],
+            ["__cdc_log", "__cdc_log_ts", true],
         ]);
     });
 

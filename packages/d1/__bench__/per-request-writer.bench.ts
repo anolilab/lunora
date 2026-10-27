@@ -74,7 +74,7 @@ const seed = async (): Promise<void> => {
     harness.ddl(`INSERT INTO "notes" ("id", "_creationTime", "body") VALUES ('n1', 1, 'a')`);
 
     await requestWriter().count("todos", { where: { projectId: "p5" } });
-    await requestWriter().patch("t42", { score: 1 }, "todos");
+    await requestWriter().patch("todos", "t42", { score: 1 });
 };
 
 const ready = (): Promise<void> => {
@@ -93,11 +93,11 @@ describe("d1 — a fresh writer per request over 10k rows", () => {
 
     bench("patch a row of a table with aggregate + rank indexes", async () => {
         await ready();
-        await requestWriter().patch("t42", { score: clock % 997 }, "todos");
+        await requestWriter().patch("todos", "t42", { score: clock % 997 });
     });
 
     bench("pinned patch, table without companions", async () => {
         await ready();
-        await requestWriter().patch("n1", { body: String(clock) }, "notes");
+        await requestWriter().patch("notes", "n1", { body: String(clock) });
     });
 });
