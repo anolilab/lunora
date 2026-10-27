@@ -750,10 +750,10 @@ const parseWire = (text: string): unknown => {
 
 /**
  * Parse a stored JSON blob back into a document: {@link parseWire}, then
- * {@link isPlainObject}. Returns `undefined` for
- * anything that is not a document — unparseable text, a malformed tag
- * (`decodeWire` throws on an over-long bigint or past the nesting cap), or a
- * root that decodes to a non-plain object.
+ * {@link isPlainObject}. Returns `undefined` for anything that is not a document:
+ * unparseable text, a malformed tag (`decodeWire` throws on an over-long bigint,
+ * or past the nesting cap in tagged text), or a root that decodes to a non-plain
+ * object.
  *
  * Never throws, because its callers are read paths that must degrade rather
  * than fail: a display surface shows the row unexpanded, an editor falls back
