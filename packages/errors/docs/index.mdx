@@ -13,7 +13,7 @@ hints render consistently in the CLI, the Vite error overlay, the Studio UI, and
 the client SDK.
 
 ```ts
-import { LunoraError, isLunoraError } from "@lunora/errors";
+import { LunoraError, isLunoraError, resolveHint } from "@lunora/errors";
 
 throw new LunoraError("NOT_FOUND", `no message with id ${id}`);
 

@@ -4,9 +4,11 @@
  * `ERROR_CATALOG` (`packages/errors/src/catalog.ts`) and its per-code `ERROR_HINTS`
  * (`packages/errors/src/hints.ts`).
  *
- * The catalog is the single source of truth every error surface already reads —
- * the runtime/DO wire mappers, the CLI renderer, the Vite overlay, Studio and
- * the client SDK. The docs page was the one consumer that re-typed it by hand,
+ * The catalog holds each code's status, title and `internal` flag; `ERROR_HINTS`
+ * holds the fix text. This generator combines both. Together they are what every
+ * error surface already reads — the runtime/DO wire mappers, the CLI renderer,
+ * the Vite overlay and Studio (the client SDK carries no hints). The docs page
+ * was the one consumer that re-typed them by hand,
  * and it had drifted to 36 of the catalog's 154 codes: the other 118 existed in
  * the product but on no page, so `llms.txt`, `llms-full.txt` and the docs MCP
  * server at `/mcp` — the three ways an AI agent retrieves an explanation — had

@@ -31,6 +31,7 @@
 import { HTTP_STREAM_NO_BODY_HINT, LunoraError } from "@lunora/errors";
 import { decodeWire } from "@lunora/wire";
 
+import frameHintOption from "./frame-hint";
 import { createReconnect } from "./reconnect";
 import type { StreamIterable } from "./stream";
 import { createStream } from "./stream";
@@ -234,17 +235,17 @@ const handleSseFrame = (frame: SseFrame, handle: UntypedHandle): boolean => {
     }
 
     if (frame.event === "error") {
-        let payload: { code?: unknown; message?: unknown; why?: unknown } = {};
+        let payload: { code?: unknown; hint?: unknown; message?: unknown; why?: unknown } = {};
 
         try {
-            payload = JSON.parse(frame.data) as { code?: unknown; message?: unknown; why?: unknown };
+            payload = JSON.parse(frame.data) as { code?: unknown; hint?: unknown; message?: unknown; why?: unknown };
         } catch {
             /* fall through to the generic error below */
         }
 
         const message = typeof payload.message === "string" ? payload.message : "stream error";
         const code = typeof payload.code === "string" ? payload.code : "HTTP_STREAM_ERROR";
-        const error: LunoraError & { why?: string } = new LunoraError(code, message);
+        const error: LunoraError & { why?: string } = new LunoraError(code, message, frameHintOption(payload.hint));
 
         if (typeof payload.why === "string") {
             error.why = payload.why;

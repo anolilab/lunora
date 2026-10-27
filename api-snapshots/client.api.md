@@ -1238,6 +1238,7 @@ type SubscriptionCallback = (data: unknown) => void;
 ```ts
 interface SubscriptionError {
     code?: LunoraErrorCodeInput;
+    hint?: string | string[];
     message: string;
     why?: string;
 }

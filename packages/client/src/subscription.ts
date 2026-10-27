@@ -44,6 +44,8 @@ export interface SubscriptionError {
      * so narrowing it to `LunoraErrorCode` would be a lie a newer server tells.
      */
     code?: LunoraErrorCodeInput;
+    /** The actionable fix text (Markdown), when the frame carried one. */
+    hint?: string | string[];
     message: string;
     /** The client-visible explanation of the cause, when the frame carried one. */
     why?: string;

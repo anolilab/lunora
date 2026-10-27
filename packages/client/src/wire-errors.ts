@@ -3,6 +3,7 @@ import { LunoraError } from "@lunora/errors";
 import { decodeWire } from "@lunora/wire";
 
 import { getRetryAfterMs, TransportError } from "./errors";
+import frameHintOption from "./frame-hint";
 import type { SubscriptionError } from "./subscription";
 import type { ServerErrorMessage } from "./types";
 
@@ -148,8 +149,9 @@ const parseServerError = (message: ServerErrorMessage, fallbackMessage: string):
 /** Build a coded `Error` from a stream-scoped server `error` frame, keeping the server's `why` explanation. */
 const buildStreamError = (message: ServerErrorMessage): Error => {
     const { code, messageText } = parseServerError(message, "stream error");
-    const why = (message.error as { why?: unknown } | undefined)?.why;
-    const error: Error & { why?: string } = code === undefined ? new Error(messageText) : new LunoraError(code, messageText);
+    const frame = message.error as { hint?: unknown; why?: unknown } | undefined;
+    const why = frame?.why;
+    const error: Error & { why?: string } = code === undefined ? new Error(messageText) : new LunoraError(code, messageText, frameHintOption(frame?.hint));
 
     if (typeof why === "string") {
         error.why = why;
@@ -165,9 +167,10 @@ const buildStreamError = (message: ServerErrorMessage): Error => {
  */
 const buildSubscriptionError = (message: ServerErrorMessage): SubscriptionError => {
     const { code, messageText } = parseServerError(message, "subscription error");
-    const why = (message.error as { why?: unknown } | undefined)?.why;
+    const frame = message.error as { hint?: unknown; why?: unknown } | undefined;
+    const why = typeof frame?.why === "string" ? { why: frame.why } : {};
 
-    return { message: messageText, ...(code === undefined ? {} : { code }), ...(typeof why === "string" ? { why } : {}) };
+    return { message: messageText, ...(code === undefined ? {} : { code }), ...frameHintOption(frame?.hint), ...why };
 };
 
 /** The `Symbol.for` key `@lunora/mcp` reads to tell a server verdict from a caller's own error. */

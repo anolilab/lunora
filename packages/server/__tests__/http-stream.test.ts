@@ -1,3 +1,4 @@
+import { resolveHint } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
 import type { HttpActionCtx as HttpActionContext, LunoraRouteHandler } from "../src/index";
@@ -88,6 +89,27 @@ describe("httpRoute stream() terminal", () => {
             { index: 0, room: "lobby" },
             { index: 1, room: "lobby" },
         ]);
+    });
+
+    it("carries the resolved hint on a non-redacted event:error frame and none on a redacted one", async () => {
+        expect.assertions(2);
+
+        const conflict = httpRoute.get("/api/hint").stream(async function* conflictGen() {
+            yield { status: "pending" };
+            throw new LunoraError("CONFLICT", "stale");
+        });
+        const internal = httpRoute.get("/api/boom").stream(async function* internalGen() {
+            yield { status: "pending" };
+            throw new LunoraError("INTERNAL", "secret path /etc/passwd");
+        });
+
+        const { events: conflictEvents } = await readSse(await dispatch(conflict, "GET", "/api/hint", new Request("https://x/api/hint")));
+        const { events: internalEvents } = await readSse(await dispatch(internal, "GET", "/api/boom", new Request("https://x/api/boom")));
+        const conflictFrame = conflictEvents.find((event) => event.event === "error");
+        const internalFrame = internalEvents.find((event) => event.event === "error");
+
+        expect((conflictFrame?.data as { hint?: unknown }).hint).toStrictEqual(resolveHint({ code: "CONFLICT" }));
+        expect(internalFrame?.data).not.toHaveProperty("hint");
     });
 
     it("carries a thrown LunoraError's why on its event:error frame", async () => {

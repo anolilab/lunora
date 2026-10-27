@@ -663,7 +663,7 @@ Run `pageDeltaFrames` only once you announce the token.
 | `delta`              | `{ type, id, delta: <wire>, cursor?, epoch?, lastMutationId?, more? }` | merge delta into server base; the LAST frame of a run carries the cursor                                                                                   |
 | `resume`             | `{ type, id, cursor?, epoch?, lastMutationId? }`                       | nothing changed; keep value, advance cursor                                                                                                                |
 | `settled`            | `{ type, id, cursor?, epoch?, lastMutationId? }`                       | write touched tables, byte-identical result; advance only                                                                                                  |
-| `error`              | `{ type, id?, error: { code?, message? }, message? }`                  | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)                                                                                  |
+| `error`              | `{ type, id?, error: { code?, message?, hint?, why? }, message? }`     | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)                                                                                  |
 | `complete`           | `{ type, id }`                                                         | subscription/stream closed server-side                                                                                                                     |
 | `chunk`              | `{ type, id, data: <wire>, seq?, generation? }`                        | one streaming-query chunk (`seq` + run `generation` on a durable run only)                                                                                 |
 | `whisper`            | `{ type, topic, data: <wire>, from? }`                                 | ephemeral relay                                                                                                                                            |
@@ -870,7 +870,8 @@ without sending a credential. Gate them at the edge if this matters.
 
 `httpRoute.<verb>(path).stream()` routes stream Server-Sent Events: one
 `data: <json>\n\n` frame per chunk, a terminal `event: complete` frame, and an
-`event: error` frame carrying `{ code, message }` on throw. Frames are separated
+`event: error` frame carrying `{ code, message }` (plus `hint` and `why` when the error is not
+redacted) on throw. Frames are separated
 by `\n\n`; multiple `data:` lines join with `\n`; one optional space after the
 field colon is stripped. See `packages/client/src/http-stream.ts`.
 
