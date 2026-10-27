@@ -10,6 +10,32 @@ describe("@lunora/wire", () => {
         expect(decodeWire(JSON.parse(text))).toStrictEqual(value);
     });
 
+    it("counts nesting depth exactly the same through arrays and plain objects", () => {
+        expect.assertions(8);
+
+        const nest = (levels: number, wrap: (inner: unknown) => unknown): unknown => {
+            let value: unknown = 1;
+
+            for (let index = 0; index < levels; index += 1) {
+                value = wrap(value);
+            }
+
+            return value;
+        };
+
+        for (const wrap of [
+            (inner: unknown) => [inner],
+            (inner: unknown) => {
+                return { inner };
+            },
+        ]) {
+            expect(() => encodeWire(nest(64, wrap))).not.toThrow();
+            expect(() => encodeWire(nest(65, wrap))).toThrow(RangeError);
+            expect(() => decodeWire(nest(64, wrap))).not.toThrow();
+            expect(() => decodeWire(nest(65, wrap))).toThrow(RangeError);
+        }
+    });
+
     it("builds a key independent of object key order", () => {
         expect(stableWireKey({ a: 1n, b: 2 })).toBe(stableWireKey({ b: 2, a: 1n }));
     });
