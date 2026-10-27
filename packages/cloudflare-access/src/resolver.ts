@@ -1,10 +1,18 @@
-import { ANONYMOUS, nonEmpty } from "@lunora/jwt-auth";
-
 import type { ExecutionContextLike } from "../../../shared/execution-context";
+import { nonEmpty } from "../../../shared/jwt-verify";
 import { readIdentityGroups, rolesForGroups } from "./identity-groups";
 import readPlatformIdentity from "./platform-identity";
 import type { AccessClaims, CreateAccessResolverOptions, ResolvedAccessIdentity, ResolvedIdentityLike, ResolveIdentityFunction } from "./types";
 import { assertJwtFallbackOptions, verifyRequest } from "./verify";
+
+/**
+ * The "anonymous" identity. `null` is the runtime's `resolveIdentity` contract
+ * for an unauthenticated caller (its return type is `… | null`); `undefined`
+ * would not be assignable. Centralized so the rest of the file stays free of
+ * inline `null` literals.
+ */
+// eslint-disable-next-line unicorn/no-null -- runtime resolveIdentity contract value for "anonymous"
+const ANONYMOUS = null;
 
 /**
  * Derive the stable caller id from verified claims: the IdP `sub` for SSO users,

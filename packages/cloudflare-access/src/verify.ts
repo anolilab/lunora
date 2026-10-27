@@ -1,8 +1,20 @@
 import { LunoraError } from "@lunora/errors";
-import type { JwtVerifier } from "@lunora/jwt-auth";
-import { cookieToken, firstToken, headerToken, httpsOrigin, jwtVerifier, verifyJwt } from "@lunora/jwt-auth";
+import { createRemoteJWKSet, errors, jwtVerify } from "jose";
 
-import type { AccessClaims, AccessJwtFallbackOptions, RequestVerifyOptions, VerifyAccessJwtOptions } from "./types";
+import type { JwtVerifierOf, JwtVerifierOptionsOf } from "../../../shared/jwt-verify";
+import { cookieToken, createJwtVerification, firstToken, headerToken } from "../../../shared/jwt-verify";
+import type { AccessClaims, AccessJwtFallbackOptions, AccessKeySet, RequestVerifyOptions, VerifyAccessJwtOptions } from "./types";
+
+const { httpsOrigin, jwtVerifier, verifyJwt } = createJwtVerification<AccessKeySet, AccessClaims>({
+    fail: (message) => new LunoraError("INTERNAL", message),
+    jose: {
+        createRemoteJWKSet,
+        errors,
+        // `jose` overloads `jwtVerify` per key kind; the union is one of the two at runtime.
+        jwtVerify: async (token, key, options) => jwtVerify<AccessClaims>(token, key as Parameters<typeof jwtVerify>[1], options),
+    },
+    name: "@lunora/cloudflare-access",
+});
 
 /** Cloudflare Access publishes its signing keys at this path under the team domain. */
 const CERTS_PATH = "/cdn-cgi/access/certs";
@@ -53,8 +65,8 @@ const normalizeAudiences = (aud: VerifyAccessJwtOptions["aud"]): string[] => {
     return audiences;
 };
 
-/** The `@lunora/jwt-auth` verify options for an Access application: RS256 against the team JWKS, its issuer, its AUD tags. */
-const jwtOptions = (options: VerifyAccessJwtOptions): Parameters<typeof verifyJwt>[1] => {
+/** The shared verify options for an Access application: RS256 against the team JWKS, its issuer, its AUD tags. */
+const jwtOptions = (options: VerifyAccessJwtOptions): JwtVerifierOptionsOf<AccessKeySet> => {
     const issuer = accessIssuer(options.teamDomain);
 
     return {
@@ -133,10 +145,10 @@ const verifyAccessJwt = async (token: string, options: VerifyAccessJwtOptions): 
  * The request verifier for an Access application: the `Cf-Access-Jwt-Assertion`
  * header (the assertion Cloudflare adds to every proxied request) first, then the
  * `CF_Authorization` cookie (present on top-level browser navigations), verified
- * by `@lunora/jwt-auth`'s shared pipeline. `onError` fires for a present-but-invalid
+ * by the JWT pipeline shared with `@lunora/jwt-auth`. `onError` fires for a present-but-invalid
  * token, never for an absent one.
  */
-const accessVerifier = (options: RequestVerifyOptions): JwtVerifier =>
+const accessVerifier = (options: RequestVerifyOptions): JwtVerifierOf<AccessClaims> =>
     jwtVerifier({
         ...jwtOptions(options),
         onError: options.onError,

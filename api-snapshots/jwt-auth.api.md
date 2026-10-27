@@ -70,23 +70,13 @@ type JwtKeySet = CryptoKey | JWTVerifyGetKey | KeyObject;
 ### `JwtVerifier` (type)
 
 ```ts
-type JwtVerifier = (request: Request) => Promise<VerifiedJwt | undefined>;
+type JwtVerifier = JwtVerifierOf<JWTPayload>;
 ```
 
-### `JwtVerifierOptions` (interface)
+### `JwtVerifierOptions` (type)
 
 ```ts
-interface JwtVerifierOptions {
-    algorithms?: string[];
-    audience?: string | string[];
-    clockTolerance?: number;
-    issuer?: string | string[];
-    jwksUrl?: string | URL;
-    keySet?: JwtKeySet;
-    onError?: (error: unknown, request: Request) => void;
-    requiredClaims?: string[];
-    token?: TokenSource;
-}
+type JwtVerifierOptions = JwtVerifierOptionsOf<JwtKeySet>;
 ```
 
 ### `SupabaseOptions` (interface)
@@ -104,13 +94,10 @@ interface SupabaseOptions extends PresetOverrides {
 type TokenSource = (request: Request) => string | null | undefined;
 ```
 
-### `VerifiedJwt` (interface)
+### `VerifiedJwt` (type)
 
 ```ts
-interface VerifiedJwt {
-    expired: boolean;
-    payload: JWTPayload;
-}
+type VerifiedJwt = VerifiedJwtOf<JWTPayload>;
 ```
 
 ### `WorkOsOptions` (interface)
@@ -246,8 +233,39 @@ interface ExecutionContextLike {
 }
 ```
 
+### `JwtVerifierOf` (type)
+
+```ts
+type JwtVerifierOf<Claims> = (request: Request) => Promise<VerifiedJwtOf<Claims> | undefined>;
+```
+
+### `JwtVerifierOptionsOf` (interface)
+
+```ts
+interface JwtVerifierOptionsOf<Key> {
+    algorithms?: string[];
+    audience?: string | string[];
+    clockTolerance?: number;
+    issuer?: string | string[];
+    jwksUrl?: string | URL;
+    keySet?: Key;
+    onError?: (error: unknown, request: Request) => void;
+    requiredClaims?: string[];
+    token?: TokenSource;
+}
+```
+
 ### `PresetOverrides` (type)
 
 ```ts
 type PresetOverrides = Pick<JwtIdentityResolverOptions, "claims" | "clockTolerance" | "keySet" | "onError" | "token">;
+```
+
+### `VerifiedJwtOf` (interface)
+
+```ts
+interface VerifiedJwtOf<Claims> {
+    expired: boolean;
+    payload: Claims;
+}
 ```
