@@ -114,6 +114,56 @@ describe("createSqlCtxDb — companion rebuilds", () => {
 
         expect(statements.filter((statement) => isRebuild(statement))).toHaveLength(1);
     });
+
+    it("keeps an aggregate and a rank index whose names would join to the same key apart", async () => {
+        // Keyed as `${table}::${name}` and `${table}::rank::${name}`, the counter
+        // `rank::leaderboard` and the rank `leaderboard` shared one entry, and the
+        // counter's rebuild stood in for the rank's.
+        expect.assertions(2);
+
+        const collidingSchema = {
+            tables: {
+                notes: {
+                    aggregateIndexes: [{ by: [], name: "rank::leaderboard", on: "notes", op: "count" }],
+                    indexes: [],
+                    rankIndexes: [{ name: "leaderboard", on: "notes", sortBy: [{ direction: "desc", field: "score" }] }],
+                    shape: { org: col("string"), score: col("number") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as never;
+        const seed = createSqlCtxDb({ clock: () => 1, dialect, exec: harness.exec, schema: collidingSchema });
+        const id = await seed.insert("notes", { org: "a", score: 1 });
+
+        // Empty both companions behind the store's back so only a rebuild can fill them.
+        harness.database.exec(`DELETE FROM "notes__agg_rank::leaderboard"; DELETE FROM "notes__rank_leaderboard"`);
+
+        const writer = createSqlCtxDb({ clock: () => 2, dialect, exec: harness.exec, provisionScope: {}, schema: collidingSchema });
+
+        await expect(writer.count("notes")).resolves.toBe(1);
+        await expect(writer.rank("notes", "leaderboard", { row: id })).resolves.toStrictEqual({ position: 1, total: 1 });
+    });
+
+    it("does not record a companion as missing when patchIf runs before provisioning", async () => {
+        // patchIf reached the companion check without provisioning first, so on a
+        // store that had not created the counter yet it recorded "missing" for the
+        // whole scope and every later write skipped the counter's deltas.
+        expect.assertions(2);
+
+        const plainSchema = { tables: { notes: { ...companionSchema.tables["notes"], aggregateIndexes: [], rankIndexes: [] } } } as never;
+        const id = await createSqlCtxDb({ clock: () => 1, dialect, exec: harness.exec, schema: plainSchema }).insert("notes", { org: "a", score: 1 });
+
+        const { exec, statements } = recording(harness.exec);
+        const writer = createSqlCtxDb({ clock: () => 2, dialect, exec, provisionScope: {}, schema: companionSchema });
+
+        await expect(writer.patchIf?.("notes", id, { patch: { score: 2 }, where: { org: "a" } })).resolves.toMatchObject({ applied: true });
+
+        statements.length = 0;
+        await writer.count("notes", { org: "a" });
+
+        // Read from the counter, not the scan fallback a "missing" record leaves behind.
+        expect(statements.filter((statement) => statement.includes("COUNT(*)"))).toStrictEqual([]);
+    });
 });
 
 describe("createSqlCtxDb — by-id writes pinned to a table", () => {

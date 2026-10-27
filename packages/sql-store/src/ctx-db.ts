@@ -1392,13 +1392,14 @@ const capAtLateCommit = (cursor: number, row: Record<string, unknown> | undefine
  * for a 50-row delta, and D1 bills it as 100k rows read. Ranging on `seq`
  * instead reads only the delta, but sorts whole rows (`doc` included), so a
  * poll from far back costs ~10x the index walk. This form is O(tables · log n)
- * at any distance, and yields the same rows in the same (name) order.
+ * at any distance, and yields the same rows. The outer `ORDER BY` keeps them
+ * in name order, which SQL does not promise for a recursive CTE's output.
  */
 const sqliteChangedTablesSql = (sinceSeq: number): SQL => {
     const log = sql.identifier(CDC_LOG_TABLE);
     const table = sql.identifier("table");
 
-    return sql`SELECT ${table}, seq FROM (WITH RECURSIVE "t"("name") AS (SELECT MIN(${table}) FROM ${log} UNION ALL SELECT (SELECT MIN(${table}) FROM ${log} WHERE ${table} > "t"."name") FROM "t" WHERE "t"."name" IS NOT NULL) SELECT "t"."name" AS ${table}, (SELECT MAX(seq) FROM ${log} WHERE ${table} = "t"."name" AND seq > ${sinceSeq}) AS seq FROM "t" WHERE "t"."name" IS NOT NULL) WHERE seq IS NOT NULL`;
+    return sql`SELECT ${table}, seq FROM (WITH RECURSIVE "t"("name") AS (SELECT MIN(${table}) FROM ${log} UNION ALL SELECT (SELECT MIN(${table}) FROM ${log} WHERE ${table} > "t"."name") FROM "t" WHERE "t"."name" IS NOT NULL) SELECT "t"."name" AS ${table}, (SELECT MAX(seq) FROM ${log} WHERE ${table} = "t"."name" AND seq > ${sinceSeq}) AS seq FROM "t" WHERE "t"."name" IS NOT NULL) WHERE seq IS NOT NULL ORDER BY ${table}`;
 };
 
 /**
@@ -1945,7 +1946,15 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
     const backfills = companionBackfills;
 
-    /** Run `rebuild` once per scope for `key`; a rejected run is evicted so the next caller retries it. */
+    /**
+     * Run `rebuild` once per scope for `key`; a rejected run is evicted so the
+     * next caller retries it. Keys are JSON tuples tagged with the companion
+     * kind: index names may contain any separator a string key would use.
+     *
+     * Provisioning is awaited first. A `false` ("companion missing") is kept for
+     * the life of the scope, so one recorded before provisioning created the
+     * companion would switch its deltas off for every later writer.
+     */
     const backfillOnce = (key: string, rebuild: () => Promise<boolean>): Promise<boolean> => {
         const cached = backfills.get(key);
 
@@ -1953,7 +1962,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return cached;
         }
 
-        const run = rebuild().catch((error: unknown) => {
+        const run = (async (): Promise<boolean> => {
+            await ensureMigrated();
+
+            return await rebuild();
+        })().catch((error: unknown) => {
             backfills.delete(key);
             throw error;
         });
@@ -2029,7 +2042,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
 
     const ensureBackfilled = (tableName: string, index: AggregateIndexDefinitionLike): Promise<boolean> =>
-        backfillOnce(`${tableName}::${index.name}`, () => rebuildCounter(tableName, index));
+        backfillOnce(JSON.stringify(["aggregate", tableName, index.name]), () => rebuildCounter(tableName, index));
 
     /**
      * Reduce one group's extreme in JS, off the decoded rows, for a column
@@ -2441,7 +2454,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
 
     const ensureRankBackfilled = (tableName: string, index: RankIndexDefinitionLike): Promise<boolean> =>
-        backfillOnce(`${tableName}::rank::${index.name}`, () => rebuildRankCompanion(tableName, index));
+        backfillOnce(JSON.stringify(["rank", tableName, index.name]), () => rebuildRankCompanion(tableName, index));
 
     /** Pre-write hook: rebuild rank companions once per scope. */
     const ensureRankBackfilledForTable = async (tableName: string): Promise<void> => {
@@ -3799,6 +3812,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
          */
         async patchIf(tableName, id, args) {
             assertNoExplicitUndefined("patchIf", args.patch);
+
+            await ensureMigrated();
 
             const definition = schema.tables[tableName];
 
