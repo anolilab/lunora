@@ -676,7 +676,7 @@ const decodeTagged = (frame: ReadonlyArray<unknown>, next: Recurse): unknown => 
     }
 };
 
-const decodeObject = (source: Record<string, unknown>, next: Recurse): Record<string, unknown> => {
+const decodeObject = (source: Record<string, unknown>, depth: number): Record<string, unknown> => {
     const result: Record<string, unknown> = {};
 
     for (const key of Object.keys(source)) {
@@ -685,7 +685,8 @@ const decodeObject = (source: Record<string, unknown>, next: Recurse): Record<st
         // (and its prototype chain). `setField` defines it as a plain own data
         // property instead so the value round-trips faithfully without any
         // pollution (Cap'n Web #190).
-        setField(result, key, next(source[key]));
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with decodeWire
+        setField(result, key, decodeWire(source[key], depth));
     }
 
     return result;
@@ -701,15 +702,15 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
         return value;
     }
 
-    const next: Recurse = (item) => decodeWire(item, depth + 1);
-
+    // The recursion closure is built only for tagged frames: plain arrays and
+    // objects are nearly every node, and a closure per node is measurable.
     if (Array.isArray(value)) {
         const frame: unknown[] = value;
 
-        return frame[0] === TAG ? decodeTagged(frame, next) : frame.map((item) => next(item));
+        return frame[0] === TAG ? decodeTagged(frame, (item) => decodeWire(item, depth + 1)) : frame.map((item) => decodeWire(item, depth + 1));
     }
 
-    return decodeObject(value as Record<string, unknown>, next);
+    return decodeObject(value as Record<string, unknown>, depth + 1);
 };
 
 /**
