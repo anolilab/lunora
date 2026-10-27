@@ -122,6 +122,21 @@ describe("shardDO socket routes", () => {
         expect(socketCalls(shard)).toHaveLength(0);
     });
 
+    it("refuses a route upgrade whose forwarded credential has already expired, so onOpen never runs as that user", async () => {
+        expect.assertions(3);
+
+        const shard = makeShard([], CHAT_ROUTE);
+        const response = await shard.fetch(
+            new Request("https://shard.internal/chat", {
+                headers: { Upgrade: "websocket", "x-lunora-identity-exp": String(Date.now() - 1000), "x-lunora-userid": "user-1" },
+            }),
+        );
+
+        expect(response.status).toBe(401);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "TOKEN_EXPIRED" } });
+        expect(socketCalls(shard)).toHaveLength(0);
+    });
+
     it("accepts a verified upgrade, stamps the route, and fires onOpen", async () => {
         expect.assertions(4);
 

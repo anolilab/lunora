@@ -1946,6 +1946,25 @@ const assertLiveTopicPublishable = (topic: string): void => {
 };
 
 /**
+ * Why a route upgrade is refused before its pair is allocated, so nothing it would run is registered: a route that
+ * requires a verified session refuses an anonymous caller (the default route allows anonymous sockets, like every
+ * other surface), and a credential that had already lapsed is refused as `TOKEN_EXPIRED`, like the HTTP path. A
+ * route fires `onOpen` straight from the upgrade, before any frame the per-frame expiry check sees, so an
+ * expired-but-genuine JWT (forwarded to signal a refresh) would otherwise run that mutation as its user.
+ */
+const refuseRouteUpgrade = (route: { auth: boolean }, userId: string | undefined, expiresAt: number | undefined): Response | undefined => {
+    if (route.auth && userId === undefined) {
+        return new Response("Unauthorized", { status: 401 });
+    }
+
+    if (userId !== undefined && isIdentityExpired(expiresAt)) {
+        return jsonResponse({ error: { code: "TOKEN_EXPIRED", message: "authentication token expired" } }, 401);
+    }
+
+    return undefined;
+};
+
+/**
  * Base class for shard Durable Objects.
  *
  * Concrete subclasses implement `handleRpc` and may emit deltas via
@@ -16530,12 +16549,10 @@ abstract class ShardDO {
         // bytes against the attachment's 16 KiB ceiling.
         const ip = request.headers.get("x-lunora-client-ip") ?? undefined;
 
-        // A route that requires a verified session refuses an anonymous upgrade
-        // here, after the worker resolved identity and BEFORE the pair is even
-        // allocated — so nothing unauthenticated is ever registered. The default
-        // route allows anonymous sockets, exactly like every other surface.
-        if (route?.auth === true && userId === undefined) {
-            return new Response("Unauthorized", { status: 401 });
+        const routeRefusal = route === undefined ? undefined : refuseRouteUpgrade(route, userId, expiresAt);
+
+        if (routeRefusal !== undefined) {
+            return routeRefusal;
         }
 
         // Resolve the admin flag BEFORE accepting the socket: the (async)
