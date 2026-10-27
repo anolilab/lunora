@@ -1,3 +1,12 @@
+## @lunora/shard-engine [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.163...@lunora/shard-engine@1.0.0-alpha.164) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.137
+* **@lunora/values:** upgraded to 1.0.0-alpha.83
+
 ## @lunora/shard-engine [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.162...@lunora/shard-engine@1.0.0-alpha.163) (2026-10-26)
 
 ### Features
