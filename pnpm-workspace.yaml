@@ -831,7 +831,7 @@ catalogs:
     # Exact-pinned: patches/gray-matter@4.0.3.patch is version-pinned, so a caret
     # would make the patch unused and fail the install.
     gray-matter: 4.0.3
-    happy-dom: 20.14.5
+    happy-dom: 21.0.4
     lucide-react: 1.52.0
     lucide-static: 1.52.0
     media-icons: 1.1.5
