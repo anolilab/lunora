@@ -123,9 +123,11 @@ export const withAuthWebSocket = (WebSocketImpl: typeof WebSocket, getAuthHeader
 
             // The client offers its bearer as a `lunora` / `lunora.bearer.*` subprotocol for
             // browsers, which cannot set headers. With a real `Authorization` header that offer
-            // is redundant, so drop it: the native handshake stays exactly as before (a worker
-            // that selects no subprotocol is still accepted) and the token rides one header.
-            super(url, hasAuthorization ? withoutLunoraProtocols(protocols) : protocols, headers ? { headers } : undefined);
+            // is redundant on native, so drop it there: the native handshake stays exactly as
+            // before (a worker that selects no subprotocol is still accepted) and the token rides
+            // one header. Under react-native-web the browser ignores `{ headers }`, so the
+            // subprotocol is the only credential the upgrade carries and must stay.
+            super(url, hasAuthorization && isNativeRuntime() ? withoutLunoraProtocols(protocols) : protocols, headers ? { headers } : undefined);
         }
     } as unknown as typeof WebSocket;
 
