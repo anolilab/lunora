@@ -73,7 +73,7 @@
         "@lunora/queue": "1.0.0-alpha.130",
         "@lunora/scheduler": "1.0.0-alpha.153",
         "@lunora/server": "1.0.0-alpha.243",
-        "@lunora/wire": "1.0.0-alpha.2",
+        "@lunora/wire": "1.0.0-alpha.3",
         "@visulima/notification": "catalog:notify",
         "ai": "catalog:ai"
     },
