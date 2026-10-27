@@ -156,8 +156,8 @@ const accessVerifier = (options: RequestVerifyOptions): JwtVerifierOf<AccessClai
     });
 
 /**
- * Build the request verifier once, at wiring time: it reads the Access JWT off a
- * request and verifies it. The returned function resolves the verified claims,
+ * Build a function that reads the Access JWT off a request and verifies it. It
+ * resolves the verified claims,
  * or `undefined` when no token is present **or** verification fails — the
  * fail-closed "no Access identity on this request" signal, matching what
  * `readPlatformIdentity` returns for the other authentication path so callers
@@ -165,7 +165,7 @@ const accessVerifier = (options: RequestVerifyOptions): JwtVerifierOf<AccessClai
  *
  * Built per factory rather than per request because the options are static: the
  * issuer, audience and key-source checks parse URLs, and on a request carrying no
- * token that parsing was most of the work.
+ * token that parsing is most of the work.
  *
  * With `acceptExpired`, a token that failed ONLY on its `exp` still yields its
  * claims (their past `exp` included), so the caller can answer `TOKEN_EXPIRED`
