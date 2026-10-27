@@ -50,7 +50,7 @@ pnpm --filter "@lunora/runtime" run test    # single package
 pnpm run api:check                # public API vs api-snapshots/*.api.md (api:update to accept)
 pnpm run dist:check               # built dist/ is production-clean
 pnpm run lint:package-json        # package.json key order (:fix)
-pnpm run lint:registry:sync       # registry/auth-ui-* in sync with packages/auth-ui
+pnpm run lint:registry:sync       # registry/auth-ui-* and the vendored ratelimit copies in sync
 pnpm run test:templates           # templates/* scaffold, install, build, typecheck
 pnpm run test:workerd             # the `workerd` vitest projects (19 packages, one example) — see below
 pnpm run test:celld               # platform + engine TCK against a live celld (needs the `celld` binary)

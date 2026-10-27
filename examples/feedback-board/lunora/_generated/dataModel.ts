@@ -89,7 +89,7 @@ export interface IndexNamesByTable {
     votes: "by_feedback_and_voter" | "by_voter";
     comments: "by_feedback";
     summaries: "by_generated";
-    ratelimit_buckets: "by_key";
+    ratelimit_buckets: "by_key" | "by_ts";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];

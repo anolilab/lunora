@@ -85,7 +85,7 @@ export interface IndexNamesByTable {
     channels: "by_name";
     messages: "by_channel";
     presence: "by_channel_session";
-    ratelimit_buckets: "by_key";
+    ratelimit_buckets: "by_key" | "by_ts";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];

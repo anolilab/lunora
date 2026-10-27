@@ -100,7 +100,7 @@ export interface IndexNamesByTable {
     lobbies: "by_host" | "by_guest" | "by_invite_code" | "by_open_public";
     games: "by_status" | "by_white" | "by_black";
     moves: "by_game_turn";
-    ratelimit_buckets: "by_key";
+    ratelimit_buckets: "by_key" | "by_ts";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
