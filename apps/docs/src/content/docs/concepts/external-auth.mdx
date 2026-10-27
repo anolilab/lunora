@@ -57,8 +57,8 @@ What every resolver from this package does:
   Override with `token: (request) => …`, or compose
   `firstToken(bearerToken, cookieToken("name"))`.
 - **Verifies it** against the provider's JWKS: signature, `iss`, `aud` when the
-  provider issues one, `exp` (required) and `nbf`, and that `iat` is not in the
-  future. Algorithms are pinned per provider, so `alg: none` and HMAC
+  provider issues one, `exp` (required) and `nbf`, and that `iat` is at most
+  a minute in the future. Algorithms are pinned per provider, so `alg: none` and HMAC
   forgeries never verify. `clockTolerance` allows that much skew, and the
   forwarded `exp` includes it, since the runtime has no skew allowance of its
   own.

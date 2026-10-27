@@ -29,7 +29,7 @@ Returns a `resolveIdentity`-compatible function.
 | `requiredClaims` | `["exp"]`                 | Claims the token must carry.                                                                                                                                                                     |
 | `token`          | `bearerToken`             | `(request) => string \| null \| undefined`. See `headerToken(name)`, `cookieToken(name)` and `firstToken(...sources)`.                                                                           |
 | `claims`         | none                      | `(payload) => Record \| null`: extra identity claims. `null` refuses the token. A returned `userId` overrides `sub`.                                                                             |
-| `clockTolerance` | `0`                       | Seconds of skew allowed on `exp` / `nbf` / `iat`. The forwarded `exp` includes it.                                                                                                               |
+| `clockTolerance` | `0`                       | Seconds of skew allowed on `exp` / `nbf` (and on `iat`, beyond its own 60 s floor). The forwarded `exp` includes it.                                                                             |
 | `onError`        | —                         | Observes a present-but-invalid token. Never fires for a missing one.                                                                                                                             |
 | `keySet`         | remote JWKS               | A public key (`importSPKI`, `importJWK`) or key-set getter (`createLocalJWKSet`). No HMAC secrets.                                                                                               |
 
@@ -46,8 +46,9 @@ The runtime then answers `TOKEN_EXPIRED`. Missing configuration throws when the
 resolver is created.
 
 One remote key set is cached per JWKS URL per isolate. An unknown `kid` refetches
-it once, which handles key rotation. A token with an `iat` in the future is
-refused (`jose` checks `iat` only with `maxTokenAge`).
+it once, which handles key rotation. A token whose `iat` lies more than 60 s
+(or `clockTolerance`, if larger) in the future is refused (`jose` checks `iat`
+only with `maxTokenAge`).
 
 With the default token source the resolver reads only `Authorization`, so
 `memoizeIdentity`'s default `Authorization`/`Cookie` cache key is safe. A
