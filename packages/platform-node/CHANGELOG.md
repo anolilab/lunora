@@ -1,3 +1,42 @@
+## @lunora/platform-node [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.184...@lunora/platform-node@1.0.0-alpha.185) (2026-10-26)
+
+### Features
+
+* **server:** require the table for ctx.db by-id reads and writes ([#1344](https://github.com/anolilab/lunora/issues/1344)) ([97244c5](https://github.com/anolilab/lunora/commit/97244c5eae27fb0c9ab19a71e7e0b50b02b13782))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.211
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.243
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.212
+* **@lunora/do:** upgraded to 1.0.0-alpha.251
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.163
+
+## @lunora/platform-node [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.183...@lunora/platform-node@1.0.0-alpha.184) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/storage:** upgraded to 1.0.0-alpha.156
+* **@visulima/workflow:** 3.0.0 → 4.0.0
+
+## @lunora/platform-node [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.182...@lunora/platform-node@1.0.0-alpha.183) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.210
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/queue:** upgraded to 1.0.0-alpha.129
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.242
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.211
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.96
+* **@lunora/do:** upgraded to 1.0.0-alpha.250
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.110
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.162
+* **@lunora/storage:** upgraded to 1.0.0-alpha.155
+
 ## @lunora/platform-node [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.181...@lunora/platform-node@1.0.0-alpha.182) (2026-10-26)
 
 ### Features

@@ -147,7 +147,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     // The trigger patches the row mid-flight, so this update's CAS
                     // matches nothing. A host whose SQL cannot report `changes()`
                     // silently loses the whole guarantee, which is why it is here.
-                    await expect(database.patch("i1", { title: "second" })).rejects.toBeInstanceOf(ConflictError);
+                    await expect(database.patch("items", "i1", { title: "second" })).rejects.toBeInstanceOf(ConflictError);
                 } finally {
                     close?.();
                 }
@@ -169,7 +169,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     let raised: unknown;
 
                     try {
-                        await database.patch("i1", { title: "second" });
+                        await database.patch("items", "i1", { title: "second" });
                     } catch (error) {
                         raised = error;
                     }
@@ -201,7 +201,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     await database.insert("items", { _id: "i1", title: "first", version: 1 }, { allowExplicitId: true });
 
                     try {
-                        await database.patch("i1", { title: "second" });
+                        await database.patch("items", "i1", { title: "second" });
                     } catch {
                         // expected — asserted above
                     }
@@ -249,10 +249,10 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                                 triggerMap: {
                                     recurse: {
                                         handler: async (
-                                            context: { db: { patch: (id: string, patch: Record<string, unknown>) => Promise<unknown> } },
+                                            context: { db: { patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<unknown> } },
                                             event: { doc: Record<string, unknown> },
                                         ) => {
-                                            await context.db.patch(event.doc["_id"] as string, { version: 99 });
+                                            await context.db.patch("items", event.doc["_id"] as string, { version: 99 });
                                         },
                                         op: "update",
                                         timing: "before",
@@ -271,7 +271,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     let raised: unknown;
 
                     try {
-                        await database.patch("i1", { title: "second" });
+                        await database.patch("items", "i1", { title: "second" });
                     } catch (error) {
                         raised = error;
                     }

@@ -22,8 +22,6 @@ export type { AuthState } from "./auth-state";
 export { useAuthState } from "./auth-state";
 export type { LunoraProviderProps } from "./lunora-provider";
 export { LunoraProvider, useLunora } from "./lunora-provider";
-export type { LunoraQueryOptions } from "./query-options";
-export { lunoraQueryOptions } from "./query-options";
 export type {
     ArgsOf,
     AuthImpersonation,
@@ -149,3 +147,8 @@ export { getErrorCode, getRetryAfterMs, isConflictError, isForbiddenError, isRat
 // re-exported so a React-only user imports everything from one package.
 export type { ClientQueryRef } from "@lunora/client";
 export { createClientQuery } from "@lunora/client";
+
+// The TanStack options factory, for driving a Lunora query through TanStack's
+// own hooks (`useSuspenseQuery`, `useQueries`, `ensureQueryData`).
+export type { LunoraQueryOptions } from "@lunora/client/query";
+export { lunoraQueryOptions } from "@lunora/client/query";

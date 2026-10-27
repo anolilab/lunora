@@ -4,6 +4,7 @@ import { defineMaterializer, MaterializerRuntime } from "../src/define-materiali
 import { EventLogDO } from "../src/event-log-do";
 import { EventLogDOClient } from "../src/event-log-do-client";
 import { InMemorySnapshotStore } from "../src/snapshot-store";
+import { TEST_ENV, TEST_INSTANCE } from "./_helpers/signed-request";
 
 // ── Mock SqlStorage ────────────────────────────────────────────────────
 
@@ -92,14 +93,16 @@ const createMockSql = () => {
 /** Create an EventLogDO instance backed by the in-memory mock SQL. */
 const createDO = (): EventLogDO => {
     const sql = createMockSql();
-    const state = { storage: { sql: sql as unknown as EventLogDO["state"]["storage"]["sql"] } };
-    return new EventLogDO(state, {});
+    const state = { id: { toString: () => TEST_INSTANCE }, storage: { sql: sql as unknown as EventLogDO["state"]["storage"]["sql"] } };
+    return new EventLogDO(state, TEST_ENV);
 };
 
 /** Wrap an EventLogDO as an EventLogDOClient by routing fetch through the DO. */
 const createClient = (do_: EventLogDO): EventLogDOClient =>
     new EventLogDOClient({
+        env: TEST_ENV,
         fetch: (req) => do_.fetch(req),
+        instance: TEST_INSTANCE,
     });
 
 // ── Tests ──────────────────────────────────────────────────────────────
@@ -515,23 +518,33 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
     });
 });
 
-describe("eventLogDO secret", () => {
-    const createSecuredDO = (): EventLogDO => {
-        const state = { storage: { sql: createMockSql() as unknown as EventLogDO["state"]["storage"]["sql"] } };
+describe("eventLogDOClient relay secret", () => {
+    it("throws at construction when the env carries no relay secret", () => {
+        expect.assertions(1);
 
-        return new EventLogDO(state, { EVENT_LOG_DO_SECRET: "s3cret" });
-    };
+        expect(() => new EventLogDOClient({ env: {}, fetch: () => Promise.reject(new Error("unused")), instance: TEST_INSTANCE })).toThrow(
+            /LUNORA_RELAY_SECRET/u,
+        );
+    });
 
-    it("rejects a client without the secret and serves one that sends it", async () => {
+    it("is refused by a DO that holds a different secret, and served by one that matches", async () => {
         expect.assertions(3);
 
-        const do_ = createSecuredDO();
+        const do_ = new EventLogDO({ id: { toString: () => TEST_INSTANCE }, storage: { sql: createMockSql() } }, TEST_ENV);
+        const stranger = new EventLogDOClient({ env: { LUNORA_RELAY_SECRET: "other" }, fetch: (req) => do_.fetch(req), instance: TEST_INSTANCE });
+        const client = new EventLogDOClient({ env: TEST_ENV, fetch: (req) => do_.fetch(req), instance: TEST_INSTANCE });
 
-        await expect(new EventLogDOClient({ fetch: (req) => do_.fetch(req) }).append([{ payload: {}, type: "a" }])).rejects.toThrow(/401/u);
-
-        const client = new EventLogDOClient({ fetch: (req) => do_.fetch(req), secret: "s3cret" });
-
+        await expect(stranger.append([{ payload: {}, type: "a" }])).rejects.toThrow(/403/u);
         await expect(client.append([{ payload: {}, type: "a" }])).resolves.toHaveLength(1);
         await expect(client.getSince(0)).resolves.toMatchObject({ truncated: false });
+    });
+
+    it("is refused by the DO when the client addresses a different instance", async () => {
+        expect.assertions(1);
+
+        const do_ = createDO();
+        const misaddressed = new EventLogDOClient({ env: TEST_ENV, fetch: (req) => do_.fetch(req), instance: "other-instance" });
+
+        await expect(misaddressed.append([{ payload: {}, type: "a" }])).rejects.toThrow(/403/u);
     });
 });

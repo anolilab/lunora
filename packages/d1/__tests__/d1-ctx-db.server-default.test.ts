@@ -102,13 +102,13 @@ describe("d1 ctx-db .serverDefault()", () => {
 
         await writer.insert("notes", { _id: "n1", title: "hi" }, { allowExplicitId: true });
 
-        await writer.patch("n1", { title: "bye" });
+        await writer.patch("notes", "n1", { title: "bye" });
 
         const afterTitlePatch = await writer.get("notes", "n1");
 
         expect(afterTitlePatch?.["ownerId"]).toBe("u1");
 
-        await writer.patch("n1", { ownerId: "attacker" });
+        await writer.patch("notes", "n1", { ownerId: "attacker" });
 
         const afterOwnerPatch = await writer.get("notes", "n1");
 
@@ -122,7 +122,7 @@ describe("d1 ctx-db .serverDefault()", () => {
 
         await writer.insert("notes", { _id: "n1", title: "hi" }, { allowExplicitId: true });
 
-        await writer.replace("n1", { ownerId: "attacker", title: "new" });
+        await writer.replace("notes", "n1", { ownerId: "attacker", title: "new" });
 
         const replaced = await writer.get("notes", "n1");
 

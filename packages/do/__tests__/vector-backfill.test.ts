@@ -256,8 +256,8 @@ describe("backfillVectors admin RPC", () => {
         await embedding;
 
         const write = via === "action" ? shard.act.bind(shard) : shard.mutate.bind(shard);
-        const patch = write(async (db) => db.patch("p_0001", { body: "new body" }));
-        const remove = write(async (db) => db.delete("p_0002", "posts"));
+        const patch = write(async (db) => db.patch("posts", "p_0001", { body: "new body" }));
+        const remove = write(async (db) => db.delete("posts", "p_0002"));
 
         // Unordered, the writes' hooks do not wait for the page, so they land
         // first. (Ordered, awaiting them here would wait on the held page.)

@@ -93,7 +93,7 @@ const requestStore = (ctx: LocalContext): RequestStore => {
                 return false;
             }
 
-            await writerOf(ctx).patch(row._id, toRequestPatch(patch));
+            await writerOf(ctx).patch("privacy_requests", row._id, toRequestPatch(patch));
 
             return true;
         },
@@ -101,7 +101,7 @@ const requestStore = (ctx: LocalContext): RequestStore => {
             const row = await rowFor(ctx, id);
 
             if (row !== undefined) {
-                await writerOf(ctx).patch(row._id, toRequestPatch(patch));
+                await writerOf(ctx).patch("privacy_requests", row._id, toRequestPatch(patch));
             }
         },
     };
@@ -138,7 +138,7 @@ const tasksPort = (ctx: LocalContext, subjectId: string) => {
                         throw new LunoraError("INTERNAL", "privacy-example has no retention rule for tasks.");
                     }
 
-                    await database.delete(row._id);
+                    await database.delete("tasks", row._id);
                 }),
             );
 
@@ -187,7 +187,7 @@ const invoicesPort = (ctx: LocalContext, subjectId: string) => {
                         throw new LunoraError("INTERNAL", "privacy-example deletes or keeps an invoice; it does not anonymise one.");
                     }
 
-                    await database.delete(row._id);
+                    await database.delete("invoices", row._id);
                 }),
             );
 
@@ -269,7 +269,7 @@ const archivePort = (ctx: LocalContext): ArchivePort => {
 
             const database = writerOf(ctx);
 
-            await Promise.all(rows.map(async (row) => database.delete(row._id)));
+            await Promise.all(rows.map(async (row) => database.delete("privacy_archive", row._id)));
 
             return { hasMore: rows.length === ERASE_BATCH, purged: rows.length };
         },
@@ -304,7 +304,7 @@ const filePort = (ctx: LocalContext): StorePort => {
 
             await (existing === undefined
                 ? writerOf(ctx).insert("exportFiles", { body, encoding, name: file.name, requestId })
-                : writerOf(ctx).patch(existing._id, { body, encoding }));
+                : writerOf(ctx).patch("exportFiles", existing._id, { body, encoding }));
 
             return `${requestId}/${file.name}`;
         },
@@ -322,7 +322,7 @@ const filePort = (ctx: LocalContext): StorePort => {
             const row = await fileRowOf(ctx, key);
 
             if (row !== null) {
-                await writerOf(ctx).delete(row._id);
+                await writerOf(ctx).delete("exportFiles", row._id);
             }
         },
         list: async (prefix) => {

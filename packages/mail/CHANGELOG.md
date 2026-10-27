@@ -1,3 +1,17 @@
+## @lunora/mail [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.124...@lunora/mail@1.0.0-alpha.125) (2026-10-26)
+
+
+### Dependencies
+
+* **@visulima/email:** 3.0.28 → 4.2.0
+
+## @lunora/mail [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.123...@lunora/mail@1.0.0-alpha.124) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+
 ## @lunora/mail [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.122...@lunora/mail@1.0.0-alpha.123) (2026-10-26)
 
 

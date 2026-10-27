@@ -220,10 +220,10 @@ const searchRaceCases = (target: RaceTarget, options: { native?: boolean } = {})
                 const row = pad(20);
                 const hold = holdAt(touchesCompanion(row));
                 const [isolateA, isolateB] = await livePair(hold.gate);
-                const older = isolateA.patch(row, { body: "olderword common" });
+                const older = isolateA.patch("notes", row, { body: "olderword common" });
 
                 await hold.reached;
-                await isolateB.patch(row, { body: "newerword common" });
+                await isolateB.patch("notes", row, { body: "newerword common" });
                 hold.release();
                 await older;
 
@@ -251,10 +251,10 @@ const searchRaceCases = (target: RaceTarget, options: { native?: boolean } = {})
                         await atRecheck.gate(text, parameters);
                     }
                 });
-                const older = isolateA.patch(row, { body: "olderword common" });
+                const older = isolateA.patch("notes", row, { body: "olderword common" });
 
                 await atWrite.reached;
-                await isolateB.patch(row, { body: "newerword common" });
+                await isolateB.patch("notes", row, { body: "newerword common" });
                 written = true;
                 atWrite.release();
                 await atRecheck.reached;
@@ -275,10 +275,10 @@ const searchRaceCases = (target: RaceTarget, options: { native?: boolean } = {})
                 const row = pad(20);
                 const hold = holdAt(touchesCompanion(row));
                 const [isolateA, isolateB] = await livePair(hold.gate);
-                const writing = isolateA.patch(row, { body: "onlyword common" });
+                const writing = isolateA.patch("notes", row, { body: "onlyword common" });
 
                 await hold.reached;
-                await isolateB.patch(row, { title: "renamed" });
+                await isolateB.patch("notes", row, { title: "renamed" });
                 hold.release();
                 await writing;
 
@@ -294,7 +294,7 @@ const searchRaceCases = (target: RaceTarget, options: { native?: boolean } = {})
                 const row = pad(20);
                 const hold = holdAt(touchesCompanion(row));
                 const [isolateA, isolateB] = await livePair(hold.gate);
-                const deleting = isolateA.delete(row);
+                const deleting = isolateA.delete("notes", row);
 
                 await hold.reached;
                 await isolateB.insert("notes", { _id: row, body: "rebornword common", title: "t" }, { allowExplicitId: true });
@@ -324,7 +324,7 @@ const searchRaceCases = (target: RaceTarget, options: { native?: boolean } = {})
                         await atRecheck.gate(text, parameters);
                     }
                 });
-                const deleting = isolateA.delete(row);
+                const deleting = isolateA.delete("notes", row);
 
                 await atPurge.reached;
                 await isolateB.insert("notes", { _id: row, body: "rebornword common", title: "t" }, { allowExplicitId: true });
@@ -370,7 +370,7 @@ const searchRaceCases = (target: RaceTarget, options: { native?: boolean } = {})
                 const [isolateA, other] = await livePair(async () => {}, staleSnapshot);
 
                 isolateB = other;
-                await isolateA.delete(row);
+                await isolateA.delete("notes", row);
 
                 await expect(search("rebornword")).resolves.toStrictEqual([row]);
                 await expect(companionRows(row)).resolves.toBe(perDocument);
@@ -390,7 +390,7 @@ const searchRaceCases = (target: RaceTarget, options: { native?: boolean } = {})
 
             await seed((n) => `word${String(n)} common`);
             await backfillSqlSearchIndexes(target.exec(), schemaFor(INDEX), target.dialect);
-            await writer(target.exec(), INDEX).patch(pad(3), { body: "common common fresh" });
+            await writer(target.exec(), INDEX).patch("notes", pad(3), { body: "common common fresh" });
 
             // `common` is both purged and re-inserted by the one write.
             const rows = await target.query(`SELECT __token__ AS t, __n__ AS n FROM ${COMPANION} WHERE __id__ = '${pad(3)}' ORDER BY __token__`);
@@ -564,13 +564,13 @@ const searchRaceCases = (target: RaceTarget, options: { native?: boolean } = {})
 
                         if (inAttempt > 1) {
                             bumps += 1;
-                            await other.patch(row, { title: `t${String(bumps)}` });
+                            await other.patch("notes", row, { title: `t${String(bumps)}` });
                         }
                     }
                 });
 
                 other = isolateB;
-                await isolateA.patch(row, { body: "freshword common" });
+                await isolateA.patch("notes", row, { body: "freshword common" });
 
                 await expect(companionRows(row)).resolves.toBeGreaterThan(0);
                 await expect(search("common")).resolves.toContain(row);

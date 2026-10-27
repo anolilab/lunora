@@ -1,3 +1,44 @@
+## @lunora/agent [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.251...@lunora/agent@1.0.0-alpha.252) (2026-10-26)
+
+### Features
+
+* **server:** require the table for ctx.db by-id reads and writes ([#1344](https://github.com/anolilab/lunora/issues/1344)) ([97244c5](https://github.com/anolilab/lunora/commit/97244c5eae27fb0c9ab19a71e7e0b50b02b13782))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.242
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.163
+
+## @lunora/agent [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.250...@lunora/agent@1.0.0-alpha.251) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/mail:** upgraded to 1.0.0-alpha.125
+
+## @lunora/agent [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.249...@lunora/agent@1.0.0-alpha.250) (2026-10-26)
+
+### Bug Fixes
+
+* **config:** bound the binding-scan parse cache to one project ([#1345](https://github.com/anolilab/lunora/issues/1345)) ([a2c777e](https://github.com/anolilab/lunora/commit/a2c777ed4262a5aa33df6d580552f7aa1b2e731e))
+
+### Performance Improvements
+
+* **codegen:** cheaper codegen passes, no agent/seed graphs at load ([#1346](https://github.com/anolilab/lunora/issues/1346)) ([6df95da](https://github.com/anolilab/lunora/commit/6df95da21c42b2be079a968b90d9192c3808aff2))
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.147
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/mail:** upgraded to 1.0.0-alpha.124
+* **@lunora/server:** upgraded to 1.0.0-alpha.241
+* **@lunora/values:** upgraded to 1.0.0-alpha.82
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.96
+* **@lunora/container:** upgraded to 1.0.0-alpha.93
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.162
+
 ## @lunora/agent [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.248...@lunora/agent@1.0.0-alpha.249) (2026-10-26)
 
 

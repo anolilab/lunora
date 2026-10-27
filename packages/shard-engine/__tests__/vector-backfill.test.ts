@@ -436,7 +436,7 @@ describe("backfillVectorIndexes", () => {
         const writer = createShardCtxDb({ clock: () => 2, schema, sql: harness.sql });
 
         // Hidden before the backfill, and a stale vector for it already in the index.
-        await writer.delete("p_0003", "posts");
+        await writer.delete("posts", "p_0003");
         vectors.store.set("p_0003", "stale");
 
         await run({ maxPages: 10 });

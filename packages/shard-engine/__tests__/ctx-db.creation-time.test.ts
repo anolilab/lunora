@@ -61,7 +61,7 @@ describe("ctx-db `_creationTime` across the write verbs", () => {
         const id = await writer.insert("notes", { body: "first" });
         const inserted = await writer.get("notes", id);
 
-        await writer.replace(id, { body: "second" }, "notes");
+        await writer.replace("notes", id, { body: "second" });
 
         const replaced = await writer.get("notes", id);
 
@@ -75,7 +75,7 @@ describe("ctx-db `_creationTime` across the write verbs", () => {
         const writer = setup();
         const id = await writer.insert("notes", { body: "first" });
 
-        await writer.replace(id, { _creationTime: 42, body: "second" }, "notes", { allowExplicitId: true });
+        await writer.replace("notes", id, { _creationTime: 42, body: "second" }, { allowExplicitId: true });
 
         const replaced = await writer.get("notes", id);
 
@@ -91,7 +91,7 @@ describe("ctx-db `_creationTime` across the write verbs", () => {
 
         deltas = [];
 
-        await writer.patch(id, { _creationTime: 1, body: "second" }, "notes");
+        await writer.patch("notes", id, { _creationTime: 1, body: "second" });
 
         const patched = await writer.get("notes", id);
         const logged = harness.raw(`SELECT doc FROM "__cdc_log" WHERE op = 'update' ORDER BY seq DESC LIMIT 1`)[0];

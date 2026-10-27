@@ -141,7 +141,7 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `LunoraQueryOptions` (interface)
 
-Re-exported from `@lunora/react` — signature tracked at its source.
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `MutationHook` (interface)
 
@@ -497,7 +497,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `lunoraQueryOptions` (const)
 
-Re-exported from `@lunora/react` — signature tracked at its source.
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `useAction` (const)
 

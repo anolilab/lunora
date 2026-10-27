@@ -193,7 +193,7 @@ describe("ctx-db triggers — aggregates and rank", () => {
                                     // during the replace's await window.
                                     if (!fired) {
                                         fired = true;
-                                        await competitor?.patch("t1", { title: "concurrent" });
+                                        await competitor?.patch("todos", "t1", { title: "concurrent" });
                                     }
                                 },
                                 op: "update",
@@ -212,7 +212,7 @@ describe("ctx-db triggers — aggregates and rank", () => {
             // replace reads its snapshot, fires the before-update trigger
             // (which commits the competing patch), then its guarded UPDATE
             // must match zero rows and raise a ConflictError.
-            await expect(writer.replace("t1", { projectId: "p2", title: "replaced" })).rejects.toMatchObject({ name: "ConflictError" });
+            await expect(writer.replace("todos", "t1", { projectId: "p2", title: "replaced" })).rejects.toMatchObject({ name: "ConflictError" });
 
             // The competing patch survived (not clobbered) and the row stays
             // in its original partition — proof the aggregate -prev step never
@@ -254,7 +254,7 @@ describe("ctx-db triggers — aggregates and rank", () => {
 
             await writer.insert("todos", { _id: "t1", projectId: "p1" }, { allowExplicitId: true });
             await writer.insert("todos", { _id: "t2", projectId: "p1" }, { allowExplicitId: true });
-            await writer.delete("t1");
+            await writer.delete("todos", "t1");
 
             expect(counts).toEqual([1]);
         });

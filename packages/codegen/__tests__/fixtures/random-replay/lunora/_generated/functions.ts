@@ -115,7 +115,7 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     draws: {
-        composed: (args?: {}) => Promise<unknown[]>;
+        composed: (args?: {}) => Promise<number[][]>;
         twice: (args?: {}) => Promise<number[]>;
     };
 }

@@ -1,3 +1,45 @@
+## @lunora/testing [1.0.0-alpha.308](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.307...@lunora/testing@1.0.0-alpha.308) (2026-10-26)
+
+### Features
+
+* **server:** require the table for ctx.db by-id reads and writes ([#1344](https://github.com/anolilab/lunora/issues/1344)) ([97244c5](https://github.com/anolilab/lunora/commit/97244c5eae27fb0c9ab19a71e7e0b50b02b13782))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.252
+* **@lunora/server:** upgraded to 1.0.0-alpha.242
+* **@lunora/observability:** upgraded to 1.0.0-alpha.175
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.173
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.163
+
+## @lunora/testing [1.0.0-alpha.307](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.306...@lunora/testing@1.0.0-alpha.307) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.251
+* **@lunora/mail:** upgraded to 1.0.0-alpha.125
+* **@lunora/notify:** upgraded to 1.0.0-alpha.98
+* **@visulima/notification:** 1.2.0 → 2.0.2
+
+## @lunora/testing [1.0.0-alpha.306](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.305...@lunora/testing@1.0.0-alpha.306) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.250
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.136
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/mail:** upgraded to 1.0.0-alpha.124
+* **@lunora/notify:** upgraded to 1.0.0-alpha.97
+* **@lunora/queue:** upgraded to 1.0.0-alpha.129
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.152
+* **@lunora/server:** upgraded to 1.0.0-alpha.241
+* **@lunora/observability:** upgraded to 1.0.0-alpha.174
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.172
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.162
+
 ## @lunora/testing [1.0.0-alpha.305](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.304...@lunora/testing@1.0.0-alpha.305) (2026-10-26)
 
 ### Features

@@ -86,7 +86,7 @@ describe("ctx-db OCC guarded write — concurrent writers", () => {
 
         let competitor: DatabaseWriterLike | undefined;
         const schema = schemaWithRace("update", async () => {
-            await competitor?.patch("t1", { title: "winner" });
+            await competitor?.patch("tasks", "t1", { title: "winner" });
         });
 
         const writer = makeWriter(schema);
@@ -101,7 +101,7 @@ describe("ctx-db OCC guarded write — concurrent writers", () => {
         let caught: unknown;
 
         try {
-            await writer.patch("t1", { title: "loser" });
+            await writer.patch("tasks", "t1", { title: "loser" });
         } catch (error) {
             caught = error;
         }
@@ -119,7 +119,7 @@ describe("ctx-db OCC guarded write — concurrent writers", () => {
 
         let competitor: DatabaseWriterLike | undefined;
         const schema = schemaWithRace("update", async () => {
-            await competitor?.patch("t1", { title: "winner" });
+            await competitor?.patch("tasks", "t1", { title: "winner" });
         });
 
         const writer = makeWriter(schema);
@@ -131,7 +131,7 @@ describe("ctx-db OCC guarded write — concurrent writers", () => {
         let caught: unknown;
 
         try {
-            await writer.replace("t1", { title: "replaced", weight: 99 });
+            await writer.replace("tasks", "t1", { title: "replaced", weight: 99 });
         } catch (error) {
             caught = error;
         }
@@ -150,7 +150,7 @@ describe("ctx-db OCC guarded write — concurrent writers", () => {
 
         let competitor: DatabaseWriterLike | undefined;
         const schema = schemaWithRace("update", async () => {
-            await competitor?.delete("t1");
+            await competitor?.delete("tasks", "t1");
         });
 
         const writer = makeWriter(schema);
@@ -162,7 +162,7 @@ describe("ctx-db OCC guarded write — concurrent writers", () => {
         let caught: unknown;
 
         try {
-            await writer.patch("t1", { title: "loser" });
+            await writer.patch("tasks", "t1", { title: "loser" });
         } catch (error) {
             caught = error;
         }
@@ -178,7 +178,7 @@ describe("ctx-db OCC guarded write — concurrent writers", () => {
 
         let competitor: DatabaseWriterLike | undefined;
         const schema = schemaWithRace("delete", async () => {
-            await competitor?.patch("t1", { title: "winner" });
+            await competitor?.patch("tasks", "t1", { title: "winner" });
         });
 
         const writer = makeWriter(schema);
@@ -193,7 +193,7 @@ describe("ctx-db OCC guarded write — concurrent writers", () => {
         let caught: unknown;
 
         try {
-            await writer.delete("t1");
+            await writer.delete("tasks", "t1");
         } catch (error) {
             caught = error;
         }
@@ -213,7 +213,7 @@ describe("ctx-db OCC guarded write — concurrent writers", () => {
         // The race patches a *different* row (t2) than the parked writer (t1),
         // so the guard's snapshot on t1 is untouched and must NOT conflict.
         const schema = schemaWithRace("update", async () => {
-            await competitor?.patch("t2", { title: "two-updated" });
+            await competitor?.patch("tasks", "t2", { title: "two-updated" });
         });
 
         const writer = makeWriter(schema);
@@ -224,7 +224,7 @@ describe("ctx-db OCC guarded write — concurrent writers", () => {
         await writer.insert("tasks", { _id: "t2", title: "two", weight: 2 }, { allowExplicitId: true });
 
         // Must resolve, not reject — disjoint rows are not a conflict.
-        await expect(writer.patch("t1", { title: "one-updated" })).resolves.toBeUndefined();
+        await expect(writer.patch("tasks", "t1", { title: "one-updated" })).resolves.toBeUndefined();
 
         const rows = await Promise.all([competitor.get("tasks", "t1"), competitor.get("tasks", "t2")]);
 

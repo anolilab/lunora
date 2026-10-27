@@ -159,8 +159,8 @@ const buildGlobalWriter = () => {
     };
 
     return {
-        async delete(id: string, expectedTable?: string) {
-            const entry = locate(id, expectedTable);
+        async delete(table: string, id: string) {
+            const entry = locate(id, table);
 
             if (entry) {
                 rows.delete(id);
@@ -202,18 +202,18 @@ const buildGlobalWriter = () => {
             return id;
         },
 
-        async patch(id: string, patch: Record<string, unknown>, expectedTable?: string) {
-            const entry = locateOrThrow(id, expectedTable);
+        async patch(table: string, id: string, patch: Record<string, unknown>) {
+            const entry = locateOrThrow(id, table);
 
             entry.document = { ...entry.document, ...patch };
         },
 
-        async replace(id: string, document: Record<string, unknown>, expectedTable?: string) {
-            locateOrThrow(id, expectedTable).document = { _id: id, ...document };
+        async replace(table: string, id: string, document: Record<string, unknown>) {
+            locateOrThrow(id, table).document = { _id: id, ...document };
         },
 
-        async restore(id: string, expectedTable?: string) {
-            const entry = locateOrThrow(id, expectedTable);
+        async restore(table: string, id: string) {
+            const entry = locateOrThrow(id, table);
             const { deletedAt, ...rest } = entry.document;
 
             entry.document = rest;
@@ -294,7 +294,7 @@ describe("facade over a .global() table — by-id surface", () => {
 
         expect(created.created).toBe(true);
 
-        // The update branch routes through `writer.patch(id, …, "profiles")`.
+        // The update branch routes through `writer.patch("profiles", id, …)`.
         const updated = await profiles.upsert({ create: { userId: "u1", value: "ignored" }, target: "userId", update: { value: "two" } });
 
         expect(updated).toStrictEqual({ created: false, id: created.id });

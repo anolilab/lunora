@@ -1,3 +1,68 @@
+## @lunora/codegen [1.0.0-alpha.362](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.361...@lunora/codegen@1.0.0-alpha.362) (2026-10-26)
+
+### Features
+
+* **server:** require the table for ctx.db by-id reads and writes ([#1344](https://github.com/anolilab/lunora/issues/1344)) ([97244c5](https://github.com/anolilab/lunora/commit/97244c5eae27fb0c9ab19a71e7e0b50b02b13782))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.261
+* **@lunora/agent:** upgraded to 1.0.0-alpha.252
+* **@lunora/client:** upgraded to 1.0.0-alpha.254
+* **@lunora/do:** upgraded to 1.0.0-alpha.251
+* **@lunora/payment:** upgraded to 1.0.0-alpha.244
+* **@lunora/server:** upgraded to 1.0.0-alpha.242
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.163
+
+## @lunora/codegen [1.0.0-alpha.361](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.360...@lunora/codegen@1.0.0-alpha.361) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.251
+* **@visulima/fs:** 6.0.29 → 7.0.0
+
+## @lunora/codegen [1.0.0-alpha.360](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.359...@lunora/codegen@1.0.0-alpha.360) (2026-10-26)
+
+### Performance Improvements
+
+* **codegen:** cheaper reused-Project passes (classification memo, cached handler walks, import scan) ([#1350](https://github.com/anolilab/lunora/issues/1350)) ([0c8713f](https://github.com/anolilab/lunora/commit/0c8713f0bc922356e82b0838dae2ba736b17d6e1))
+
+## @lunora/codegen [1.0.0-alpha.359](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.358...@lunora/codegen@1.0.0-alpha.359) (2026-10-26)
+
+### Performance Improvements
+
+* drop unused TypeScript programs from dev startup binding scan ([#1349](https://github.com/anolilab/lunora/issues/1349)) ([8aa7725](https://github.com/anolilab/lunora/commit/8aa772521e2f101f5ad4585c49882df064ccaa8f))
+
+## @lunora/codegen [1.0.0-alpha.358](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.357...@lunora/codegen@1.0.0-alpha.358) (2026-10-26)
+
+### Bug Fixes
+
+* **config:** bound the binding-scan parse cache to one project ([#1345](https://github.com/anolilab/lunora/issues/1345)) ([a2c777e](https://github.com/anolilab/lunora/commit/a2c777ed4262a5aa33df6d580552f7aa1b2e731e))
+
+### Performance Improvements
+
+* **codegen:** cheaper codegen passes, no agent/seed graphs at load ([#1346](https://github.com/anolilab/lunora/issues/1346)) ([6df95da](https://github.com/anolilab/lunora/commit/6df95da21c42b2be079a968b90d9192c3808aff2))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.260
+* **@lunora/agent:** upgraded to 1.0.0-alpha.250
+* **@lunora/container:** upgraded to 1.0.0-alpha.93
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/queue:** upgraded to 1.0.0-alpha.129
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.152
+* **@lunora/values:** upgraded to 1.0.0-alpha.82
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.96
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.136
+* **@lunora/client:** upgraded to 1.0.0-alpha.253
+* **@lunora/do:** upgraded to 1.0.0-alpha.250
+* **@lunora/payment:** upgraded to 1.0.0-alpha.243
+* **@lunora/server:** upgraded to 1.0.0-alpha.241
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.162
+
 ## @lunora/codegen [1.0.0-alpha.357](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.356...@lunora/codegen@1.0.0-alpha.357) (2026-10-26)
 
 ### Bug Fixes

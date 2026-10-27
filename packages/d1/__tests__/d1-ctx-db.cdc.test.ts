@@ -98,8 +98,8 @@ describe("d1 ctx-db change-data-capture", () => {
         const writer = setupWriter(true);
 
         await writer.insert("todos", { _id: "t_1", text: "hi" }, { allowExplicitId: true });
-        await writer.patch("t_1", { text: "edited" });
-        await writer.delete("t_1");
+        await writer.patch("todos", "t_1", { text: "edited" });
+        await writer.delete("todos", "t_1");
 
         const { changes, cursor } = await readD1CdcChanges(harness.exec);
 

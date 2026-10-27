@@ -162,15 +162,15 @@ describe("ctx-db against real SQLite", () => {
 
             await writer.insert("messages", { authorId: "u1", channelId: "c1", text: "hi" });
 
-            await writer.patch("m_1", { text: "edited" });
+            await writer.patch("messages", "m_1", { text: "edited" });
 
             await expect(writer.get("messages", "m_1")).resolves.toMatchObject({ channelId: "c1", text: "edited" });
 
-            await writer.replace("m_1", { authorId: "u2", channelId: "c2", text: "fresh" });
+            await writer.replace("messages", "m_1", { authorId: "u2", channelId: "c2", text: "fresh" });
 
             await expect(writer.get("messages", "m_1")).resolves.toMatchObject({ _id: "m_1", authorId: "u2", channelId: "c2", text: "fresh" });
 
-            await writer.delete("m_1");
+            await writer.delete("messages", "m_1");
 
             await expect(writer.get("messages", "m_1")).resolves.toBeNull();
         });

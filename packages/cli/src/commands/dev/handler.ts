@@ -128,21 +128,31 @@ const printAgentRulesHint = (logger: Logger, cwd: string): void => {
  * now-complete `.dev.vars.example`, then log the non-interactive hint if declined.
  */
 const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string, cache: DiscoveryCache): Promise<void> => {
-    // Phase 1 — seed .dev.vars.example with any package-required secrets that
-    // are not already listed there. Best-effort: a scan failure is non-fatal.
+    // The project's secret sources, read once for both the example and the fill. Best-effort: a scan failure is non-fatal, and the fill then
+    // generates every key.
+    let secretSources: ReadonlyArray<string> | undefined;
+
     try {
-        const bindings = await inferLunoraBindings({ cache, projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) });
-        const sources = secretSourcesFromBindings(bindings);
-        const addedKeys = (options.ensureExample ?? ensureDevVarsExample)(cwd, sources);
-
-        if (addedKeys.length > 0) {
-            // `@lunora/notify:webPush` → `@lunora/notify (webPush)`.
-            const readable = sources.map((source) => (source.includes(":") ? `${source.replace(":", " (")})` : source));
-
-            options.logger.info(`Updated .dev.vars.example with secrets for: ${readable.join(", ")} (${addedKeys.join(", ")})`);
-        }
+        secretSources = secretSourcesFromBindings(await inferLunoraBindings({ cache, projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) }));
     } catch {
         // Non-fatal — scanning may fail in unusual project layouts.
+    }
+
+    // Phase 1 — seed .dev.vars.example with any package-required secrets that
+    // are not already listed there. Best-effort: a write failure is non-fatal.
+    if (secretSources !== undefined) {
+        try {
+            const addedKeys = (options.ensureExample ?? ensureDevVarsExample)(cwd, secretSources);
+
+            if (addedKeys.length > 0) {
+                // `@lunora/notify:webPush` → `@lunora/notify (webPush)`.
+                const readable = secretSources.map((source) => (source.includes(":") ? `${source.replace(":", " (")})` : source));
+
+                options.logger.info(`Updated .dev.vars.example with secrets for: ${readable.join(", ")} (${addedKeys.join(", ")})`);
+            }
+        } catch {
+            // Non-fatal — the example is left as it was.
+        }
     }
 
     // Phase 2 — offer to generate / top up .dev.vars from the example.
@@ -175,6 +185,7 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
     try {
         (options.fillSecrets ?? fillDevSecrets)({
             cwd,
+            secretSources,
             info: (message) => {
                 options.logger.info(message);
             },

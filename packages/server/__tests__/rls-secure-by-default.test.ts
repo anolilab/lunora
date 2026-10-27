@@ -56,7 +56,7 @@ const createRawWriter = (rows: Row[], log: string[]) => {
 
             return rowsOfTable(tableName).length;
         },
-        async delete(id: string) {
+        async delete(_table: string, id: string) {
             log.push(`raw.delete:${id}`);
         },
         async explain() {
@@ -104,7 +104,7 @@ const createRawWriter = (rows: Row[], log: string[]) => {
 
             return (document._id as string | undefined) ?? "new-id";
         },
-        async patch(id: string) {
+        async patch(_table: string, id: string, _patch?: Record<string, unknown>, _options?: unknown) {
             log.push(`raw.patch:${id}`);
         },
         query(tableName: string): never {
@@ -121,7 +121,7 @@ const createRawWriter = (rows: Row[], log: string[]) => {
 
             return { continueCursor: null, isDone: true, page: rowsOfTable(tableName) };
         },
-        async replace(id: string) {
+        async replace(_table: string, id: string, _document?: Record<string, unknown>) {
             log.push(`raw.replace:${id}`);
         },
     };
@@ -161,15 +161,11 @@ const guard = (raw: RawWriter, protectedTables: Set<string>, tableOfId: (id: str
 
             return raw.count(tableName);
         },
-        delete: async (id: string, expectedTable?: string) => {
-            // A pinned delete is denied on the pinned table, even when the row is already gone.
-            if (expectedTable === undefined) {
-                denyById(id);
-            } else {
-                deny(expectedTable);
-            }
+        delete: async (table: string, id: string) => {
+            // A delete is denied on the table it names, even when the row is already gone.
+            deny(table);
 
-            return raw.delete(id);
+            return raw.delete(table, id);
         },
         findFirst: (tableName: string, args?: { where?: { _id?: string } }) => {
             deny(tableName);
@@ -201,15 +197,15 @@ const guard = (raw: RawWriter, protectedTables: Set<string>, tableOfId: (id: str
 
             return raw.insert(tableName, document);
         },
-        patch: async (id: string) => {
-            denyById(id);
+        patch: async (table: string, id: string, patch: Record<string, unknown>, options?: unknown) => {
+            deny(table);
 
-            return raw.patch(id);
+            return raw.patch(table, id, patch, options);
         },
-        replace: async (id: string) => {
-            denyById(id);
+        replace: async (table: string, id: string, document: Record<string, unknown>) => {
+            deny(table);
 
-            return raw.replace(id);
+            return raw.replace(table, id, document);
         },
     };
 
@@ -503,7 +499,7 @@ describe("rls — chained rls() steps compose", () => {
         const handler = lunora.mutation
             .use(rlsForTest<TestContext>(permissive))
             .use(rlsForTest<TestContext>(restrictive))
-            .mutation(async ({ ctx }) => ctx.db.patch("post_1", { title: "x" }));
+            .mutation(async ({ ctx }) => ctx.db.patch("posts", "post_1", { title: "x" }));
 
         await expect(handler.handler({ auth: { userId: "u1" }, db: guarded }, {})).rejects.toThrow(/denied by policy/u);
 
@@ -527,7 +523,7 @@ describe("rls — chunked delete over a guarded writer", () => {
         const base = createRawWriter(rows, log);
         const raw = {
             ...base,
-            async delete(id: string) {
+            async delete(_table: string, id: string) {
                 log.push(`raw.delete:${id}`);
 
                 if (id === "post_1") {

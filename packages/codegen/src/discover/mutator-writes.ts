@@ -103,7 +103,7 @@ const mutatorWritesFromSource = (source: SourceFile): MutatorWriteIR[] =>
  * authoritative `server` impls (`lunora/mutators.ts`) — the
  * `mutator_full_row_replace` advisor input. Returns `[]` when the file doesn't
  * exist. Each `replace` is attributed to the mutator export performing it so the
- * lint can steer a developer toward column-level `ctx.db.patch(id, { field })`.
+ * lint can steer a developer toward column-level `ctx.db.patch("table", id, { field })`.
  */
 const discoverMutatorWrites = (project: Project, lunoraDirectory: string): MutatorWriteIR[] => {
     const mutatorsPath = join(lunoraDirectory, MUTATORS_FILENAME);

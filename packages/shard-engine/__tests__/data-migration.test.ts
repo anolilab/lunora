@@ -448,8 +448,8 @@ describe("runDataMigration", () => {
             const original = writer.replace.bind(writer);
             const probingWriter: DatabaseWriterLike = {
                 ...writer,
-                replace: async (id, document) => {
-                    await original(id, document);
+                replace: async (table, id, document) => {
+                    await original(table, id, document);
                     observedUpdatedAt.push(Number(stateRow("bump-version")?.["updated_at"] ?? 0));
                 },
             };
@@ -775,13 +775,13 @@ describe("runDataMigration", () => {
 
             await writer.insert("users", { _id: "u1", name: "one", score: 10, version: 0 }, { allowExplicitId: true });
             await writer.insert("users", { _id: "u2", name: "two", score: 20, version: 0 }, { allowExplicitId: true });
-            await writer.delete("u2", "users");
+            await writer.delete("users", "u2");
 
             const result = await runDataMigration({ migration: bumpVersion, sql: harness.sql, writer });
 
             expect(result).toMatchObject({ changed: 2, processed: 2, status: "completed" });
 
-            await writer.restore?.("u2", "users");
+            await writer.restore?.("users", "u2");
 
             const restored = await writer.get("users", "u2");
 
@@ -846,7 +846,7 @@ describe("runDataMigration", () => {
                 table: "users",
                 up: async (document) => {
                     if (document["_id"] === "u1") {
-                        await writer.patch("u3", { score: 999 });
+                        await writer.patch("users", "u3", { score: 999 });
                     }
 
                     return { ...document, version: Number(document["version"] ?? 0) + 1 };
@@ -881,7 +881,7 @@ describe("runDataMigration", () => {
 
                         // Writes u2 again inside every attempt, so the re-read never
                         // matches what the transform was handed.
-                        await writer.patch("u2", { score: 100 + bump });
+                        await writer.patch("users", "u2", { score: 100 + bump });
                     }
 
                     return { ...document, version: Number(document["version"] ?? 0) + 1 };

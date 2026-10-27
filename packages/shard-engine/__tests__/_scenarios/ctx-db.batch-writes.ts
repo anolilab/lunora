@@ -174,7 +174,7 @@ const runBatchWriteScenarios = (factory: () => SqlHarness): void => {
                 const { writer } = setupWriter();
                 const ids = (await writer.insertMany("messages", [row(1), row(2), row(3)])) as string[];
 
-                const result = await writer.deleteMany(ids);
+                const result = await writer.deleteMany("messages", ids);
 
                 expect(result).toStrictEqual({ deleted: 3 });
                 await expect(writer.findMany("messages", {}).then((p) => p.page)).resolves.toHaveLength(0);
@@ -186,7 +186,7 @@ const runBatchWriteScenarios = (factory: () => SqlHarness): void => {
                 const { writer } = setupWriter();
                 const ids = Array.from({ length: 501 }, (_, index) => `m${String(index)}`);
 
-                await expect(writer.deleteMany(ids)).rejects.toThrow(/exceeds the limit of 500/);
+                await expect(writer.deleteMany("messages", ids)).rejects.toThrow(/exceeds the limit of 500/);
             });
 
             it.each([-1, 1.5, Number.NaN])("deleteWhere rejects limit %s before reading", async (limit) => {
@@ -245,7 +245,7 @@ const runBatchWriteScenarios = (factory: () => SqlHarness): void => {
 
                 const ids = Array.from({ length: 501 }, (_, index) => `m${String(index)}`);
 
-                await expect(writer.deleteMany(ids, { limit: Number.POSITIVE_INFINITY })).resolves.toStrictEqual({ deleted: 501 });
+                await expect(writer.deleteMany("messages", ids, { limit: Number.POSITIVE_INFINITY })).resolves.toStrictEqual({ deleted: 501 });
             });
 
             it("deleteWhere removes every row matching the predicate", async () => {
@@ -303,6 +303,7 @@ const runBatchWriteScenarios = (factory: () => SqlHarness): void => {
                 const ids = (await writer.insertMany("messages", [row(1), row(2)])) as string[];
 
                 const result = await writer.patchMany(
+                    "messages",
                     ids.map((id, index) => {
                         return { id, patch: { text: `patched-${String(index)}` } };
                     }),
@@ -323,7 +324,7 @@ const runBatchWriteScenarios = (factory: () => SqlHarness): void => {
                     return { id: `m${String(index)}`, patch: { text: "x" } };
                 });
 
-                await expect(writer.patchMany(patches)).rejects.toThrow(/exceeds the limit of 500/);
+                await expect(writer.patchMany("messages", patches)).rejects.toThrow(/exceeds the limit of 500/);
             });
 
             it("patchWhere stops reading one row past the cap before refusing an over-cap match", async () => {

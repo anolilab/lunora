@@ -253,13 +253,13 @@ export const internalAction = lunoraBuilders.internalAction as unknown as Intern
  * custom mutators (`lunora/mutators.ts`) with it instead of importing from
  * `lunorash/server`, and the authoritative `server` impl's `ctx` carries the
  * schema-typed `ctx.db` (`ctx.db.query("nodes")` resolves `Doc<"nodes">`,
- * `ctx.db.patch(id, …)` takes an `Id<"nodes">`) with no hand-written ctx type and
+ * `ctx.db.patch("nodes", id, …)` takes an `Id<"nodes">`) with no hand-written ctx type and
  * no `as unknown as` cast. Runtime-identical to the package export; only the
  * context type narrows, so discovery finds a mutator authored either way.
  * @example
  * export const setText = defineMutator({
  *     args: { id: v.id("nodes"), text: v.string() },
- *     server: async (ctx, args) => { await ctx.db.patch(args.id, { text: args.text }); },
+ *     server: async (ctx, args) => { await ctx.db.patch("nodes", args.id, { text: args.text }); },
  * });
  */
 export const defineMutator = defineMutatorBase as unknown as <Args extends Record<string, Validator> = Record<string, Validator>, ClientTx = unknown, R = unknown>(

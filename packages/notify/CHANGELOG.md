@@ -1,3 +1,17 @@
+## @lunora/notify [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.97...@lunora/notify@1.0.0-alpha.98) (2026-10-26)
+
+
+### Dependencies
+
+* **@visulima/notification:** 1.2.0 → 2.0.2
+
+## @lunora/notify [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.96...@lunora/notify@1.0.0-alpha.97) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+
 ## @lunora/notify [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.95...@lunora/notify@1.0.0-alpha.96) (2026-10-26)
 
 

@@ -2249,7 +2249,15 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ## `lunorash/client/auth`
 
+### `ADMIN_AUTH_DEFAULT_PAGE_SIZE` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `AUTH_STATUSES` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `AdminAuthList` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2257,7 +2265,35 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `AuthUsersListFilter` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `IdentityStore` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `adminAuthListHasMore` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `adminAuthListQueryKey` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `authOrganizationsList` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `authSessionsList` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `authSignUpInvitationsList` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `authUsersList` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2270,6 +2306,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `isLoadingStatus` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `subscribeAdminAuthIdentity` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2325,6 +2365,14 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `LunoraQueryKey` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `LunoraQueryOptions` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `QuerySubscriptionOptions` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -2358,6 +2406,18 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `createQuerySubscription` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `lunoraQueryKey` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `lunoraQueryKeyFromArgsKey` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `lunoraQueryOptions` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 

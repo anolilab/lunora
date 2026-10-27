@@ -137,7 +137,7 @@ const episodicComponent = (): EpisodicComponentFunctions => {
 
             for (const stale of overflow.slice(0, Math.max(0, overflow.length - MAX_EPISODE_RETENTION))) {
                 // eslint-disable-next-line no-await-in-loop -- sequential deletes in a serialized mutation
-                await context.db.delete(stale["_id"] as never);
+                await context.db.delete(EPISODES_TABLE, stale["_id"] as never);
             }
 
             return { recorded: true };

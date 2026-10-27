@@ -1,3 +1,22 @@
+## @lunora/db [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.254...@lunora/db@1.0.0-alpha.255) (2026-10-26)
+
+### Features
+
+* **server:** require the table for ctx.db by-id reads and writes ([#1344](https://github.com/anolilab/lunora/issues/1344)) ([97244c5](https://github.com/anolilab/lunora/commit/97244c5eae27fb0c9ab19a71e7e0b50b02b13782))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.254
+
+## @lunora/db [1.0.0-alpha.254](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.253...@lunora/db@1.0.0-alpha.254) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.253
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+
 ## @lunora/db [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.252...@lunora/db@1.0.0-alpha.253) (2026-10-26)
 
 

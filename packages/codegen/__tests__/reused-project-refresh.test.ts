@@ -170,3 +170,102 @@ describe("reused Project — fresh vs reused output", () => {
         expect(reused).toStrictEqual(readGenerated(freshDirectory));
     });
 });
+
+/**
+ * A stand-in for `@lunora/server`'s builder types, so the `__lunoraProcedure` brand and the
+ * `__lunoraVisibility` marker resolve in a temp project without installing the package.
+ */
+const SERVER_TYPES = `interface Builder { readonly __lunoraProcedure: true; mutation(handler: (input: { ctx: unknown }) => Promise<unknown>): unknown }
+interface InternalBuilder extends Builder { readonly __lunoraVisibility: "internal" }
+export declare const mutation: Builder;
+export declare const internalMutation: InternalBuilder;
+`;
+
+const builderModule = (builder: string): string => `import { ${builder} } from "@lunora/server";\n\nexport const appMutation = ${builder};\n`;
+
+const postsModule = (body: string): string =>
+    `import { appMutation } from "./lib/builders";\n\nexport const createPost = appMutation.mutation(async ({ ctx }) => ${body});\n`;
+
+/**
+ * Codegen caches per-pass work by compiler node and type checker (`classifyProcedureCall`,
+ * `descendantsOfKind`). A reused Project must still answer from the source as it is now:
+ * an edit to one file can change what an UNCHANGED file classifies as, and an edited
+ * handler must be read again rather than served from the previous pass.
+ */
+describe("reused Project — per-pass caches see edits", () => {
+    let freshDirectory: string | undefined;
+
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-codegen-reuse-"));
+        lunoraDirectory = join(workdir, "lunora");
+
+        const serverPackage = join(workdir, "node_modules", "@lunora", "server");
+
+        cpSync(join(fixtureRoot, "lunora"), lunoraDirectory, { recursive: true });
+        writeFileSync(
+            join(workdir, "tsconfig.json"),
+            JSON.stringify({ compilerOptions: { module: "esnext", moduleResolution: "bundler", strict: true, target: "es2022" } }),
+            "utf8",
+        );
+        mkdirSync(serverPackage, { recursive: true });
+        writeFileSync(join(serverPackage, "package.json"), JSON.stringify({ name: "@lunora/server", type: "module", types: "./index.d.ts" }), "utf8");
+        writeFileSync(join(serverPackage, "index.d.ts"), SERVER_TYPES, "utf8");
+        mkdirSync(join(lunoraDirectory, "lib"), { recursive: true });
+        writeFileSync(join(lunoraDirectory, "lib", "builders.ts"), builderModule("mutation"), "utf8");
+        writeFileSync(join(lunoraDirectory, "posts.ts"), postsModule("ctx"), "utf8");
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+
+        if (freshDirectory) {
+            rmSync(freshDirectory, { force: true, recursive: true });
+        }
+    });
+
+    /** The `_generated/` a fresh Project writes for the current sources. */
+    const freshGenerated = (): Map<string, string> => {
+        freshDirectory = mkdtempSync(join(tmpdir(), "lunora-codegen-fresh-"));
+        cpSync(workdir, freshDirectory, { recursive: true });
+        rmSync(join(freshDirectory, "lunora", "_generated"), { force: true, recursive: true });
+        runCodegen({ projectRoot: freshDirectory, wranglerQueueProducers: [] });
+
+        return readGenerated(freshDirectory);
+    };
+
+    it("reclassifies a procedure when only the module its builder comes from changes", () => {
+        expect.assertions(4);
+
+        const project = createCodegenProject(lunoraDirectory);
+
+        expect(runCodegen({ project, projectRoot: workdir, wranglerQueueProducers: [] }).generated.api).toContain("createPost");
+
+        // `posts.ts` is untouched: only its builder's module switches to the internal
+        // builder, so `createPost` must leave the client-facing `api`.
+        writeFileSync(join(lunoraDirectory, "lib", "builders.ts"), builderModule("internalMutation"), "utf8");
+        refreshCodegenProject(project, lunoraDirectory);
+
+        const after = runCodegen({ project, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(after.generated.api).not.toContain("createPost");
+        expect(after.generated.internal).toContain("createPost");
+        expect(readGenerated(workdir)).toStrictEqual(freshGenerated());
+    });
+
+    it("re-reads an edited handler body on the next pass", () => {
+        expect.assertions(3);
+
+        const project = createCodegenProject(lunoraDirectory);
+        const before = runCodegen({ project, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(before.advisorContext?.nondeterministicCalls ?? []).toHaveLength(0);
+
+        writeFileSync(join(lunoraDirectory, "posts.ts"), postsModule("[ctx, Math.random()]"), "utf8");
+        refreshCodegenProject(project, lunoraDirectory);
+
+        const after = runCodegen({ project, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(after.advisorContext?.nondeterministicCalls).toHaveLength(1);
+        expect(readGenerated(workdir)).toStrictEqual(freshGenerated());
+    });
+});

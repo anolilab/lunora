@@ -74,9 +74,9 @@ interface ActionCacheContext {
 
 ```ts
 interface ActionCacheDatabase {
-    delete: <T extends string>(id: Id<T>) => Promise<void>;
+    delete: <T extends string>(table: T, id: Id<T>) => Promise<void>;
     insert: (table: string, document: Record<string, unknown>) => Promise<unknown>;
-    patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
+    patch: <T extends string>(table: T, id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
     query: (table: string) => ActionCacheQuery;
 }
 ```
@@ -278,14 +278,14 @@ interface DatabaseReader {
 
 ```ts
 interface DatabaseWriter extends DatabaseReader {
-    delete: <T extends string>(id: Id<T>) => Promise<void>;
+    delete: <T extends string>(table: T, id: Id<T>) => Promise<void>;
     deleteAll: (tableName: string, options?: {
         chunkSize?: number;
         hard?: boolean;
     }) => Promise<{
         deleted: number;
     }>;
-    deleteMany: <T extends string>(ids: ReadonlyArray<Id<T>>, options?: BatchWriteOptions) => Promise<{
+    deleteMany: <T extends string>(table: T, ids: ReadonlyArray<Id<T>>, options?: BatchWriteOptions) => Promise<{
         deleted: number;
     }>;
     deleteWhere: (tableName: string, where: Record<string, unknown>, options?: BatchWriteOptions) => Promise<{
@@ -303,12 +303,12 @@ interface DatabaseWriter extends DatabaseReader {
     insertManyUnsafe: <T extends string>(tableName: T, documents: ReadonlyArray<Record<string, unknown>>, options?: BatchWriteOptions & {
         allowExplicitId?: boolean;
     }) => Promise<Id<T>[]>;
-    patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
+    patch: <T extends string>(table: T, id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
     patchIf: <T extends string>(tableName: T, id: Id<T>, args: {
         patch: Record<string, unknown>;
         where: Record<string, unknown>;
     }) => Promise<PatchIfResult>;
-    patchMany: <T extends string>(patches: ReadonlyArray<{
+    patchMany: <T extends string>(table: T, patches: ReadonlyArray<{
         id: Id<T>;
         patch: Record<string, unknown>;
     }>, options?: BatchWriteOptions) => Promise<{
@@ -320,7 +320,7 @@ interface DatabaseWriter extends DatabaseReader {
     }, options?: BatchWriteOptions) => Promise<{
         patched: number;
     }>;
-    replace: <T extends string>(id: Id<T>, document: Record<string, unknown>) => Promise<void>;
+    replace: <T extends string>(table: T, id: Id<T>, document: Record<string, unknown>) => Promise<void>;
     wipeShard: (options?: {
         chunkSize?: number;
         exclude?: ReadonlyArray<string>;
@@ -635,12 +635,12 @@ interface FacadeEntry {
 interface FacadeWriterLike {
     aggregate(tableName: string, options: unknown): Promise<unknown>;
     count(tableName: string, where?: unknown): Promise<number>;
-    delete(id: string, expectedTable?: string, options?: {
+    delete(table: string, id: string, options?: {
         hard?: boolean;
     }): Promise<void>;
-    deleteMany?(ids: ReadonlyArray<string>, options?: {
+    deleteMany?(table: string, ids: ReadonlyArray<string>, options?: {
         limit?: number;
-    }, expectedTable?: string): Promise<{
+    }): Promise<{
         deleted: number;
     }>;
     deleteWhere?(tableName: string, where: Record<string, unknown>, options?: {
@@ -659,13 +659,13 @@ interface FacadeWriterLike {
         limit?: number;
         skipDuplicates?: boolean;
     }): Promise<(string | null)[]>;
-    patch(id: string, patch: Record<string, unknown>, expectedTable?: string): Promise<void>;
-    patchMany?(patches: ReadonlyArray<{
+    patch(table: string, id: string, patch: Record<string, unknown>): Promise<void>;
+    patchMany?(table: string, patches: ReadonlyArray<{
         id: string;
         patch: Record<string, unknown>;
     }>, options?: {
         limit?: number;
-    }, expectedTable?: string): Promise<{
+    }): Promise<{
         patched: number;
     }>;
     patchWhere?(tableName: string, args: {
@@ -683,8 +683,8 @@ interface FacadeWriterLike {
     rank(tableName: string, indexName: string, options: unknown): Promise<unknown>;
     rankPage(tableName: string, indexName: string, options?: unknown): Promise<unknown>;
     readonly relationWrites?: Readonly<Record<string, RelationWriteInfosLike>>;
-    replace(id: string, document: Record<string, unknown>, expectedTable?: string): Promise<void>;
-    restore?(id: string, expectedTable?: string): Promise<void>;
+    replace(table: string, id: string, document: Record<string, unknown>): Promise<void>;
+    restore?(table: string, id: string): Promise<void>;
 }
 ```
 
@@ -2892,16 +2892,16 @@ interface TriggerCtx {
 interface TriggerDatabase {
     aggregate: (tableName: string, options: TriggerAggregateOptions) => Promise<null | number>;
     count: (tableName: string, where?: Record<string, unknown>) => Promise<number>;
-    delete: (id: string) => Promise<void>;
+    delete: (table: string, id: string) => Promise<void>;
     findFirst: (tableName: string, args?: TriggerQueryArgs) => Promise<Record<string, unknown> | null>;
     findMany: (tableName: string, args?: TriggerQueryArgs) => Promise<TriggerQueryPage>;
     get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
     groupBy: (tableName: string, options: TriggerGroupByOptions) => Promise<ReadonlyArray<TriggerGroupByEntry>>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
-    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<void>;
     rank: (tableName: string, indexName: string, options: TriggerRankOptions) => Promise<null | TriggerRankResult>;
     rankPage: (tableName: string, indexName: string, options?: TriggerRankPageOptions) => Promise<TriggerQueryPage>;
-    replace: (id: string, document: Record<string, unknown>) => Promise<void>;
+    replace: (table: string, id: string, document: Record<string, unknown>) => Promise<void>;
 }
 ```
 
@@ -6423,9 +6423,9 @@ const DOCUMENT_HISTORY_KEY = "documentHistory";
 ```ts
 interface DatabaseWriterLike {
     aggregate: (tableName: string, options: AggregateArgs$1) => Promise<null | number>;
-    assertPatchAllowed?: (id: string, expectedTable?: string) => Promise<void>;
+    assertPatchAllowed?: (table: string, id: string) => Promise<void>;
     count: (tableName: string, whereOrArgs?: CountArgs | WhereInput) => Promise<number>;
-    delete: (id: string, expectedTable?: string, options?: {
+    delete: (table: string, id: string, options?: {
         hard?: boolean;
     }) => Promise<void>;
     deleteAll?: (tableName: string, options?: {
@@ -6434,9 +6434,9 @@ interface DatabaseWriterLike {
     }) => Promise<{
         deleted: number;
     }>;
-    deleteMany: (ids: ReadonlyArray<string>, options?: {
+    deleteMany: (table: string, ids: ReadonlyArray<string>, options?: {
         limit?: number;
-    }, expectedTable?: string) => Promise<{
+    }) => Promise<{
         deleted: number;
     }>;
     deleteRereadTables?: ReadonlySet<string>;
@@ -6470,7 +6470,7 @@ interface DatabaseWriterLike {
         row: Record<string, unknown>;
         tableName: string;
     }>;
-    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: PatchWriteOptions) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>, options?: PatchWriteOptions) => Promise<void>;
     patchIf?: (tableName: string, id: string, args: {
         patch: Record<string, unknown>;
         verify?: PatchVerifier;
@@ -6479,12 +6479,12 @@ interface DatabaseWriterLike {
         applied: boolean;
         doc: Record<string, unknown> | null;
     }>;
-    patchMany: (patches: ReadonlyArray<{
+    patchMany: (table: string, patches: ReadonlyArray<{
         id: string;
         patch: Record<string, unknown>;
     }>, options?: {
         limit?: number;
-    }, expectedTable?: string) => Promise<{
+    }) => Promise<{
         patched: number;
     }>;
     patchWhere?: (tableName: string, args: {
@@ -6508,8 +6508,8 @@ interface DatabaseWriterLike {
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<ShardRankPageResultLike>;
     related?: (start: RelatedStartLike, options?: RelatedArgs) => Promise<RelatedPageLike>;
     relationEdges?: ReadonlyArray<RelationEdgeLike>;
-    replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
-    restore?: (id: string, expectedTable?: string) => Promise<void>;
+    replace: (table: string, id: string, document: Record<string, unknown>) => Promise<void>;
+    restore?: (table: string, id: string) => Promise<void>;
     softDeleteFields?: ReadonlyMap<string, string>;
     wipeShard?: (options?: {
         chunkSize?: number;
@@ -6778,8 +6778,8 @@ interface MaskContextIn {
 interface MaskDatabase {
     aggregate: (tableName: string, options: AggregateArgs) => Promise<null | number>;
     count: (tableName: string, whereOrArgs?: unknown) => Promise<number>;
-    delete: (id: string, expectedTable?: string) => Promise<void>;
-    deleteMany: (ids: ReadonlyArray<string>, options?: {
+    delete: (table: string, id: string) => Promise<void>;
+    deleteMany: (table: string, ids: ReadonlyArray<string>, options?: {
         limit?: number;
     }) => Promise<{
         deleted: number;
@@ -6807,7 +6807,7 @@ interface MaskDatabase {
         row: Record<string, unknown>;
         tableName: string;
     }>;
-    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<void>;
     patchIf?: (tableName: string, id: string, args: {
         patch: Record<string, unknown>;
         where: Record<string, unknown>;
@@ -6815,7 +6815,7 @@ interface MaskDatabase {
         applied: boolean;
         doc: Record<string, unknown> | null;
     }>;
-    patchMany: (patches: ReadonlyArray<{
+    patchMany: (table: string, patches: ReadonlyArray<{
         id: string;
         patch: Record<string, unknown>;
     }>, options?: {
@@ -6852,7 +6852,7 @@ interface MaskDatabase {
         }[];
     }>;
     relationWrites?: Readonly<Record<string, RelationWriteInfosLike>>;
-    replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    replace: (table: string, id: string, document: Record<string, unknown>) => Promise<void>;
 }
 ```
 

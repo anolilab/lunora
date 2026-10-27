@@ -51,6 +51,7 @@ const E2E_DEV_VARS = `# Written by tests/e2e/globalSetup.ts; restored on teardow
 AUTH_SECRET="e2e-deterministic-secret-do-not-use-in-prod"
 AUTH_URL="${BASE_URL}"
 STORAGE_SECRET="e2e-deterministic-storage-secret"
+LUNORA_RELAY_SECRET="e2e-deterministic-relay-secret-do-not-use-in-prod"
 LUNORA_E2E="true"
 LUNORA_ORIGIN_URL="${BASE_URL}"
 LUNORA_ADMIN_TOKEN="e2e-deterministic-admin-token"

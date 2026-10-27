@@ -19,12 +19,12 @@ describe("discoverOwnerFieldWrites: the ctx.db receiver", () => {
             [
                 "`const database = ctx.db`",
                 "ctx, args",
-                `const database = ctx.db;\n        await database.patch(args.id, { userId: args.targetUserId }); // @write`,
+                `const database = ctx.db;\n        await database.patch("posts", args.id, { userId: args.targetUserId }); // @write`,
             ],
             [
                 "a `const` alias of a renamed ctx",
                 "c, args",
-                `const context = c;\n        await context.db.replace(args.id, { userId: args.targetUserId }); // @write`,
+                `const context = c;\n        await context.db.replace("posts", args.id, { userId: args.targetUserId }); // @write`,
             ],
         ])("reports a caller-chosen owner written through %s", (_label, parameters, body) => {
             expect.assertions(2);

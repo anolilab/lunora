@@ -251,7 +251,7 @@ describe("d1 ctx-db — explicit-id tableName cache", () => {
             { _id: "shared", active: true, big: 1n, count: 1, meta: {}, name: "first", settings: {}, tags: [] },
             { allowExplicitId: true },
         );
-        await writer.delete("shared");
+        await writer.delete("docs", "shared");
 
         await expect(writer.get("docs", "shared")).resolves.toBeNull();
 
@@ -341,11 +341,11 @@ describe("d1 ctx-db — a scalar in an untyped column", () => {
         const database = writer();
 
         await database.insert("events", { _id: "e3", anything: "start", either: 1, external: "x" }, { allowExplicitId: true });
-        await database.patch("e3", { anything: 7 });
+        await database.patch("events", "e3", { anything: 7 });
 
         await expect(database.get("events", "e3").then((row) => row?.["anything"])).resolves.toBe(7);
 
-        await database.replace("e3", { anything: false, either: 2, external: "y" });
+        await database.replace("events", "e3", { anything: false, either: 2, external: "y" });
 
         await expect(database.get("events", "e3").then((row) => row?.["anything"])).resolves.toBe(false);
     });

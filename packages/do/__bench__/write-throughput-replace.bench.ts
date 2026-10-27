@@ -36,6 +36,6 @@ beforeAll(async () => {
 describe("write throughput — bare replace", () => {
     bench("bare: replace (full-row substitute on seed row)", async () => {
         counter += 1;
-        await writer.replace(SEED_ID, { _id: SEED_ID, projectId: "p1", seq: counter });
+        await writer.replace("todos", SEED_ID, { _id: SEED_ID, projectId: "p1", seq: counter });
     });
 });

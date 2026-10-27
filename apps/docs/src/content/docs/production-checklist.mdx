@@ -49,11 +49,12 @@ Cloudflare Worker secrets, set per environment. `wrangler deploy` never pushes
 - [ ] Every key in `.dev.vars.example` has a production value:
       `wrangler secret put NAME --env production`, or push in bulk with
       `lunora env push --prod`.
-- [ ] `LUNORA_RELAY_SECRET` is set when you run more than one shard or have a
-      `.shardBy()` table. It signs the internal control channel between shards
-      (relay and read replicas) and every request to `ShardRegistryDO`, which
-      refuses all of them without it. For the relay channel alone, no secret
-      means it trusts any caller inside the Durable Object namespace.
+- [ ] `LUNORA_RELAY_SECRET` is set on the Worker and on every Durable Object
+      namespace whenever you run more than one shard, read replicas, an
+      `EventLogDO`, or a shard registry. It signs the internal control channel
+      between Durable Objects. Read replicas, `EventLogDO` and the shard registry
+      refuse every request without it; the relay alone falls back to trusting any
+      caller inside the Durable Object namespace.
 - [ ] Generated secrets are strong. `lunora env generate` mints 32-byte-hex
       values for everything locally generatable; provider keys (Resend,
       Stripe, …) come from the provider dashboard.
