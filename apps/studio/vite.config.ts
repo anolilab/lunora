@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
+import { redact } from "@tanstack/redact/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig, loadEnv } from "vite";
 
@@ -46,7 +47,15 @@ export default defineConfig(({ command, mode }) => {
     const workerUrl = env["LUNORA_DEV_PROXY"] ?? `http://localhost:${String(ports.playground)}`;
 
     return {
-        plugins: [react(), babel({ presets: [reactCompilerPreset({ panicThreshold: "none" })] }), tailwindcss()],
+        plugins: [
+            // The studio mounts with `createRoot` only (no SSR), so hydration is dead
+            // weight. Everything else stays on: ErrorBoundary is a class component, and
+            // the panels rely on context, portals and Suspense.
+            redact({ features: { hydration: false } }),
+            react(),
+            babel({ presets: [reactCompilerPreset({ panicThreshold: "none" })] }),
+            tailwindcss(),
+        ],
         resolve: {
             // Resolve the studio library to its SOURCE (not the built dist), so
             // editing a panel HMRs instantly and the build compiles from source —

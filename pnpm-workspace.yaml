@@ -577,6 +577,9 @@ catalogs:
     diff: ^9.0.0
     html-to-image: ^1.11.13
     motion: ^14.0.0
+    # Synchronous React runtime for the standalone studio build (apps/studio) only.
+    # Pinned, not ranged: it is v0.
+    "@tanstack/redact": 0.2.0
     recharts: ^3.10.1
     "@solidjs/testing-library": ^0.8.10
     # Held as a set. `@tanstack/db` and `@tanstack/react-db` are pre-1.0, so their
