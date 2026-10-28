@@ -3595,6 +3595,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         stub: cronRunStub,
     });
 
+    const isPaused = async (): Promise<boolean> => {
+        const state = await deploymentPause.read();
+
+        return state.paused;
+    };
+
     /**
      * Dispatch every code-defined cron job declared under the firing expression,
      * collecting per-job failures into `errors` so one failing job neither aborts
@@ -5801,6 +5807,35 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
+    /**
+     * Run the app's raw `crons` handler for one tick. Paused, it is skipped: it is
+     * user code with no lease of its own (`cronJobs()` skip through `beginCronRun`,
+     * which records the paused tick). The built-in backup is not routed here and
+     * keeps running — it executes no app code, and an operator mid-incident wants
+     * the snapshot more than ever.
+     */
+    const runUserCron = async (
+        handler: CronHandler,
+        controller: ScheduledControllerLike,
+        env: unknown,
+        context: ExecutionContextLike,
+        errors: Error[],
+        toError: (error: unknown) => Error,
+    ): Promise<void> => {
+        if (await isPaused()) {
+            // eslint-disable-next-line no-console -- the scheduled() entry point has no request-scoped logger; the host captures console
+            console.warn(`[lunora] scheduled("${controller.cron}") skipped its crons handler: the deployment is paused.`);
+
+            return;
+        }
+
+        try {
+            await handler(controller, env, context);
+        } catch (error: unknown) {
+            errors.push(toError(error));
+        }
+    };
+
     const handleScheduled = async (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike, traceparent?: string): Promise<void> => {
         // A cron can fire on an isolate that never served a `fetch`, so resolve
         // `env.LUNORA_ADMIN_TOKEN` here too — the built-in backup authenticates its
@@ -5813,11 +5848,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const userHandler = options.crons?.[controller.cron];
 
         if (userHandler) {
-            try {
-                await userHandler(controller, env, context);
-            } catch (error: unknown) {
-                errors.push(toError(error));
-            }
+            await runUserCron(userHandler, controller, env, context, errors, toError);
         }
 
         // Code-defined crons: run every job declared under the firing expression.
@@ -5867,6 +5898,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const tenantFanoutRoutes = buildTenantFanoutRoutes({
         assertAdmin: assertAdminAuthorized,
         dispatchScheduled: handleScheduled,
+        isPaused,
         queueHandler: options.queueHandler,
     });
 

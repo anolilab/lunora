@@ -204,6 +204,64 @@ describe("createWorker — deployment pause", () => {
         expect(queue).toHaveBeenCalledTimes(1);
     });
 
+    it("hands a forwarded tenant queue batch back for retry while paused", async () => {
+        expect.hasAssertions();
+
+        const queueHandler = vi.fn<() => Promise<{ retry: string[] }>>(async () => {
+            return { retry: [] };
+        });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, queueHandler, schedulerDO: pausableScheduler().namespace, shardDO: countingShard().namespace });
+        const forward = (): Request =>
+            new Request("https://app.example/_lunora/queue", {
+                body: JSON.stringify({
+                    messages: [
+                        { body: 1, id: "m1" },
+                        { body: 2, id: "m2" },
+                    ],
+                    queue: "jobs",
+                }),
+                headers: admin,
+                method: "POST",
+            });
+
+        await worker.fetch(setPaused(true), {}, fakeContext);
+
+        const held = await worker.fetch(forward(), {}, fakeContext);
+
+        await expect(held.json()).resolves.toStrictEqual({ retry: ["m1", "m2"] });
+        expect(queueHandler).not.toHaveBeenCalled();
+
+        await worker.fetch(setPaused(false), {}, fakeContext);
+        await worker.fetch(forward(), {}, fakeContext);
+
+        expect(queueHandler).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips a raw crons handler while paused", async () => {
+        expect.hasAssertions();
+
+        const handler = vi.fn<() => Promise<void>>(async () => undefined);
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            crons: { "* * * * *": handler },
+            schedulerDO: pausableScheduler().namespace,
+            shardDO: countingShard().namespace,
+        });
+
+        await worker.fetch(setPaused(true), {}, fakeContext);
+        await worker.scheduled?.({ cron: "* * * * *", scheduledTime: 0 }, {}, fakeContext);
+
+        expect(handler).not.toHaveBeenCalled();
+
+        await worker.fetch(setPaused(false), {}, fakeContext);
+        await worker.scheduled?.({ cron: "* * * * *", scheduledTime: 0 }, {}, fakeContext);
+
+        expect(handler).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
+    });
+
     it("reports pausing as unsupported on a worker without a scheduler", async () => {
         expect.hasAssertions();
 
