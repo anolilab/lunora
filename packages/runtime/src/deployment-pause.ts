@@ -70,6 +70,9 @@ interface DeploymentPause {
 const createDeploymentPause = (options: DeploymentPauseOptions): DeploymentPause => {
     const now = options.now ?? Date.now;
     let cached: { readAt: number; state: DeploymentPauseState } | undefined;
+    // Shared by every caller that finds the cache stale while a read is out, so a
+    // burst of calls costs one scheduler read, not one each.
+    let pending: Promise<DeploymentPauseState> | undefined;
 
     const fetchState = async (stub: ResolvedShard, init?: RequestInit): Promise<DeploymentPauseState> => {
         const response = await stub.fetch(new Request("https://scheduler.internal/pause", init));
@@ -103,13 +106,17 @@ const createDeploymentPause = (options: DeploymentPauseOptions): DeploymentPause
             return cached.state;
         }
 
-        try {
-            return await fetchState(stub);
-        } catch {
-            cached = { readAt: now(), state: NOT_PAUSED };
+        pending ??= fetchState(stub)
+            .catch(() => {
+                cached = { readAt: now(), state: NOT_PAUSED };
 
-            return NOT_PAUSED;
-        }
+                return NOT_PAUSED;
+            })
+            .finally(() => {
+                pending = undefined;
+            });
+
+        return pending;
     };
 
     /** The `503` a function call gets while paused, or `undefined` to let it through. */

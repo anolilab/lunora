@@ -185,6 +185,17 @@ describe("createWorker — deployment pause", () => {
         now.mockRestore();
     });
 
+    it("shares one flag read between concurrent calls", async () => {
+        expect.hasAssertions();
+
+        const scheduler = pausableScheduler();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: scheduler.namespace, shardDO: countingShard().namespace });
+
+        await Promise.all([worker.fetch(rpc(), {}, fakeContext), worker.fetch(rpc(), {}, fakeContext), worker.fetch(rpc(), {}, fakeContext)]);
+
+        expect(scheduler.reads()).toBe(1);
+    });
+
     it("hands a queue batch back for later instead of running it while paused", async () => {
         expect.hasAssertions();
 
