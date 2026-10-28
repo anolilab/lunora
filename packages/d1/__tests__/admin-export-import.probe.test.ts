@@ -1,4 +1,5 @@
 import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
+import { ConflictError } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { importGlobalRows } from "../src/admin-export-import";
@@ -179,18 +180,20 @@ describe("d1 import ownership probe", () => {
     });
 
     it("returns the original insert error when the recheck probe itself fails", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const schema = schemaOf(["alpha"]);
-        const writer: DatabaseWriterLike = { ...writerFor(schema), insert: () => Promise.reject(new Error("driver error: connection reset")) };
-        // Probe 1 is the batch probe; probe 2 is the recheck after the failed insert.
+        const writer: DatabaseWriterLike = { ...writerFor(schema), insert: () => Promise.reject(new ConflictError("unique index breached")) };
+        // Probe 1 is the batch probe; probe 2 is the recheck, which only a unique-index CONFLICT triggers.
+        const probe = counting((probeNumber) => probeNumber === 2);
         const result = await importGlobalRows(writer, schema, {
-            exec: counting((probeNumber) => probeNumber === 2).exec,
+            exec: probe.exec,
             rows: [{ doc: { _id: "r1", label: "a" }, table: "alpha" }],
         });
 
+        expect(probe.probes()).toBe(2);
         expect(result.errors).toHaveLength(1);
-        expect(result.errors[0]).toMatchObject({ code: "INSERT_FAILED", message: "Internal error" });
+        expect(result.errors[0]).toMatchObject({ code: "CONFLICT", line: 1, table: "alpha" });
     });
 
     it("reports a conflict, not a collision, when the row's own table and another both hold the id", async () => {
