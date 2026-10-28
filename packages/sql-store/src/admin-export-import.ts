@@ -485,13 +485,15 @@ const batchedOwnership = (
     }
 
     const holders = found.owners.get(explicitId);
-    const other = tables.find((name) => name !== table && holders?.has(name) === true);
 
-    if (other !== undefined) {
-        return { error: collisionError(other, explicitId, line, table) };
+    // The row's own table answers first, as in `explicitIdOwner`: a duplicate across tables is a conflict (or the replace target), not a collision.
+    if (holders?.has(table) === true) {
+        return { existingId: explicitId };
     }
 
-    return { existingId: holders?.has(table) === true ? explicitId : undefined };
+    const other = tables.find((name) => holders?.has(name) === true);
+
+    return other === undefined ? { existingId: undefined } : { error: collisionError(other, explicitId, line, table) };
 };
 
 type RowOutcome =
@@ -682,11 +684,42 @@ const importOneRow = async (
     if (outcome.kind === "inserted" || outcome.kind === "replaced") {
         // The probe predates this write: record it so a later row repeating the id, in this table or another, is seen.
         recordOwner(found, explicitId, table);
-    } else if (outcome.kind === "error" && existingId === undefined) {
+    } else if (outcome.kind === "error" && outcome.error.code === "CONFLICT" && existingId === undefined) {
+        // Only a unique-index breach can mean the id was taken since the probe. Any other failure (a trigger or companion
+        // write after the base row landed) keeps its own error: the recheck would find the row this very insert stored.
         return (await recheckOwner(writer, schema, dialect, args.exec, found, { ...row, explicitId })) ?? outcome;
     }
 
     return outcome;
+};
+
+/**
+ * The batched owner lookup for every explicit id in `prepared`. Provisioning
+ * runs only when there is something to probe, and its failure is a probe
+ * failure: the rows error out rather than the whole import rejecting.
+ */
+const probeBatch = async (exec: SqlContextExec, schema: SchemaLike, dialect: SqlDialect, prepared: ReadonlyArray<PreparedRow>): Promise<IdOwners> => {
+    const ids = new Set<string>();
+
+    for (const entry of prepared) {
+        if (entry.kind === "ready" && entry.explicitId !== undefined) {
+            ids.add(entry.explicitId);
+        }
+    }
+
+    if (ids.size === 0) {
+        return { owners: new Map() };
+    }
+
+    try {
+        await runSqlGlobalTableMigrations(exec, schema, dialect);
+    } catch (error: unknown) {
+        const { body } = toErrorBody(error, { fallbackCode: "PROBE_FAILED" });
+
+        return { failure: { code: body.code, message: body.message } };
+    }
+
+    return probeIdOwners(exec, dialect, selectGlobalTables(schema), [...ids]);
 };
 
 /**
@@ -719,17 +752,7 @@ const importSqlGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLik
 
     // The ownership probe reads every global table, so each must exist first. A dry run touches no table.
     if (args.exec && args.dryRun !== true) {
-        await runSqlGlobalTableMigrations(args.exec, schema, dialect);
-
-        const ids = new Set<string>();
-
-        for (const entry of prepared) {
-            if (entry.kind === "ready" && entry.explicitId !== undefined) {
-                ids.add(entry.explicitId);
-            }
-        }
-
-        found = ids.size === 0 ? { owners: new Map() } : await probeIdOwners(args.exec, dialect, selectGlobalTables(schema), [...ids]);
+        found = await probeBatch(args.exec, schema, dialect, prepared);
     }
 
     for (const entry of prepared) {

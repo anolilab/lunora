@@ -192,4 +192,78 @@ describe("d1 import ownership probe", () => {
         expect(result.errors).toHaveLength(1);
         expect(result.errors[0]).toMatchObject({ code: "INSERT_FAILED", message: "Internal error" });
     });
+
+    it("reports a conflict, not a collision, when the row's own table and another both hold the id", async () => {
+        expect.assertions(2);
+
+        const schema = schemaOf(["alpha", "beta"]);
+        const writer = writerFor(schema);
+
+        await writer.insert("alpha", { _id: "dup", label: "a" }, { allowExplicitId: true });
+        await writer.insert("beta", { _id: "dup", label: "b" }, { allowExplicitId: true });
+
+        const result = await importGlobalRows(writer, schema, { exec: counting().exec, rows: [{ doc: { _id: "dup", label: "c" }, table: "alpha" }] });
+
+        expect(result).toMatchObject({ conflicts: 1, errors: [] });
+        await expect(writer.get("alpha", "dup")).resolves.toMatchObject({ label: "a" });
+    });
+
+    it("keeps the insert error when a trigger throws after the base row landed", async () => {
+        expect.assertions(2);
+
+        const base = schemaOf(["alpha"]);
+        const triggerSchema = {
+            tables: {
+                alpha: {
+                    ...base.tables["alpha"]!,
+                    triggerMap: {
+                        boom: {
+                            handler: async () => {
+                                throw new Error("trigger blew up");
+                            },
+                            op: "insert",
+                            timing: "after",
+                        },
+                    },
+                },
+            },
+        } as never as SchemaLike;
+        const result = await importGlobalRows(writerFor(triggerSchema), triggerSchema, {
+            exec: counting().exec,
+            rows: [{ doc: { _id: "t1", label: "a" }, table: "alpha" }],
+        });
+
+        expect(result.conflicts).toBe(0);
+        expect(result.errors).toMatchObject([{ code: "INSERT_FAILED", line: 1 }]);
+    });
+
+    it("does not provision tables when no row carries an id, and fails closed when provisioning throws", async () => {
+        expect.assertions(3);
+
+        const schema = schemaOf(["alpha"]);
+        const statements: string[] = [];
+        let failProvision = false;
+        const exec: Exec = {
+            all: (query, parameters) => harness.exec.all(query, parameters),
+            run: (query, parameters) => {
+                statements.push(query);
+
+                if (/CREATE TABLE/iu.test(query) && statements.length > 0 && failProvision) {
+                    return Promise.reject(new Error("provision unavailable"));
+                }
+
+                return harness.exec.run(query, parameters);
+            },
+        };
+        const idless = await importGlobalRows(writerFor(schema), schema, { exec, rows: [{ doc: { label: "a" }, table: "alpha" }] });
+
+        expect(statements.filter((statement) => /CREATE TABLE/iu.test(statement))).toHaveLength(0);
+
+        failProvision = true;
+
+        const failed = await importGlobalRows(writerFor(schema), schema, { exec, rows: [{ doc: { _id: "q1", label: "a" }, table: "alpha" }] });
+
+        expect(idless.errors).toEqual([]);
+        expect(failed.errors).toMatchObject([{ code: "PROBE_FAILED", line: 1 }]);
+    });
 });
