@@ -146,7 +146,7 @@ const ERROR_CATALOG: {
         readonly title: "Migration drift";
     };
     readonly UNIQUE_INDEX_DUPLICATES: {
-        readonly status: 409;
+        readonly status: 503;
         readonly title: "Unique index blocked by duplicate rows";
     };
     readonly UNKNOWN_TABLE: {

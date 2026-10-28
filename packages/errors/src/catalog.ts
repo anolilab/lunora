@@ -103,9 +103,14 @@ export const ERROR_CATALOG = {
         status: 409,
         title: "Migration drift",
     },
-    /** A UNIQUE index cannot be built because existing rows already share its key. The shard refuses user traffic until a later build succeeds. */
+
+    /**
+     * A UNIQUE index cannot be built because existing rows already share its key. The shard refuses user traffic until a later
+     * build succeeds. 503, not 409: the refusal lifts on its own once the rows are repaired, and clients retry or reconnect on a
+     * 5xx but treat a 4xx as final, so a live subscription refused with a 409 never came back.
+     */
     UNIQUE_INDEX_DUPLICATES: {
-        status: 409,
+        status: 503,
         title: "Unique index blocked by duplicate rows",
     },
     UNKNOWN_TABLE: { status: 404, title: "Unknown table" },
