@@ -179,6 +179,26 @@ describe("sqlLexicalStore", () => {
         expect(matches).toHaveLength(1);
     });
 
+    it("searches a term with more posting rows than a call can take as arguments", async () => {
+        expect.assertions(1);
+
+        const { close, exec } = open();
+
+        opened.push(close);
+
+        // Past V8's argument limit, which `push(...rows)` would hit.
+        const postings = Array.from({ length: 200_000 }, (_, index) => {
+            return { frequency: 1, id: `doc#${String(index)}`, length: 10, term: "common" };
+        });
+        const lexical = sqlLexicalStore({
+            exec: async (sql, parameters) => (sql.includes(" t.term IN (") ? postings : exec(sql, parameters)),
+        });
+
+        await lexical.index([chunk("a#0", "common words")], {});
+
+        await expect(lexical.search("common", { topK: 5 })).resolves.toBeInstanceOf(Array);
+    });
+
     it("returns nothing for a query with no usable terms", async () => {
         expect.assertions(1);
 

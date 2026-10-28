@@ -107,9 +107,14 @@ const cosineSimilarity = (left: ReadonlyArray<number>, right: ReadonlyArray<numb
     let leftNorm = 0;
     let rightNorm = 0;
 
-    for (const [index, leftValue] of left.entries()) {
+    // A plain for-of with a manual index: `entries()` allocates an iterator
+    // result and a pair per dimension, rows x dimensions times on the exact scan.
+    let index = 0;
+
+    for (const leftValue of left) {
         const rightValue = right[index] as number;
 
+        index += 1;
         dot += leftValue * rightValue;
         leftNorm += leftValue * leftValue;
         rightNorm += rightValue * rightValue;
