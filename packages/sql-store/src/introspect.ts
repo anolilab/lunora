@@ -152,6 +152,10 @@ const isInternalTable = (name: string, dialect: SqlDialect): boolean => isIntern
 /** `information_schema`'s scope for the connection's own schema/database, so a shared server never shows another database's tables. */
 const schemaScope = (dialect: SqlDialect): SQL => (dialect.name === "postgres" ? sql`current_schema()` : sql`DATABASE()`);
 
+/** The primary-key columns of a SQLite `PRAGMA table_info` result, in key order as the pragma lists them. */
+const sqlitePrimaryKey = (info: ReadonlyArray<Record<string, unknown>>): string[] =>
+    info.filter((column) => Number(column["pk"] ?? 0) > 0).map((column) => String(column["name"]));
+
 /**
  * The catalog reads, the only SQL here that differs by engine. SQLite keeps the
  * `PRAGMA` statements D1 authorises; Postgres and MySQL read `information_schema`.
@@ -190,9 +194,7 @@ const catalog = {
     },
     primaryKey: async (exec: SqlContextExec, dialect: SqlDialect, table: string): Promise<string[]> => {
         if (dialect.name === "sqlite") {
-            const info = await queryAll(exec, dialect, sql`PRAGMA table_info(${sql.identifier(table)})`);
-
-            return info.filter((column) => Number(column["pk"] ?? 0) > 0).map((column) => String(column["name"]));
+            return sqlitePrimaryKey(await queryAll(exec, dialect, sql`PRAGMA table_info(${sql.identifier(table)})`));
         }
 
         const rows = await queryAll(
@@ -456,16 +458,32 @@ const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknow
 /**
  * Columns the browser shows for `table`: a schema `.global()` table uses its
  * declared fields plus the framework columns (`_id`, `_creationTime`); any other
- * table uses its real physical columns from `PRAGMA table_info`.
+ * table uses its real physical columns.
+ *
+ * `primaryKey` is the table's own key, for {@link pageOrderKey}. SQLite derives
+ * both from the one `PRAGMA table_info` read, so a page costs one catalog round
+ * trip; Postgres and MySQL keep the key in a separate `information_schema` query,
+ * which only a caller that orders by it pays for.
  */
-const resolveColumns = async (exec: SqlContextExec, dialect: SqlDialect, schema: SchemaLike, table: string): Promise<string[]> => {
+const resolveColumns = async (
+    exec: SqlContextExec,
+    dialect: SqlDialect,
+    schema: SchemaLike,
+    table: string,
+): Promise<{ columns: string[]; primaryKey: () => Promise<string[]> }> => {
     const definition = globalTableDefinition(schema, table);
 
     if (definition) {
-        return ["_id", "_creationTime", ...Object.keys(definition.shape)];
+        return { columns: ["_id", "_creationTime", ...Object.keys(definition.shape)], primaryKey: () => Promise.resolve([]) };
     }
 
-    return catalog.columns(exec, dialect, table);
+    if (dialect.name === "sqlite") {
+        const info = await queryAll(exec, dialect, sql`PRAGMA table_info(${sql.identifier(table)})`);
+
+        return { columns: info.map((column) => String(column["name"])), primaryKey: () => Promise.resolve(sqlitePrimaryKey(info)) };
+    }
+
+    return { columns: await catalog.columns(exec, dialect, table), primaryKey: () => catalog.primaryKey(exec, dialect, table) };
 };
 
 /**
@@ -531,13 +549,19 @@ const listSqlGlobalTables = async (exec: SqlContextExec, schema: SchemaLike, dia
  * External tables are asked for their own primary key instead, which also covers
  * `WITHOUT ROWID` — those have no `rowid` to fall back on.
  */
-const pageOrderKey = async (exec: SqlContextExec, dialect: SqlDialect, schema: SchemaLike, table: string, columns: ReadonlyArray<string>): Promise<SQL> => {
+const pageOrderKey = async (
+    dialect: SqlDialect,
+    schema: SchemaLike,
+    table: string,
+    columns: ReadonlyArray<string>,
+    readPrimaryKey: () => Promise<string[]>,
+): Promise<SQL> => {
     if (globalTableDefinition(schema, table) !== undefined) {
         // eslint-disable-next-line no-restricted-syntax -- `sql` is the drizzle tagged-template builder, not a string conversion
         return sql`${sql.identifier("id")}`;
     }
 
-    const primaryKey = await catalog.primaryKey(exec, dialect, table);
+    const primaryKey = await readPrimaryKey();
 
     if (primaryKey.length > 0) {
         return sql.join(
@@ -588,7 +612,7 @@ const readSqlGlobalTablePage = async (
 
     const limit = pagingBound(options.limit, DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE);
     const offset = pagingBound(options.offset, 0, 0, Number.MAX_SAFE_INTEGER);
-    const columns = await resolveColumns(exec, dialect, schema, table);
+    const { columns, primaryKey } = await resolveColumns(exec, dialect, schema, table);
     const { bound, where } = buildEqPredicate(schema, dialect, table, columns, options.filters);
 
     assertParameterBudget(table, bound);
@@ -599,7 +623,7 @@ const readSqlGlobalTablePage = async (
     // are free to disagree — so a row can show up on two pages, or on none. The
     // shard browser keyset-paginates for the same reason. See `pageOrderKey`
     // for how the ordering column is chosen for each table kind.
-    const orderColumn = await pageOrderKey(exec, dialect, schema, table, columns);
+    const orderColumn = await pageOrderKey(dialect, schema, table, columns, primaryKey);
     // LIMIT/OFFSET are clamped integers inlined as literals: mysql2's prepared
     // statements reject a bound `LIMIT ?`.
     const raw = await queryAll(
@@ -652,7 +676,7 @@ const facetSqlGlobalColumn = async (
 
     await assertBrowsableTable(exec, dialect, schema, table);
 
-    const columns = await resolveColumns(exec, dialect, schema, table);
+    const { columns } = await resolveColumns(exec, dialect, schema, table);
 
     if (!columns.includes(column)) {
         throw new LunoraError("UNKNOWN_COLUMN", `unknown column: ${column}`, { status: 404 });
