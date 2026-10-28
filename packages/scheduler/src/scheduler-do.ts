@@ -2031,6 +2031,10 @@ class SchedulerDO {
         // The park reason described the attempts this budget reset discards.
         delete revived.error;
 
+        // A purge that wrote its `failed` outcome but failed to drop the dead row
+        // leaves that outcome behind, and `/get` reads it before the header. Dropped
+        // first: should the put below fail, the dead row still answers `failed`.
+        await this.state.storage.delete(`${DONE_PREFIX}${dead.id}`);
         await this.state.storage.put<ScheduleRecord | string>({
             ...SchedulerDO.pendingRows(revived),
             [SchedulerDO.indexKey(scheduledFor, dead.id)]: dead.id,

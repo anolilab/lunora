@@ -108,6 +108,32 @@ describe("schedulerDO job lifecycle", () => {
         await expect(getJob(scheduler, "doomed")).resolves.toMatchObject({ state: "failed" });
     });
 
+    it("reads a requeued dead job as pending even when a half-finished purge left its failed outcome", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const state = createFakeState();
+        const scheduler = new AlwaysFailing(state, env);
+
+        await scheduler.fetch(
+            post("/schedule", { args: {}, functionPath: "jobs.run", id: "doomed", retry: { baseMs: 0, maxAttempts: 1 }, scheduledFor: Date.now() }),
+        );
+        await scheduler.alarm();
+        setNow(1_700_000_000_001);
+        await scheduler.alarm();
+
+        const dead = state.storageMap.get("dead:doomed");
+
+        expect(dead).toBeDefined();
+
+        await scheduler.fetch(post("/dead/cancel", { id: "doomed" }));
+        // The purge's dead-row delete is what failed.
+        state.storageMap.set("dead:doomed", dead);
+        await scheduler.fetch(post("/dead/retry", { id: "doomed" }));
+
+        await expect(getJob(scheduler, "doomed")).resolves.toMatchObject({ state: "pending" });
+    });
+
     it("reports a cancelled pending job as canceled", async () => {
         expect.hasAssertions();
 
