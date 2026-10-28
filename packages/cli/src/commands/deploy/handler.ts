@@ -54,6 +54,7 @@ import { runPostCodegenHook } from "../../util/post-codegen-hook";
 import projectRootFor from "../../util/project-root";
 import { buildRailpackImages } from "../../util/railpack";
 import { resolveWorkerUrl } from "../../util/resolve-target";
+import rowCheckTargetRefusal from "../../util/row-check-target";
 import type { StoredRowChecker } from "../../util/schema-drift-gate";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
@@ -748,6 +749,12 @@ const celldToolchainError = async (options: DeployCommandOptions, target: string
 const storedRowChecker =
     (cwd: string, options: DeployCommandOptions, codegen: CodegenResult): StoredRowChecker =>
     async (changes) => {
+        const refusal = options.migrateUrl === undefined ? undefined : rowCheckTargetRefusal(cwd, options.env, options.migrateUrl);
+
+        if (refusal !== undefined) {
+            return { kind: "inconclusive", reason: refusal };
+        }
+
         const baseUrl = options.migrateUrl === undefined ? undefined : resolveAdminBaseUrl(options.migrateUrl, options.logger, cwd);
         const token = baseUrl === undefined ? undefined : resolveAdminBearer({ cwd, token: options.migrateToken, url: baseUrl }).token;
         const target = baseUrl === undefined || !token ? undefined : { baseUrl, fetchImpl: options.fetchImpl ?? adminFetch, token };

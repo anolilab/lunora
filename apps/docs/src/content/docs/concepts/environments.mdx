@@ -103,6 +103,10 @@ lunora init my-app --ci github    # or --ci gitlab
 That scaffolds a production deploy on the default branch plus a
 `lunora deploy --dry-run` check on every pull or merge request. Set
 `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets.
+After the first deploy, also set `LUNORA_DEPLOY_URL` (the production worker's
+URL) and `LUNORA_ADMIN_TOKEN`: the production job passes them to the drift gate,
+which then [checks the stored rows](/docs/concepts/migrations#when-the-stored-rows-already-fit)
+before blocking a schema change.
 
 celld has no Wrangler environments: deploy a separate config (and fleet bucket)
 per copy. The Node target has no `lunora deploy`.

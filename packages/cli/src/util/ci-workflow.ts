@@ -134,6 +134,8 @@ ${requirement}
 # Set these repository secrets (Settings → Secrets and variables → Actions):
 #   CLOUDFLARE_API_TOKEN   — a Workers-scoped API token
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
+#   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
+#   LUNORA_ADMIN_TOKEN     — the production worker's admin token
 env:
   CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
   CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -147,9 +149,12 @@ jobs:
       contents: read
     steps:
 ${githubSetupSteps(pm)}
-      # Codegen + wrangler validation gate (no deploy) — fails fast on drift.
-      - run: ${execLine(manager, ["prepare"])}
-      - run: ${execLine(manager, ["deploy"])}
+      # When a schema change tightens a table, the drift gate reads that table's
+      # stored rows from this worker and lets the change ship if every row fits.
+      # Unset (a first deploy), the gate blocks as before.
+      - run: ${execLine(manager, ["deploy", "--migrate-url", `"\${{ secrets.LUNORA_DEPLOY_URL }}"`])}
+        env:
+          LUNORA_ADMIN_TOKEN: \${{ secrets.LUNORA_ADMIN_TOKEN }}
 
   # Every pull request runs the full deploy pipeline, bundle included, and
   # publishes nothing. A Worker version would share production's Durable
@@ -183,6 +188,8 @@ const buildGitlabContent = (manager: PackageManager): string => {
 # Set these as masked CI/CD variables (Settings → CI/CD → Variables):
 #   CLOUDFLARE_API_TOKEN   — a Workers-scoped API token
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
+#   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
+#   LUNORA_ADMIN_TOKEN     — the production worker's admin token
 .lunora_base:
   image: ${pm.gitlabImage}
   stage: deploy
@@ -195,9 +202,10 @@ deploy:
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   script:
-    # Codegen + wrangler validation gate (no deploy) — fails fast on drift.
-    - ${execLine(manager, ["prepare"])}
-    - ${execLine(manager, ["deploy"])}
+    # When a schema change tightens a table, the drift gate reads that table's
+    # stored rows from this worker and lets the change ship if every row fits.
+    # Unset (a first deploy), the gate blocks as before.
+    - ${execLine(manager, ["deploy", "--migrate-url", '"$LUNORA_DEPLOY_URL"'])}
 
 # Every merge request runs the full deploy pipeline, bundle included, and
 # publishes nothing. A Worker version would share production's Durable Objects

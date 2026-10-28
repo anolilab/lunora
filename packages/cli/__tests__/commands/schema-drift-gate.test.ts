@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -90,7 +90,7 @@ const dropIndex = (): void => {
 const deployedWorker = (rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>): { fetchImpl: StreamingFetchLike; reads: string[][] } => {
     const reads: string[][] = [];
     const fetchImpl: StreamingFetchLike = async (url, init) => {
-        if (url !== "https://app.example.workers.dev/_lunora/admin/export") {
+        if (url !== "https://lunora-app.acme.workers.dev/_lunora/admin/export") {
             throw new Error(`unexpected request to ${url}`);
         }
 
@@ -119,7 +119,7 @@ const deployedWorker = (rows: ReadonlyArray<{ doc: Record<string, unknown>; tabl
     return { fetchImpl, reads };
 };
 
-const TARGET = { migrateToken: "admin-token", migrateUrl: "https://app.example.workers.dev" };
+const TARGET = { migrateToken: "admin-token", migrateUrl: "https://lunora-app.acme.workers.dev" };
 
 describe("schema-drift gate", () => {
     beforeEach(() => {
@@ -352,6 +352,53 @@ describe("schema-drift gate", () => {
 
             expect(confirmed.code).toBe(0);
             expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).not.toBe(baselineBefore);
+        });
+
+        it.each([
+            ["a loopback dev worker", "http://127.0.0.1:8787", "it is a local or private address"],
+            ["another environment's worker", "https://lunora-app-staging.acme.workers.dev", 'this deploy ships the Worker "lunora-app"'],
+        ])("takes no stored-row evidence from %s, and stays blocked", async (_label, url, why) => {
+            expect.assertions(3);
+
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+            introduceBreakingDrift();
+
+            const { errors, logger } = silentLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runDeployCommand({
+                cwd: workdir,
+                fetchImpl: deployedWorker([{ doc: { _id: "u1", name: 7 }, table: "users" }]).fetchImpl,
+                logger,
+                migrateToken: "admin-token",
+                migrateUrl: url,
+                spawner,
+            });
+
+            expect(result.schemaDrift?.blocked).toBe(true);
+            expect(calls).toHaveLength(0);
+            expect(errors.join("\n")).toContain(why);
+        });
+
+        it("takes no stored-row evidence from a URL other than the one this checkout is linked to for the --env", async () => {
+            expect.assertions(2);
+
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+            introduceBreakingDrift();
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
+            writeFileSync(join(workdir, ".lunora", "project.json"), JSON.stringify({ workerUrl: "https://app.acme.com" }), "utf8");
+
+            const { errors, logger } = silentLogger();
+            const result = await runDeployCommand({
+                cwd: workdir,
+                fetchImpl: deployedWorker([{ doc: { _id: "u1", name: 7 }, table: "users" }]).fetchImpl,
+                logger,
+                migrateToken: "admin-token",
+                migrateUrl: "https://lunora-app.acme.workers.dev",
+                spawner: createRecordingSpawner().spawner,
+            });
+
+            expect(result.schemaDrift?.blocked).toBe(true);
+            expect(errors.join("\n")).toContain("this checkout is linked to https://app.acme.com");
         });
 
         it("does not let an identity migration (the scaffold's placeholder) cover a change on its own", async () => {

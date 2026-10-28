@@ -81,9 +81,15 @@ validator on the changed fields:
 The rows are read through the deployed worker's admin export, from the URL
 `--migrate-url` names (or the [project link](/docs/concepts/environments#linking-a-checkout-to-a-deployment)
 for this `--env`), with `LUNORA_ADMIN_TOKEN` as the bearer. With no URL or no
-token the check does not run and the block stands. A celld deploy prints no
-worker URL to link, so record the fleet's URL once with `lunora link --url` or
-pass `--migrate-url`. The Node target has no `lunora deploy`.
+token the check does not run and the block stands. The URL must be the worker
+this deploy ships to: a local or private address (`localhost`, `127.0.0.1`, a
+LAN address) is refused, a URL other than the one this checkout is linked to for
+the `--env` is refused, and a `*.workers.dev` URL must carry the Worker name
+Wrangler deploys for that `--env`. A refused URL keeps the block and the message
+names it. A celld deploy prints no worker URL to link, so record the fleet's URL
+once with `lunora link --url` or pass `--migrate-url`. The Node target has no
+`lunora deploy`. The scaffolded CI pipelines pass `LUNORA_DEPLOY_URL` and
+`LUNORA_ADMIN_TOKEN` from the provider's secrets.
 
 Some changes cannot be settled by reading rows, and keep their block: a new
 `.unique()` column or unique index (a duplicate is a property of two rows), a

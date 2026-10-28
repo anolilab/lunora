@@ -37,6 +37,8 @@ on:
 # Set these repository secrets (Settings → Secrets and variables → Actions):
 #   CLOUDFLARE_API_TOKEN   — a Workers-scoped API token
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
+#   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
+#   LUNORA_ADMIN_TOKEN     — the production worker's admin token
 env:
   CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
   CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -58,9 +60,12 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Codegen + wrangler validation gate (no deploy) — fails fast on drift.
-      - run: pnpm exec lunora prepare
-      - run: pnpm exec lunora deploy
+      # When a schema change tightens a table, the drift gate reads that table's
+      # stored rows from this worker and lets the change ship if every row fits.
+      # Unset (a first deploy), the gate blocks as before.
+      - run: pnpm exec lunora deploy --migrate-url "\${{ secrets.LUNORA_DEPLOY_URL }}"
+        env:
+          LUNORA_ADMIN_TOKEN: \${{ secrets.LUNORA_ADMIN_TOKEN }}
 
   # Every pull request runs the full deploy pipeline, bundle included, and
   # publishes nothing. A Worker version would share production's Durable
@@ -93,6 +98,8 @@ const ORIGINAL_PNPM_GITLAB = `stages:
 # Set these as masked CI/CD variables (Settings → CI/CD → Variables):
 #   CLOUDFLARE_API_TOKEN   — a Workers-scoped API token
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
+#   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
+#   LUNORA_ADMIN_TOKEN     — the production worker's admin token
 .lunora_base:
   image: node:22
   stage: deploy
@@ -106,9 +113,10 @@ deploy:
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   script:
-    # Codegen + wrangler validation gate (no deploy) — fails fast on drift.
-    - pnpm exec lunora prepare
-    - pnpm exec lunora deploy
+    # When a schema change tightens a table, the drift gate reads that table's
+    # stored rows from this worker and lets the change ship if every row fits.
+    # Unset (a first deploy), the gate blocks as before.
+    - pnpm exec lunora deploy --migrate-url "$LUNORA_DEPLOY_URL"
 
 # Every merge request runs the full deploy pipeline, bundle included, and
 # publishes nothing. A Worker version would share production's Durable Objects
@@ -265,8 +273,8 @@ describe("ci-workflow", () => {
 
             expect(yaml).toContain(PM_CI_PROFILES[manager].installCmd);
             expect(yaml).toContain(`commit your ${PM_CI_PROFILES[manager].lockfile}`);
-            expect(yaml).toContain("lunora prepare");
-            expect(yaml).toContain("lunora deploy");
+            expect(yaml).toContain("lunora deploy --migrate-url");
+            expect(yaml).toContain("LUNORA_ADMIN_TOKEN: ${{ secrets.LUNORA_ADMIN_TOKEN }}");
         });
 
         it("produces a gitlab pipeline with a provision/install before_script and an exec script", () => {
@@ -275,7 +283,7 @@ describe("ci-workflow", () => {
             const yaml = buildContent("gitlab", manager);
 
             expect(yaml).toContain(PM_CI_PROFILES[manager].installCmd);
-            expect(yaml).toContain("lunora prepare");
+            expect(yaml).toContain('lunora deploy --migrate-url "$LUNORA_DEPLOY_URL"');
             expect(yaml).toContain("lunora deploy --dry-run");
         });
 
