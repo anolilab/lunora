@@ -118,7 +118,7 @@ const measure = (appDirectory) => {
     let stdout;
 
     try {
-        stdout = execFileSync(process.execPath, [cli, "build", "--format", "json", "--out-dir", "out"], {
+        stdout = execFileSync(process.execPath, [cli, "build", "--no-startup-check", "--format", "json", "--out-dir", "out"], {
             cwd: appDirectory,
             encoding: "utf8",
             env: { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" },

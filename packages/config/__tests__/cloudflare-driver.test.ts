@@ -18,17 +18,9 @@ describe("cLOUDFLARE_DRIVER toolchain", () => {
 
         expect(toolchain?.deploy({})).toStrictEqual({ args: ["deploy"], tool: "wrangler" });
         // Entry positional precedes flags; `--metafile` always rides with `--outdir`.
-        expect(toolchain?.deploy({ dryRun: true, entry: "src/worker.ts", environment: "prod", outDir: "dist", temporary: true }).args).toStrictEqual([
-            "deploy",
-            "src/worker.ts",
-            "--env",
-            "prod",
-            "--temporary",
-            "--dry-run",
-            "--outdir",
-            "dist",
-            "--metafile",
-        ]);
+        expect(
+            toolchain?.deploy({ dryRun: true, entry: "src/worker.ts", environment: "prod", outDir: "dist", outFile: "w.bundle", temporary: true }).args,
+        ).toStrictEqual(["deploy", "src/worker.ts", "--env", "prod", "--temporary", "--dry-run", "--outdir", "dist", "--metafile", "--outfile", "w.bundle"]);
     });
 
     // A preview must never take production traffic, so it maps to a different

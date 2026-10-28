@@ -55,7 +55,7 @@ lunora reset [--all] [--yes]            # clear local Miniflare state
 lunora prepare [--api-spec <spec>]      # every pre-deploy gate, without deploying — for CI
                [--lazy-functions] [--no-smoke-load]
 lunora build [--out-dir <dir>] [--no-framework-build]   # bundle the worker to disk without deploying
-             [--lazy-functions] [--no-smoke-load]
+             [--lazy-functions] [--no-smoke-load] [--no-startup-check]
 lunora deploy [--env <name>]            # codegen, validate wrangler, then wrangler deploy
               [--migrate --migrate-yes] #   --migrate also needs --migrate-url unless linked
               [--lazy-functions] [--no-smoke-load] [--no-framework-build]
@@ -759,6 +759,17 @@ when modules are evaluated, not how many bytes are uploaded.
 
 Lazy builds also smoke-load every lazy module in workerd first (see `lunora deploy`);
 pass `--no-smoke-load` to skip it.
+
+After bundling, `build` profiles the Worker's startup: three `wrangler check startup` runs on the
+exact upload form the dry run wrote, reported as their median "Active" time. Cloudflare rejects a
+Worker whose global scope takes more than 1 s of its CPU to evaluate (error 10021), and nothing
+before the upload says so. Above 200 ms of local CPU the line becomes a warning that names the
+[startup CPU limit](https://lunora.sh/docs/startup-cpu-limit) page, and for an eager build,
+`--lazy-functions`. The 200 ms line is a heuristic: how laptop CPU maps to Cloudflare's is unknown,
+and local profiles of 0.4–0.7 s have been rejected. It never fails the build. It is skipped, with a
+debug line, when wrangler cannot run or wrote no upload form; `--no-startup-check` skips it. A
+plain `lunora deploy` does not profile, because wrangler bundles and uploads in one step there;
+wrangler profiles a rejected upload itself.
 
 Runs the full pre-deploy pipeline (codegen, the schema-drift gate, `wrangler.jsonc`
 validation) and writes the bundled Worker to disk **without publishing**

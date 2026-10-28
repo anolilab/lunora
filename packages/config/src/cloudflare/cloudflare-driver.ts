@@ -56,6 +56,11 @@ const CLOUDFLARE_TOOLCHAIN: DriverToolchain = {
             args.push("--outdir", request.outDir, "--metafile");
         }
 
+        // The multipart upload form, which `wrangler check startup --worker` profiles without rebuilding.
+        if (request.outFile !== undefined) {
+            args.push("--outfile", request.outFile);
+        }
+
         return { args, tool: "wrangler" };
     },
 

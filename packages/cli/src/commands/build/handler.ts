@@ -20,6 +20,7 @@ import type { BundleSize } from "./bundle-size";
 import { measureBundle, WORKER_SIZE_LIMIT_BYTES } from "./bundle-size";
 import { viteBundleMetaPath } from "./framework-build";
 import type { BuildOptions } from "./index";
+import { checkStartupBudget, startupBundlePath } from "./startup-check";
 
 /** Default artifact directory — gitignored alongside the other `.lunora/` state. */
 const DEFAULT_OUT_DIR = ".lunora/build";
@@ -58,6 +59,9 @@ interface BuildCommandOptions {
     /** `false` skips evaluating lazy function modules before the bundle is written. */
     smokeLoad?: boolean;
     spawner?: Spawner;
+
+    /** `false` (`--no-startup-check`) skips profiling the built Worker's startup CPU. Default on. */
+    startupCheck?: boolean;
 
     /**
      * Fail the build on ERROR-level codegen advisories. `undefined` leaves the
@@ -131,6 +135,25 @@ const outDirectoryFingerprint = (directory: string): string => {
         .join("\n");
 };
 
+/** The upload form is scratch for the startup profile; its per-run directory goes whether or not the build succeeded. */
+const discardStartupBundle = (projectRoot: string, startupBundle: string | undefined): void => {
+    if (startupBundle !== undefined) {
+        rmSync(resolve(projectRoot, dirname(startupBundle)), { force: true, recursive: true });
+    }
+};
+
+const profileStartup = async (projectRoot: string, startupBundle: string | undefined, logger: Logger, spawner: Spawner): Promise<void> => {
+    if (startupBundle === undefined) {
+        return;
+    }
+
+    try {
+        await checkStartupBudget({ bundleFile: startupBundle, cwd: projectRoot, logger, spawner });
+    } finally {
+        discardStartupBundle(projectRoot, startupBundle);
+    }
+};
+
 /**
  * Build the Worker without deploying: this is `deploy` in its dry-run +
  * `--outdir` mode, so it reuses the entire pre-deploy pipeline (codegen, the
@@ -161,6 +184,8 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
     const outDirectoryPath = resolve(projectRoot, outDirectory);
     const outBefore = outDirectoryFingerprint(outDirectoryPath);
     let result: DeployCommandResult | undefined;
+    // Outside the out-dir: `measureBundle` counts every file there, and the upload form would double the reported size.
+    const startupBundle = options.startupCheck === false ? undefined : startupBundlePath(randomUUID());
 
     try {
         result = await runDeployCommand({
@@ -185,6 +210,7 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
             interactive: jsonMode ? false : undefined,
             logger,
             outDir: outDirectory,
+            outFile: startupBundle,
             smokeLauncher: options.smokeLauncher,
             smokeLoad: options.smokeLoad,
             spawner: options.spawner ?? (jsonMode ? stderrOnlySpawner : undefined),
@@ -214,6 +240,8 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
     }
 
     if (result.code !== 0) {
+        discardStartupBundle(projectRoot, startupBundle);
+
         return result;
     }
 
@@ -240,6 +268,8 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
         }
     }
 
+    await profileStartup(projectRoot, startupBundle, logger, options.spawner ?? defaultSpawner);
+
     return { ...result, bundle };
 };
 
@@ -258,6 +288,7 @@ const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions, BuildC
         logger,
         outDir: options.outDir,
         smokeLoad: options.smokeLoad,
+        startupCheck: options.startupCheck,
         strictAdvisories: options.strictAdvisories,
         target: options.target,
     });

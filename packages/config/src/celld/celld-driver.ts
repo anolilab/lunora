@@ -31,6 +31,7 @@ const UNSUPPORTED_DEPLOY_OPTIONS: ReadonlyArray<[keyof DeployRequest, string]> =
     ["entry", "`celld deploy` deploys the config's `main`; a composed framework entry has no celld equivalent yet"],
     ["environment", "celld has no Wrangler environments — deploy a separate config per environment"],
     ["outDir", "`celld deploy` does not write its bundle to disk"],
+    ["outFile", "`celld deploy` does not write its upload artifact to disk"],
     ["preview", "celld has no preview versions — a deploy replaces the fleet's current deployment"],
     ["temporary", "celld has no short-lived accounts — it deploys to the fleet bucket in CELLD_BUCKET"],
 ];
