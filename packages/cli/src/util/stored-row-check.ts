@@ -176,9 +176,14 @@ const COMPOSITE_CHECKS: Record<string, (value: unknown, validator: ValidatorIR, 
     object: (value, validator, path) =>
         // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: object properties re-enter `mismatch`
         isPlainRecord(value) ? shapeMismatch(value, validator.shape ?? {}, `${path}.`) : [path, `expected object, found ${typeName(value)}`],
+    // A key is checked as a value of its key validator, but reported as `[*]`: record keys are data, not schema.
     record: (value, validator, path) =>
         isPlainRecord(value)
-            ? firstMismatch(Object.entries(value), validator.valueType, () => `${path}[*]`)
+            ? (firstMismatch(
+                  Object.keys(value).map((key): [string, unknown] => [key, key]),
+                  validator.keyType,
+                  () => `${path}[*]`,
+              ) ?? firstMismatch(Object.entries(value), validator.valueType, () => `${path}[*]`))
             : [path, `expected record, found ${typeName(value)}`],
     union: (value, validator, path) =>
         // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: each member re-enters `mismatch`
