@@ -429,6 +429,26 @@ describe(EventLog, () => {
         }).toThrow(RangeError);
     });
 
+    it("rejects a snapshot holding a NaN seq or a NaN nextSeq", () => {
+        expect.assertions(2);
+
+        const log = new EventLog();
+
+        log.append("a", 1);
+        log.append("b", 2);
+        log.append("c", 3);
+
+        const snap = log.snapshot();
+        const entries = snap.entries.map((entry, index) => (index === 1 ? { ...entry, seq: Number.NaN } : entry));
+
+        expect(() => {
+            new EventLog().load({ ...snap, entries });
+        }).toThrow(RangeError);
+        expect(() => {
+            new EventLog().load({ ...snap, nextSeq: Number.NaN });
+        }).toThrow(RangeError);
+    });
+
     it("snapshot captures headSeq", () => {
         expect.assertions(2);
 

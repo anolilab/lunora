@@ -126,6 +126,26 @@ describe("memory store sweep", () => {
     });
 });
 
+describe("memory store sweep on a shared store", () => {
+    it("still reaches an expired key that another limiter's sweep rotated behind a live one", async () => {
+        expect.assertions(2);
+
+        const store = createMemoryStore();
+
+        await store.set("b-old", { ts: 1, value: 1 });
+        await store.set("a-live", { ts: 100, value: 1 });
+        await store.set("b-live", { ts: 101, value: 1 });
+
+        // Limiter A's sweep rotates "b-old" (not its own) behind the live entries and stops at "a-live".
+        await store.sweep?.(10, 10, (key) => key.startsWith("a-"));
+        // Limiter B's sweep now meets its own live entry first; it must still reach "b-old".
+        await store.sweep?.(10, 10, (key) => key.startsWith("b-"));
+
+        expect(store.get("b-old")).toBeUndefined();
+        expect(store.get("b-live")).toEqual({ ts: 101, value: 1 });
+    });
+});
+
 describe("limiter retention", () => {
     it("bounds the store across 200k distinct keys and keeps only recent entries", async () => {
         expect.assertions(3);

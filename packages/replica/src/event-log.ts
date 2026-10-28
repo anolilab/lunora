@@ -348,15 +348,20 @@ export class EventLog {
      * the tail reads binary-search over a log whose appends stay ascending.
      */
     public load(snapshot: EventLogSnapshot): void {
-        for (let index = 1; index < snapshot.entries.length; index += 1) {
-            if ((snapshot.entries[index] as EventLogEntry).seq <= (snapshot.entries[index - 1] as EventLogEntry).seq) {
+        // `<=` is false for NaN, so a non-integer seq is rejected up front rather than by the order check.
+        for (const [index, entry] of snapshot.entries.entries()) {
+            if (!Number.isSafeInteger(entry.seq)) {
+                throw new RangeError("EventLog snapshot entry seq must be a safe integer");
+            }
+
+            if (index > 0 && entry.seq <= (snapshot.entries[index - 1] as EventLogEntry).seq) {
                 throw new RangeError("EventLog snapshot entries must be in strictly ascending seq order");
             }
         }
 
         const last = snapshot.entries.at(-1);
 
-        if (last !== undefined && snapshot.nextSeq <= last.seq) {
+        if (!Number.isSafeInteger(snapshot.nextSeq) || (last !== undefined && snapshot.nextSeq <= last.seq)) {
             throw new RangeError("EventLog snapshot nextSeq must be above the last entry seq");
         }
 

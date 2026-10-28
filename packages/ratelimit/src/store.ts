@@ -62,6 +62,12 @@ const createMemoryStore = (): RateLimitStore => {
                 // or reset; add a debt-aware bound if abandoned debts show up in memory profiles.
                 if (value.value < 0 || value.ts > olderThanTs || owns?.(storageKey) === false) {
                     map.set(storageKey, value);
+
+                    // Rotating an older entry behind newer ones (another limiter's expired key, or
+                    // a debt) breaks the order the early break relies on.
+                    if (value.ts < lastTs) {
+                        ordered = false;
+                    }
                 }
             }
         },
