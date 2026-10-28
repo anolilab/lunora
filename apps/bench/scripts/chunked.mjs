@@ -47,8 +47,10 @@ const { values } = parseArgs({
 });
 
 const runs = Number(values.runs);
-const size = sizeFromArgs({ domains: values.domains, heavyShare: values["heavy-share"], preset: values.domains === undefined ? values.preset : undefined });
-const presetName = sizeLabel({ domains: values.domains, preset: values.domains === undefined ? values.preset : undefined }, size);
+// `--preset` has a default, so `--domains` must override it rather than be ignored.
+const preset = values.domains === undefined ? values.preset : undefined;
+const size = sizeFromArgs({ domains: values.domains, heavyShare: values["heavy-share"], preset });
+const presetName = sizeLabel({ domains: values.domains, preset }, size);
 const vite = join(appDirectory, "node_modules", ".bin", "vite");
 const strictConfig = join(benchDirectory, "vite.strict.config.ts");
 // `@cloudflare/vite-plugin` writes this after every build; while it exists, wrangler deploys the Vite output instead of the source.
