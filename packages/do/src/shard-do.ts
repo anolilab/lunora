@@ -7266,7 +7266,8 @@ abstract class ShardDO {
      * collected even when the reactive cache is off, since the causal signal is
      * independent of caching.
      *
-     * It ALSO marks the table unnarrowable on the scope's `footprint`,
+     * It ALSO forwards the read to the scope's `footprint`, which marks the
+     * table unnarrowable unless the reader flagged a point read (`exact`),
      * mirroring `executeSubscription`'s wiring (which hands a single
      * `ReadFootprint`'s `onRead`/`onReadRange` pair straight to `buildCtx`).
      * `ctx-db.ts`'s reader calls this `onRead` and `onReadRange` mutually
@@ -7276,10 +7277,10 @@ abstract class ShardDO {
      * "read this table outside a range" signal {@link ReadFootprint.ranges}
      * needs to drop that table from the narrowed set.
      */
-    protected getCtxDbReadHook(scope?: QueryReadScope): (table: string, idOrScan?: string) => void {
-        return (table, idOrScan) => {
+    protected getCtxDbReadHook(scope?: QueryReadScope): (table: string, idOrScan?: string, exact?: boolean) => void {
+        return (table, idOrScan, exact) => {
             scope?.tracker.recordRead(table, idOrScan ?? SCAN_DEP);
-            scope?.footprint.onRead(table, idOrScan ?? SCAN_DEP);
+            scope?.footprint.onRead(table, idOrScan ?? SCAN_DEP, exact);
 
             // Attribute a scan ONLY on the explicit `SCAN_DEP` sentinel. A
             // predicated (indexed) `findMany` calls `onRead(table)` with no id

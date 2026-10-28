@@ -30,6 +30,7 @@
  * invalidation would serve stale data; an extra one only costs a re-run.
  */
 
+import { compareStrings } from "./aggregate-tally";
 import { encodeIndexKey, encodeIndexValue, KEY_HIGH, KEY_SEPARATOR } from "./index-key-codec";
 
 /** A half-open `[lo, hi)` slice of one index on one table. */
@@ -294,48 +295,119 @@ const indexKeysForRow = (
 const rangeContains = (range: KeyRange, entry: IndexKeyEntry): boolean => range.index === entry.index && entry.key >= range.lo && entry.key < range.hi;
 
 /**
+ * The index name for a row's own id. Every table has it implicitly, whether or
+ * not it declares indexes, so a by-id read can be narrowed to the one row it
+ * named. The `!` keeps it out of the `defineTable` name space; even a user index
+ * that collided would only add touches, never hide one, because every written
+ * row carries its id key.
+ */
+const ID_INDEX = "!id";
+
+/** The position a row with `id` occupies on {@link ID_INDEX}. */
+const idIndexKey = (id: string): IndexKeyEntry => {
+    return { index: ID_INDEX, key: id };
+};
+
+/**
+ * The slice holding exactly the row `id`. Half-open over raw strings: `id + "\0"`
+ * is the immediate successor of `id`, so nothing else falls inside.
+ */
+const idRange = (table: string, id: string): KeyRange => {
+    return { hi: `${id}\u0000`, index: ID_INDEX, lo: id, table };
+};
+
+/** `ranges` sorted by `lo` with overlapping or adjacent slices merged, so a key needs one binary search. */
+const mergeSorted = (ranges: ReadonlyArray<KeyRange>): KeyRange[] => {
+    const sorted = ranges.toSorted((a, b) => compareStrings(a.lo, b.lo));
+    const merged: KeyRange[] = [];
+
+    for (const range of sorted) {
+        const last = merged.at(-1);
+
+        if (last && range.lo <= last.hi) {
+            if (range.hi > last.hi) {
+                merged[merged.length - 1] = { ...last, hi: range.hi };
+            }
+        } else {
+            merged.push(range);
+        }
+    }
+
+    return merged;
+};
+
+/** Does `key` fall inside one of `merged` (sorted, disjoint)? */
+const mergedContains = (merged: ReadonlyArray<KeyRange>, key: string): boolean => {
+    let low = 0;
+    let high = merged.length - 1;
+
+    while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        const range = merged[middle] as KeyRange;
+
+        if (key < range.lo) {
+            high = middle - 1;
+        } else if (key >= range.hi) {
+            low = middle + 1;
+        } else {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+const groupByIndex = <T extends { index: string }, V>(items: ReadonlyArray<T>, value: (item: T) => V): Map<string, V[]> => {
+    const groups = new Map<string, V[]>();
+
+    for (const item of items) {
+        const group = groups.get(item.index);
+
+        if (group) {
+            group.push(value(item));
+        } else {
+            groups.set(item.index, [value(item)]);
+        }
+    }
+
+    return groups;
+};
+
+/**
  * Did any of `keys` land inside any of `ranges`?
  *
  * Returns `true` (assume touched) whenever either side is unknown, so callers
  * can pass through partial information without special-casing it.
+ *
+ * A query doing many `get`s carries one range per id, so ranges are merged per
+ * index and each key binary-searched: a bulk write against a wide footprint
+ * costs `(R + K) log R`, not `R * K`.
  */
 const keysTouchRanges = (ranges: ReadonlyArray<KeyRange> | undefined, keys: ReadonlyArray<IndexKeyEntry> | undefined): boolean => {
     if (!ranges || ranges.length === 0 || !keys || keys.length === 0) {
         return true;
     }
 
-    // Group once by index rather than re-filtering `keys` for every range in
-    // the loop below — a write can carry one key per index (one per declared
-    // index on the table) but a cached entry can hold many ranges over the
-    // same index (e.g. several disjoint windows), so the old per-range
-    // `.filter()` re-scanned the same small array once per range for no
-    // benefit.
-    const byIndex = new Map<string, IndexKeyEntry[]>();
+    const keysByIndex = groupByIndex(keys, (entry) => entry.key);
 
-    for (const entry of keys) {
-        const bucket = byIndex.get(entry.index);
+    // A range over an index the write produced no key for (unencodable
+    // component) is unprovable, so it counts as touched.
+    if (ranges.some((range) => !keysByIndex.has(range.index))) {
+        return true;
+    }
 
-        if (bucket) {
-            bucket.push(entry);
-        } else {
-            byIndex.set(entry.index, [entry]);
+    const rangesByIndex = groupByIndex(ranges, (range) => range);
+
+    for (const [index, indexRanges] of rangesByIndex) {
+        const merged = indexRanges.length === 1 ? indexRanges : mergeSorted(indexRanges);
+
+        if ((keysByIndex.get(index) as string[]).some((key) => mergedContains(merged, key))) {
+            return true;
         }
     }
 
-    // A write is only provably outside the read slice when every range the
-    // query read is expressed over an index we actually computed a key for.
-    // A range over an index missing from `keys` (unencodable component) is
-    // unprovable, so it counts as touched.
-    return ranges.some((range) => {
-        const matching = byIndex.get(range.index);
-
-        if (!matching || matching.length === 0) {
-            return true;
-        }
-
-        return matching.some((entry) => rangeContains(range, entry));
-    });
+    return false;
 };
 
-export { buildIndexRange, indexKeysForRow, keysTouchRanges, rangeContains };
+export { buildIndexRange, ID_INDEX, idIndexKey, idRange, indexKeysForRow, keysTouchRanges, rangeContains };
 export type { IndexKeyEntry, KeyRange, StagedCondition };
