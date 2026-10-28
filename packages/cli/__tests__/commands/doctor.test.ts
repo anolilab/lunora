@@ -1003,7 +1003,10 @@ describe("runDoctor", () => {
 
             const stand = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
 
-            expect(stand.findings.some((finding) => finding.code === "d1-placeholder-id" && finding.level === "fail")).toBe(true);
+            expect(stand.findings.find((finding) => finding.code === "d1-placeholder-id")).toMatchObject({
+                fix: "Set database_id to the database celld should use.",
+                level: "fail",
+            });
 
             seed(workdir, PLACEHOLDER_WRANGLER.replace("<replace-with-d1-create-id>", "replacement-orders"));
 
@@ -1334,6 +1337,14 @@ describe("runDoctor", () => {
 
             expect(urlOf(url ?? "")).toBe("https://api.cloudflare.com/client/v4/user/tokens/verify");
             expect(init).toMatchObject({ headers: { Authorization: "Bearer token" } });
+        });
+
+        it("does not pass a token whose verify answer reports active inside a failed envelope", async () => {
+            expect.assertions(1);
+
+            const fetchImpl = vi.fn<typeof globalThis.fetch>(async () => Response.json({ result: { status: "active" }, success: false }));
+
+            await expect(tokenFinding(fetchImpl, credentials)).resolves.not.toMatchObject({ code: "cloudflare-token-ok" });
         });
 
         it("passes an account-owned token once its account endpoint reports it active, after the user endpoint refuses it", async () => {

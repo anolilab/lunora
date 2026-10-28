@@ -30,9 +30,9 @@ interface VerifyProbe {
 
 type TokenVerdict = { verdict: "active" } | { verdict: "rejected" } | { reason: string; verdict: "unchecked" };
 
-/** The `result.status` of a verify answer, or `undefined` when the body does not carry one. */
+/** The `result.status` of a verify answer, or `undefined` when the body does not carry one or its envelope says the call failed. */
 const reportedStatus = (body: unknown): string | undefined => {
-    if (typeof body !== "object" || body === null || !("result" in body)) {
+    if (typeof body !== "object" || body === null || !("result" in body) || ("success" in body && body.success === false)) {
         return undefined;
     }
 

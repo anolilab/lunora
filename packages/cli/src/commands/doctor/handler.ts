@@ -422,7 +422,10 @@ const d1PlaceholderFindings = (config: unknown, suffix: string, celld: boolean):
 
             found.push({
                 code: "d1-placeholder-id",
-                fix: "Run `lunora doctor --fix` to create the database and write its id into wrangler.jsonc, or run `wrangler d1 create <name>` and paste the returned database_id in yourself.",
+                // celld takes the id as the database's identity, so there is no Cloudflare database to create.
+                fix: celld
+                    ? "Set database_id to the database celld should use."
+                    : "Run `lunora doctor --fix` to create the database and write its id into wrangler.jsonc, or run `wrangler d1 create <name>` and paste the returned database_id in yourself.",
                 level: "fail",
                 message: `D1 binding "${label}"${suffix} has a placeholder database_id ("${databaseId || "<empty>"}").`,
             });
