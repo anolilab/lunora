@@ -529,6 +529,12 @@ const serviceDeploySkipReason = (options: DeployCommandOptions): string | undefi
         return "--skip-services";
     }
 
+    // A service is deployed under its own name, which is production's: a preview
+    // deploying it would replace the Worker production calls.
+    if (options.isolatedPreview === true) {
+        return "a preview never deploys services: they are production's Workers";
+    }
+
     // A temporary account is the app's alone: services deployed with the real
     // login would land elsewhere, and the bindings could never resolve.
     if (options.temporary === true) {

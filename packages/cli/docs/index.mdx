@@ -795,14 +795,18 @@ deletes the preview Worker (with its Durable Objects) and then each recorded
 resource. It refuses a preview with no record, a record whose Worker is not the
 derived preview name, and a record that names any id or name production's
 config (any environment) uses. A deploy never adopts an existing resource that
-has a preview name but no record. An R2 bucket that still holds objects cannot
+has a preview name but no record. The preview Worker carries a `LUNORA_PREVIEW`
+var (`<worker>/<name>`): a deploy refuses to replace a Worker with the preview's
+name that lacks it, and `delete` refuses to remove one. An R2 bucket that still holds objects cannot
 be deleted through the API, so it stays on record for the next `delete`.
 
 An app that binds anything a preview cannot isolate yet is refused with the
 list: Hyperdrive, service bindings, queues, workflows, Vectorize, Analytics
-Engine, containers, Artifacts, a Durable Object on another Worker's
-`script_name`, a singular `route`, an R2 bucket with a jurisdiction, or any
-binding kind the CLI does not know. Copying any of these would point the preview
+Engine, containers, Artifacts, `lunora.config` services, a Durable Object on
+another Worker's `script_name`, a singular `route`, an R2 bucket with a
+jurisdiction, or any binding kind the CLI does not know. A `secrets.required`
+entry has to be passed with `--secret`; the preview refuses before creating
+anything otherwise. Copying any of these would point the preview
 at production's resource.
 
 It needs `CLOUDFLARE_API_TOKEN` with Workers Scripts, D1, Workers KV Storage

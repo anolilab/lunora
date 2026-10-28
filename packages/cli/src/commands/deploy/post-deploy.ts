@@ -215,7 +215,10 @@ const finalizeSuccessfulDeploy = async (
 ): Promise<DeployCommandResult> => {
     // Before migrations: a data migration may write rows whose vectors are
     // filtered on immediately afterwards.
-    await provisionVectorMetadataIndexes(options, cwd);
+    // The indexes are named in the schema, not per Worker, so a preview would change production's.
+    if (options.isolatedPreview !== true) {
+        await provisionVectorMetadataIndexes(options, cwd);
+    }
 
     const migrateCode = options.migrate ? await runPostDeployMigrations(options, cwd) : 0;
 

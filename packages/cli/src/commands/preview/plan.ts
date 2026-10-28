@@ -134,6 +134,14 @@ const refusalFor = (key: string, value: unknown): string | undefined => {
     return `"${key}": a preview cannot isolate this binding yet, and copying it would point the preview at production's resource`;
 };
 
+/** The plain-text var every preview Worker carries: `<production>/<slug>`. */
+const PREVIEW_MARKER_VAR = "LUNORA_PREVIEW";
+
+const previewMarker = (names: Pick<PreviewPlan, "production" | "slug">): string => `${names.production}/${names.slug}`;
+
+/** Whether an `env` block is one a preview run wrote (it carries the marker), not one of production's environments. */
+const isPreviewBlock = (block: PreviewConfig | undefined): boolean => typeof block?.vars?.[PREVIEW_MARKER_VAR] === "string";
+
 const NON_SLUG_CHARACTERS = /[^a-z0-9]+/u;
 
 /** The preview's name in Cloudflare's alphabet: lowercase letters, digits and single dashes. */
@@ -174,7 +182,8 @@ const planPreview = (config: PreviewConfig, name: string): { error: string; plan
 
     const { environment, worker } = named.names;
 
-    if (config.env?.[environment] !== undefined) {
+    // A block this command wrote and an interrupted run left behind is overwritten; any other is the user's.
+    if (config.env?.[environment] !== undefined && !isPreviewBlock(config.env[environment])) {
         return { error: `wrangler.jsonc already declares "env.${environment}"; a preview writes that block itself, so name the preview differently` };
     }
 
@@ -235,12 +244,16 @@ const isolatedEntry = (kind: PreviewResourceKind, entry: Entry, plan: PreviewPla
 const previewEnvironmentBlock = (config: PreviewConfig, plan: PreviewPlan, ids: ResourceIds): Entry => {
     const source = config as Record<string, unknown>;
     const block: Entry = { name: plan.worker, routes: [], workers_dev: true };
+    const marker = { [PREVIEW_MARKER_VAR]: previewMarker(plan) };
 
     for (const key of COPIED_KEYS) {
         if (isPresent(source[key])) {
             block[key] = source[key];
         }
     }
+
+    // Deployed with the Worker, so `delete` can tell a Worker this command made from one that merely has its name.
+    block.vars = { ...(isPresent(config.vars) ? config.vars : {}), ...marker };
 
     if (isPresent(config.durable_objects)) {
         block.durable_objects = config.durable_objects;
@@ -277,7 +290,11 @@ const identitiesOf = (block: Record<string, unknown>): string[] => {
 
 /** Every resource identity and Worker name production's config (top level and every environment) points at. */
 const productionIdentities = (config: PreviewConfig): Set<string> =>
-    new Set([config, ...Object.values(config.env ?? {})].flatMap((block) => identitiesOf(block as Record<string, unknown>)));
+    new Set(
+        [config, ...Object.values(config.env ?? {}).filter((block) => !isPreviewBlock(block))].flatMap((block) =>
+            identitiesOf(block as Record<string, unknown>),
+        ),
+    );
 
 /** The production identities a preview name or id collides with; a preview may touch none of them. */
 const productionCollisions = (config: PreviewConfig, candidates: ReadonlyArray<string>): string[] => {
@@ -287,4 +304,4 @@ const productionCollisions = (config: PreviewConfig, candidates: ReadonlyArray<s
 };
 
 export type { PlannedResource, PreviewConfig, PreviewNames, PreviewPlan, PreviewResourceKind, ResourceIds };
-export { planPreview, previewEnvironmentBlock, previewNames, productionCollisions, resourceKey };
+export { planPreview, PREVIEW_MARKER_VAR, previewEnvironmentBlock, previewMarker, previewNames, productionCollisions, resourceKey };

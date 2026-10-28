@@ -689,6 +689,7 @@ describe("lunora deploy", () => {
             it.each([
                 ["--skip-services", { skipServices: true }, "--skip-services"],
                 ["--temporary", { temporary: true }, "--temporary deploys the app to a throwaway account"],
+                ["an isolated preview", { isolatedPreview: true }, "a preview never deploys services: they are production's Workers"],
             ] as const)("deploys no service on %s, and says why", async (_label, extra, reason) => {
                 expect.assertions(2);
 

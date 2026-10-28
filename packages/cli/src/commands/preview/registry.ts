@@ -250,6 +250,25 @@ const deleteWorker = async (request: Request, worker: string): Promise<void> => 
     }
 };
 
+/**
+ * Whether a Worker of this name exists, and the preview marker var it was deployed with. Read from the script's
+ * settings, whose `bindings` list a plain-text var with its `text`.
+ */
+const workerMarker = async (request: Request, worker: string, variable: string): Promise<{ exists: boolean; marker?: string }> => {
+    const outcome = await request(`/workers/scripts/${encodeURIComponent(worker)}/settings`);
+
+    if (!outcome.ok && outcome.status === 404) {
+        return { exists: false };
+    }
+
+    const { bindings } = resultObject(expectOk(outcome, `reading Worker "${worker}"`));
+    const marker = (Array.isArray(bindings) ? (bindings as { name?: unknown; text?: unknown; type?: unknown }[]) : []).find(
+        (binding) => binding.type === "plain_text" && binding.name === variable,
+    )?.text;
+
+    return typeof marker === "string" ? { exists: true, marker } : { exists: true };
+};
+
 /** The account's workers.dev subdomain, which the preview's URL is on. */
 const workersSubdomain = async (request: Request): Promise<string> => {
     const { subdomain } = resultObject(expectOk(await request("/workers/subdomain"), "reading the workers.dev subdomain"));
@@ -273,6 +292,7 @@ export {
     recordKey,
     REGISTRY_TITLE,
     registryNamespace,
+    workerMarker,
     workersSubdomain,
     writeRecord,
 };

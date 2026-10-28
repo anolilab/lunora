@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,7 @@ import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { runCli } from "../../src/cli";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer/shared";
 import { runPreviewCommand } from "../../src/commands/preview/handler";
 import type { PreviewConfig, PreviewPlan } from "../../src/commands/preview/plan";
@@ -85,6 +86,7 @@ const KV_KEYS_PATH = /^\/storage\/kv\/namespaces\/([^/]+)\/keys$/u;
 const KV_NAMESPACE_PATH = /^\/storage\/kv\/namespaces\/([^/]+)$/u;
 const D1_PATH = /^\/d1\/database\/([^/]+)$/u;
 const R2_PATH = /^\/r2\/buckets\/([^/]+)$/u;
+const SCRIPT_SETTINGS_PATH = /^\/workers\/scripts\/([^/]+)\/settings$/u;
 const SCRIPT_PATH = /^\/workers\/scripts\/([^/]+)$/u;
 const ACCOUNT_PREFIX = /^\/client\/v4\/accounts\/[^/]+/u;
 
@@ -96,13 +98,13 @@ const fakeAccount = (): {
     kv: Map<string, string>;
     kvValues: Map<string, Map<string, string>>;
     r2: Set<string>;
-    workers: Set<string>;
+    workers: Map<string, string | undefined>;
 } => {
     const d1 = new Map<string, string>();
     const kv = new Map<string, string>();
     const kvValues = new Map<string, Map<string, string>>();
     const r2 = new Set<string>();
-    const workers = new Set<string>();
+    const workers = new Map<string, string | undefined>();
     const calls: { method: string; path: string }[] = [];
     let sequence = 0;
     const nextId = (prefix: string): string => {
@@ -233,6 +235,20 @@ const fakeAccount = (): {
             return envelope({ subdomain: "acme" });
         }
 
+        const settings = SCRIPT_SETTINGS_PATH.exec(path);
+
+        if (settings !== null) {
+            const name = decodeURIComponent(settings[1] ?? "");
+
+            if (!workers.has(name)) {
+                return notFound();
+            }
+
+            const marker = workers.get(name);
+
+            return envelope({ bindings: marker === undefined ? [] : [{ name: "LUNORA_PREVIEW", text: marker, type: "plain_text" }] });
+        }
+
         const script = SCRIPT_PATH.exec(path);
 
         if (script !== null && method === "DELETE") {
@@ -269,7 +285,7 @@ Current Version ID: 1f2e3d4c-5b6a-7089-9a0b-1c2d3e4f5a6b
 /** A wrangler stand-in that records, at the moment `wrangler deploy` runs, the config and secrets file it would read. */
 const wranglerAt = (
     workdir: string,
-    workers: Set<string>,
+    workers: Map<string, string | undefined>,
 ): { deploys: { args: ReadonlyArray<string>; secrets: Record<string, string>; wrangler: PreviewConfig }[]; spawner: Spawner } => {
     const deploys: { args: ReadonlyArray<string>; secrets: Record<string, string>; wrangler: PreviewConfig }[] = [];
     const spawner: Spawner = async (descriptor) => {
@@ -283,7 +299,10 @@ const wranglerAt = (
                 secrets: JSON.parse(readFileSync(secretsPath, "utf8")) as Record<string, string>,
                 wrangler: parseJsonc(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as PreviewConfig,
             });
-            workers.add(String(args[args.indexOf("--env") + 1]).replace(/^preview-/u, "lunora-app-preview-"));
+            const environment = String(args[args.indexOf("--env") + 1]);
+            const block = deploys.at(-1)?.wrangler.env?.[environment] as { name: string; vars?: Record<string, string> };
+
+            workers.set(block.name, block.vars?.LUNORA_PREVIEW);
         }
 
         const captured = descriptor.captureStdout === true || descriptor.captureStdoutSilently === true;
@@ -381,7 +400,21 @@ describe("lunora preview", () => {
             expect(block.workers_dev).toBe(true);
             expect(block.name).toBe("lunora-app-preview-42");
             expect(block.d1_databases).toStrictEqual([{ binding: "DB", database_id: "preview-id-DB", database_name: "lunora-app-preview-42-db" }]);
-            expect(block.vars).toStrictEqual({ PUBLIC_FLAG: "on" });
+            // Production's vars, plus the marker `delete` checks before it removes the Worker.
+            expect(block.vars).toStrictEqual({ LUNORA_PREVIEW: "lunora-app/42", PUBLIC_FLAG: "on" });
+        });
+
+        it("overwrites the block an interrupted run left behind, but never an environment of the user's own", () => {
+            expect.assertions(2);
+
+            const leftover = {
+                ...production,
+                env: { "preview-42": { name: "lunora-app-preview-42", vars: { LUNORA_PREVIEW: "lunora-app/42" } } },
+            } as PreviewConfig;
+            const owned = { ...production, env: { "preview-42": { name: "lunora-app-qa" } } } as PreviewConfig;
+
+            expect(planPreview(leftover, "42").plan?.worker).toBe("lunora-app-preview-42");
+            expect(planPreview(owned, "42").error).toMatch(/already declares "env.preview-42"/u);
         });
 
         it.each([
@@ -556,6 +589,65 @@ describe("lunora preview", () => {
             expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(PRODUCTION_WRANGLER);
         });
 
+        it("refuses to deploy over an existing Worker it did not deploy, before creating anything", async () => {
+            expect.assertions(3);
+
+            const account = fakeAccount();
+
+            account.workers.set("lunora-app-preview-42", undefined);
+
+            const { deploys, spawner } = wranglerAt(workdir, account.workers);
+            const { logger } = silentLogger();
+
+            const result = await runPreviewCommand({
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                logger,
+                name: "42",
+                spawner,
+                subcommand: "deploy",
+            });
+
+            expect(result.error).toMatch(/Worker named "lunora-app-preview-42" already exists and was not deployed as preview "42"/u);
+            expect(account.calls.filter((call) => call.method !== "GET")).toHaveLength(0);
+            expect(deploys).toHaveLength(0);
+        });
+
+        it("refuses an app that declares lunora.config services, which a preview would share with production", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`, "utf8");
+            mkdirSync(join(workdir, "services", "parser"), { recursive: true });
+            writeFileSync(join(workdir, "services", "parser", "wrangler.jsonc"), `{ "name": "parser", "main": "src/index.ts" }\n`, "utf8");
+
+            const account = fakeAccount();
+            const { logger } = silentLogger();
+
+            const result = await runPreviewCommand({ cwd: workdir, environment: CREDENTIALS, fetch: account.fetch, logger, name: "42", subcommand: "deploy" });
+
+            expect(result.error).toMatch(/declares lunora.config services \(parser\)/u);
+            expect(account.calls).toHaveLength(0);
+        });
+
+        it("refuses a config's required secret that was not passed with --secret, before creating anything", async () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                PRODUCTION_WRANGLER.replace(`"vars":`, `"secrets": { "required": ["STRIPE_KEY"] },\n    "vars":`),
+                "utf8",
+            );
+
+            const account = fakeAccount();
+            const { logger } = silentLogger();
+
+            const result = await runPreviewCommand({ cwd: workdir, environment: CREDENTIALS, fetch: account.fetch, logger, name: "42", subcommand: "deploy" });
+
+            expect(result.error).toMatch(/requires STRIPE_KEY.*--secret STRIPE_KEY/u);
+            expect(account.calls).toHaveLength(0);
+        });
+
         it("--dry-run shows the plan without calling Cloudflare or deploying", async () => {
             expect.assertions(4);
 
@@ -614,6 +706,28 @@ describe("lunora preview", () => {
                 code: EXIT_CODE.USAGE,
                 error: expect.stringMatching(message),
             });
+        });
+    });
+
+    describe("command line", () => {
+        it("reads the subcommand, the name and every --secret from the real argv", async () => {
+            expect.assertions(3);
+
+            const lines: string[] = [];
+            const push = (...parts: unknown[]): void => {
+                lines.push(parts.map(String).join(" "));
+            };
+
+            const code = await runCli({
+                argv: ["preview", "deploy", "42", "--dry-run", "--secret", "ALPHA_KEY", "--secret", "BETA_KEY"],
+                cwd: workdir,
+                logger: { debug: push, error: push, info: push, log: push, warn: push } as unknown as Console,
+            });
+            const output = lines.join("\n");
+
+            expect(code).toBe(0);
+            expect(output).toContain('Worker "lunora-app-preview-42"');
+            expect(output).toContain("from the environment: ALPHA_KEY, BETA_KEY");
         });
     });
 
@@ -692,6 +806,29 @@ describe("lunora preview", () => {
 
             expect(result.error).toMatch(/production's prod-d1-uuid; refusing to delete anything/u);
             expect(account.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+        });
+
+        it("refuses to delete a Worker by the preview's name that the preview did not deploy, and deletes nothing", async () => {
+            expect.assertions(3);
+
+            const account = await deployed();
+
+            // Someone else's Worker now holds the name.
+            account.workers.set("lunora-app-preview-42", undefined);
+            account.calls.length = 0;
+
+            const result = await runPreviewCommand({
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                logger: silentLogger().logger,
+                name: "42",
+                subcommand: "delete",
+            });
+
+            expect(result.error).toMatch(/was not deployed as preview "42"; refusing to delete anything/u);
+            expect(account.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+            expect(account.workers.has("lunora-app-preview-42")).toBe(true);
         });
 
         it("--dry-run lists what would be deleted and deletes nothing", async () => {

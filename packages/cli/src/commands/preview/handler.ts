@@ -10,6 +10,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { readServiceBindings } from "@lunora/codegen";
 import { generateSecretValue } from "@lunora/config";
 import { applyModify, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
@@ -31,7 +32,7 @@ import { resolveRequiredSecretKeys } from "../deploy/secrets";
 import { runSeedCommand } from "../seed/handler";
 import type { PreviewOptions } from "./index";
 import type { PreviewConfig, PreviewPlan, ResourceIds } from "./plan";
-import { planPreview, previewEnvironmentBlock, previewNames, productionCollisions, resourceKey } from "./plan";
+import { planPreview, PREVIEW_MARKER_VAR, previewEnvironmentBlock, previewMarker, previewNames, productionCollisions, resourceKey } from "./plan";
 import type { PreviewRecord, Request } from "./registry";
 import {
     createResource,
@@ -43,6 +44,7 @@ import {
     readRecord,
     recordKey,
     registryNamespace,
+    workerMarker,
     workersSubdomain,
     writeRecord,
 } from "./registry";
@@ -175,6 +177,7 @@ const reason = (error: unknown): string => (error instanceof Error ? error.messa
  */
 const previewSecrets = async (
     cwd: string,
+    config: PreviewConfig,
     options: PreviewCommandOptions,
 ): Promise<{ adminToken: string; error?: never; missing: string[]; values: Record<string, string> } | { error: string }> => {
     const environment = options.environment ?? process.env;
@@ -199,6 +202,15 @@ const previewSecrets = async (
     }
 
     const missing = [...new Set([...fromPackages, ...fromLocal])].filter((key) => values[key] === undefined);
+    // Wrangler refuses a first deploy without the config's required secrets; say so before anything is created.
+    const required = Array.isArray(config.secrets?.required)
+        ? (config.secrets.required as unknown[]).filter((key): key is string => typeof key === "string")
+        : [];
+    const unmet = required.filter((key) => values[key] === undefined);
+
+    if (unmet.length > 0) {
+        return { error: `the config requires ${unmet.join(", ")}, which a preview only gets when you pass ${unmet.map((key) => `--secret ${key}`).join(" ")}` };
+    }
 
     return { adminToken: values[ADMIN_TOKEN_KEY] ?? "", missing, values };
 };
@@ -271,7 +283,7 @@ const reportPlan = (logger: Logger, plan: PreviewPlan, block: Record<string, unk
 const shipPreview = async (context: PreviewContext, plan: PreviewPlan, options: PreviewCommandOptions, request: Request): Promise<PreviewCommandResult> => {
     const { config, cwd, wranglerPath } = context;
     const { logger } = options;
-    const secrets = await previewSecrets(cwd, options);
+    const secrets = await previewSecrets(cwd, config, options);
 
     if (secrets.error !== undefined) {
         return fail(logger, secrets.error);
@@ -287,6 +299,13 @@ const shipPreview = async (context: PreviewContext, plan: PreviewPlan, options: 
     let namespace: string;
 
     try {
+        // A Worker with the preview's name that this command did not deploy is someone else's: never deploy over it.
+        const existingWorker = await workerMarker(request, plan.worker, PREVIEW_MARKER_VAR);
+
+        if (existingWorker.exists && existingWorker.marker !== previewMarker(plan)) {
+            return fail(logger, `a Worker named "${plan.worker}" already exists and was not deployed as preview "${plan.slug}"; refusing to deploy over it`);
+        }
+
         namespace = (await registryNamespace(request, true)) ?? "";
 
         const now = new Date().toISOString();
@@ -394,6 +413,16 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
         // every binding the code needs, not the ones the last deploy happened to write.
         await provisionBindings(cwd, logger, undefined, "cloudflare", undefined);
 
+        const { services } = readServiceBindings(cwd);
+
+        // Services deploy under their own names, which are production's, and the app's bindings reach them.
+        if (services.length > 0) {
+            return fail(
+                logger,
+                `this app cannot be previewed in isolation yet: it declares lunora.config services (${services.map((service) => service.name).join(", ")}), which a preview would share with production`,
+            );
+        }
+
         const config = readWranglerJsonc<PreviewConfig>(context.wranglerPath).parsed ?? context.config;
         const planned = planPreview(config, name);
 
@@ -413,6 +442,9 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
             const ids = new Map(plan.resources.map((resource) => [resourceKey(resource.kind, resource.binding), `<${resource.name}>`]));
 
             reportPlan(logger, plan, previewEnvironmentBlock(config, plan, ids));
+            logger.info(
+                `  secrets: every one Lunora can mint, fresh${(options.secrets ?? []).length > 0 ? `; from the environment: ${(options.secrets ?? []).join(", ")}` : ""}`,
+            );
 
             return { code: EXIT_CODE.SUCCESS, data: { plan: planSummary(plan) } };
         }
@@ -435,9 +467,18 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
  */
 const removePreview = async (request: Request, namespace: string, record: PreviewRecord, logger: Logger): Promise<PreviewCommandResult> => {
     try {
+        const worker = await workerMarker(request, record.worker, PREVIEW_MARKER_VAR);
+
+        // A Worker by that name without this preview's marker was not deployed by it: deleting it would destroy someone else's.
+        if (worker.exists && worker.marker !== previewMarker({ production: record.production, slug: record.name })) {
+            return fail(logger, `Worker "${record.worker}" was not deployed as preview "${record.name}"; refusing to delete anything`);
+        }
+
         // The Worker first: a resource must not disappear from under a Worker still serving it.
-        await deleteWorker(request, record.worker);
-        logger.success(`deleted Worker "${record.worker}"`);
+        if (worker.exists) {
+            await deleteWorker(request, record.worker);
+            logger.success(`deleted Worker "${record.worker}"`);
+        }
     } catch (error) {
         return fail(logger, `deleting Worker "${record.worker}" failed (${reason(error)}); its resources were left in place`, EXIT_CODE.FAILURE);
     }
