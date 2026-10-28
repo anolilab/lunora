@@ -197,6 +197,7 @@ const resolveIdentity = async (env: Env, request: Request): Promise<{ [claim: st
         name: session.user.name || undefined,
         orgRole: member?.role,
         userId: session.user.id,
+        ...(session.user.emailVerified ? { verifiedEmail: session.user.email } : {}),
     };
 };
 

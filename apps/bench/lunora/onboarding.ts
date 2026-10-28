@@ -3,15 +3,14 @@
  * workflow once per organisation; its steps call back into the internal
  * functions below.
  *
- * The welcome mail goes to the caller's own verified address, looked up
- * server-side from better-auth — never to an address from the request, which
- * would turn this into a relay for mail to anyone.
+ * The welcome mail goes to the caller's own verified address, from the
+ * `verifiedEmail` identity claim the Worker resolves from better-auth, never
+ * to an address from the request, which would turn this into a relay for mail
+ * to anyone.
  */
 import { LunoraError } from "@lunora/errors";
 
-import { internalAction, internalMutation, internalQuery, v } from "./_generated/server.js";
-import type { AuthEnv } from "./auth/index.js";
-import { getAuth } from "./auth/index.js";
+import { internalMutation, internalQuery, v } from "./_generated/server.js";
 import { orgBulkMutation, requireWriter } from "./lib/crpc.js";
 
 /**
@@ -21,22 +20,16 @@ import { orgBulkMutation, requireWriter } from "./lib/crpc.js";
  */
 export const start = orgBulkMutation.mutation(async ({ ctx }) => {
     const { organizationId, userId } = await requireWriter(ctx);
-    const id = `onboarding-${organizationId}`;
-    const { created } = await ctx.workflows.get("onboarding").createBatch({ instances: [{ id, params: { organizationId, userId } }] });
+    const email = (await ctx.auth.getIdentity())?.verifiedEmail;
 
-    return { instanceId: id, started: created.length === 1 };
-});
-
-/** The user's verified email, or a refusal: an unverified address is not one to mail. */
-export const recipient = internalAction.input({ userId: v.string() }).action(async ({ args, ctx }): Promise<{ email: string }> => {
-    const { adapter } = await getAuth(ctx.env as unknown as AuthEnv).$context;
-    const user = await adapter.findOne<{ email: string; emailVerified: boolean }>({ model: "user", where: [{ field: "id", value: args.userId }] });
-
-    if (!user?.emailVerified) {
-        throw new LunoraError("UNPROCESSABLE", "onboarding: the user has no verified email address");
+    if (email === undefined) {
+        throw new LunoraError("UNPROCESSABLE", "onboarding: verify your email address first");
     }
 
-    return { email: user.email };
+    const id = `onboarding-${organizationId}`;
+    const { created } = await ctx.workflows.get("onboarding").createBatch({ instances: [{ id, params: { email, organizationId, userId } }] });
+
+    return { instanceId: id, started: created.length === 1 };
 });
 
 export const seedOrganization = internalMutation.input({ organizationId: v.string(), userId: v.string() }).mutation(async ({ args, ctx }) => {

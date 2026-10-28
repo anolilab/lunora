@@ -93,6 +93,15 @@ export const identity = defineIdentity(
 
         /** The better-auth user id. Required by the contract on every identity. */
         userId: v.string(),
+
+        /**
+         * The caller's email address, present only once better-auth marks it
+         * verified. Onboarding mails the welcome to it: functions run without
+         * the Worker's `env`, so they cannot look the user up in better-auth
+         * themselves, and an address from the request would make the mailer a
+         * relay.
+         */
+        verifiedEmail: v.optional(v.string()),
     },
     { onInvalid: "reject" },
 );
