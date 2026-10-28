@@ -69,14 +69,16 @@ export const getScheduledJob = async (host: AdminHost, id: string): ReturnType<L
     return body.record === undefined ? null : decodeRecordArgs(body.record);
 };
 
-export const listScheduledHistory = async (host: AdminHost): ReturnType<LunoraAdminClient["listScheduledHistory"]> => {
+export const listScheduledHistory = async (host: AdminHost, options: { cursor?: string } = {}): ReturnType<LunoraAdminClient["listScheduledHistory"]> => {
     host.assertOpen();
 
-    // One page, newest first: history is a recent-activity view, and the
-    // retention window — not this read — is what bounds how much exists.
-    const body = (await host.adminFetch(SCHEDULED_HISTORY_PATH, "GET")) as { records?: ScheduledJobView[] };
+    // One page per call, not every page: seven days of outcomes is unbounded,
+    // so the caller asks for older ones with the returned `cursor`.
+    const path = options.cursor === undefined ? SCHEDULED_HISTORY_PATH : `${SCHEDULED_HISTORY_PATH}?cursor=${encodeURIComponent(options.cursor)}`;
+    const body = (await host.adminFetch(path, "GET")) as { cursor?: string; records?: ScheduledJobView[]; truncated?: boolean };
+    const records = (body.records ?? []).map((record) => decodeRecordArgs(record));
 
-    return (body.records ?? []).map((record) => decodeRecordArgs(record));
+    return body.truncated === true && body.cursor !== undefined ? { cursor: body.cursor, records } : { records };
 };
 
 export const listCronRuns = async (host: AdminHost): ReturnType<LunoraAdminClient["listCronRuns"]> => {

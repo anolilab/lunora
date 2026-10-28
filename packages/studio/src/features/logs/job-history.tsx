@@ -1,7 +1,9 @@
-import type { ScheduledJobView } from "@lunora/client";
+import type { ScheduledHistoryPage, ScheduledJobView } from "@lunora/client";
 import type { ReactElement } from "react";
+import { useState } from "react";
 
 import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
@@ -9,11 +11,11 @@ import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
-import { formatTimestamp } from "../../lib/internal";
+import { errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
 
 interface JobHistoryProps {
-    /** Load the finished jobs, newest first. Defaults to `client.listScheduledHistory`. */
-    readonly loadJobs?: () => Promise<ScheduledJobView[]>;
+    /** Load one page of finished jobs, newest first, older ones by `cursor`. Defaults to `client.listScheduledHistory`. */
+    readonly loadJobs?: (cursor?: string) => Promise<ScheduledHistoryPage>;
 }
 
 const STATE_VARIANT = { canceled: "secondary", failed: "destructive", pending: "outline", running: "info", succeeded: "success" } as const;
@@ -27,10 +29,33 @@ const STATE_VARIANT = { canceled: "secondary", failed: "destructive", pending: "
 export const JobHistory = ({ loadJobs }: JobHistoryProps = {}): ReactElement => {
     const client = useStudioClient();
     const t = useT();
-    const jobsQuery = useClientQuery(["lunora-job-history", loadJobs ? "custom" : "default"], async () =>
-        (loadJobs ?? (() => client.listScheduledHistory()))(),
-    );
-    const jobs = jobsQuery.data;
+    const load = loadJobs ?? (async (cursor?: string) => client.listScheduledHistory(cursor === undefined ? {} : { cursor }));
+    const jobsQuery = useClientQuery(["lunora-job-history", loadJobs ? "custom" : "default"], async () => load());
+    // Older pages the operator asked for; the polled query keeps refreshing only the newest one.
+    const [older, setOlder] = useState<{ cursor?: string; records: ScheduledJobView[] } | undefined>(undefined);
+    const [loadingOlder, setLoadingOlder] = useState(false);
+    const [olderError, setOlderError] = useState<string | undefined>(undefined);
+    const newest = jobsQuery.data?.records;
+    const newestIds = new Set(newest?.map((job) => job.id));
+    const jobs = newest === undefined ? undefined : [...newest, ...(older?.records ?? []).filter((job) => !newestIds.has(job.id))];
+    const nextCursor = older === undefined ? jobsQuery.data?.cursor : older.cursor;
+
+    const onLoadOlder = async (): Promise<void> => {
+        setLoadingOlder(true);
+        setOlderError(undefined);
+
+        try {
+            const page = await load(nextCursor);
+
+            setOlder((previous) => {
+                return { cursor: page.cursor, records: [...(previous?.records ?? []), ...page.records] };
+            });
+        } catch (error: unknown) {
+            setOlderError(errorMessage(error));
+        } finally {
+            setLoadingOlder(false);
+        }
+    };
     const stateLabel = { canceled: t("canceled"), failed: t("failed"), pending: t("pending"), running: t("running"), succeeded: t("succeeded") };
 
     useAutoRefresh(() => jobsQuery.poll(), true);
@@ -82,6 +107,20 @@ export const JobHistory = ({ loadJobs }: JobHistoryProps = {}): ReactElement => 
                         </Table>
                     </CardContent>
                 </Card>
+            )}
+
+            {olderError !== undefined && (
+                <p className="text-sm text-destructive" role="alert">
+                    {olderError}
+                </p>
+            )}
+
+            {nextCursor !== undefined && (
+                <div>
+                    <Button data-testid="job-history-load-more" disabled={loadingOlder} onClick={() => { fireAndForget(onLoadOlder()); }} variant="outline">
+                        {loadingOlder ? t("Loading…") : t("Load more")}
+                    </Button>
+                </div>
             )}
         </div>
     );

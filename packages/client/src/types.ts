@@ -1214,6 +1214,12 @@ export interface ScheduledJobView extends ScheduleRecord {
     state: ScheduledJobState;
 }
 
+/** One page of finished jobs, newest first, plus the cursor to the next older page, if any. */
+export interface ScheduledHistoryPage {
+    cursor?: string;
+    records: ScheduledJobView[];
+}
+
 /** How one cron fire ended; `skipped` is a tick that did not run because the previous run was still going. Mirrors `@lunora/scheduler`'s `CronRunStatus`. */
 export type CronRunStatus = "failed" | "skipped" | "succeeded";
 

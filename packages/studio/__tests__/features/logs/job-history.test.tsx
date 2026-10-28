@@ -1,7 +1,7 @@
 import type { ScheduledJobView } from "@lunora/client";
 import { LunoraProvider } from "@lunora/react";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { JobHistory } from "../../../src/features/logs/job-history";
 import { createMockClient } from "../../mock-client";
@@ -27,7 +27,11 @@ describe("jobHistory", () => {
 
         render(
             <LunoraProvider client={createMockClient().asClient}>
-                <JobHistory loadJobs={async () => JOBS} />
+                <JobHistory
+                    loadJobs={async () => {
+                        return { records: JOBS };
+                    }}
+                />
             </LunoraProvider>,
         );
 
@@ -44,10 +48,37 @@ describe("jobHistory", () => {
 
         render(
             <LunoraProvider client={createMockClient().asClient}>
-                <JobHistory loadJobs={async () => []} />
+                <JobHistory
+                    loadJobs={async () => {
+                        return { records: [] };
+                    }}
+                />
             </LunoraProvider>,
         );
 
         await expect(screen.findByTestId("job-history-empty")).resolves.toBeDefined();
+    });
+
+    it("loads older pages on demand by the returned cursor", async () => {
+        expect.assertions(3);
+
+        const [newest, ...rest] = JOBS;
+        const loadJobs = vi.fn<(cursor?: string) => Promise<{ cursor?: string; records: ScheduledJobView[] }>>(async (cursor) =>
+            cursor === undefined ? { cursor: "page-2", records: newest === undefined ? [] : [newest] } : { records: rest },
+        );
+
+        render(
+            <LunoraProvider client={createMockClient().asClient}>
+                <JobHistory loadJobs={loadJobs} />
+            </LunoraProvider>,
+        );
+
+        fireEvent.click(await screen.findByTestId("job-history-load-more"));
+
+        await screen.findByTestId("job-history-row-dead");
+
+        expect(loadJobs).toHaveBeenCalledWith("page-2");
+        expect(screen.getByTestId("job-history-row-gone")).toBeDefined();
+        expect(screen.queryByTestId("job-history-load-more")).toBeNull();
     });
 });

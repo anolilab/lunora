@@ -121,6 +121,7 @@ export type {
     RowOp,
     RpcEnvelope,
     RpcResponseBody,
+    ScheduledHistoryPage,
     ScheduledJobState,
     ScheduledJobView,
     ScheduleRecord,

@@ -129,8 +129,17 @@ describe("admin modules: request shape", () => {
 
         const { calls, host } = recordingHost();
 
-        await expect(listScheduledHistory(host)).resolves.toStrictEqual([]);
+        await expect(listScheduledHistory(host)).resolves.toStrictEqual({ records: [] });
         expect(calls[0]).toMatchObject({ method: "GET", path: SCHEDULED_HISTORY_PATH });
+    });
+
+    it("listScheduledHistory hands back the cursor of a truncated page and forwards it for the next", async () => {
+        expect.assertions(2);
+
+        const { calls, host } = recordingHost({ cursor: "dt:42:job", records: [], truncated: true });
+
+        await expect(listScheduledHistory(host, { cursor: "dt:1:a" })).resolves.toStrictEqual({ cursor: "dt:42:job", records: [] });
+        expect(calls[0]).toMatchObject({ path: `${SCHEDULED_HISTORY_PATH}?cursor=dt%3A1%3Aa` });
     });
 
     it("cancelScheduledJob posts the id and reports cancelled only on an explicit true", async () => {

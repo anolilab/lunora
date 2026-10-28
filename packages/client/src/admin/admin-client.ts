@@ -66,6 +66,7 @@ import type {
     KvValueResult,
     PipelineLogPage,
     PipelineLogQuery,
+    ScheduledHistoryPage,
     ScheduledJobView,
     ScheduleRecord,
     SchedulerStatus,
@@ -187,13 +188,14 @@ class LunoraAdminClient extends LunoraClient {
     }
 
     /**
-     * The most recently finished scheduled jobs, newest first — one page of the
-     * scheduler's terminal records. Hits the admin-gated
-     * `GET /_lunora/admin/scheduled/history`. Powers `@lunora/studio`'s
-     * recent-jobs panel.
+     * Finished scheduled jobs, newest first — one page of the scheduler's
+     * terminal records within the retention window. Pass the returned `cursor`
+     * back for the next, older page; it is absent on the last one. Hits the
+     * admin-gated `GET /_lunora/admin/scheduled/history`. Powers
+     * `@lunora/studio`'s recent-jobs panel.
      */
-    public async listScheduledHistory(): Promise<ScheduledJobView[]> {
-        return listScheduledHistory(this.adminHost);
+    public async listScheduledHistory(options: { cursor?: string } = {}): Promise<ScheduledHistoryPage> {
+        return listScheduledHistory(this.adminHost, options);
     }
 
     /**
