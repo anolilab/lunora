@@ -150,4 +150,27 @@ describe("global table drift on D1 in workerd", () => {
         expect(addColumnStatements(statements)).toStrictEqual([]);
         await expect(tableDdl(table)).resolves.toContain(`"slug" TEXT NOT NULL`);
     });
+
+    it("refuses a unique index over duplicate rows with the code that names the fix", async () => {
+        expect.assertions(1);
+
+        const table = "duplicated_notes";
+
+        await env.DB.prepare(
+            `CREATE TABLE "${table}" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "${OCC_VERSION_COLUMN}" INTEGER, "body" TEXT NOT NULL, "slug" TEXT NOT NULL)`,
+        ).run();
+        await env.DB.prepare(`INSERT INTO "${table}" ("id", "_creationTime", "body", "slug") VALUES ('a', 1, 'x', 'dup'), ('b', 2, 'y', 'dup')`).run();
+
+        const schema = {
+            tables: {
+                [table]: {
+                    indexes: [{ fields: ["slug"], name: "by_slug", unique: true }],
+                    shape: { body: col("string"), slug: col("string") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as never;
+
+        await expect(runSqlGlobalTableMigrations(recordingExec().exec, schema, sqliteDialect)).rejects.toMatchObject({ code: "UNIQUE_INDEX_DUPLICATES" });
+    });
 });
