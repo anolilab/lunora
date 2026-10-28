@@ -76,6 +76,16 @@ describe("stableStringify arrays", () => {
         expect(reads).toBe(1);
     });
 
+    it("truncates a fractional proxied length and refuses an unbounded one", () => {
+        expect.assertions(2);
+
+        const withLength = (length: number): unknown[] =>
+            new Proxy([1, 2, 3], { get: (target, key, receiver) => (key === "length" ? length : (Reflect.get(target, key, receiver) as unknown)) });
+
+        expect(stableStringify(withLength(2.5))).toBe("[1,2]");
+        expect(() => stableStringify(withLength(Number.POSITIVE_INFINITY))).toThrow(RangeError);
+    });
+
     it("visits sparse holes as null and keeps a sparse array distinct from an empty one", () => {
         expect.assertions(3);
 
