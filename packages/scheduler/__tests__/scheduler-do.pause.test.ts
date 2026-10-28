@@ -82,6 +82,33 @@ describe("schedulerDO deployment pause", () => {
         }
     });
 
+    it("stays paused when resuming cannot re-arm the clock, so the resume can be retried", async () => {
+        expect.hasAssertions();
+
+        vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+
+        const state = createFakeState();
+        const scheduler = new RecordingScheduler(state, env);
+
+        await scheduler.fetch(post("/pause", { paused: true }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.run", id: "held", scheduledFor: Date.now() - 1000 }));
+
+        const setAlarm = vi.spyOn(state.storage, "setAlarm").mockRejectedValueOnce(new Error("storage unavailable"));
+
+        await scheduler.fetch(post("/pause", { paused: false })).catch(() => undefined);
+
+        await expect(pauseState(scheduler)).resolves.toMatchObject({ paused: true });
+
+        setAlarm.mockRestore();
+        await scheduler.fetch(post("/pause", { paused: false }));
+
+        expect(state.alarm).toBe(1_700_000_000_000 - 1000);
+
+        await scheduler.alarm();
+
+        expect(scheduler.dispatched).toStrictEqual(["held"]);
+    });
+
     it("keeps the original pausedAt when paused again", async () => {
         expect.hasAssertions();
 

@@ -2259,8 +2259,16 @@ class SchedulerDO {
         }
 
         if (!body.paused) {
+            // Clock first, flag second: a failed arm leaves the deployment paused and
+            // the resume retryable, while a failed flag delete only costs an alarm
+            // that finds the flag, stops itself, and waits for the retry.
+            const earliest = await this.earliestPendingTime();
+
+            if (earliest !== undefined && Number.isFinite(earliest)) {
+                await this.state.storage.setAlarm(earliest);
+            }
+
             await this.state.storage.delete(PAUSE_KEY);
-            await this.rescheduleAlarm();
 
             return SchedulerDO.json({ paused: false } satisfies DeploymentPauseState);
         }
