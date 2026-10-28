@@ -369,7 +369,7 @@ const CAPABILITY_ROWS = [
             // Same `instrumentDatabase` levels as `ctx.db`, under its own `sql.*` tally.
             instrument: "instrumentSql",
             missingMessage:
-                "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString))`.",
+                "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 }))`.",
             stubMethods: ["query"],
         },
         tier: "action",
