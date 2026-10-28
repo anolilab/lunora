@@ -1,3 +1,20 @@
+## @lunora/shard-engine [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.166...@lunora/shard-engine@1.0.0-alpha.167) (2026-10-28)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** `runMigrateToHyperdriveCommand` is now `runMigrateBackendCommand`
+and requires a `direction`.
+* **hyperdrive:** ImportShardResult and the global ImportResult gain a required
+`replaced` count; `streamingImport` takes an `onConflict` argument.
+
+### Features
+
+* **hyperdrive:** wire the admin global plane, add replace imports and migrate hyperdrive-to-d1 ([#1360](https://github.com/anolilab/lunora/issues/1360)) ([f25b400](https://github.com/anolilab/lunora/commit/f25b400a13fbf76d19e5e587f4d20f00242a7ece)), closes [#1274](https://github.com/anolilab/lunora/issues/1274)
+
+### Performance Improvements
+
+* cache hmac keys per secret on per-message paths ([#1383](https://github.com/anolilab/lunora/issues/1383)) ([4b259f8](https://github.com/anolilab/lunora/commit/4b259f8583960cf26066423f64ee10e5e0de7c85))
+
 ## @lunora/shard-engine [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.165...@lunora/shard-engine@1.0.0-alpha.166) (2026-10-28)
 
 ### ⚠ BREAKING CHANGES
