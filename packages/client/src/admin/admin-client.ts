@@ -55,6 +55,7 @@ import type {
     AuthUser,
     CronJobInfo,
     CronRunsResult,
+    DeploymentPauseStatus,
     FunctionDescriptor,
     GlobalFacetResult,
     GlobalFilterClause,
@@ -83,6 +84,7 @@ import { deleteKvKey, getKvValue, listKvKeys, listKvNamespaces, putKvValue } fro
 import { queryLogArchive, shardTraffic } from "./observability";
 import {
     cancelScheduledJob,
+    getDeploymentPause,
     getScheduledJob,
     getWorkflowInstance,
     listCronRuns,
@@ -93,6 +95,7 @@ import {
     removeDeadJob,
     retryDeadJob,
     schedulerStatus,
+    setDeploymentPause,
     setWorkflowInstanceStatus,
 } from "./scheduler";
 import { deleteStorageObject, listStorageBuckets, listStorageObjects, signedStorageUrl, uploadStorageObject } from "./storage";
@@ -124,6 +127,27 @@ class LunoraAdminClient extends LunoraClient {
      */
     public async shardTraffic(table: string): Promise<ShardTrafficResult> {
         return shardTraffic(this.adminHost, table);
+    }
+
+    // --- Deployment pause ---------------------------------------------------
+
+    /**
+     * Whether the deployment is paused — function calls refused with
+     * `503 DEPLOYMENT_PAUSED`, scheduled jobs held, cron ticks skipped, queue
+     * batches handed back. Hits the admin-gated `GET /_lunora/admin/pause`.
+     * `supported` is `false` on a worker without a `schedulerDO`.
+     */
+    public async getDeploymentPause(): Promise<DeploymentPauseStatus> {
+        return getDeploymentPause(this.adminHost);
+    }
+
+    /**
+     * Pause (`true`) or resume (`false`) the deployment, with an optional note
+     * shown wherever the pause is. Resuming runs every scheduled job held while
+     * paused. Hits the admin-gated `POST /_lunora/admin/pause`.
+     */
+    public async setDeploymentPause(paused: boolean, reason?: string): Promise<DeploymentPauseStatus> {
+        return setDeploymentPause(this.adminHost, paused, reason);
     }
 
     // --- Scheduler admin ----------------------------------------------------

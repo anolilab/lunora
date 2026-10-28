@@ -27,6 +27,7 @@ import { linkCommand } from "./commands/link";
 import { logsCommand } from "./commands/logs";
 import { mcpCommand } from "./commands/mcp";
 import { migrateCommand } from "./commands/migrate";
+import { pauseCommand, resumeCommand } from "./commands/pause";
 import { prepareCommand } from "./commands/prepare";
 import { profileCommand } from "./commands/profile";
 import { registryCommand } from "./commands/registry/command";
@@ -69,6 +70,8 @@ const COMMANDS = [
     "import",
     "seed",
     "shards",
+    "pause",
+    "resume",
     "backup",
     "eval",
     "verify",
@@ -110,6 +113,8 @@ const CLI_COMMANDS = [
     importCommand,
     seedCommand,
     shardsCommand,
+    pauseCommand,
+    resumeCommand,
     introspectCommand,
     backupCommand,
     evalCommand,

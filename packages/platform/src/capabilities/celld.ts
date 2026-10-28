@@ -180,6 +180,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "celld does not terminate TLS or front a CDN: request.url's hostname comes from the Host header unless a trusted proxy is declared (`--trust-forwarded-headers`, which then reads X-Forwarded-Host / -Proto). Pin the host at the ingress proxy, or configure a base (publicBaseUrl) rather than trusting the request",
         },
+        deploymentPause: {
+            level: "emulated",
+            note: "The same SchedulerDO-held flag as on Cloudflare, on cell storage and alarms: jobs are held by the alarm, the worker's router, cron and queue checks are unchanged. A queue batch held while paused spends a delivery attempt per retry",
+        },
         scheduler: {
             level: "emulated",
             note: "SchedulerDO's `runAfter`/`runAt` half runs on cell alarms, and declarative crons reach `scheduled()` through celld's fleet-wide Cron Triggers. As on Cloudflare there is no runtime cron registration, and celld's cron parser rejects descending ranges and `*` inside a list",

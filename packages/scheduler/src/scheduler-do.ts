@@ -134,6 +134,14 @@ const poolQueuePrefix = (pool: string): string => `${POOL_QUEUE_PREFIX}${encodeP
  * older build, which therefore gets walked once.
  */
 const CLEAN_KEY = "meta:clean";
+
+/**
+ * The deployment pause flag ({@link DeploymentPauseState}). Held here because
+ * this is the one durable object every app that schedules or crons anything
+ * has, and the alarm that must hold jobs reads it without a hop; the worker's
+ * router and queue consumer read it through `GET /pause`.
+ */
+const PAUSE_KEY = "meta:paused";
 // Default page size for the `/list` + WS `jobs` view (listPage()) and the
 // page size used internally by the exact-count cursor loop (forEachPage()).
 // Mirrors the alarm path's existing `limit: 100` bound so the whole file has
@@ -371,6 +379,15 @@ interface SchedulerStatus {
     inFlight: number;
     /** Per-pool backlog breakdown, one entry per `pool:<name>` record. */
     pools: SchedulerPoolStatus[];
+}
+
+/** Whether the deployment is paused, as `GET /pause` answers it. */
+interface DeploymentPauseState {
+    paused: boolean;
+    /** When the pause began (epoch ms). */
+    pausedAt?: number;
+    /** The operator's note, shown wherever the pause is. */
+    reason?: string;
 }
 
 interface CancelRequestBody {
@@ -652,6 +669,9 @@ class SchedulerDO {
             case "GET /list": {
                 return this.handleList(url);
             }
+            case "GET /pause": {
+                return SchedulerDO.json(await this.pauseState());
+            }
             case "GET /pool": {
                 return this.handlePoolStatus(url);
             }
@@ -676,6 +696,9 @@ class SchedulerDO {
             case "POST /dead/retry": {
                 return this.handleDeadRetry(request);
             }
+            case "POST /pause": {
+                return this.handleSetPause(request);
+            }
             case "POST /schedule": {
                 return this.handleSchedule(request);
             }
@@ -692,6 +715,19 @@ class SchedulerDO {
         // BEFORE the due slice is read, so a job recovered here fires in this
         // very pass rather than waiting for the next one.
         await this.reindexOrphanedRecords();
+
+        // Paused: hold every job exactly where it is — header, index and attempt
+        // count untouched — and stop the clock. Deleting the alarm rather than
+        // re-arming it matters: every due `t:` row is in the past, so a re-arm
+        // would fire again at once and spin. Resume re-derives the clock from
+        // `t:`, and the held jobs drain on that first alarm.
+        const pause = await this.pauseState();
+
+        if (pause.paused) {
+            await this.state.storage.deleteAlarm();
+
+            return;
+        }
 
         const now = Date.now();
         // Each entry carries the index key the record was SELECTED under, not one
@@ -2128,6 +2164,44 @@ class SchedulerDO {
         await this.state.storage.delete(owned.flat());
     }
 
+    private async pauseState(): Promise<DeploymentPauseState> {
+        return (await this.state.storage.get<DeploymentPauseState>(PAUSE_KEY)) ?? { paused: false };
+    }
+
+    /**
+     * `POST /pause { paused, reason? }` — pause or resume the deployment.
+     * Pausing stops the alarm (see `alarm()`); resuming re-derives it from the
+     * time index, so every job held while paused fires on the next alarm, late
+     * but with its attempt budget intact. Idempotent both ways; re-pausing keeps
+     * the original `pausedAt`.
+     */
+    private async handleSetPause(request: Request): Promise<Response> {
+        const body = (await request.json().catch(() => undefined)) as { paused?: unknown; reason?: unknown } | undefined;
+
+        if (typeof body?.paused !== "boolean") {
+            return SchedulerDO.error(400, "INVALID_INPUT", "paused (boolean) is required");
+        }
+
+        if (!body.paused) {
+            await this.state.storage.delete(PAUSE_KEY);
+            await this.rescheduleAlarm();
+
+            return SchedulerDO.json({ paused: false } satisfies DeploymentPauseState);
+        }
+
+        const current = await this.pauseState();
+        const next: DeploymentPauseState = {
+            paused: true,
+            pausedAt: current.pausedAt ?? Date.now(),
+            ...(typeof body.reason === "string" && body.reason.length > 0 ? { reason: body.reason.slice(0, 500) } : {}),
+        };
+
+        await this.state.storage.put(PAUSE_KEY, next);
+        await this.state.storage.deleteAlarm();
+
+        return SchedulerDO.json(next);
+    }
+
     /**
      * `POST /cron/begin { name }` — take the in-flight lease for one cron job, or
      * answer `{ acquired: false }` and record the tick as skipped when a run of
@@ -2155,6 +2229,24 @@ class SchedulerDO {
 
         const leaseKey = `${CRON_LEASE_PREFIX}${encodePoolName(name)}`;
         const now = Date.now();
+
+        const pause = await this.pauseState();
+
+        if (pause.paused) {
+            await this.recordCronRun({
+                durationMs: 0,
+                endedAt: now,
+                name,
+                reason: "paused",
+                runId: resolveScheduleId(undefined),
+                skipped: 0,
+                startedAt: now,
+                status: "skipped",
+            });
+
+            return SchedulerDO.json({ acquired: false, reason: "paused" });
+        }
+
         const lease = await this.state.storage.get<CronRunInFlight>(leaseKey);
 
         if (lease !== undefined && lease.startedAt > now - DISPATCH_LEASE_MS) {
@@ -2498,4 +2590,4 @@ class SchedulerDO {
 }
 
 export { DISPATCH_LEASE_MS, MAX_CONCURRENT_DISPATCHES, MAX_RETRY_ATTEMPTS, MAX_SCHEDULED_FOR_MS, RETRY_BASE_DELAY_MS, SchedulerDO, TERMINAL_RETENTION_MS };
-export type { SchedulerDOState, SchedulerEnv, SchedulerPoolStatus, SchedulerStatus };
+export type { DeploymentPauseState, SchedulerDOState, SchedulerEnv, SchedulerPoolStatus, SchedulerStatus };

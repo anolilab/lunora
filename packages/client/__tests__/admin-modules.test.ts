@@ -6,7 +6,15 @@ import { listGlobalTables } from "../src/admin/global-tables";
 import type { AdminHost } from "../src/admin/host";
 import { deleteKvKey, listKvNamespaces } from "../src/admin/kv";
 import { queryLogArchive, shardTraffic } from "../src/admin/observability";
-import { cancelScheduledJob, getScheduledJob, listCronRuns, listScheduledHistory, listScheduledJobs } from "../src/admin/scheduler";
+import {
+    cancelScheduledJob,
+    getDeploymentPause,
+    getScheduledJob,
+    listCronRuns,
+    listScheduledHistory,
+    listScheduledJobs,
+    setDeploymentPause,
+} from "../src/admin/scheduler";
 import { listStorageBuckets, uploadStorageObject } from "../src/admin/storage";
 import { listVectorIndexes } from "../src/admin/vector-indexes";
 import {
@@ -16,6 +24,7 @@ import {
     KV_NAMESPACES_PATH,
     KV_VALUE_PATH,
     LOG_ARCHIVE_PATH,
+    PAUSE_PATH,
     SCHEDULED_CANCEL_PATH,
     SCHEDULED_CRON_RUNS_PATH,
     SCHEDULED_HISTORY_PATH,
@@ -86,6 +95,24 @@ describe("admin modules: request shape", () => {
         const hit = recordingHost({ record: { args: {}, completedAt: 5, enqueuedAt: 1, id: "job-1", scheduledFor: 2, state: "succeeded" } });
 
         await expect(getScheduledJob(hit.host, "job-1")).resolves.toMatchObject({ completedAt: 5, state: "succeeded" });
+    });
+
+    it("getDeploymentPause reads the flag and defaults to running and unsupported", async () => {
+        expect.assertions(2);
+
+        const { calls, host } = recordingHost();
+
+        await expect(getDeploymentPause(host)).resolves.toStrictEqual({ paused: false, supported: false });
+        expect(calls[0]).toMatchObject({ method: "GET", path: PAUSE_PATH });
+    });
+
+    it("setDeploymentPause posts the flag with its reason", async () => {
+        expect.assertions(2);
+
+        const { calls, host } = recordingHost({ paused: true, pausedAt: 5, reason: "incident", supported: true });
+
+        await expect(setDeploymentPause(host, true, "incident")).resolves.toStrictEqual({ paused: true, pausedAt: 5, reason: "incident", supported: true });
+        expect(calls[0]).toMatchObject({ method: "POST", path: PAUSE_PATH, payload: { paused: true, reason: "incident" } });
     });
 
     it("listCronRuns gets the cron run history and defaults to empty lists", async () => {

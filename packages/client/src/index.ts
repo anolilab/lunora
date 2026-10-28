@@ -83,6 +83,7 @@ export type {
     CronRunRecord,
     CronRunsResult,
     CronRunStatus,
+    DeploymentPauseStatus,
     FunctionArgumentDescriptor,
     FunctionDescriptor,
     FunctionReference,

@@ -317,7 +317,9 @@ export const ERROR_CATALOG = {
         title: "Backup too large to assemble in a Worker",
     },
     CRON_JOBS_NOT_CONFIGURED: { status: 400, title: "Cron jobs not configured" },
+    CRON_JOB_IN_FLIGHT: { status: 409, title: "Cron job is already running" },
     CRON_JOB_NOT_FOUND: { status: 404, title: "Cron job not found" },
+    DEPLOYMENT_PAUSED: { status: 503, title: "Deployment is paused" },
     EXPORT_SHARD_FAILED: {
         status: 502,
         title: "Export failed on one or more shards",
@@ -331,6 +333,7 @@ export const ERROR_CATALOG = {
     },
     KV_NOT_CONFIGURED: { status: 400, title: "KV introspector not configured" },
     MIGRATION_ID_REQUIRED: { status: 400, title: "Migration id required" },
+    PAUSE_NOT_CONFIGURED: { status: 400, title: "Deployment pause not configured" },
     PITR_UNAVAILABLE: { status: 409, title: "Point-in-time recovery unavailable" },
     SCHEDULER_NOT_CONFIGURED: { status: 400, title: "Scheduler not configured" },
     STORAGE_CHECKSUM_MISMATCH: {

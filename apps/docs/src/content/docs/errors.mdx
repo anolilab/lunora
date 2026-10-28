@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 199 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 198 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -92,10 +92,6 @@ Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 ### `ADMIN_TOKEN_NOT_CONFIGURED`
 
 `400` — Admin token not configured
-
-### `AI_CHAT_FAILED`
-
-`500` — Assistant turn failed
 
 ### `AI_UNKNOWN_IMAGE_MODEL`
 
@@ -285,6 +281,10 @@ Re-read the row and retry the mutation with the fresh value. Lunora serializes a
 
 `400` — Cron jobs not configured
 
+### `CRON_JOB_IN_FLIGHT`
+
+`409` — Cron job is already running
+
 ### `CRON_JOB_NOT_FOUND`
 
 `404` — Cron job not found
@@ -328,6 +328,10 @@ The operation may have committed. Retry with the same transport key; a committed
 `409` — Committed receipt authorization changed
 
 The operation committed, but its stored result belongs to an older authority epoch. Do not automatically retry with a new transport ID. Recover through the application's durable operation key under current authorization.
+
+### `DEPLOYMENT_PAUSED`
+
+`503` — Deployment is paused
 
 ### `DISPATCH_IN_PROGRESS`
 
@@ -488,10 +492,6 @@ A response with no `body` stream that can still be read as text (React Native's 
 
 `502` — HTTP stream transport error
 
-### `IDENTITY_CHANGED`
-
-`409` — Socket identity changed
-
 ### `IDENTITY_MISMATCH`
 
 `409` — Session changed since the write was queued
@@ -647,6 +647,10 @@ A mutation sent with `onlineOnly: true` found its connection down or reconnectin
 ### `OUT_OF_ORDER`
 
 `409` — Out-of-order mutation
+
+### `PAUSE_NOT_CONFIGURED`
+
+`400` — Deployment pause not configured
 
 ### `PAYLOAD_TOO_LARGE`
 
@@ -808,10 +812,6 @@ Add a read policy with `.rls(...)`, or mark the table `.public()` if it is inten
 
 `400` — Socket tag budget exceeded
 
-### `STALE_CREDENTIAL`
-
-`409` — Stale credential
-
 ### `STORAGE_CHECKSUM_MISMATCH`
 
 `400` — Storage checksum mismatch
@@ -931,14 +931,6 @@ The ceilings are deliberately conservative — they exist to stop one request ta
 ### `UNAUTHORIZED`
 
 `401` — Unauthorized
-
-### `UNIQUE_INDEX_DUPLICATES`
-
-`503` — Unique index blocked by duplicate rows
-
-The index was not built, so requests to its store are refused until it is.
-
-Make one row keep each key. For a shard table, write a `defineMigration` in `lunora/migrations.ts` that deletes or merges the duplicates, deploy it, then run `lunora migrate up <id>` with that migration's id; the `lunora-migration-helper` skill covers the pattern. A `.global()` table lives in your SQL database, not a shard, so `defineMigration` does not reach it: delete or merge the duplicate rows directly in the database. Either way the index build is retried on its own, so no second deploy is needed.
 
 ### `UNKNOWN_ADMIN_OP`
 

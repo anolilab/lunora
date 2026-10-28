@@ -1227,8 +1227,8 @@ export interface CronRunRecord {
     error?: string;
     /** The `cronJobs()` name. */
     name: string;
-    /** Why a tick was `skipped`. */
-    reason?: "in-flight";
+    /** Why a tick was `skipped`: the previous run still held the lease, or the deployment was paused. */
+    reason?: "in-flight" | "paused";
     runId: string;
     /** Ticks of the same cron skipped while this run held the lease. */
     skipped: number;
@@ -1249,6 +1249,17 @@ export interface CronRunInFlight {
 export interface CronRunsResult {
     inFlight: CronRunInFlight[];
     runs: CronRunRecord[];
+}
+
+/** Whether the deployment is paused, as `getDeploymentPause` / `setDeploymentPause` return it. */
+export interface DeploymentPauseStatus {
+    paused: boolean;
+    /** When the pause began (epoch ms). */
+    pausedAt?: number;
+    /** The operator's note. */
+    reason?: string;
+    /** `false` on a worker without a `schedulerDO`, which cannot be paused. */
+    supported: boolean;
 }
 
 /**

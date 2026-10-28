@@ -26,6 +26,8 @@ const SCHEDULED_JOB_PATH = "/_lunora/admin/scheduled/job";
 
 const SCHEDULED_CRON_RUNS_PATH = "/_lunora/admin/scheduled/cron-runs";
 
+const PAUSE_PATH = "/_lunora/admin/pause";
+
 const WORKFLOWS_INSTANCES_PATH = "/_lunora/admin/workflows/instances";
 
 const WORKFLOWS_INSTANCE_PATH = "/_lunora/admin/workflows/instance";
@@ -235,6 +237,7 @@ export {
     LOG_ARCHIVE_PATH,
     OPENAPI_PATH,
     OPENRPC_PATH,
+    PAUSE_PATH,
     RPC_BATCH_PATH,
     RPC_PATH,
     SCHEDULED_CANCEL_PATH,

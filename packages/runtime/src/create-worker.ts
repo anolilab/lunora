@@ -45,6 +45,7 @@ import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit, withBodyLimit } from "./body-readers";
 import { beginCronRun, endCronRun } from "./cron-runs";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
+import { createDeploymentPause, holdQueueBatch, PAUSE_PATH } from "./deployment-pause";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { LunoraError, toErrorResponse } from "./errors";
 import { prepareExportRows } from "./export-stream";
@@ -1862,6 +1863,9 @@ const RPC_PATH = "/_lunora/rpc";
 const RPC_BATCH_PATH = "/_lunora/rpc-batch";
 const WS_PATH = "/_lunora/ws";
 
+/** The reserved paths that run app functions, and so answer `503 DEPLOYMENT_PAUSED` while the deployment is paused. */
+const FUNCTION_CALL_PATHS: ReadonlySet<string> = new Set([RPC_BATCH_PATH, RPC_PATH, WS_PATH]);
+
 /** HTTP metadata extracted safely from an inbound request for observability. */
 interface RequestTelemetryMeta {
     host?: string;
@@ -3574,9 +3578,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         return value;
     };
 
-    /** The scheduler instance holding cron leases and run history, or `undefined` when the worker has none (runs are then unguarded). */
+    /** The scheduler instance holding cron leases, run history and the pause flag, or `undefined` when the worker has none. */
     const cronRunStub = (): ResolvedShard | undefined =>
         schedulerDO === undefined ? undefined : resolveShard(schedulerDO, options.schedulerInstanceName ?? "default");
+
+    const deploymentPause = createDeploymentPause({
+        assertAdmin: assertAdminAuthorized,
+        // The WS ticket too: Studio's live views upgrade `/_lunora/ws` with `?token=`, since a browser socket cannot carry the bearer header.
+        isAdmin: async (request) => requestIsAdmin(request) || checkAdminWsToken(request, effectiveAdminToken()),
+        stub: cronRunStub,
+    });
 
     /**
      * Dispatch every code-defined cron job declared under the firing expression,
@@ -3657,6 +3668,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         const stub = cronRunStub();
         const gate = await beginCronRun(stub, job.name);
+
+        if (gate.skip && gate.reason === "paused") {
+            throw new LunoraError(`cron job "${name}" was not run: the deployment is paused`, { code: "DEPLOYMENT_PAUSED", status: 503 });
+        }
 
         if (gate.skip) {
             throw new LunoraError(`cron job "${name}" is already running`, { code: "CRON_JOB_IN_FLIGHT", status: 409 });
@@ -6024,6 +6039,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         [RPC_BATCH_PATH]: (request, env, _url, context) => handleBatchRpc(request, env, context),
         [SCHEDULER_DISPATCH_PATH]: (request, env, _url, context) => handleSchedulerDispatch(request, env, context),
         [CRON_JOBS_RUN_PATH]: (request, env, _url, context) => handleRunCronJob(request, env, context),
+        [PAUSE_PATH]: async (request) => deploymentPause.handleRoute(request),
         // Mint a short-lived HMAC-signed WS admin sub-token. Gated by the master
         // admin bearer (header) / `adminGate`; the studio then sends the minted
         // token — not the master credential — in the WS `?token=`
@@ -6189,7 +6205,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // through to the router rather than failing with a 426. The handshake is
         // always a GET (RFC 6455 §4.1), so a POST carrying the header is not one.
         if (socketRoutePaths.has(url.pathname) && request.method === "GET" && isWebSocketUpgrade(request)) {
-            return handleWebSocketUpgrade(request, env, url);
+            return (await deploymentPause.refusal(request)) ?? handleWebSocketUpgrade(request, env, url);
         }
 
         // Auth providers register routes as `"METHOD path"` (e.g. `"GET /auth/signin"`).
@@ -6220,7 +6236,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         if (internalRoute) {
             await applyAdminGate(request, url.pathname);
 
-            return internalRoute(request, env, url, context);
+            const isFunctionCall = FUNCTION_CALL_PATHS.has(url.pathname) || Object.hasOwn(restRoutes, url.pathname);
+
+            return (isFunctionCall ? await deploymentPause.refusal(request) : undefined) ?? internalRoute(request, env, url, context);
         }
 
         // Voice sessions live under a DYNAMIC prefix (`/_lunora/voice/<agent>`), so
@@ -6228,7 +6246,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // the app wired `voiceAgents` (a voice-enabled agent) — otherwise it falls
         // through to the 404 below.
         if (options.voiceAgents !== undefined && url.pathname.startsWith(VOICE_PATH_PREFIX)) {
-            return handleVoiceUpgrade(request, env, url);
+            return (await deploymentPause.refusal(request)) ?? handleVoiceUpgrade(request, env, url);
         }
 
         // The reserved prefix is reserved even where nothing matched. The internal
@@ -6315,6 +6333,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             //
             // Named after the queue so a collector groups consumer invocations per
             // queue rather than lumping every batch under one span name.
+            // Paused: hand the whole batch back for later rather than run it. See
+            // `holdQueueBatch` for what a long pause costs the held messages.
+            const pause = await deploymentPause.read();
+
+            if (pause.paused && holdQueueBatch(batch)) {
+                return;
+            }
+
             await instrumentTrigger(`queue:${queueNameOf(batch)}`, context, async (traceparent) => {
                 // The consumer's publish is `"trusted"`: no caller is checked against the `shardKey` it names. A `shardKey` taken from a
                 // client-supplied message body must be checked by the consumer before it is passed, or any message can publish into any shard.

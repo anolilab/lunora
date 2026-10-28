@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { useState } from "react";
 
+import { DeploymentPauseToggle } from "../../components/deployment-pause";
 import { Button } from "../../components/ui/button";
 import { useT } from "../../i18n/i18n-context";
 import type { CronTriggersPanelProps } from "./cron-triggers-panel";
@@ -51,6 +52,8 @@ export const SchedulePanel = ({ loadCronJobs, scheduledCancel, scheduledLoad }: 
 
     return (
         <div className="flex flex-col gap-4" data-testid="lunora-schedule">
+            <DeploymentPauseToggle />
+
             <div aria-label={t("Schedule view")} className="flex gap-1.5" data-testid="schedule-view-toggle" role="tablist">
                 {VIEW_KEYS.map((key) => (
                     <Button

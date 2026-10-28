@@ -187,7 +187,9 @@ recorded. **Run now** in Studio answers `409 CRON_JOB_IN_FLIGHT` in the same
 situation. A run that never reports back (its invocation was torn down) gives
 up its lease after fifteen minutes, the platform's cron wall-clock limit, and is
 recorded as failed. If the `SchedulerDO` can't be reached, the run goes ahead
-without the guard rather than stopping the cron, and a warning is logged.
+without the guard rather than stopping the cron, and a warning is logged. A cron
+that targets a workflow holds the lease only while it starts the instance, so a
+long-running workflow can still overlap the next tick's instance.
 
 Every fire is recorded: start, duration, outcome, the error of a failed run, and
 how many ticks it caused to be skipped. The last 50 per job are kept, and

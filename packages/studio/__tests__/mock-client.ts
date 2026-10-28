@@ -4,6 +4,7 @@ import type {
     AuthUser,
     CronJobInfo,
     CronRunsResult,
+    DeploymentPauseStatus,
     FunctionDescriptor,
     FunctionReference,
     GlobalFacetResult,
@@ -56,6 +57,7 @@ interface MockClientHooks {
     getAuthCapabilities: ReturnType<typeof vi.fn>;
     getAuthConfig: ReturnType<typeof vi.fn>;
     getCronJobs: ReturnType<typeof vi.fn>;
+    getDeploymentPause: ReturnType<typeof vi.fn>;
     getKvValue: ReturnType<typeof vi.fn>;
     impersonateAuthUser: ReturnType<typeof vi.fn>;
     inviteAuthOrgMember: ReturnType<typeof vi.fn>;
@@ -96,6 +98,7 @@ interface MockClientHooks {
     setAuthOrgMemberRole: ReturnType<typeof vi.fn>;
     setAuthUserPassword: ReturnType<typeof vi.fn>; // gitleaks:allow -- mock method name, not a secret
     setAuthUserRole: ReturnType<typeof vi.fn>;
+    setDeploymentPause: ReturnType<typeof vi.fn>;
     shardTraffic: ReturnType<typeof vi.fn>;
     signedStorageUrl: ReturnType<typeof vi.fn>;
     /** The SSE-framed dispatch (`__lunora_admin__:aiChat`). See {@link MockClientImpls.streamRpc}. */
@@ -151,6 +154,8 @@ interface MockClientImpls {
     listStorageObjects?: (options: { bucket?: string; cursor?: string; limit?: number; prefix?: string }) => StorageListPage;
     listVectorIndexes?: () => VectorIndexSummary[];
     mutation?: Impl;
+    /** The deployment pause flag the toggle and banner read. Defaults to running and unsupported. */
+    pause?: DeploymentPauseStatus;
     query?: Impl;
     queryLogArchive?: (query?: PipelineLogQuery) => PipelineLogPage;
     queryVectorIndex?: (options: { name: string; text: string; topK?: number }) => VectorQueryMatch[];
@@ -183,6 +188,13 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const fetchOpenRpc = vi.fn<() => Promise<Record<string, unknown>>>(async () => impls.fetchOpenRpc?.() ?? { methods: [], openrpc: "1.3.2" });
     const listScheduledJobs = vi.fn<() => Promise<ScheduleRecord[]>>(async () => impls.listScheduledJobs?.() ?? []);
     const getCronJobs = vi.fn<() => Promise<CronJobInfo[]>>(async () => impls.getCronJobs?.() ?? []);
+    let pauseState: DeploymentPauseStatus = impls.pause ?? { paused: false, supported: false };
+    const getDeploymentPause = vi.fn<() => Promise<DeploymentPauseStatus>>(async () => pauseState);
+    const setDeploymentPause = vi.fn<(paused: boolean, reason?: string) => Promise<DeploymentPauseStatus>>(async (paused, reason) => {
+        pauseState = paused ? { paused, pausedAt: 1, supported: true, ...(reason === undefined ? {} : { reason }) } : { paused, supported: true };
+
+        return pauseState;
+    });
     const listCronRuns = vi.fn<() => Promise<CronRunsResult>>(async () => impls.listCronRuns?.() ?? { inFlight: [], runs: [] });
     const cancelScheduledJob = vi.fn<(id: string) => Promise<{ cancelled: boolean }>>(
         async (id: string) => impls.cancelScheduledJob?.(id) ?? { cancelled: true },
@@ -508,6 +520,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         fetchOpenApi,
         fetchOpenRpc,
         getCronJobs,
+        getDeploymentPause,
         getKvValue,
         listCronRuns,
         listAuthSessions,
@@ -529,6 +542,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         queryVectorIndex,
         readGlobalTablePage,
         runCronJob,
+        setDeploymentPause,
         shardTraffic,
         signedStorageUrl,
         streamRpc,
@@ -554,6 +568,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         fetchOpenApi,
         fetchOpenRpc,
         getCronJobs,
+        getDeploymentPause,
         getKvValue,
         listCronRuns,
         listAuthSessions,
@@ -573,6 +588,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         queryVectorIndex,
         readGlobalTablePage,
         runCronJob,
+        setDeploymentPause,
         shardTraffic,
         signedStorageUrl,
         streamRpc,

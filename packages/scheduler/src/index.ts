@@ -6,7 +6,7 @@ export type { CronJob, CronJobsBuilder, CronScheduleKind, DailySchedule, HourlyS
 export { compileCronSchedule, CRON_SCHEDULE_KINDS, cronJobs } from "./jobs";
 export { createQueueConsumer, createQueueWorkpool, httpDispatcher } from "./queue-workpool";
 export { default as resolveScheduleId } from "./resolve-schedule-id";
-export type { SchedulerDOState, SchedulerEnv, SchedulerPoolStatus, SchedulerStatus } from "./scheduler-do";
+export type { DeploymentPauseState, SchedulerDOState, SchedulerEnv, SchedulerPoolStatus, SchedulerStatus } from "./scheduler-do";
 export { MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS, SchedulerDO, TERMINAL_RETENTION_MS } from "./scheduler-do";
 export type { SchedulerHostOptions } from "./scheduler-host";
 export { createSchedulerHost } from "./scheduler-host";
