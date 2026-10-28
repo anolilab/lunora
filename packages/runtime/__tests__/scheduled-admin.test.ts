@@ -50,6 +50,10 @@ const recordingScheduler = (): { calls: { body: string; method: string; pathname
                 return Response.json({ records: DEAD_RECORDS });
             }
 
+            if (url.pathname === "/cron/runs") {
+                return Response.json({ inFlight: [], runs: [{ name: "digest", status: "skipped" }] });
+            }
+
             if (url.pathname === "/history") {
                 return Response.json({ records: [{ ...RECORDS[0], completedAt: 3000, state: "succeeded" }], truncated: false });
             }
@@ -327,6 +331,22 @@ describe("createWorker — scheduled admin endpoints", () => {
 
         await expect(response.json()).resolves.toMatchObject({ records: [{ id: "j1", state: "succeeded" }] });
         expect(calls).toEqual([{ body: "", method: "GET", pathname: "/history" }]);
+    });
+
+    it("cron-runs forwards GET /cron/runs", async () => {
+        expect.assertions(2);
+
+        const { calls, namespace } = recordingScheduler();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/scheduled/cron-runs", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` } }),
+            {},
+            fakeContext,
+        );
+
+        await expect(response.json()).resolves.toMatchObject({ runs: [{ name: "digest", status: "skipped" }] });
+        expect(calls).toEqual([{ body: "", method: "GET", pathname: "/cron/runs" }]);
     });
 
     it("job forwards GET /get with the id, and refuses a missing id (400) or no bearer (403)", async () => {

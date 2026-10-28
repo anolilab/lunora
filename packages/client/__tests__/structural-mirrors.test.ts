@@ -109,10 +109,10 @@ describe("scheduleRecord mirrors", () => {
         expect(membersOf(CLIENT_TYPES, "ScheduleRecord")).toStrictEqual(membersOf(SCHEDULER_TYPES, "ScheduleRecord"));
     });
 
-    it("this package's ScheduledJobView carries the scheduler's lifecycle fields", () => {
+    it.each(["ScheduledJobView", "CronRunRecord", "CronRunInFlight"])("this package's %s carries every field the scheduler writes", (name) => {
         expect.assertions(1);
 
-        expect(membersOf(CLIENT_TYPES, "ScheduledJobView")).toStrictEqual(membersOf(SCHEDULER_TYPES, "ScheduledJobView"));
+        expect(membersOf(CLIENT_TYPES, name)).toStrictEqual(membersOf(SCHEDULER_TYPES, name));
     });
 
     it.each(["packages/shard-engine/src/system-reader.ts", "packages/server/src/types.ts"])(

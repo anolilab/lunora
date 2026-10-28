@@ -2,7 +2,7 @@ import { DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/
 import { signCanonical } from "../../../shared/hmac-url";
 import { jsonResponse } from "../../../shared/json-response";
 import resolveScheduleId from "./resolve-schedule-id";
-import type { RetryPolicy, ScheduledJobState, ScheduledJobView, ScheduleRecord } from "./types";
+import type { CronRunInFlight, CronRunRecord, RetryPolicy, ScheduledJobState, ScheduledJobView, ScheduleRecord } from "./types";
 
 /**
  * Minimal projection of `DurableObjectState` for the SchedulerDO. Declared
@@ -97,6 +97,13 @@ const POOL_QUEUE_PREFIX = "pq:";
 // class lists that prefix.
 const DONE_PREFIX = "done:";
 const DONE_INDEX_PREFIX = "dt:";
+// `cl:<hex name>` is a cron job's in-flight lease, `cr:<hex name>:<inverted
+// startedAt>:<runId>` one recorded fire, newest first per job. Names are
+// hex-encoded like pool names, so job `a` never lists job `a:b`'s rows.
+const CRON_LEASE_PREFIX = "cl:";
+const CRON_RUN_PREFIX = "cr:";
+// Runs kept per cron job.
+const CRON_HISTORY_LIMIT = 50;
 // Durable Object `put` and `delete` take at most 128 keys per call.
 const MAX_STORAGE_BATCH = 128;
 
@@ -397,6 +404,13 @@ class SchedulerDO {
         return `${DONE_INDEX_PREFIX}${padTime(MAX_SCHEDULED_FOR_MS - completedAt)}:${id}`;
     }
 
+    /** A cron job name off an untrusted body, or `undefined` when absent or implausible. */
+    private static cronName(body: unknown): string | undefined {
+        const name = (body as { name?: unknown } | undefined)?.name;
+
+        return typeof name === "string" && name.length > 0 && name.length <= 256 ? name : undefined;
+    }
+
     /** The record's `pq:` row key, or `undefined` for a job outside any pool. */
     private static poolQueueKey(record: ScheduleRecord): string | undefined {
         return record.pool === undefined ? undefined : `${poolQueuePrefix(record.pool)}${record.id}`;
@@ -623,6 +637,9 @@ class SchedulerDO {
         }
 
         switch (`${request.method} ${url.pathname}`) {
+            case "GET /cron/runs": {
+                return this.handleCronRuns();
+            }
             case "GET /dead": {
                 return this.handleDeadList(url);
             }
@@ -646,6 +663,12 @@ class SchedulerDO {
             }
             case "POST /complete": {
                 return this.handleComplete(request);
+            }
+            case "POST /cron/begin": {
+                return this.handleCronBegin(request);
+            }
+            case "POST /cron/end": {
+                return this.handleCronEnd(request);
             }
             case "POST /dead/cancel": {
                 return this.handleDeadCancel(request);
@@ -2103,6 +2126,144 @@ class SchedulerDO {
         );
 
         await this.state.storage.delete(owned.flat());
+    }
+
+    /**
+     * `POST /cron/begin { name }` — take the in-flight lease for one cron job, or
+     * answer `{ acquired: false }` and record the tick as skipped when a run of
+     * the same job still holds it.
+     *
+     * The lease lives here rather than in the worker because Cloudflare delivers
+     * cron triggers to whichever isolate it likes: module state cannot see a run
+     * in another isolate, and this Durable Object is the one place every fire of
+     * an app passes through. The check and the write are atomic for the same
+     * reason every read-modify-write in this class is: the input gate keeps any
+     * other request out while a storage operation is pending, and nothing between
+     * them awaits I/O.
+     *
+     * A lease older than {@link DISPATCH_LEASE_MS} is treated as lost, for the
+     * same platform reason that constant gives: a `scheduled()` invocation is
+     * torn down at fifteen minutes of wall time, so no run can still hold it. The
+     * lost run is recorded as failed rather than vanishing.
+     */
+    private async handleCronBegin(request: Request): Promise<Response> {
+        const name = SchedulerDO.cronName(await request.json().catch(() => undefined));
+
+        if (name === undefined) {
+            return SchedulerDO.error(400, "INVALID_INPUT", "name is required");
+        }
+
+        const leaseKey = `${CRON_LEASE_PREFIX}${encodePoolName(name)}`;
+        const now = Date.now();
+        const lease = await this.state.storage.get<CronRunInFlight>(leaseKey);
+
+        if (lease !== undefined && lease.startedAt > now - DISPATCH_LEASE_MS) {
+            await this.state.storage.put(leaseKey, { ...lease, skipped: lease.skipped + 1 });
+            await this.recordCronRun({
+                durationMs: 0,
+                endedAt: now,
+                name,
+                reason: "in-flight",
+                runId: resolveScheduleId(undefined),
+                skipped: 0,
+                startedAt: now,
+                status: "skipped",
+            });
+
+            return SchedulerDO.json({ acquired: false, reason: "in-flight", runningSince: lease.startedAt });
+        }
+
+        if (lease !== undefined) {
+            await this.recordCronRun({
+                durationMs: now - lease.startedAt,
+                endedAt: now,
+                error: "the run never reported completion; its lease expired",
+                name,
+                runId: lease.runId,
+                skipped: lease.skipped,
+                startedAt: lease.startedAt,
+                status: "failed",
+            });
+        }
+
+        const runId = resolveScheduleId(undefined);
+
+        await this.state.storage.put(leaseKey, { name, runId, skipped: 0, startedAt: now } satisfies CronRunInFlight);
+
+        return SchedulerDO.json({ acquired: true, runId });
+    }
+
+    /**
+     * `POST /cron/end { name, runId, status, error? }` — release the lease and
+     * record the run. A `runId` that no longer holds the lease (its lease expired
+     * and was already recorded as lost) is ignored, so a late report cannot
+     * record the same run twice or free a successor's lease.
+     */
+    private async handleCronEnd(request: Request): Promise<Response> {
+        const body = (await request.json().catch(() => undefined)) as { error?: unknown; runId?: unknown; status?: unknown } | undefined;
+        const name = SchedulerDO.cronName(body);
+
+        if (name === undefined || typeof body?.runId !== "string" || (body.status !== "succeeded" && body.status !== "failed")) {
+            return SchedulerDO.error(400, "INVALID_INPUT", "name, runId and status (succeeded | failed) are required");
+        }
+
+        const leaseKey = `${CRON_LEASE_PREFIX}${encodePoolName(name)}`;
+        const lease = await this.state.storage.get<CronRunInFlight>(leaseKey);
+
+        if (lease?.runId !== body.runId) {
+            return SchedulerDO.json({ recorded: false });
+        }
+
+        const now = Date.now();
+
+        await this.state.storage.delete(leaseKey);
+        await this.recordCronRun({
+            durationMs: now - lease.startedAt,
+            endedAt: now,
+            ...(body.status === "failed" && typeof body.error === "string" ? { error: body.error.slice(0, 2000) } : {}),
+            name,
+            runId: lease.runId,
+            skipped: lease.skipped,
+            startedAt: lease.startedAt,
+            status: body.status,
+        });
+
+        return SchedulerDO.json({ recorded: true });
+    }
+
+    /**
+     * `GET /cron/runs` — every cron job's in-flight lease and recorded runs,
+     * newest first per job. Bounded by {@link CRON_HISTORY_LIMIT} rows per job
+     * and by the app's own `cronJobs()` declarations.
+     */
+    private async handleCronRuns(): Promise<Response> {
+        const inFlight: CronRunInFlight[] = [];
+        const runs: CronRunRecord[] = [];
+
+        await this.forEachPage<CronRunInFlight>(CRON_LEASE_PREFIX, (lease) => {
+            inFlight.push(lease);
+        });
+        await this.forEachPage<CronRunRecord>(CRON_RUN_PREFIX, (run) => {
+            runs.push(run);
+        });
+
+        return SchedulerDO.json({ inFlight, runs });
+    }
+
+    /** Write one run row and drop that job's rows past {@link CRON_HISTORY_LIMIT}. */
+    private async recordCronRun(run: CronRunRecord): Promise<void> {
+        const prefix = `${CRON_RUN_PREFIX}${encodePoolName(run.name)}:`;
+
+        await this.state.storage.put(`${prefix}${padTime(MAX_SCHEDULED_FOR_MS - run.startedAt)}:${run.runId}`, run);
+
+        // Each write adds one row, so the overflow past the limit is a handful
+        // at most and one bounded page reaches all of it.
+        const rows = await this.state.storage.list({ limit: CRON_HISTORY_LIMIT + MAX_STORAGE_BATCH, prefix });
+        const overflow = [...rows.keys()].slice(CRON_HISTORY_LIMIT);
+
+        if (overflow.length > 0) {
+            await this.state.storage.delete(overflow);
+        }
     }
 
     private async removeRecord(record: ScheduleRecord): Promise<void> {

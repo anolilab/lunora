@@ -3,6 +3,7 @@ import { decodeWire } from "@lunora/wire";
 import { collectPages } from "../../../../shared/collect-pages";
 import {
     SCHEDULED_CANCEL_PATH,
+    SCHEDULED_CRON_RUNS_PATH,
     SCHEDULED_DEAD_CANCEL_PATH,
     SCHEDULED_DEAD_PATH,
     SCHEDULED_DEAD_RETRY_PATH,
@@ -14,7 +15,15 @@ import {
     WORKFLOWS_INSTANCES_PATH,
     WORKFLOWS_STATUS_PATH,
 } from "../client-paths";
-import type { ScheduledJobView, ScheduleRecord, SchedulerStatus, WorkflowInstanceDetail, WorkflowInstancePage, WorkflowInstanceStatus } from "../types";
+import type {
+    CronRunsResult,
+    ScheduledJobView,
+    ScheduleRecord,
+    SchedulerStatus,
+    WorkflowInstanceDetail,
+    WorkflowInstancePage,
+    WorkflowInstanceStatus,
+} from "../types";
 import type { LunoraAdminClient } from "./admin-client";
 import type { AdminHost } from "./host";
 
@@ -57,6 +66,14 @@ export const listScheduledHistory = async (host: AdminHost): ReturnType<LunoraAd
     const body = (await host.adminFetch(SCHEDULED_HISTORY_PATH, "GET")) as { records?: ScheduledJobView[] };
 
     return (body.records ?? []).map((record) => decodeRecordArgs(record));
+};
+
+export const listCronRuns = async (host: AdminHost): ReturnType<LunoraAdminClient["listCronRuns"]> => {
+    host.assertOpen();
+
+    const body = (await host.adminFetch(SCHEDULED_CRON_RUNS_PATH, "GET")) as Partial<CronRunsResult>;
+
+    return { inFlight: body.inFlight ?? [], runs: body.runs ?? [] };
 };
 
 export const schedulerStatus = async (host: AdminHost): ReturnType<LunoraAdminClient["schedulerStatus"]> => {

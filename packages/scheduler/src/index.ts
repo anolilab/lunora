@@ -12,6 +12,9 @@ export type { SchedulerHostOptions } from "./scheduler-host";
 export { createSchedulerHost } from "./scheduler-host";
 export type {
     ArgsOf,
+    CronRunInFlight,
+    CronRunRecord,
+    CronRunStatus,
     CronTarget,
     DurableObjectIdLike,
     DurableObjectJurisdiction,

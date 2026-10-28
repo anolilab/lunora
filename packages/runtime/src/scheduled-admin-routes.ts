@@ -23,6 +23,7 @@ const SCHEDULED_WS_PATH = "/_lunora/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_lunora/admin/scheduled/cancel";
 const SCHEDULED_DEAD_PATH = "/_lunora/admin/scheduled/dead";
 const SCHEDULED_HISTORY_PATH = "/_lunora/admin/scheduled/history";
+const SCHEDULED_CRON_RUNS_PATH = "/_lunora/admin/scheduled/cron-runs";
 const SCHEDULED_JOB_PATH = "/_lunora/admin/scheduled/job";
 const SCHEDULED_DEAD_RETRY_PATH = "/_lunora/admin/scheduled/dead/retry";
 const SCHEDULED_DEAD_CANCEL_PATH = "/_lunora/admin/scheduled/dead/cancel";
@@ -193,6 +194,7 @@ const buildScheduledAdminRoutes = (deps: ScheduledAdminRouteDeps): Record<string
 
     return {
         [SCHEDULED_CANCEL_PATH]: proxyPost("/cancel", "Scheduled-cancel", "Scheduled-cancel endpoint"),
+        [SCHEDULED_CRON_RUNS_PATH]: proxyGet("/cron/runs", "Cron-runs"),
         [SCHEDULED_DEAD_CANCEL_PATH]: proxyPost("/dead/cancel", "Scheduled dead-letter action"),
         [SCHEDULED_DEAD_PATH]: proxyGet("/dead", "Scheduled dead-letter"),
         [SCHEDULED_DEAD_RETRY_PATH]: proxyPost("/dead/retry", "Scheduled dead-letter action"),
@@ -209,6 +211,7 @@ export type { ScheduledAdminRouteDeps };
 export {
     buildScheduledAdminRoutes,
     SCHEDULED_CANCEL_PATH,
+    SCHEDULED_CRON_RUNS_PATH,
     SCHEDULED_DEAD_CANCEL_PATH,
     SCHEDULED_DEAD_PATH,
     SCHEDULED_DEAD_RETRY_PATH,

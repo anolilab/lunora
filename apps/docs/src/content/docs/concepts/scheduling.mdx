@@ -179,6 +179,21 @@ firing.
     and the tick is gone until the next one. Make cron handlers idempotent, and re-derive missed work from your own data rather than assuming a redelivery.
 </Callout>
 
+A code-defined cron job (`cronJobs()`) never overlaps itself. Before a run
+starts, the worker takes a per-job lease held in the `SchedulerDO`. A tick that
+lands while the previous run of the same job is still going is **skipped**
+instead of run alongside it, whichever isolate it lands in, and the skip is
+recorded. **Run now** in Studio answers `409 CRON_JOB_IN_FLIGHT` in the same
+situation. A run that never reports back (its invocation was torn down) gives
+up its lease after fifteen minutes, the platform's cron wall-clock limit, and is
+recorded as failed. If the `SchedulerDO` can't be reached, the run goes ahead
+without the guard rather than stopping the cron, and a warning is logged.
+
+Every fire is recorded: start, duration, outcome, the error of a failed run, and
+how many ticks it caused to be skipped. The last 50 per job are kept, and
+Studio's **Cron triggers** view shows each job's last run plus the recent
+history.
+
 ## How dispatch works
 
 A scheduled job is stored in the `SchedulerDO` sorted by its fire time and

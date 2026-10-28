@@ -80,7 +80,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         cronTriggers: {
             level: "native",
-            note: "`triggers.crons` is a supported Wrangler key and celld schedules durably fleet-wide: one handler per occurrence across the whole fleet, one at a time per script, a failure retried with doubling backoff (giving up after six, or on `noRetry()`) without ever delaying the next occurrence, and one catch-up run of the most recent missed occurrence after downtime. Two parser gaps: celld rejects a descending range (`SAT-SUN`, `NOV-FEB`) and `*` inside a list (`1,*`)",
+            note: "`triggers.crons` is a supported Wrangler key and celld schedules durably fleet-wide: one handler per occurrence across the whole fleet, one at a time per script, a failure retried with doubling backoff (giving up after six, or on `noRetry()`) without ever delaying the next occurrence, and one catch-up run of the most recent missed occurrence after downtime. Two parser gaps: celld rejects a descending range (`SAT-SUN`, `NOV-FEB`) and `*` inside a list (`1,*`). The runtime's SchedulerDO-held per-job lease and run history apply unchanged (the lease is redundant with celld's one-at-a-time-per-script delivery, and harmless)",
         },
         crossShardFanout: {
             level: "emulated",

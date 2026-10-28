@@ -99,7 +99,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
         cronTriggers: {
             level: "native",
-            note: "wrangler triggers.crons, reconciled from the declared crons at build time, delivered to the worker's scheduled() handler — which is the one cron dispatch that ships: it walks the generated LUNORA_CRONS map itself",
+            note: "wrangler triggers.crons, reconciled from the declared crons at build time, delivered to the worker's scheduled() handler — which is the one cron dispatch that ships: it walks the generated LUNORA_CRONS map itself. Each job runs under a SchedulerDO-held lease, so a tick landing in any isolate while the previous run is still going is skipped, and every fire (run, skip, failure) is recorded in the SchedulerDO",
         },
         authJurisdictionMove: {
             level: "native",

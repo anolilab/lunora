@@ -221,6 +221,40 @@ export interface ScheduledJobView extends ScheduleRecord {
     state: ScheduledJobState;
 }
 
+/**
+ * How one cron fire ended. `skipped` is a tick that did not run: the previous
+ * run of the same cron was still in flight (`reason: "in-flight"`).
+ */
+export type CronRunStatus = "failed" | "skipped" | "succeeded";
+
+/** One recorded fire of a code-defined cron job (`cronJobs()`), as the SchedulerDO's `/cron/runs` reports it. */
+export interface CronRunRecord {
+    /** Run time in ms; `0` for a skipped tick. */
+    durationMs: number;
+    /** When the run finished, or when the tick was skipped (epoch ms). */
+    endedAt: number;
+    /** The thrown message of a `failed` run. */
+    error?: string;
+    /** The `cronJobs()` name. */
+    name: string;
+    /** Why a tick was `skipped`. */
+    reason?: "in-flight";
+    runId: string;
+    /** Ticks of the same cron skipped while this run held the lease. */
+    skipped: number;
+    startedAt: number;
+    status: CronRunStatus;
+}
+
+/** A cron run that holds its lease right now. */
+export interface CronRunInFlight {
+    name: string;
+    runId: string;
+    /** Ticks skipped so far because this run was still going. */
+    skipped: number;
+    startedAt: number;
+}
+
 export interface Scheduler {
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
 

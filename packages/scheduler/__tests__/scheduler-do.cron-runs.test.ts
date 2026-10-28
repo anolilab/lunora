@@ -1,0 +1,155 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { DISPATCH_LEASE_MS, SchedulerDO } from "../src/scheduler-do";
+import type { CronRunInFlight, CronRunRecord } from "../src/types";
+import { post } from "./blocking-scheduler";
+import { createFakeState } from "./fake-state";
+
+const env = { LUNORA_ORIGIN_URL: "https://app.test" };
+
+const pinClock = (at: number): ((to: number) => void) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(at);
+
+    return (to: number) => {
+        now.mockReturnValue(to);
+    };
+};
+
+type Begin = { acquired: false; reason: string; runningSince: number } | { acquired: true; runId: string };
+
+const begin = async (scheduler: SchedulerDO, name: string): Promise<Begin> => {
+    const response = await scheduler.fetch(post("/cron/begin", { name }));
+
+    return response.json();
+};
+
+const end = async (scheduler: SchedulerDO, body: Record<string, unknown>): Promise<{ recorded: boolean }> => {
+    const response = await scheduler.fetch(post("/cron/end", body));
+
+    return response.json();
+};
+
+const runs = async (scheduler: SchedulerDO): Promise<{ inFlight: CronRunInFlight[]; runs: CronRunRecord[] }> => {
+    const response = await scheduler.fetch(new Request("https://scheduler.internal/cron/runs"));
+
+    return response.json();
+};
+
+const acquire = async (scheduler: SchedulerDO, name: string): Promise<string> => {
+    const lease = await begin(scheduler, name);
+
+    if (!lease.acquired) {
+        throw new Error(`expected to acquire ${name}`);
+    }
+
+    return lease.runId;
+};
+
+describe("schedulerDO cron runs", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("skips a tick while the previous run of the same cron is in flight, and counts it on that run", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const scheduler = new SchedulerDO(createFakeState(), env);
+        const runId = await acquire(scheduler, "digest");
+
+        setNow(1_700_000_060_000);
+
+        await expect(begin(scheduler, "digest")).resolves.toMatchObject({ acquired: false, reason: "in-flight", runningSince: 1_700_000_000_000 });
+
+        // A different cron is not held up by it.
+        await expect(begin(scheduler, "digest:eu")).resolves.toMatchObject({ acquired: true });
+
+        await expect(runs(scheduler)).resolves.toMatchObject({ inFlight: expect.arrayContaining([expect.objectContaining({ name: "digest", skipped: 1 })]) });
+
+        setNow(1_700_000_090_000);
+
+        await expect(end(scheduler, { name: "digest", runId, status: "succeeded" })).resolves.toStrictEqual({ recorded: true });
+
+        const { inFlight, runs: recorded } = await runs(scheduler);
+
+        expect(inFlight.map((lease) => lease.name)).toStrictEqual(["digest:eu"]);
+        // Newest start first: the skipped tick came after the run began.
+        expect(recorded.filter((run) => run.name === "digest")).toStrictEqual([
+            expect.objectContaining({ durationMs: 0, reason: "in-flight", startedAt: 1_700_000_060_000, status: "skipped" }),
+            { durationMs: 90_000, endedAt: 1_700_000_090_000, name: "digest", runId, skipped: 1, startedAt: 1_700_000_000_000, status: "succeeded" },
+        ]);
+
+        // The lease is free again.
+        await expect(begin(scheduler, "digest")).resolves.toMatchObject({ acquired: true });
+    });
+
+    it("records a failed run with its error", async () => {
+        expect.hasAssertions();
+
+        pinClock(1_700_000_000_000);
+
+        const scheduler = new SchedulerDO(createFakeState(), env);
+        const runId = await acquire(scheduler, "digest");
+
+        await end(scheduler, { error: "shard status 500", name: "digest", runId, status: "failed" });
+
+        await expect(runs(scheduler)).resolves.toMatchObject({ inFlight: [], runs: [{ error: "shard status 500", runId, status: "failed" }] });
+    });
+
+    it("treats a lease past the fifteen-minute ceiling as lost: records it failed and lets the next tick run", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const scheduler = new SchedulerDO(createFakeState(), env);
+        const lost = await acquire(scheduler, "digest");
+
+        setNow(1_700_000_000_000 + DISPATCH_LEASE_MS - 1);
+
+        await expect(begin(scheduler, "digest")).resolves.toMatchObject({ acquired: false });
+
+        setNow(1_700_000_000_000 + DISPATCH_LEASE_MS);
+
+        const next = await acquire(scheduler, "digest");
+
+        // The lost run's late report neither records twice nor frees its successor's lease.
+        await expect(end(scheduler, { name: "digest", runId: lost, status: "succeeded" })).resolves.toStrictEqual({ recorded: false });
+
+        const state = await runs(scheduler);
+
+        expect(state.inFlight).toMatchObject([{ runId: next }]);
+        expect(state.runs.find((run) => run.runId === lost)).toMatchObject({ skipped: 1, status: "failed" });
+    });
+
+    it("keeps the newest fifty runs per cron job", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const scheduler = new SchedulerDO(createFakeState(), env);
+
+        for (let index = 0; index < 55; index += 1) {
+            setNow(1_700_000_000_000 + index * 1000);
+            // eslint-disable-next-line no-await-in-loop -- each run must begin and end before the next tick
+            const runId = await acquire(scheduler, "digest");
+            // eslint-disable-next-line no-await-in-loop -- same
+            await end(scheduler, { name: "digest", runId, status: "succeeded" });
+        }
+
+        const { runs: recorded } = await runs(scheduler);
+
+        expect(recorded).toHaveLength(50);
+        expect(recorded[0]?.startedAt).toBe(1_700_000_054_000);
+        expect(recorded.at(-1)?.startedAt).toBe(1_700_000_005_000);
+    });
+
+    it("refuses a begin without a name and an end without a valid status", async () => {
+        expect.hasAssertions();
+
+        const scheduler = new SchedulerDO(createFakeState(), env);
+
+        const noName = await scheduler.fetch(post("/cron/begin", {}));
+        const badStatus = await scheduler.fetch(post("/cron/end", { name: "digest", runId: "r", status: "skipped" }));
+
+        expect(noName.status).toBe(400);
+        expect(badStatus.status).toBe(400);
+    });
+});

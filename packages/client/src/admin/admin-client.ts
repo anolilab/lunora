@@ -54,6 +54,7 @@ import type {
     AuthSession,
     AuthUser,
     CronJobInfo,
+    CronRunsResult,
     FunctionDescriptor,
     GlobalFacetResult,
     GlobalFilterClause,
@@ -84,6 +85,7 @@ import {
     cancelScheduledJob,
     getScheduledJob,
     getWorkflowInstance,
+    listCronRuns,
     listDeadJobs,
     listScheduledHistory,
     listScheduledJobs,
@@ -168,6 +170,17 @@ class LunoraAdminClient extends LunoraClient {
      */
     public async listScheduledHistory(): Promise<ScheduledJobView[]> {
         return listScheduledHistory(this.adminHost);
+    }
+
+    /**
+     * The code-defined cron jobs' run history: which runs are in flight, and the
+     * recorded fires (start, duration, outcome, error, ticks skipped because the
+     * previous run was still going), newest first per job. Hits the admin-gated
+     * `GET /_lunora/admin/scheduled/cron-runs`, so the worker needs a
+     * `schedulerDO` — which every app declaring a cron has.
+     */
+    public async listCronRuns(): Promise<CronRunsResult> {
+        return listCronRuns(this.adminHost);
     }
 
     /** Cancel a pending scheduled job by id. Returns whether a job was removed. */

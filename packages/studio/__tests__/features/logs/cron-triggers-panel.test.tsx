@@ -51,6 +51,50 @@ describe("cronTriggersPanel", () => {
         expect(mock.getCronJobs).toHaveBeenCalledTimes(1);
     });
 
+    it("shows each trigger's last run and the recent-run history from the client", async () => {
+        expect.assertions(4);
+
+        const mock = createMockClient({
+            getCronJobs: () => JOBS,
+            listCronRuns: () => {
+                return {
+                    inFlight: [{ name: "clear presence", runId: "live", skipped: 2, startedAt: 5000 }],
+                    runs: [
+                        {
+                            durationMs: 0,
+                            endedAt: 4000,
+                            name: "daily digest",
+                            reason: "in-flight",
+                            runId: "skip-1",
+                            skipped: 0,
+                            startedAt: 4000,
+                            status: "skipped",
+                        },
+                        {
+                            durationMs: 1500,
+                            endedAt: 2500,
+                            error: "shard status 500",
+                            name: "daily digest",
+                            runId: "fail-1",
+                            skipped: 1,
+                            startedAt: 1000,
+                            status: "failed",
+                        },
+                    ],
+                };
+            },
+        });
+
+        render(withProvider(mock, <CronTriggersPanel />));
+
+        await screen.findByTestId("cron-run-history");
+
+        expect(screen.getByTestId("cron-last-run-clear presence").textContent).toContain("2 ticks skipped");
+        expect(screen.getByTestId("cron-last-run-daily digest").textContent).toContain("skipped");
+        expect(screen.getByTestId("cron-run-row-fail-1").textContent).toContain("shard status 500");
+        expect(screen.getByTestId("cron-run-row-fail-1").textContent).toContain("1.5 s");
+    });
+
     it("shows the empty state when there are no triggers", async () => {
         expect.assertions(1);
 

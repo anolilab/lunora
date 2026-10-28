@@ -43,6 +43,7 @@ import { buildAuthJurisdictionMoveRpc } from "./auth-jurisdiction-move-rpc";
 import { buildBackupAdminRoutes } from "./backup-admin-routes";
 import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit, withBodyLimit } from "./body-readers";
+import { beginCronRun, endCronRun } from "./cron-runs";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { LunoraError, toErrorResponse } from "./errors";
@@ -3573,10 +3574,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         return value;
     };
 
+    /** The scheduler instance holding cron leases and run history, or `undefined` when the worker has none (runs are then unguarded). */
+    const cronRunStub = (): ResolvedShard | undefined =>
+        schedulerDO === undefined ? undefined : resolveShard(schedulerDO, options.schedulerInstanceName ?? "default");
+
     /**
      * Dispatch every code-defined cron job declared under the firing expression,
      * collecting per-job failures into `errors` so one failing job neither aborts
-     * the others nor is swallowed.
+     * the others nor is swallowed. Each job runs under its own overlap lease: a
+     * tick that lands while the previous run of the same job is still going is
+     * skipped (and recorded as such) rather than run concurrently with it.
      * @returns how many jobs were declared under `cron` — 0 means the expression
      * matched nothing, which the caller reports rather than treating as success.
      */
@@ -3594,14 +3601,25 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return 0;
         }
 
+        const stub = cronRunStub();
+
+        /* eslint-disable no-await-in-loop -- intentional: jobs on one expression run sequentially for deterministic order and to avoid a concurrent-RPC herd against a single shard */
         for (const job of cronJobs) {
+            const gate = await beginCronRun(stub, job.name);
+
+            if (gate.skip) {
+                continue;
+            }
+
             try {
-                // eslint-disable-next-line no-await-in-loop -- intentional: jobs on one expression run sequentially for deterministic order and to avoid a concurrent-RPC herd against a single shard
                 await runOneCronJob(job, env, context, traceparent);
+                await endCronRun(stub, job.name, gate);
             } catch (error: unknown) {
                 errors.push(toError(error));
+                await endCronRun(stub, job.name, gate, error);
             }
         }
+        /* eslint-enable no-await-in-loop */
 
         return cronJobs.length;
     };
@@ -3637,7 +3655,22 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             throw new LunoraError(`no cron job named "${name}" is registered`, { code: "CRON_JOB_NOT_FOUND", status: 404 });
         }
 
-        await runOneCronJob(job, env, context);
+        const stub = cronRunStub();
+        const gate = await beginCronRun(stub, job.name);
+
+        if (gate.skip) {
+            throw new LunoraError(`cron job "${name}" is already running`, { code: "CRON_JOB_IN_FLIGHT", status: 409 });
+        }
+
+        try {
+            await runOneCronJob(job, env, context);
+        } catch (error: unknown) {
+            await endCronRun(stub, job.name, gate, error);
+
+            throw error;
+        }
+
+        await endCronRun(stub, job.name, gate);
 
         return Response.json({ name, ran: true }, { status: 200 });
     };
