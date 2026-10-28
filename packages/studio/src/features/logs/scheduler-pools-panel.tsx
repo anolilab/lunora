@@ -1,11 +1,13 @@
 import type { SchedulerStatus } from "@lunora/client";
 import type { ReactElement } from "react";
 
+import { ShardInput } from "../../components/shard-input";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery, useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import { useShardKey } from "../../hooks/use-shard-key";
 import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import type { MetricSeries, MetricSeriesResult } from "../../lib/admin";
@@ -22,6 +24,8 @@ const lagFunction = (series: MetricSeries): string => {
 };
 
 interface SchedulerPoolsPanelProps {
+    /** The shard whose lag series to show first. Defaults to the default shard. */
+    readonly initialShardKey?: string;
     /** Load the workpool backlog status. Defaults to `client.schedulerStatus`. */
     readonly loadStatus?: () => Promise<SchedulerStatus>;
 }
@@ -47,7 +51,7 @@ const StatTile = ({ label, testId, value }: { label: string; testId: string; val
  * Below the totals, each job's start lag (due time to dispatch) from the
  * shard's `scheduler.lag_ms` series — a lag that climbs is a queue falling behind.
  */
-export const SchedulerPoolsPanel = ({ loadStatus }: SchedulerPoolsPanelProps = {}): ReactElement => {
+export const SchedulerPoolsPanel = ({ initialShardKey, loadStatus }: SchedulerPoolsPanelProps = {}): ReactElement => {
     const client = useStudioClient();
     const t = useT();
 
@@ -61,11 +65,16 @@ export const SchedulerPoolsPanel = ({ loadStatus }: SchedulerPoolsPanelProps = {
     });
     const { data: status, error } = statusQuery;
 
-    useAutoRefresh(() => statusQuery.poll(), true);
+    // The shard records a job's lateness when it runs it, so lag lives in that
+    // shard's metric series rather than in the SchedulerDO's backlog status — and
+    // only on the shard the job targets. Polled, not live: recording a sample
+    // writes no table, so a live subscription would never re-run for it.
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
+    const metricsQuery = useAdminQuery<MetricSeriesResult>(ADMIN_FUNCTIONS.getMetricSeries, {}, { shardKey: queryShardKey });
+    const { data: metrics } = metricsQuery;
 
-    // The shard records a job's lateness when it runs it, so lag lives in the
-    // metric series rather than in the SchedulerDO's backlog status.
-    const { data: metrics } = useAdminQuery<MetricSeriesResult>(ADMIN_FUNCTIONS.getMetricSeries, {}, { live: true });
+    useAutoRefresh(() => Promise.all([statusQuery.poll(), metricsQuery.poll()]), true);
+
     const lag = (Array.isArray(metrics?.series) ? metrics.series : [])
         .filter((series) => series.name === LAG_METRIC && series.count > 0)
         .toSorted((a, b) => b.max - a.max);
@@ -106,6 +115,13 @@ export const SchedulerPoolsPanel = ({ loadStatus }: SchedulerPoolsPanelProps = {
                     title={t("No workpools.")}
                 />
             )}
+
+            <div className="flex flex-wrap items-center gap-3">
+                <ShardInput onChange={setShardKey} testId="lag-shard-input" value={shardKey} />
+                <p className="text-xs text-muted-foreground" data-testid="lag-scope">
+                    {t("Start lag per job on this shard since it last woke; the series reset when the shard hibernates.")}
+                </p>
+            </div>
 
             {lag.length > 0 && (
                 <Card className="overflow-hidden py-0">

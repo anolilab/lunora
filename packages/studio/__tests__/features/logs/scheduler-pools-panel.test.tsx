@@ -151,4 +151,43 @@ describe("schedulerPoolsPanel lag", () => {
         expect(row.textContent).toBe("jobs:sweep4409030");
         expect(screen.getAllByTestId(/^lag-row-/u)).toHaveLength(1);
     });
+
+    it("reads the lag series from the chosen shard", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference, _args, options): unknown =>
+                reference === ADMIN_FUNCTIONS.getMetricSeries && (options as { shardKey?: string } | undefined)?.shardKey === "tenant-a"
+                    ? {
+                          series: [
+                              {
+                                  attributes: { function: "jobs:bill" },
+                                  count: 1,
+                                  firstTs: 0,
+                                  functionPath: "jobs:bill",
+                                  kind: "histogram",
+                                  last: 5,
+                                  lastTs: 0,
+                                  max: 5,
+                                  min: 5,
+                                  name: "scheduler.lag_ms",
+                                  sum: 5,
+                              },
+                          ],
+                      }
+                    : { series: [] },
+        });
+
+        render(withProvider(mock, <SchedulerPoolsPanel initialShardKey="tenant-a" loadStatus={async () => STATUS} />));
+
+        await expect(screen.findByTestId("lag-row-jobs:bill")).resolves.toBeDefined();
+    });
+
+    it("says the lag series only cover the shard since it last woke", async () => {
+        expect.assertions(1);
+
+        render(withProvider(createMockClient(), <SchedulerPoolsPanel loadStatus={async () => STATUS} />));
+
+        await expect(screen.findByTestId("lag-scope")).resolves.toBeDefined();
+    });
 });
