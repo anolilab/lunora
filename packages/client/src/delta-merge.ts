@@ -188,22 +188,16 @@ export const UNMERGEABLE_DELTA: unique symbol = Symbol("lunora.unmergeableDelta"
  * an optimistic overlay: a delta describes a change to server truth, and the overlay
  * is re-folded over the result afterwards.
  *
- * `tagged: false` is the caller's proof, from the frame's text, that it carries no
- * wire tag; the frame must be freshly parsed, since its value is then adopted as is.
- *
  * Returns the payload to commit, or {@link UNMERGEABLE_DELTA} when the frame is a row
  * delta that cannot be spliced into the base. The caller must then re-snapshot.
  */
-export const resolveDataPayload = (message: ServerDataMessage, serverBase: unknown, tagged = true): unknown => {
-    // A frame parsed from text without the wire tag is already its value; the decode would only copy it.
-    const decode = tagged ? decodeWire : (value: unknown): unknown => value;
-
+export const resolveDataPayload = (message: ServerDataMessage, serverBase: unknown): unknown => {
     if ("data" in message && message.data !== undefined) {
         // Wire-decode the snapshot so a `bytes`/`bigint` column arrives as a real value.
-        return decode(message.data);
+        return decodeWire(message.data);
     }
 
-    const delta = decode(message.delta);
+    const delta = decodeWire(message.delta);
 
     if (isMutationDelta(delta)) {
         // No cached base is not a merge failure: there is nothing to corrupt. This is

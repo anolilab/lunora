@@ -736,16 +736,17 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
  * rebuild `decodeWire` does would only copy it. A string that merely contains
  * the tag text takes the decode path, which leaves it alone.
  *
+ * Text with a `\u` escape always takes the decode path, because JSON allows
+ * the tag to be spelled that way (`\u0024` for `$`) and the check would miss it.
+ *
  * Keep `decodeWire(JSON.parse(text))` where a peer controls the text: the
  * skipped path also skips {@link MAX_DEPTH}, so a tagless tree nested deeper
- * than 64 levels parses instead of throwing. And only feed it text from
- * `JSON.stringify`: a serializer that escapes `$` (`\u0024`) hides the tag
- * from the check and leaves its frames undecoded.
+ * than 64 levels parses instead of throwing.
  */
 const parseWire = (text: string): unknown => {
     const parsed: unknown = JSON.parse(text);
 
-    return text.includes(TAG) ? decodeWire(parsed) : parsed;
+    return text.includes(TAG) || text.includes(String.raw`\u`) ? decodeWire(parsed) : parsed;
 };
 
 /**

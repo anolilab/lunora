@@ -259,14 +259,14 @@ const handleSseFrame = (frame: SseFrame, handle: UntypedHandle): boolean => {
     // Default event: one wire-encoded chunk. Ignore data-less frames (e.g. a
     // keepalive comment) rather than JSON.parse("").
     //
-    // `parseWire` is the other half of the server pump's `encodeWire`, and the
+    // `decodeWire` is the other half of the server pump's `encodeWire`, and the
     // ONLY decode on this path — it is not idempotent, so nothing downstream may
     // decode again. Without it a `Date` arrived as an ISO string, an
     // `ArrayBuffer` as `{}` and a `NaN` as `null`, each still typed as the
     // declared chunk type.
     if ((frame.event === "" || frame.event === "message") && frame.data !== "") {
         try {
-            handle.push(parseWire(frame.data));
+            handle.push(decodeWire(JSON.parse(frame.data)));
         } catch {
             handle.fail(new LunoraError("HTTP_STREAM_BAD_CHUNK", "httpStream: malformed SSE chunk (invalid JSON)"));
 

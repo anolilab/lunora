@@ -215,6 +215,14 @@ describe(parseWire, () => {
         expect(decodeDocument(text)).toStrictEqual(deep);
     });
 
+    it("decodes a tag spelled with a JSON unicode escape", () => {
+        expect.assertions(1);
+
+        const text = JSON.stringify(encodeWire({ id: 7n })).replace("$lunora.wire$", String.raw`\u0024lunora.wire$`);
+
+        expect(parseWire(text)).toStrictEqual({ id: 7n });
+    });
+
     it("keeps the depth cap when the text carries a tag", () => {
         expect.assertions(1);
 

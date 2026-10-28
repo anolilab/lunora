@@ -192,7 +192,7 @@ describe("subscription resilience", () => {
         client.close();
     });
 
-    it("decodes a tagged data frame and adopts a tagless one as parsed", () => {
+    it("decodes a tagged data frame and refuses an over-deep tagless one", () => {
         expect.assertions(3);
 
         const client = makeClient();
@@ -213,12 +213,12 @@ describe("subscription resilience", () => {
         }
 
         socket.receive({ cursor: 1, data: encodeWire({ list: [7n], note: "$lunora.wire$" }), id, type: "data" });
-        // Past the codec's 64-level cap: only a frame that skipped the decode arrives.
+        // Past the codec's 64-level cap: a peer-sent frame must hit the decode-failure path, tagged or not.
         socket.receive({ cursor: 2, data: deep, id, type: "data" });
 
-        expect(errors).toStrictEqual([]);
-        expect(received[0]).toStrictEqual({ list: [7n], note: "$lunora.wire$" });
-        expect(received[1]).toStrictEqual(deep);
+        expect(received).toStrictEqual([{ list: [7n], note: "$lunora.wire$" }]);
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toMatchObject({ code: "WIRE_DECODE_FAILED" });
 
         client.close();
     });

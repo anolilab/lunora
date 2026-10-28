@@ -7053,7 +7053,7 @@ class LunoraClient {
             }
             case "data":
             case "delta": {
-                this.handleDataMessage(message, undefined, text.includes(WIRE_TAG));
+                this.handleDataMessage(message);
 
                 return;
             }
@@ -7306,7 +7306,7 @@ class LunoraClient {
      * Apply one `data` frame. `snapshotMark` is set only for a frame synthesized
      * by a poll, which carries no cursor: see {@link pollSubscriptions}.
      */
-    private handleDataMessage(message: ServerDataMessage, snapshotMark?: number, tagged = true): void {
+    private handleDataMessage(message: ServerDataMessage, snapshotMark?: number): void {
         const { id } = message;
         const state = id ? this.subscriptions.getById(id) : undefined;
 
@@ -7324,7 +7324,7 @@ class LunoraClient {
 
         try {
             // A run's later frames merge onto the frames before them, not onto the committed base.
-            payload = resolveDataPayload(message, pendingRun === undefined ? state.serverBase : pendingRun.payload, tagged);
+            payload = resolveDataPayload(message, pendingRun === undefined ? state.serverBase : pendingRun.payload);
         } catch (error) {
             // The frame carried a value `decodeWire` refuses (an over-long
             // bigint, an over-depth tree, a malformed map entry). Left to throw
