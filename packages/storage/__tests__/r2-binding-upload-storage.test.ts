@@ -621,6 +621,38 @@ describe(createR2BindingUploadStorage, () => {
         expect(sameBytes(storedObject(bucket, location)?.bytes, pattern(bytes.byteLength + 1))).toBe(true);
     });
 
+    it("reads the waiting segments back concurrently, not one round trip after another", async () => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        const { get } = bucket;
+        let inFlight = 0;
+        let peak = 0;
+
+        bucket.get = async (...arguments_: Parameters<typeof get>) => {
+            inFlight += 1;
+            peak = Math.max(peak, inFlight);
+
+            // Yield once, so a read started before this one settles is counted.
+            await Promise.resolve();
+
+            try {
+                return await get(...arguments_);
+            } finally {
+                inFlight -= 1;
+            }
+        };
+
+        const driver = tusDriver(handlerOver(bucket));
+        const bytes = pattern(4000);
+        const location = await driver.create(bytes.byteLength);
+
+        await sendChunks(driver, location, bytes, 1000);
+
+        expect(peak).toBe(3);
+        expect(sameBytes(storedObject(bucket, location)?.bytes, bytes)).toBe(true);
+    });
+
     it("keeps each scope's upload state apart: another scope cannot read the upload (#1053)", async () => {
         expect.assertions(3);
 

@@ -30,6 +30,8 @@ import { analyzedSearchText, analyzedSearchTokens, countSearchTokens } from "../
 const asciiShort = "Hello World, this is a chat message";
 const asciiBody = "The quick brown fox jumps over the lazy dog. ".repeat(12);
 const asciiLong = "Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt. ".repeat(46);
+const asciiHuge = `${asciiLong} ${asciiBody}`.repeat(14);
+const distinctTerms = Array.from({ length: 8000 }, (_v, index) => `term${String(index)}`).join(" ");
 const accented = "Café über größe naïve résumé Straße piñata jamón ".repeat(11);
 
 const plain = createSearchAnalyzer(undefined);
@@ -65,6 +67,18 @@ describe("analyzer.query — folding + tokenizing + de-dup", () => {
     bench("long query (~540 B)", () => {
         english.query(asciiBody);
     });
+
+    // Nothing caps a query's length before it is analyzed (the term cap counts
+    // the de-duplicated output), so a pasted document reaches `query()` whole.
+    bench("pasted document as query (~60 KiB)", () => {
+        english.query(asciiHuge);
+    });
+
+    // The de-dup's worst case: every term distinct, so no repeat sits near the
+    // end of the stream for a backwards scan to find early.
+    bench("8,000 distinct terms as query (~50 KiB)", () => {
+        english.query(distinctTerms);
+    });
 });
 
 describe("write-path entry points", () => {
@@ -76,7 +90,7 @@ describe("write-path entry points", () => {
     });
 
     bench("countSearchTokens (inverted rows)", () => {
-        countSearchTokens(asciiBody, english);
+        countSearchTokens(document, index);
     });
 });
 
