@@ -242,8 +242,8 @@ interface DriftChange {
     remediation: DriftRemediation;
     scope: DriftScope;
     severity: "breaking" | "safe";
-    field?: string;
     summary: string;
+    field?: string;
     table?: string;
     type: "addedFieldConstraint" | "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedCommitOrdering" | "changedFieldKind" | "changedFieldShape" | "changedIndex" | "changedJurisdiction" | "changedMemoryMode" | "changedShardMode" | "changedTtlPolicy" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "relaxedFieldConstraint" | "removedField" | "removedIndex" | "removedRelation" | "removedTable" | "widenedFieldShape";
 }

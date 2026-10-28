@@ -1155,6 +1155,12 @@ interface ImportCommandData {
 }
 ```
 
+### `ImportMode` (type)
+
+```ts
+type ImportMode = "append" | "replace" | "require-empty" | "upsert";
+```
+
 ### `ImportRowError` (interface)
 
 ```ts
@@ -1455,6 +1461,19 @@ interface StudioServerOptions {
     };
     port: number;
     workerOrigin: string;
+}
+```
+
+### `TablePlan` (interface)
+
+```ts
+interface TablePlan {
+    add: number;
+    delete: number;
+    existing: number;
+    source: number;
+    table: string;
+    target: number;
 }
 ```
 

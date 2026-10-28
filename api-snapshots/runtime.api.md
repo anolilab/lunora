@@ -2361,9 +2361,9 @@ interface WorkerOptions {
     httpRouter?: HttpRouterLike;
     identity?: IdentityContractLike;
     importGlobals?: GlobalImportFunction;
+    importGlobalsSupportsDelete?: boolean;
     importGlobalsSupportsDryRun?: boolean;
     importGlobalsSupportsReplace?: boolean;
-    importGlobalsSupportsDelete?: boolean;
     jurisdiction?: DurableObjectJurisdiction;
     kvIntrospector?: KvIntrospector;
     listSchemaTables?: () => ReadonlyArray<string>;
