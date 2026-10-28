@@ -89,6 +89,10 @@ class DispatchHeadroom extends TransactionHeadroomTracker {
         this.current.recordRead(count);
     }
 
+    public override recordReadBytes(bytes: number): void {
+        this.current.recordReadBytes(bytes);
+    }
+
     public override recordWrite(row: unknown): void {
         this.current.recordWrite(row);
     }

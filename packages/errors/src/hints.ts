@@ -62,6 +62,8 @@ const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> = {
         "Narrow the read with an index (`.withIndex(...)`) instead of scanning the table, or split the write across several mutations — for a large backfill use `defineMigration` + `lunora migrate up`, which batches and checkpoints for you.",
         "",
         "The ceilings are deliberately conservative — they exist to stop one request taking down the whole shard. A deployment that genuinely needs bigger transactions can raise them by overriding the `transactionLimits()` seam on its generated shard class.",
+        "",
+        "A transaction that reaches 80% of any ceiling logs one `warn` line (event `lunora.transaction.near_limit`) naming the limit, so a function that only gets close on development data shows up before production data pushes it over.",
     ],
     MIGRATION_DRIFT: [
         "An applied SQL migration is never re-run, so the runner stopped before applying anything.",

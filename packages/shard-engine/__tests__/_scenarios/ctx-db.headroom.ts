@@ -7,7 +7,8 @@ import { isLunoraError } from "@lunora/errors";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../../src/ctx-db";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, meterReadBytes, runShardMigrations } from "../../src/ctx-db";
+import { isFtsAvailable } from "../../src/do-sql";
 import { TransactionHeadroomTracker } from "../../src/transaction-headroom";
 import type { SqlHarness } from "../_helpers/sql-harness";
 
@@ -183,6 +184,108 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
                         .paginate({ numItems: 1 }),
                 ),
             ).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+        });
+
+        it("stops a read on total bytes even when the row count is fine", async () => {
+            expect.assertions(1);
+
+            const seed = build({ maxWrittenRows: 100 });
+
+            for (let index = 0; index < 20; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+                await seed.insert("notes", { body: "x".repeat(200), bucket: "a" });
+            }
+
+            const reader = build({ maxReadBytes: 2000, maxReadRows: 1_000_000 });
+
+            await expect(
+                codeOf(async () =>
+                    reader
+                        .query("notes")
+                        .withIndex("by_bucket", (q) => q.eq("bucket", "a"))
+                        .collect(),
+                ),
+            ).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+        });
+
+        it("charges a by-id read by its stored size", async () => {
+            expect.assertions(2);
+
+            const id = await build({}).insert("notes", { body: "x".repeat(500), bucket: "a" });
+            const tracker = new TransactionHeadroomTracker({ maxReadBytes: 100 });
+            const reader = createShardContextDatabase({ clock: () => 1_700_000_000_000, headroom: tracker, schema, sql });
+
+            await expect(codeOf(async () => reader.get("notes", id))).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+            expect(tracker.headroom().readBytes).toBeGreaterThan(500);
+        });
+
+        it("does not charge read bytes inside an unmetered deleteAll", async () => {
+            expect.assertions(1);
+
+            const seed = build({ maxWrittenRows: 100 });
+
+            for (let index = 0; index < 10; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+                await seed.insert("notes", { body: "x".repeat(200), bucket: "a" });
+            }
+
+            await expect(build({ maxReadBytes: 100 }).deleteAll?.("notes")).resolves.toStrictEqual({ deleted: 10 });
+        });
+
+        it("probes FTS once per database handle, not once per metered writer", () => {
+            expect.assertions(1);
+
+            let probes = 0;
+            const counting: SqlExec = {
+                exec: (query, ...params) => {
+                    if (query.includes("CREATE VIRTUAL TABLE") && query.includes("__lunora_fts_probe")) {
+                        probes += 1;
+                    }
+
+                    return sql.exec(query, ...params);
+                },
+            };
+
+            for (let writer = 0; writer < 3; writer += 1) {
+                isFtsAvailable(meterReadBytes(counting, new TransactionHeadroomTracker(), () => false));
+            }
+
+            expect(probes).toBe(1);
+        });
+
+        it("warns once when a read crosses 80% of a ceiling", async () => {
+            expect.assertions(2);
+
+            const seed = build({ maxWrittenRows: 100 });
+
+            for (let index = 0; index < 9; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+                await seed.insert("notes", { body: "b", bucket: "a" });
+            }
+
+            const warnings: unknown[] = [];
+            const reader = createShardContextDatabase({
+                clock: () => 1_700_000_000_000,
+                headroom: new TransactionHeadroomTracker({ maxReadRows: 10 }, (warning) => {
+                    warnings.push(warning);
+                }),
+                schema,
+                sql,
+            });
+            const read = async (): Promise<unknown> =>
+                reader
+                    .query("notes")
+                    .withIndex("by_bucket", (q) => q.eq("bucket", "a"))
+                    .take(9);
+
+            await read();
+
+            expect(warnings).toStrictEqual([{ kind: "readRows", limit: 10, used: 9 }]);
+
+            // Past the ceiling now: it throws, and the warning is not repeated.
+            await codeOf(read);
+
+            expect(warnings).toHaveLength(1);
         });
 
         it("leaves a transaction within its ceilings untouched", async () => {

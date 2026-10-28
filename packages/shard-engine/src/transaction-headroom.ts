@@ -28,6 +28,8 @@ import { estimateBytes } from "./estimate-bytes";
 
 /** Ceilings for one transaction. Every field is a hard stop, not a target. */
 interface TransactionLimits {
+    /** Maximum encoded document bytes a single transaction may read. */
+    maxReadBytes: number;
     /** Maximum documents a single transaction may read. */
     maxReadRows: number;
     /** Maximum serialized bytes a single transaction may write. */
@@ -38,7 +40,9 @@ interface TransactionLimits {
 
 /** What a transaction has consumed, and what remains before each ceiling. */
 interface TransactionHeadroom {
+    readBytes: number;
     readRows: number;
+    remainingReadBytes: number;
     remainingReadRows: number;
     remainingWrittenBytes: number;
     remainingWrittenRows: number;
@@ -46,22 +50,58 @@ interface TransactionHeadroom {
     writtenRows: number;
 }
 
+/** Which ceiling a {@link TransactionLimitWarning} is about. */
+type TransactionLimitKind = "readBytes" | "readRows" | "writtenBytes" | "writtenRows";
+
+/** A transaction crossed {@link NEAR_LIMIT_RATIO} of one ceiling without breaching it. */
+interface TransactionLimitWarning {
+    kind: TransactionLimitKind;
+    limit: number;
+    used: number;
+}
+
 /**
  * Defaults sized for a Cloudflare Durable Object (128 MiB isolate).
  *
- * The byte cap is the load-bearing one: 32 MiB of serialized documents leaves
+ * The byte caps are the load-bearing ones: 32 MiB of serialized documents leaves
  * room for the JS-object expansion of that same data (roughly 2–4x), the SQLite
- * page cache, and the rest of the runtime. The row caps are secondary — they
- * catch pathological loops over small documents that would otherwise burn the
- * whole request budget before the byte cap noticed.
+ * page cache, and the rest of the runtime. Reads get the same budget for the
+ * same reason — 100k large documents exhaust the isolate long before the row
+ * cap notices. The row caps are secondary — they catch pathological loops over
+ * small documents that would otherwise burn the whole request budget before the
+ * byte caps noticed.
  */
 const DEFAULT_TRANSACTION_LIMITS: TransactionLimits = {
+    maxReadBytes: 32 * 1024 * 1024,
     maxReadRows: 100_000,
     maxWrittenBytes: 32 * 1024 * 1024,
     maxWrittenRows: 50_000,
 };
 
+/**
+ * Share of a ceiling at which the meter warns. Dev data is usually far smaller
+ * than prod data, so a transaction that only ever reaches 80% locally is the one
+ * that fails after deploy; the warning is how that shows up before it does.
+ */
+const NEAR_LIMIT_RATIO = 0.8;
+
+const LIMIT_OF: Record<TransactionLimitKind, keyof TransactionLimits> = {
+    readBytes: "maxReadBytes",
+    readRows: "maxReadRows",
+    writtenBytes: "maxWrittenBytes",
+    writtenRows: "maxWrittenRows",
+};
+
+const OVERRUN_MESSAGE: Record<TransactionLimitKind, (used: string, limit: string) => string> = {
+    readBytes: (used, limit) => `this transaction read ${used} bytes, over the ${limit}-byte limit`,
+    readRows: (used, limit) => `this transaction read ${used} documents, over the ${limit}-document limit`,
+    writtenBytes: (used, limit) => `this transaction wrote ${used} bytes, over the ${limit}-byte limit`,
+    writtenRows: (used, limit) => `this transaction wrote ${used} documents, over the ${limit}-document limit`,
+};
+
 class TransactionHeadroomTracker {
+    private readBytes = 0;
+
     private readRows = 0;
 
     private writtenRows = 0;
@@ -70,8 +110,14 @@ class TransactionHeadroomTracker {
 
     private readonly limits: TransactionLimits;
 
-    public constructor(limits: Partial<TransactionLimits> = {}) {
+    private readonly onNearLimit: ((warning: TransactionLimitWarning) => void) | undefined;
+
+    /** Kinds already warned about, so a loop near a ceiling warns once rather than once per row. */
+    private readonly warned = new Set<TransactionLimitKind>();
+
+    public constructor(limits: Partial<TransactionLimits> = {}, onNearLimit?: (warning: TransactionLimitWarning) => void) {
         this.limits = { ...DEFAULT_TRANSACTION_LIMITS, ...limits };
+        this.onNearLimit = onNearLimit;
     }
 
     /**
@@ -84,13 +130,17 @@ class TransactionHeadroomTracker {
      */
     public recordRead(count: number): void {
         this.readRows += count;
+        this.check("readRows", this.readRows);
+    }
 
-        if (this.readRows > this.limits.maxReadRows) {
-            throw new LunoraError(
-                "TRANSACTION_LIMIT_EXCEEDED",
-                `this transaction read ${String(this.readRows)} documents, over the ${String(this.limits.maxReadRows)}-document limit`,
-            );
-        }
+    /**
+     * Charge `bytes` of encoded documents against the read-byte ceiling. Sized
+     * by the stored JSON's length — the same unit {@link estimateBytes} charges
+     * writes in — so a read costs no second serialization.
+     */
+    public recordReadBytes(bytes: number): void {
+        this.readBytes += bytes;
+        this.check("readBytes", this.readBytes);
     }
 
     /** Charge one written document, sized by {@link estimateBytes}. */
@@ -111,26 +161,16 @@ class TransactionHeadroomTracker {
 
         this.writtenRows += 1;
         this.writtenBytes += bytes;
-
-        if (this.writtenRows > this.limits.maxWrittenRows) {
-            throw new LunoraError(
-                "TRANSACTION_LIMIT_EXCEEDED",
-                `this transaction wrote ${String(this.writtenRows)} documents, over the ${String(this.limits.maxWrittenRows)}-document limit`,
-            );
-        }
-
-        if (this.writtenBytes > this.limits.maxWrittenBytes) {
-            throw new LunoraError(
-                "TRANSACTION_LIMIT_EXCEEDED",
-                `this transaction wrote ${String(this.writtenBytes)} bytes, over the ${String(this.limits.maxWrittenBytes)}-byte limit`,
-            );
-        }
+        this.check("writtenRows", this.writtenRows);
+        this.check("writtenBytes", this.writtenBytes);
     }
 
     /** Current consumption and what is left before each ceiling (never negative). */
     public headroom(): TransactionHeadroom {
         return {
+            readBytes: this.readBytes,
             readRows: this.readRows,
+            remainingReadBytes: Math.max(0, this.limits.maxReadBytes - this.readBytes),
             remainingReadRows: Math.max(0, this.limits.maxReadRows - this.readRows),
             remainingWrittenBytes: Math.max(0, this.limits.maxWrittenBytes - this.writtenBytes),
             remainingWrittenRows: Math.max(0, this.limits.maxWrittenRows - this.writtenRows),
@@ -138,7 +178,26 @@ class TransactionHeadroomTracker {
             writtenRows: this.writtenRows,
         };
     }
+
+    private check(kind: TransactionLimitKind, used: number): void {
+        const limit = this.limits[LIMIT_OF[kind]];
+
+        if (used > limit) {
+            throw new LunoraError("TRANSACTION_LIMIT_EXCEEDED", OVERRUN_MESSAGE[kind](String(used), String(limit)));
+        }
+
+        if (used >= limit * NEAR_LIMIT_RATIO && !this.warned.has(kind)) {
+            this.warned.add(kind);
+            // A warning sink is telemetry: it must never turn a transaction that
+            // fits into a failed one.
+            try {
+                this.onNearLimit?.({ kind, limit, used });
+            } catch {
+                // Swallowed for the reason above.
+            }
+        }
+    }
 }
 
 export { DEFAULT_TRANSACTION_LIMITS, TransactionHeadroomTracker };
-export type { TransactionHeadroom, TransactionLimits };
+export type { TransactionHeadroom, TransactionLimitKind, TransactionLimits, TransactionLimitWarning };

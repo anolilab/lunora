@@ -139,6 +139,7 @@ import type {
     SubscriptionsResult,
     TableIndexInfo,
     TransactionLimits,
+    TransactionLimitWarning,
     TransactionSqlLike,
     TtlSweepSpec,
     VectorBackfillProgress,
@@ -7527,7 +7528,7 @@ abstract class ShardDO {
      * "this caller is that dispatch".
      */
     protected transactionHeadroom(): TransactionHeadroomTracker {
-        return new TransactionHeadroomTracker(this.transactionLimits());
+        return this.mintHeadroom("transaction");
     }
 
     /**
@@ -7547,7 +7548,7 @@ abstract class ShardDO {
      * drain would take the refresh branch and lose its own ceiling entirely.
      */
     protected subscriptionHeadroom(): TransactionHeadroomTracker {
-        return new TransactionHeadroomTracker(this.transactionLimits());
+        return this.mintHeadroom("subscription");
     }
 
     /**
@@ -7564,7 +7565,7 @@ abstract class ShardDO {
      * substituting the wrong tracker mid-flight.
      */
     protected alarmHeadroom(): TransactionHeadroomTracker {
-        return new TransactionHeadroomTracker(this.transactionLimits());
+        return this.mintHeadroom("alarm");
     }
 
     /**
@@ -8731,7 +8732,7 @@ abstract class ShardDO {
         // Stash the inbound D1 bookmark and identity headers for the
         // duration of the handler call so getters return the right
         // values. Cleared on exit so the next request starts fresh.
-        const { dispatchAttribution, dispatchBookmark, dispatchHeadroom, dispatchStartedAt, dispatchTrace } = this.beginDispatch(request);
+        const { dispatchAttribution, dispatchBookmark, dispatchHeadroom, dispatchStartedAt, dispatchTrace } = this.beginDispatch(request, payload.functionPath);
 
         // Outcome of the dispatch, for the synthetic root span recorded in the
         // `finally` below. A sentinel rather than a boolean so the `catch` can
@@ -15869,6 +15870,28 @@ abstract class ShardDO {
     }
 
     /**
+     * A fresh budget that reports crossing 80% of any ceiling as a `warn` line.
+     * Local data is usually a fraction of production's, so the transaction that
+     * fails after deploy is the one that only ever got close here — the line is
+     * how a developer sees it coming. `functionPath` names the work; callers
+     * without one pass the kind of work instead.
+     */
+    private mintHeadroom(functionPath: string, anchor?: TraceAnchor): TransactionHeadroomTracker {
+        return new TransactionHeadroomTracker(this.transactionLimits(), (warning: TransactionLimitWarning) => {
+            this.recordUserLog(
+                functionPath,
+                "warn",
+                [],
+                `transaction reached ${String(Math.round((warning.used / warning.limit) * 100))}% of its ${warning.kind} limit (${String(warning.used)} of ${String(warning.limit)}); past it the transaction fails with TRANSACTION_LIMIT_EXCEEDED`,
+                { ...warning },
+                this.lastTelemetrySink,
+                "lunora.transaction.near_limit",
+                anchor,
+            );
+        });
+    }
+
+    /**
      * Stamp everything one RPC dispatch needs off its request, and reset every
      * per-request capture the handler will fill.
      *
@@ -15887,7 +15910,10 @@ abstract class ShardDO {
      * under another request's trace (see the comments inside).
      * @returns this dispatch's trace anchor and its transaction-headroom tracker
      */
-    private beginDispatch(request: Request): {
+    private beginDispatch(
+        request: Request,
+        functionPath: string,
+    ): {
         dispatchAttribution: QueryAttribution;
         dispatchBookmark: DispatchBookmark;
         dispatchHeadroom: TransactionHeadroomTracker;
@@ -15970,7 +15996,7 @@ abstract class ShardDO {
         // VALUE (see its docstring), so this dispatch's ctx-build never depends
         // on a shared field still pointing at THIS tracker by the time an
         // `await`-interleaved concurrent dispatch's `finally` runs.
-        const dispatchHeadroom = new TransactionHeadroomTracker(this.transactionLimits());
+        const dispatchHeadroom = this.mintHeadroom(functionPath, dispatchTrace);
 
         // Collect the declared indexes this dispatch exercises (stamped by
         // the ctx-db index-use hook) so `recordFunctionCall` can persist the

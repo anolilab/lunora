@@ -477,7 +477,7 @@ export { createSystemReader } from "./system-reader";
 export type { ConflictKind } from "./transaction";
 export type { TransactionSqlLike } from "./transaction";
 export { ConflictError } from "./transaction";
-export type { TransactionHeadroom, TransactionLimits } from "./transaction-headroom";
+export type { TransactionHeadroom, TransactionLimitKind, TransactionLimits, TransactionLimitWarning } from "./transaction-headroom";
 export { DEFAULT_TRANSACTION_LIMITS, TransactionHeadroomTracker } from "./transaction-headroom";
 export type { RunTriggersOptions } from "./triggers";
 export { hasTrigger, runTriggers } from "./triggers";

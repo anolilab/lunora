@@ -85,6 +85,7 @@ import {
     serializeSqlValue,
     tableColumns,
     tryRowToDocument,
+    WRAPPED_SQL,
 } from "./do-sql";
 import { renderSql, unionAll, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import { boundingBoxGeohashes, coveringGeohashes, haversineMeters, pointInBoundingBox } from "./geo";
@@ -2000,9 +2001,119 @@ const deriveSoftDeleteFields = (schema: SchemaLike): ReadonlyMap<string, string>
     return fields;
 };
 
+/** Encoded size of the stored documents in `rows`, read off the JSON column the row store already returned. */
+const documentBytes = (rows: ReadonlyArray<unknown>): number => {
+    let bytes = 0;
+
+    for (const row of rows) {
+        const raw = (row as Record<string, unknown> | undefined)?.[DOC_COLUMN];
+
+        if (typeof raw === "string") {
+            bytes += raw.length;
+        }
+    }
+
+    return bytes;
+};
+
+/**
+ * Charge every stored document this writer materializes against the read-byte
+ * ceiling.
+ *
+ * Wrapped at the SQL handle rather than at each reader because a document
+ * reaches the isolate through a dozen paths — by-id probes, keyset pages,
+ * search and geo candidates, rank pages, relation loads — and a byte cap that
+ * one of them skips is no cap. The stored JSON is already a string in hand, so
+ * its length costs nothing; nothing is re-serialized. The engine consumes
+ * cursors through `toArray()` / `one()` only, so those are the two charged.
+ */
+const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | undefined, exempt: () => boolean): SqlExec => {
+    if (headroom === undefined) {
+        return sql;
+    }
+
+    const exec = <Row = Record<string, unknown>>(query: string, ...params: unknown[]): SqlCursor<Row> => {
+        const cursor = sql.exec<Row>(query, ...params);
+        const toArray = cursor.toArray.bind(cursor);
+        const one = cursor.one.bind(cursor);
+        const charge = (rows: ReadonlyArray<unknown>): void => {
+            if (!exempt()) {
+                const bytes = documentBytes(rows);
+
+                if (bytes > 0) {
+                    headroom.recordReadBytes(bytes);
+                }
+            }
+        };
+
+        cursor.toArray = () => {
+            const rows = toArray();
+
+            charge(rows);
+
+            return rows;
+        };
+        cursor.one = () => {
+            const row = one();
+
+            charge([row]);
+
+            return row;
+        };
+
+        return cursor;
+    };
+
+    // A proxy rather than `{ exec }` so any other member of the host's handle
+    // (`databaseSize`, a test double's extras) still reads through.
+    return new Proxy(sql, {
+        get: (target, property) => {
+            if (property === "exec") {
+                return exec;
+            }
+
+            return property === WRAPPED_SQL ? target : (Reflect.get(target, property, target) as unknown);
+        },
+    });
+};
+
 const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { baselineSeq, onStalePatchDropped } = options;
-    const { sql } = options;
+    const { headroom } = options;
+
+    /**
+     * Scoped bypass for every headroom charge below, usable ONLY by primitives
+     * that are deliberately unbounded by design — today, only `deleteAll` (see
+     * its docstring: "Deliberately uncapped… erasure primitive"). Not exported,
+     * so user code (a mutation handler, a trigger function) has no way to reach
+     * it directly; the only caller is `deleteAll`'s own implementation below.
+     *
+     * Closure-scoped to THIS writer instance rather than a bare top-level
+     * `let`: every dispatch builds a fresh `createShardCtxDb(...)` writer (see
+     * the generated `buildCtx`), so this flag can never leak across a
+     * CONCURRENT dispatch on a different writer instance — each has its own.
+     * Within one writer, though, the exemption is WRITER-WIDE for the
+     * duration of `deleteAll`'s await chain, not scoped to `deleteAll`'s own
+     * calls: `meterExempt` is a single boolean every hook on this writer
+     * reads, so any OTHER write that gets interleaved into that chain — e.g.
+     * a sibling `await Promise.all([ctx.db.deleteAll("a"),
+     * ctx.db.insertMany("b", big)])` — sees `meterExempt === true` too and is
+     * silently exempted alongside it. This is a known, low-severity
+     * limitation rather than a correctness bug: the meter is a resource
+     * bound, and parallelizing a bulk erase with other writes on the same
+     * writer is an unusual pattern to begin with.
+     *
+     * Gating the SHARED `onRead`/`onWrite` hooks (rather than only the two call
+     * sites `deleteAll` itself makes) means a trigger's own writes, fired as a
+     * side effect of the row `deleteAll` is erasing, are ALSO exempt for that
+     * one row's pipeline — there is no separate metering surface to gate
+     * instead, since triggers run against this same writer. That is bounded by
+     * "one row's worth of side effects" per iteration, not by "however many
+     * rows deleteAll erases", so it does not reopen the isolate-exhaustion gap
+     * the meter exists to close.
+     */
+    let meterExempt = false;
+    const sql = meterReadBytes(options.sql, headroom, () => meterExempt);
     const { schema } = options;
     const broadcast = options.broadcast ?? (() => undefined);
 
@@ -2170,41 +2281,6 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
         return entries.length > 0 ? entries : undefined;
     };
-
-    const { headroom } = options;
-
-    /**
-     * Scoped bypass for every headroom charge below, usable ONLY by primitives
-     * that are deliberately unbounded by design — today, only `deleteAll` (see
-     * its docstring: "Deliberately uncapped… erasure primitive"). Not exported,
-     * so user code (a mutation handler, a trigger function) has no way to reach
-     * it directly; the only caller is `deleteAll`'s own implementation below.
-     *
-     * Closure-scoped to THIS writer instance rather than a bare top-level
-     * `let`: every dispatch builds a fresh `createShardCtxDb(...)` writer (see
-     * the generated `buildCtx`), so this flag can never leak across a
-     * CONCURRENT dispatch on a different writer instance — each has its own.
-     * Within one writer, though, the exemption is WRITER-WIDE for the
-     * duration of `deleteAll`'s await chain, not scoped to `deleteAll`'s own
-     * calls: `meterExempt` is a single boolean every hook on this writer
-     * reads, so any OTHER write that gets interleaved into that chain — e.g.
-     * a sibling `await Promise.all([ctx.db.deleteAll("a"),
-     * ctx.db.insertMany("b", big)])` — sees `meterExempt === true` too and is
-     * silently exempted alongside it. This is a known, low-severity
-     * limitation rather than a correctness bug: the meter is a resource
-     * bound, and parallelizing a bulk erase with other writes on the same
-     * writer is an unusual pattern to begin with.
-     *
-     * Gating the SHARED `onRead`/`onWrite` hooks (rather than only the two call
-     * sites `deleteAll` itself makes) means a trigger's own writes, fired as a
-     * side effect of the row `deleteAll` is erasing, are ALSO exempt for that
-     * one row's pipeline — there is no separate metering surface to gate
-     * instead, since triggers run against this same writer. That is bounded by
-     * "one row's worth of side effects" per iteration, not by "however many
-     * rows deleteAll erases", so it does not reopen the isolate-exhaustion gap
-     * the meter exists to close.
-     */
-    let meterExempt = false;
 
     /** Run `run` with every headroom charge below suppressed. See `meterExempt`. */
     const runUnmetered = async <T>(run: () => Promise<T>): Promise<T> => {
@@ -4892,7 +4968,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         : writer;
 };
 
-export { assertStorableRowId, assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniqueError };
+export { assertStorableRowId, assertValidClientId, createShardCtxDb, meterReadBytes, normalizeIdStructurally, NotUniqueError };
 export type { SearchBackfillProgress } from "./ctx-db-backfill";
 export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes } from "./ctx-db-backfill";
 export type { CdcChange, CdcChangeKey } from "./ctx-db-cdc";

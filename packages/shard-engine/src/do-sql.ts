@@ -430,7 +430,16 @@ const tryRowToDocument = (row: Record<string, unknown> | undefined): Record<stri
  */
 const ftsAvailabilityCache = new WeakMap<SqlExec, boolean>();
 
-const isFtsAvailable = (sql: SqlExec): boolean => {
+/**
+ * Key under which a wrapping handle (the writer's read-byte meter) exposes the
+ * handle it wraps. A writer is built per dispatch, so its wrapper is too; keying
+ * the probe cache on the wrapper would re-run the probe — a CREATE and a DROP —
+ * on every write to a searchable table.
+ */
+const WRAPPED_SQL = Symbol("lunora.wrappedSql");
+
+const isFtsAvailable = (wrapper: SqlExec): boolean => {
+    const sql = (wrapper as { [WRAPPED_SQL]?: SqlExec })[WRAPPED_SQL] ?? wrapper;
     const cached = ftsAvailabilityCache.get(sql);
 
     if (cached !== undefined) {
@@ -489,6 +498,7 @@ export {
     rowToDocument,
     tableColumns,
     tryRowToDocument,
+    WRAPPED_SQL,
 };
 
 export { serializeSqlValue } from "./serialize-sql";
