@@ -10,6 +10,8 @@ import { defineAgent, defineAgentTool } from "@lunora/agent";
 import { jsonSchema } from "@lunora/ai";
 import { LunoraError } from "@lunora/errors";
 
+import { internal } from "./_generated/internal.js";
+
 /**
  * The organisation a tool may read. `assistant:ask` keys every thread
  * `<organizationId>:<userId>` from the caller's verified identity, and the loop
@@ -38,13 +40,12 @@ export const support = defineAgent({
     tools: {
         findTasks: defineAgentTool({
             description: "Search the organisation's tasks by title.",
-            execute: async ({ term }, context) =>
-                context.run({ __lunoraRef: "assistant/index:searchTasks" }, { organizationId: runOrganization(context), term }),
+            execute: async ({ term }, context) => context.run(internal.assistant.searchTasks, { organizationId: runOrganization(context), term }),
             inputSchema: jsonSchema<{ term: string }>({ properties: { term: { type: "string" } }, required: ["term"], type: "object" }),
         }),
         openTasks: defineAgentTool({
             description: "List the organisation's open tasks, newest first.",
-            execute: async (_input, context) => context.run({ __lunoraRef: "assistant/index:openTasks" }, { organizationId: runOrganization(context) }),
+            execute: async (_input, context) => context.run(internal.assistant.openTasks, { organizationId: runOrganization(context) }),
             inputSchema: jsonSchema<Record<string, never>>({ properties: {}, type: "object" }),
         }),
     },

@@ -4,11 +4,11 @@
  * write" and "rate limited" mean, so every domain module builds on it instead of
  * repeating the checks.
  *
- * It is also deliberately the shape that kept auth eager in the app behind
- * issue #1166: this module imports the better-auth instance (`getAuth`), the
- * rate limiter and zod at value level, and every function module imports this
- * module. Whatever this file reaches is evaluated at Worker startup no matter how
- * the function registry is loaded, which is what `apps/bench` measures.
+ * It is also deliberately the shape of the app behind issue #1166: this module
+ * imports the rate limiter and zod at value level, and every function module
+ * imports this module. Whatever this file reaches is evaluated at Worker startup
+ * no matter how the function registry is loaded, which is what `apps/bench`
+ * measures. (better-auth is on that path too, through `.auth()` in `server.ts`.)
  */
 import { LunoraError } from "@lunora/errors";
 import type { RateLimitConfigMap } from "lunorash/ratelimit";
@@ -19,8 +19,6 @@ import * as z from "zod";
 
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "../_generated/server.js";
 import { action, mutation, query, v } from "../_generated/server.js";
-import type { AuthEnv } from "../auth/index.js";
-import { getAuth } from "../auth/index.js";
 
 /** Write limits every org-scoped mutation draws from; the bucket table is the one the `ratelimit` item declares. */
 export const appLimits = {
@@ -139,16 +137,13 @@ export const tenantRead = (...tables: string[]): Middleware<QueryContext, QueryC
 export const tenantWrite = (...tables: string[]): Middleware<MutationContext, MutationContext> =>
     tenantRls(tables) as unknown as Middleware<MutationContext, MutationContext>;
 
-/**
- * Actions that need better-auth itself (member lists, invitations, session
- * revocation): the auth API rides on the context, built once per isolate.
- */
+/** Signed-in actions. */
 export const authAction = action.use(async ({ ctx, next }) => {
     if (!ctx.auth.userId) {
         throw new LunoraError("UNAUTHORIZED", "not signed in");
     }
 
-    return next({ ctx: { ...ctx, authApi: getAuth(ctx.env as unknown as AuthEnv).api } });
+    return next({ ctx: { ...ctx } });
 });
 
 /** Shared zod shapes; `v.from(...)` turns one into an args validator. */

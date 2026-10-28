@@ -611,6 +611,7 @@ export const byRegion = internalQuery.input({ region: v.string() }).query(async 
  * Integration modules. Each one imports its SDK at module scope, the way app code
  * does, and keeps a code path that completes offline so the cold-start bench can
  * call it without credentials; the credentialed path refuses until configured.
+ * Their keys are declared in `lunora/env.ts`, which is what populates `ctx.env`.
  */
 const integrationModules = {
     links: (key) => `${header(key)}import { parse } from "tldts";
@@ -651,7 +652,7 @@ export const draftPrompt = authAction.input({ tone: v.optional(v.string().max(32
 /** Drafts the update with the organisation's own OpenAI key. */
 export const draftUpdate = authAction.action(async ({ ctx }) => {
     const { organizationId } = await requireWriter(ctx);
-    const { OPENAI_API_KEY: apiKey } = ctx.env as unknown as { OPENAI_API_KEY?: string };
+    const apiKey = ctx.env.OPENAI_API_KEY;
 
     if (apiKey === undefined || apiKey === "") {
         throw new LunoraError("NOT_IMPLEMENTED", "set OPENAI_API_KEY to draft updates");
@@ -685,17 +686,10 @@ import { LunoraError } from "@lunora/errors";
 
 import { authAction, requireWriter } from "../../lib/crpc.js";
 
-interface S3Env {
-    S3_ACCESS_KEY_ID?: string;
-    S3_BUCKET?: string;
-    S3_ENDPOINT?: string;
-    S3_SECRET_ACCESS_KEY?: string;
-}
-
 /** A presigned PUT into the organisation's export prefix of an S3-compatible bucket; signing is local, no request is made. */
 export const exportUploadUrl = authAction.action(async ({ ctx }) => {
     const { organizationId } = await requireWriter(ctx);
-    const { S3_ACCESS_KEY_ID: accessKeyId, S3_BUCKET: bucket, S3_ENDPOINT: endpoint, S3_SECRET_ACCESS_KEY: secretAccessKey } = ctx.env as unknown as S3Env;
+    const { S3_ACCESS_KEY_ID: accessKeyId, S3_BUCKET: bucket, S3_ENDPOINT: endpoint, S3_SECRET_ACCESS_KEY: secretAccessKey } = ctx.env;
 
     if (!accessKeyId || !bucket || !endpoint || !secretAccessKey) {
         throw new LunoraError("NOT_IMPLEMENTED", "set S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY to export ${key} records");
@@ -726,7 +720,7 @@ export const sandboxSpec = authAction.action(async ({ ctx }) => {
 export const runReport = authAction.action(async ({ ctx }) => {
     await requireWriter(ctx);
 
-    const { E2B_API_KEY: apiKey } = ctx.env as unknown as { E2B_API_KEY?: string };
+    const apiKey = ctx.env.E2B_API_KEY;
 
     if (apiKey === undefined || apiKey === "") {
         throw new LunoraError("NOT_IMPLEMENTED", "set E2B_API_KEY to run ${key} reports");
