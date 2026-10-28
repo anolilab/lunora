@@ -64,7 +64,6 @@ Flags worth knowing:
 | -------------------------- | ------------------------------------------------------------------------------- |
 | `--env <name>`             | Deploy a wrangler environment; checks read that env's (non-inherited) bindings. |
 | `--dry-run`                | Run every gate and bundle without publishing; `wrangler.jsonc` edits roll back. |
-| `--preview`                | Upload a version (`wrangler versions upload`) with a preview URL; no traffic.   |
 | `--health-check`           | Probe `/_lunora/health/ready` on the new version; fail if it never answers.     |
 | `--prebuilt`               | Skip codegen and the drift gate when `lunora prepare` already ran in this job.  |
 | `--migrate`                | Run every declared data migration (`up` is idempotent) against the live worker. |

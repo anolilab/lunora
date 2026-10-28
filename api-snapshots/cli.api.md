@@ -190,7 +190,6 @@ interface DeployedIdentity {
     deployedAt: string;
     dryRun: boolean;
     env?: string;
-    preview: boolean;
     url?: string;
     workerName?: string;
 }

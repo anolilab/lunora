@@ -588,7 +588,7 @@ describe("lunora deploy", () => {
                     celldToolchain: celldReady,
                 });
 
-                expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/no preview versions/u) });
+                expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/--preview is not supported/u) });
                 // Refused before provisioning, so the committed config is untouched —
                 // not merely the projection left unwritten.
                 expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
@@ -688,7 +688,6 @@ describe("lunora deploy", () => {
 
             it.each([
                 ["--skip-services", { skipServices: true }, "--skip-services"],
-                ["--preview", { preview: true }, "--preview uploads the app version only"],
                 ["--temporary", { temporary: true }, "--temporary deploys the app to a throwaway account"],
             ] as const)("deploys no service on %s, and says why", async (_label, extra, reason) => {
                 expect.assertions(2);
@@ -1114,7 +1113,7 @@ describe("lunora deploy", () => {
             expect(args).toContain("deploy");
         });
 
-        it("--preview uploads a version (wrangler versions upload), not a live deploy", async () => {
+        it("refuses --preview on Cloudflare before anything is written: a version would share production's Durable Objects and D1", async () => {
             expect.assertions(3);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
@@ -1124,12 +1123,9 @@ describe("lunora deploy", () => {
 
             const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, preview: true, spawner });
 
-            expect(result.code).toBe(0);
-
-            const args = calls[0]?.descriptor.args.join(" ") ?? "";
-
-            expect(args).toContain("wrangler versions upload");
-            expect(args).not.toContain("wrangler deploy");
+            expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/--preview is not supported.*--env <name>/u) });
+            expect(calls).toHaveLength(0);
+            expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
         });
 
         it("skipCodegen (the --prebuilt path) deploys without running codegen", async () => {
@@ -2288,7 +2284,7 @@ export const backfillNames = defineMigration({
             });
 
             it("reports the deployed URL, so an automation never has to read it with its eyes", async () => {
-                expect.assertions(5);
+                expect.assertions(4);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
@@ -2300,24 +2296,7 @@ export const backfillNames = defineMigration({
                 expect(result.deployment?.url).toBe("https://lunora-app.acme.workers.dev");
                 expect(result.deployment?.workerName).toBe("lunora-app");
                 expect(result.deployment?.dryRun).toBe(false);
-                expect(result.deployment?.preview).toBe(false);
                 expect(Number.isNaN(Date.parse(result.deployment?.deployedAt ?? ""))).toBe(false);
-            });
-
-            it("--preview --format json reports the preview URL", async () => {
-                expect.assertions(3);
-
-                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-
-                const { spawner } = deployingSpawner("Worker Version ID: abc\n  https://preview-abc-lunora-app.acme.workers.dev\n");
-                const { logger } = silentLogger();
-
-                const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "json", logger, preview: true, spawner });
-
-                expect(result.deployment?.url).toBe("https://preview-abc-lunora-app.acme.workers.dev");
-                expect(result.deployment?.preview).toBe(true);
-                // A preview never becomes the checkout's recorded target.
-                expect(existsSync(join(workdir, ".lunora", "project.json"))).toBe(false);
             });
 
             it("--dry-run reports the discriminator and no URL — nothing was published", async () => {

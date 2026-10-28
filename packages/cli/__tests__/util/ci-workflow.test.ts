@@ -62,9 +62,10 @@ jobs:
       - run: pnpm exec lunora prepare
       - run: pnpm exec lunora deploy
 
-  # Preview version on every pull request — uploads a versioned preview URL;
-  # production traffic is untouched.
-  preview:
+  # Every pull request runs the full deploy pipeline, bundle included, and
+  # publishes nothing. A Worker version would share production's Durable
+  # Objects and D1, so a PR never uploads one.
+  check:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -79,7 +80,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec lunora deploy --preview
+      - run: pnpm exec lunora deploy --dry-run
 `;
 
 const ORIGINAL_PNPM_GITLAB = `stages:
@@ -109,14 +110,15 @@ deploy:
     - pnpm exec lunora prepare
     - pnpm exec lunora deploy
 
-# Preview version on every merge request (versioned preview URL; production
-# traffic is untouched).
-preview:
+# Every merge request runs the full deploy pipeline, bundle included, and
+# publishes nothing. A Worker version would share production's Durable Objects
+# and D1, so an MR never uploads one.
+check:
   extends: .lunora_base
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   script:
-    - pnpm exec lunora deploy --preview
+    - pnpm exec lunora deploy --dry-run
 `;
 
 const MANAGERS: ReadonlyArray<PackageManager> = ["npm", "pnpm", "yarn", "bun"];
@@ -157,7 +159,7 @@ describe("ci-workflow", () => {
         const github = buildContent("github", "pnpm");
 
         expect(github).toContain("      - uses: pnpm/action-setup@v4\n        with:\n          version: latest\n");
-        // Both jobs (deploy + preview) get it, not just the first.
+        // Both jobs (deploy + check) get it, not just the first.
         expect(github.match(/pnpm\/action-setup@v4\n {8}with:\n {10}version: latest\n/gu) ?? []).toHaveLength(2);
     });
 
@@ -200,8 +202,8 @@ describe("ci-workflow", () => {
         expect(gitlab).toContain("commit your pnpm-lock.yaml");
     });
 
-    it("both providers include a preview job running `lunora deploy --preview`", () => {
-        expect.assertions(4);
+    it("both providers check every pull/merge request with `lunora deploy --dry-run`, never a version upload", () => {
+        expect.assertions(6);
 
         writeCiWorkflow(workdir, "github", "pnpm");
         writeCiWorkflow(workdir, "gitlab", "pnpm");
@@ -210,9 +212,11 @@ describe("ci-workflow", () => {
         const gitlab = readFileSync(join(workdir, ".gitlab-ci.yml"), "utf8");
 
         expect(github).toContain("pull_request");
-        expect(github).toContain("lunora deploy --preview");
+        expect(github).toContain("lunora deploy --dry-run");
+        expect(github).not.toContain("--preview");
         expect(gitlab).toContain('$CI_PIPELINE_SOURCE == "merge_request_event"');
-        expect(gitlab).toContain("lunora deploy --preview");
+        expect(gitlab).toContain("lunora deploy --dry-run");
+        expect(gitlab).not.toContain("--preview");
     });
 
     it("skips an existing pipeline unless overwrite is set", () => {
@@ -272,7 +276,7 @@ describe("ci-workflow", () => {
 
             expect(yaml).toContain(PM_CI_PROFILES[manager].installCmd);
             expect(yaml).toContain("lunora prepare");
-            expect(yaml).toContain("lunora deploy --preview");
+            expect(yaml).toContain("lunora deploy --dry-run");
         });
 
         it("round-trips through writeCiWorkflow onto disk", () => {

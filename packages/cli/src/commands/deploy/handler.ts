@@ -319,6 +319,17 @@ const runCodegenStep = async (
 };
 
 /**
+ * Why `--preview` is refused. Cloudflare generates no version preview URL for a
+ * Worker that implements a Durable Object, which every Lunora app does, and an
+ * uploaded version runs against production's Durable Objects, D1 and R2 — so a
+ * per-PR "preview" was unreachable, and promoting one shared production data.
+ */
+const PREVIEW_REFUSAL =
+    "--preview is not supported: Cloudflare gives a Worker that implements a Durable Object no version preview URL, and a version shares " +
+    "production's Durable Objects, D1 and R2. Deploy an isolated copy with `--env <name>` (its own Worker name, so its own Durable Object " +
+    "namespace, plus the env's own D1/R2 bindings), or validate without publishing with `--dry-run`.";
+
+/**
  * The neutral deploy request these options describe. The projection's
  * `configPath` is added when the command is planned
  * ({@link planToolchainInvocation}).
@@ -331,7 +342,6 @@ const deployRequestFor = (cwd: string, options: DeployCommandOptions): DeployReq
         entry: resolveComposedWorkerEntry(cwd),
         environment: options.env,
         outDir: options.outDir,
-        preview: options.preview,
         temporary: options.temporary,
     };
 };
@@ -339,7 +349,7 @@ const deployRequestFor = (cwd: string, options: DeployCommandOptions): DeployReq
 /**
  * Plan the target's deploy command without writing anything. The argv builder
  * is where a host refuses an option it has no equivalent for (celld has no
- * `--env`, `--preview`, …), so the pre-deploy pipeline plans once up front — a
+ * `--env`, `--temporary`, …), so the pre-deploy pipeline plans once up front — a
  * refusal then stops the deploy before codegen or provisioning has touched a
  * file — and {@link buildDeployCommand} plans again, against the provisioned
  * config, to run it.
@@ -465,7 +475,7 @@ const reportWranglerProblems = (validation: { problems: ReadonlyArray<string>; r
 const buildDeploySpawn = (cwd: string, options: DeployCommandOptions, driver: DeployDriver): SpawnDescriptor => {
     const jsonFormat = options.format === "json";
     // Read the deployed URL off wrangler's stdout on EVERY publishing run — a
-    // preview and a `--format json` deploy need to report where the thing went
+    // `--format json` deploy needs to report where the thing went
     // just as much as a first pretty deploy does, and a re-deploy is how a
     // CHANGED url gets noticed.
     const publishes = options.dryRun !== true;
@@ -510,10 +520,6 @@ type PreDeployPipelineResult =
 const serviceDeploySkipReason = (options: DeployCommandOptions): string | undefined => {
     if (options.skipServices === true) {
         return "--skip-services";
-    }
-
-    if (options.preview === true) {
-        return "--preview uploads the app version only";
     }
 
     // A temporary account is the app's alone: services deployed with the real
@@ -652,7 +658,13 @@ const preflightDeploy = (
         return { kind: "refused", error: message, validation: NO_VALIDATION };
     }
 
-    // An option the target refuses (celld has no `--env`, `--preview`, …) has to
+    if (options.preview === true) {
+        options.logger.error(PREVIEW_REFUSAL);
+
+        return { kind: "refused", code: EXIT_CODE.USAGE, error: PREVIEW_REFUSAL, validation: NO_VALIDATION };
+    }
+
+    // An option the target refuses (celld has no `--env`, `--temporary`, …) has to
     // stop the deploy HERE, before codegen rewrites `_generated/*` and
     // provisioning writes `wrangler.jsonc` — not at the deploy step, after both.
     try {
@@ -1422,10 +1434,9 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     }
 
     // Vercel-style summary block after a successful real deploy. Skipped on
-    // failure, on dry runs, and on previews (nothing went live; wrangler already
-    // printed the preview URL), and never in json mode (the early return above)
-    // where it would corrupt the document on stdout.
-    if (result.code === 0 && options.dryRun !== true && options.preview !== true) {
+    // failure and on dry runs (nothing went live), and never in json mode (the
+    // early return above) where it would corrupt the document on stdout.
+    if (result.code === 0 && options.dryRun !== true) {
         renderDeploySummary({
             cwd: options.cwd ?? process.cwd(),
             env: options.env,
@@ -1436,10 +1447,6 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
             // stale (or absent on a first deploy), and this run knows the truth.
             url: result.deployment?.url,
         });
-    } else if (result.code === 0 && options.preview === true) {
-        const previewUrl = result.deployment?.url;
-
-        options.logger.success(previewUrl === undefined ? "preview version uploaded" : `preview version uploaded — ${previewUrl}`);
     }
 
     return result;

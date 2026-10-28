@@ -219,7 +219,7 @@ Additional flags:
 
 - `--add <list>`: add features non-interactively after scaffolding — a comma-separated list of the values in the [`lunora add` table](#lunora-add), each applied with its shipped defaults. Bypasses the interactive picker and its sub-prompts.
 - `--dry-run`: walk every step (prompts and output included) without writing files, installing, or running git.
-- `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch **and** a `lunora deploy --preview` on every pull / merge request. Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables.
+- `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch **and** a `lunora deploy --dry-run` check on every pull / merge request. Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables.
 
 ### `lunora add`
 
@@ -673,11 +673,10 @@ recorded value** rather than rewriting an explicit `lunora link`. Run
 `lunora link --url <new>` to accept the change. `--temporary` never writes a
 link, since that account is gone in an hour.
 
-`--preview` uploads a new Worker **version** (`wrangler versions upload`) and
-reports its preview URL instead of going live: production traffic is untouched,
-and the post-deploy steps (migrations, baseline re-bless, link write) are
-skipped. The `--ci` pipelines use it to deploy a preview on every pull / merge
-request.
+`--preview` is refused. Cloudflare gives a Worker that implements a Durable
+Object no version preview URL, and a version shares production's Durable
+Objects, D1 and R2. Deploy an isolated copy with `--env <name>` instead (see
+[Environments](/docs/concepts/environments#preview-deployments)).
 
 #### Cloudflare CLI (`cf`)
 

@@ -425,7 +425,6 @@ interface DeployRequest {
     entry?: string;
     environment?: string;
     outDir?: string;
-    preview?: boolean;
     temporary?: boolean;
 }
 ```

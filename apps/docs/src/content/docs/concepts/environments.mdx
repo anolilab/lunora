@@ -1,6 +1,6 @@
 ---
 title: Environments & releases
-description: Running staging next to production, shipping a preview per pull request, and rolling traffic back when something goes wrong.
+description: Running staging next to production, isolating a deployment per pull request, and rolling traffic back when something goes wrong.
 related:
     - to: /docs/deployment
     - to: /docs/production-checklist
@@ -11,7 +11,7 @@ related:
 
 A Lunora deployment is a Cloudflare Worker, so environments are Wrangler
 environments and releases are Worker versions. This page covers running more than
-one deployment, previewing a change before it takes traffic, and getting back to
+one deployment, checking a change before it takes traffic, and getting back to
 the last good version.
 
 ## Multiple environments
@@ -70,24 +70,42 @@ identifiers only, never secrets.
 
 ## Preview deployments
 
-`--preview` uploads a new Worker **version** and prints a preview URL without
-sending it any production traffic:
+`lunora deploy --preview` is refused. A Cloudflare Worker
+**version** is not an isolated preview for a Lunora app, for two reasons:
+
+- Cloudflare [generates no version preview URL](https://developers.cloudflare.com/workers/configuration/previews/)
+  for a Worker that implements a Durable Object, and every Lunora app does (its
+  shards are Durable Objects). An uploaded version would have nothing to open.
+- A version runs against the Worker's existing resources. Its Durable Objects,
+  D1 databases and R2 buckets are production's, and a pending Durable Object
+  migration only applies on `wrangler deploy`. Promoting a version shipped as a
+  "preview" therefore ran its code over production data.
+
+An isolated copy is a separate **environment**. `--env <name>` deploys under its
+own Worker name, which gives it its own Durable Object namespace, so its shards
+start empty. Bindings are non-inheritable, so the environment must declare its
+own D1 database and R2 buckets (see the callout above), then `lunora seed`
+fills it:
 
 ```bash
-lunora deploy --preview
+lunora deploy --env pr-123
+lunora seed --prod --url https://my-app-pr-123.acme.workers.dev --yes
 ```
 
-Because nothing goes live, the post-deploy steps are skipped: no migrations run,
-no baseline is re-blessed, and the project link is not rewritten. This is what
-the scaffolded CI pipelines use for every pull request:
+The scaffolded CI pipelines do not deploy pull requests. They run
+`lunora deploy --dry-run`, the whole pipeline with the bundle included, and
+publish nothing:
 
 ```bash
 lunora init my-app --ci github    # or --ci gitlab
 ```
 
 That scaffolds a production deploy on the default branch plus a
-`lunora deploy --preview` on every pull or merge request. Set
+`lunora deploy --dry-run` check on every pull or merge request. Set
 `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets.
+
+celld has no Wrangler environments: deploy a separate config (and fleet bucket)
+per copy. The Node target has no `lunora deploy`.
 
 ### Validating without publishing
 

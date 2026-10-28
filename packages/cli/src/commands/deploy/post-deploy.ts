@@ -264,20 +264,16 @@ const completeDeploy = async ({
         deployedAt: new Date().toISOString(),
         dryRun: options.dryRun === true,
         env: options.env,
-        preview: options.preview === true,
         url: options.dryRun === true ? undefined : parseDeployedUrl(stdout),
         workerName: readWranglerName(cwd),
     };
 
-    // A dry run published nothing, and a preview uploaded a Version without
-    // going live — either way, skip the post-deploy finalize (migrations /
+    // A dry run published nothing, so skip the post-deploy finalize (migrations /
     // baseline re-bless), the link write, and the health probe, which only apply
-    // to a live deploy. The URL is still reported.
-    if (options.dryRun === true || options.preview === true) {
+    // to a live deploy.
+    if (options.dryRun === true) {
         if (options.healthCheck === true) {
-            options.logger.warn(
-                `--health-check skipped: ${options.dryRun === true ? "a dry run publishes nothing" : "a preview version serves no live traffic"}`,
-            );
+            options.logger.warn("--health-check skipped: a dry run publishes nothing");
         }
 
         return { code: 0, deployment, descriptor, mintedSecretsFile, validation };

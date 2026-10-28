@@ -90,7 +90,7 @@ const deployCommand: Command = {
             type: Boolean,
         },
         {
-            description: "Upload a preview version (wrangler versions upload) instead of going live — prints a preview URL; doesn't shift production traffic",
+            description: "Refused: a Worker version shares production state and gets no preview URL — deploy an isolated copy with --env <name>",
             name: "preview",
             type: Boolean,
         },

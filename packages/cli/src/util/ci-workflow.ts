@@ -97,7 +97,7 @@ const execLine = (manager: PackageManager, args: ReadonlyArray<string>): string 
 };
 
 /**
- * The GitHub Actions steps shared by the `deploy` and `preview` jobs: checkout,
+ * The GitHub Actions steps shared by the `deploy` and `check` jobs: checkout,
  * provision the manager, provision Node, install with a frozen lockfile.
  */
 const githubSetupSteps = (pm: PmCiProfile): string =>
@@ -151,16 +151,17 @@ ${githubSetupSteps(pm)}
       - run: ${execLine(manager, ["prepare"])}
       - run: ${execLine(manager, ["deploy"])}
 
-  # Preview version on every pull request — uploads a versioned preview URL;
-  # production traffic is untouched.
-  preview:
+  # Every pull request runs the full deploy pipeline, bundle included, and
+  # publishes nothing. A Worker version would share production's Durable
+  # Objects and D1, so a PR never uploads one.
+  check:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
 ${githubSetupSteps(pm)}
-      - run: ${execLine(manager, ["deploy", "--preview"])}
+      - run: ${execLine(manager, ["deploy", "--dry-run"])}
 `;
     /* eslint-enable no-secrets/no-secrets */
 };
@@ -198,14 +199,15 @@ deploy:
     - ${execLine(manager, ["prepare"])}
     - ${execLine(manager, ["deploy"])}
 
-# Preview version on every merge request (versioned preview URL; production
-# traffic is untouched).
-preview:
+# Every merge request runs the full deploy pipeline, bundle included, and
+# publishes nothing. A Worker version would share production's Durable Objects
+# and D1, so an MR never uploads one.
+check:
   extends: .lunora_base
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   script:
-    - ${execLine(manager, ["deploy", "--preview"])}
+    - ${execLine(manager, ["deploy", "--dry-run"])}
 `;
 };
 
