@@ -253,6 +253,36 @@ describe("hyperdrive on deploy", () => {
             });
 
             it.each([
+                [{ max_age: 60 }, 1],
+                [{ disabled: true }, 0],
+            ])("warns about a binding with a real id whose config caching is %o", async (caching, warnings) => {
+                expect.assertions(3);
+
+                writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: "real-id" }], name: "app" });
+
+                const api = vi.fn<typeof globalThis.fetch>(async () => Response.json({ errors: [], result: { caching, id: "real-id" }, success: true }));
+                const { logger, messages } = recordingLogger();
+
+                await provisionHyperdrive({ cwd: root, disableCaching: true, environment: CREDENTIALS, fetch: api, logger });
+
+                expect(api.mock.calls[0]?.[0] as string).toMatch(/\/hyperdrive\/configs\/real-id$/u);
+                expect(api.mock.calls.every(([, init]) => init?.method === undefined)).toBe(true);
+                expect(messages.filter((message) => message.includes("wrangler hyperdrive update real-id --caching-disabled"))).toHaveLength(warnings);
+            });
+
+            it("skips the caching check without API credentials", async () => {
+                expect.assertions(1);
+
+                writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: "real-id" }], name: "app" });
+
+                const api = hyperdriveApi([]);
+
+                await provisionHyperdrive({ cwd: root, disableCaching: true, environment: {}, fetch: api, logger: recordingLogger().logger });
+
+                expect(api).not.toHaveBeenCalled();
+            });
+
+            it.each([
                 ['.global({ backend: "hyperdrive" })', { disabled: true }],
                 [".global()", undefined],
             ])("a deploy of an app with %s tables sends caching %o", async (marker, expected) => {

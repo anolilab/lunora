@@ -502,11 +502,77 @@ const preflight = (
     return undefined;
 };
 
+/** Warn when the config `id` (bound as `binding`) still caches queries, or when that can't be read. */
+const warnIfCaching = async (request: Request, binding: string, id: string, logger: Logger): Promise<void> => {
+    const outcome = await request(`/hyperdrive/configs/${encodeURIComponent(id)}`);
+
+    if (!outcome.ok) {
+        logger.warn(`could not check whether the "${binding}" Hyperdrive config has query caching off (${describeFailure(outcome)}).`);
+
+        return;
+    }
+
+    const { caching } = (typeof outcome.body.result === "object" && outcome.body.result !== null ? outcome.body.result : {}) as {
+        caching?: { disabled?: unknown };
+    };
+
+    if (caching?.disabled !== true) {
+        logger.warn(
+            `the "${binding}" Hyperdrive config has query caching on, so .global() tables would read rows up to 75 s old. Run \`wrangler hyperdrive update ${id} --caching-disabled\`.`,
+        );
+    }
+};
+
+/**
+ * Warn about each binding that already has a real id but whose config still caches queries. Only a
+ * config this deploy creates or reuses gets caching turned off; one whose id was put in by hand, or
+ * created before, keeps it on. The check needs the deploy's API credentials and is skipped without
+ * them; it never changes the config, since the user chose that id.
+ */
+const warnCachingOn = async (
+    options: Pick<ProvisionHyperdriveOptions, "cwd" | "fetch" | "logger" | "wranglerEnvironment">,
+    environment: CloudflareEnvironment,
+): Promise<void> => {
+    const wranglerPath = findWranglerFile(options.cwd);
+    const parsed = wranglerPath === undefined ? undefined : readWranglerJsonc<HyperdriveWrangler>(wranglerPath).parsed;
+    const scope = options.wranglerEnvironment === undefined ? parsed : parsed?.env?.[options.wranglerEnvironment];
+    const { accountId, token } = resolveCloudflareCredentials(environment, scope?.account_id ?? parsed?.account_id);
+
+    if (accountId === undefined || token === undefined) {
+        return;
+    }
+
+    const request: Request = async (path, init) =>
+        cloudflareRestRequest({
+            accountId,
+            apiToken: token,
+            ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+            init: { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+            path,
+        });
+
+    for (const entry of Array.isArray(scope?.hyperdrive) ? (scope.hyperdrive as unknown[]) : []) {
+        const { binding, id } = (typeof entry === "object" && entry !== null ? entry : {}) as { binding?: unknown; id?: unknown };
+
+        if (typeof binding === "string" && typeof id === "string" && id !== HYPERDRIVE_PLACEHOLDER_ID) {
+            // eslint-disable-next-line no-await-in-loop -- one request at a time keeps the warnings in binding order
+            await warnIfCaching(request, binding, id, options.logger);
+        }
+    }
+};
+
 /**
  * Replace every placeholder Hyperdrive id in `wrangler.jsonc` with a real config's.
  * Returns the error that blocks the deploy, or `undefined` when nothing is left to do.
  */
 const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise<string | undefined> => {
+    const environment = options.environment ?? process.env;
+
+    // The "check" phase is followed by "create" in the same deploy; asking once is enough.
+    if (options.disableCaching === true && options.checkOnly !== true) {
+        await warnCachingOn(options, environment);
+    }
+
     const scan = scanPlaceholders(options.cwd, options.wranglerEnvironment);
 
     if (scan === undefined) {
@@ -514,7 +580,6 @@ const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise
     }
 
     const { entries, path, wranglerPath } = scan;
-    const environment = options.environment ?? process.env;
     const { accountId, token } = resolveCloudflareCredentials(environment, scan.accountId);
     const origins = entries.map(({ binding }) => {
         const value = environment[connectionStringVariable(binding)] ?? "";

@@ -186,7 +186,7 @@ const globalDb = createPostgresGlobalCtxDb(fromPostgresJs(sql), { schema });
 
 For MySQL use `createMysqlGlobalCtxDb` with a `mysql2/promise` pool created with `disableEval: true` (required on Workers) and `flags: ["FOUND_ROWS"]` — without `CLIENT_FOUND_ROWS` the affected-rows OCC guard sees changed (not matched) rows and raises spurious conflicts. Lower-level building blocks (`buildPgExec`, `buildMysqlExec`, `postgresDialect`, `mysqlDialect`, `createHyperdriveGlobalCtxDb`) are exported for custom wiring.
 
-The Hyperdrive config behind `.global()` must have **query caching disabled** (`wrangler hyperdrive create … --caching-disabled`, or `wrangler hyperdrive update <id> --caching-disabled`). Hyperdrive caches reads for up to 75 s by default and writes don't invalidate them, so the store's OCC re-reads, change-log polls and live-query re-runs would see stale rows. `lunora deploy` sets this on the configs it creates when the schema has `.global({ backend: "hyperdrive" })` tables.
+The Hyperdrive config behind `.global()` must have **query caching disabled** (`wrangler hyperdrive create … --caching-disabled`, or `wrangler hyperdrive update <id> --caching-disabled`). Hyperdrive caches reads for up to 75 s by default and writes don't invalidate them, so the store's OCC re-reads, change-log polls and live-query re-runs would see stale rows. `lunora deploy` sets this on the configs it creates when the schema has `.global({ backend: "hyperdrive" })` tables, and warns about an already-bound config that still caches (when Cloudflare API credentials are set).
 
 > This README covers the basics. For the full API and the determinism/realtime rationale, see the **[documentation](https://lunora.sh/docs/packages/hyperdrive)**.
 

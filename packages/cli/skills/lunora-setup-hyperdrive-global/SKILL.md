@@ -56,7 +56,8 @@ not invalidate them, so the store would read its own rows stale: OCC retries
 reread the cached version and fail with spurious conflicts, and live queries
 re-run onto old data. For a config that already exists, run
 `wrangler hyperdrive update <id> --caching-disabled`. When `lunora deploy`
-creates the config from `LUNORA_<BINDING>_URL`, it turns caching off itself.
+creates the config from `LUNORA_<BINDING>_URL`, it turns caching off itself. For a
+binding that already has an id, it only warns (given Cloudflare API credentials).
 
 ```jsonc
 {

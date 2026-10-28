@@ -461,8 +461,10 @@ the same cached row (spurious `ConflictError`s), and change-log polls and
 live-query re-runs serve rows up to 75 s old.
 
 `lunora deploy` creates (or updates) its configs with caching off when the
-schema has `.global({ backend: "hyperdrive" })` tables. A config you made
-yourself needs it set once:
+schema has `.global({ backend: "hyperdrive" })` tables. For a binding whose id is
+already set, it doesn't change the config; with `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` in the environment it warns when caching is still on. A
+config you made yourself needs it set once:
 
 ```bash
 wrangler hyperdrive create my-db --connection-string="postgres://user:pass@host/db" --caching-disabled # gitleaks:allow -- placeholder
