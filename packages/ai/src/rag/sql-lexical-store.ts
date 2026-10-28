@@ -239,18 +239,34 @@ const sqlLexicalStore = (options: SqlLexicalStoreOptions): RagLexicalStore => {
             }
 
             const scores = new Map<string, number>();
+            // The verdict per document: a document matching k query terms comes
+            // back as k rows, and its metadata would otherwise be parsed k times.
+            const admitted = new Map<string, boolean>();
+            const admits = (id: string, row: Record<string, unknown>): boolean => {
+                if (!filtered) {
+                    return true;
+                }
+
+                let verdict = admitted.get(id);
+
+                if (verdict === undefined) {
+                    // Honour the same predicate the vector leg gets — the filter
+                    // carries the tenant/RBAC scope, so a hit it excludes must never
+                    // reach fusion.
+                    verdict = matchesMetadataFilter(readJsonColumn(row["metadata"]) as Record<string, unknown> | undefined, searchOptions.filter);
+                    admitted.set(id, verdict);
+                }
+
+                return verdict;
+            };
 
             for (const row of rows) {
-                const metadata = filtered ? (readJsonColumn(row["metadata"]) as Record<string, unknown> | undefined) : undefined;
+                const id = String(row["id"]);
 
-                // Honour the same predicate the vector leg gets — the filter
-                // carries the tenant/RBAC scope, so a hit it excludes must never
-                // reach fusion.
-                if (!matchesMetadataFilter(metadata, searchOptions.filter)) {
+                if (!admits(id, row)) {
                     continue;
                 }
 
-                const id = String(row["id"]);
                 const idf = bm25Idf(documentCount, documentFrequency.get(String(row["term"])) ?? 1);
                 const contribution = bm25TermScore(idf, readCount(row["frequency"]), readCount(row["length"]), averageLength);
 
