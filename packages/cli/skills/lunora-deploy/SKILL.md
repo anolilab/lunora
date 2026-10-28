@@ -1,6 +1,6 @@
 ---
 name: lunora-deploy
-description: Deploys a Lunora app to Cloudflare Workers + Durable Objects and gets wrangler.jsonc, remote resources and secrets to line up. Covers `lunora deploy` (and `--env`, `--dry-run`, `--preview`, `--migrate`), the `lunora doctor` / `lunora verify` / `lunora prepare` preflights, Durable Object bindings (SHARD, SHARD_REGISTRY, SCHEDULER), the `DB` D1 binding and its placeholder id, R2 buckets, production secrets (`lunora env push`, `wrangler secret put`) versus `.dev.vars`, the schema-drift gate, the architecture diff, and rollback with `lunora cloudflare deployments`. Use when the user asks to "deploy", "ship to production", "set up a staging environment", wire CI deploys, or when a deploy fails on a binding, a placeholder `database_id`, an unexported Durable Object class, a missing secret, or "schema drift gate blocked deploy".
+description: Deploys a Lunora app to Cloudflare Workers + Durable Objects and gets wrangler.jsonc, remote resources and secrets to line up. Covers `lunora deploy` (and `--env`, `--dry-run`, `--migrate`), the `lunora doctor` / `lunora verify` / `lunora prepare` preflights, Durable Object bindings (SHARD, SHARD_REGISTRY, SCHEDULER), the `DB` D1 binding and its placeholder id, R2 buckets, production secrets (`lunora env push`, `wrangler secret put`) versus `.dev.vars`, the schema-drift gate, the architecture diff, and rollback with `lunora cloudflare deployments`. Use when the user asks to "deploy", "ship to production", "set up a staging environment", wire CI deploys, or when a deploy fails on a binding, a placeholder `database_id`, an unexported Durable Object class, a missing secret, or "schema drift gate blocked deploy".
 ---
 
 # Lunora Deploy
@@ -45,8 +45,8 @@ In order, stopping at the first failure:
 7. **Secrets gate** — lists the secrets the app's packages need and checks
    which are set on the worker. Interactive runs offer to mint and push the
    generatable ones (`BETTER_AUTH_SECRET`, `LUNORA_ADMIN_TOKEN`, …). In CI a
-   missing required secret aborts the deploy. Skipped for `--dry-run` /
-   `--preview`, and when the worker doesn't exist yet.
+   missing required secret aborts the deploy. Skipped for `--dry-run`, and
+   when the worker doesn't exist yet.
 8. **Services, then `wrangler deploy`** — services declared in
    `lunora.config` deploy first (`--skip-services` to skip), then the app.
 9. **After a successful deploy** — records the URL as the project link

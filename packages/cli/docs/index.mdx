@@ -59,8 +59,7 @@ lunora build [--out-dir <dir>] [--no-framework-build]   # bundle the worker to d
 lunora deploy [--env <name>]            # codegen, validate wrangler, then wrangler deploy
               [--migrate --migrate-yes] #   --migrate also needs --migrate-url unless linked
               [--lazy-functions] [--no-smoke-load] [--no-framework-build]
-              [--prebuilt]              #   --preview uploads a version (no live traffic)
-              [--preview] [--dry-run]   #   --dry-run validates + bundles, never publishes
+              [--prebuilt] [--dry-run]  #   --dry-run validates + bundles, never publishes
               [--temporary]             #   --temporary deploys with no account (~60min, then claim)
               [--health-check]          #   --health-check probes /_lunora/health/ready after deploying
 lunora link --url <url> [--env <name>]  # link this checkout to its deployed worker
