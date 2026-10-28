@@ -2640,6 +2640,15 @@ abstract class ShardDO {
     private lastTelemetrySink: TelemetrySink | undefined;
 
     /**
+     * `functionPath` + limit kind of every live-query re-run that already warned
+     * near a limit. Each re-run gets a fresh tracker, so without this a query that
+     * sits past 80% would warn once per subscriber per write. Bounded by the
+     * app's query paths; it clears when the instance hibernates, so a query that
+     * stays near a limit warns again after a wake.
+     */
+    private readonly rerunNearLimitWarned = new Set<string>();
+
+    /**
      * Client-issued idempotency key for the in-flight mutation, forwarded via the
      * `x-lunora-mutation-id` header. When set, the dispatch path dedups the call
      * by `(currentRequestUserId, mutationId)`: a replay short-circuits to the
@@ -7552,7 +7561,7 @@ abstract class ShardDO {
     protected subscriptionHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker {
         // A re-run has no dispatch of its own; the shared trace belongs to whichever
         // write triggered it, so its warning carries the subscriber and no trace.
-        return this.mintHeadroom(functionPath, { trace: undefined, userId: identity?.userId });
+        return this.mintHeadroom(functionPath, { trace: undefined, userId: identity?.userId }, this.rerunNearLimitWarned);
     }
 
     /**
@@ -15954,8 +15963,19 @@ abstract class ShardDO {
      * use to re-set the shared trace and user, so both are pinned here. A `trace` of `undefined` files the line under no trace rather than
      * borrowing an unrelated one.
      */
-    private mintHeadroom(functionPath: string, pin: { trace: TraceAnchor | undefined; userId: string | undefined }): TransactionHeadroomTracker {
+    private mintHeadroom(
+        functionPath: string,
+        pin: { trace: TraceAnchor | undefined; userId: string | undefined },
+        warnedBefore?: Set<string>,
+    ): TransactionHeadroomTracker {
         return new TransactionHeadroomTracker(this.transactionLimits(), (warning: TransactionLimitWarning) => {
+            const key = `${functionPath}\u0000${warning.kind}`;
+
+            if (warnedBefore?.has(key)) {
+                return;
+            }
+
+            warnedBefore?.add(key);
             this.recordUserLog(
                 functionPath,
                 "warn",

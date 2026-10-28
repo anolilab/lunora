@@ -124,6 +124,19 @@ describe("transaction near-limit warning", () => {
         expect(events).toStrictEqual([expect.objectContaining({ functionPath: "items:list", traceId: undefined, userId: "subscriber-1" })]);
     });
 
+    it("warns once per query, not once per re-run", async () => {
+        expect.assertions(1);
+
+        const events: { functionPath?: string }[] = [];
+        const shard = createShard(events);
+
+        shard.writes = 9;
+        await shard.fillAsSubscription("items:list", "subscriber-1");
+        await shard.fillAsSubscription("items:list", "subscriber-2");
+
+        expect(events).toHaveLength(1);
+    });
+
     it("stays quiet for a dispatch well inside its ceilings", async () => {
         expect.assertions(1);
 
