@@ -4,11 +4,11 @@ Framework defects and surprises found while building and measuring `apps/bench`.
 Each entry has a repro. Nothing here is fixed on this branch except where the
 bench works around it in its own code, which the entry says.
 
-The core and the size-only customer rows were measured at `cf2cc3f75` on
-`feat/bench-app` (base `saas-kit` @ `d7133735c`), wrangler 4.149, macOS on a
-quiet machine (load average ~2), packages built with `build:prod`. The heavy-SDK
-customer rows and the cold-start and chunked results are newer; they are given
-below with their own commit and load.
+The core rows and the "no heavy SDKs" rows were measured at `cf2cc3f75` on
+`feat/bench-app` (base `saas-kit` @ `d7133735c`). The customer rows and the
+cold-start and chunked results were measured at `18edf37e6`. All runs used
+wrangler 4.149 and packages built with `build:prod`, on an Apple M5 Max under
+macOS 26.7 at load average ~2–3.
 
 ## Startup: what the bench measures
 
@@ -21,10 +21,10 @@ mode on the frozen `lunora build` bundle (wrangler single-file esbuild, minified
 | core                           | lazy  | 91.6 / 89.7 / 96.7        | 2,461 / 2,641       | 14.2 MiB     | 1                                      | 7.9 (2.1) MiB  |
 | 40 domains, no heavy SDKs      | eager | 105.7 / 104.7 / 114.7     | 2,749 / 2,895       | 19.1 MiB     | 289 (287 of 309)                       | 12.3 (2.2) MiB |
 | 40 domains, no heavy SDKs      | lazy  | 112.3 / 108.6 / 117.9     | 2,461 / 3,141       | 18.6 MiB     | 1                                      | 12.8 (2.3) MiB |
-| customer (999 fn / 131 tables) | eager | 158.0 / 156.1 / 164.7     | 3,529 / 3,674       | 21.8 MiB     | 1,069 (307 of 329)                     | 13.2 (2.5) MiB |
-| customer                       | lazy  | 114.6 / 113.8 / 116.3     | 2,461 / 3,940       | 18.7 MiB     | 1                                      | 13.7 (2.5) MiB |
+| customer (998 fn / 131 tables) | eager | 161.9 / 160.6 / 167.7     | 3,530 / 3,675       | 21.8 MiB     | 1,069 (307 of 330)                     | 13.2 (2.5) MiB |
+| customer                       | lazy  | 104.0 / 102.3 / 105.2     | 2,462 / 3,941       | 18.7 MiB     | 1                                      | 13.6 (2.5) MiB |
 
-The `customer` rows have 5 runs at `6e38c7888` (load 2.3 → 2.7). That preset is
+The `customer` rows have 9 runs at `18edf37e6` (load 2.0 → 2.6). That preset is
 40 domains with `--heavy-share 0.5`; the "no heavy SDKs" rows are the earlier
 preset, now `--domains 40`.
 
@@ -44,7 +44,7 @@ synthetic app.
 
 **With heavy SDKs, the preset has the real app's profile.** Half of the domains
 now have an action module on an SDK that only the registry reaches. Lazy loading
-then saves **27 %** (real app: 31 %). Of the eager graph, 30 % is registry-only
+then saves **36 %** (real app: 31 %). Of the eager graph, 30 % is registry-only
 (real app: 33 %). The largest registry-only packages are `@smithy/core`,
 `@bufbuild/protobuf`, `@connectrpc/connect`, `@aws-sdk/client-s3`, `e2b` and
 `tldts`, the same names as in the real app. The lazy eager graph stays at the
@@ -54,20 +54,20 @@ Calibration, against the real app:
 
 | Metric                          | Bench customer    | Real app (§5.1)   |
 | ------------------------------- | ----------------- | ----------------- |
-| Functions / tables              | 999 / 131         | ~1,000 / ~130     |
-| Eager modules (all)             | 3,529             | 4,088             |
+| Functions / tables              | 998 / 131         | ~1,000 / ~130     |
+| Eager modules (all)             | 3,530             | 4,088             |
 | Registry-only modules           | 1,069 (30 %)      | 1,340 (33 %)      |
 | of which dependency modules     | 762               | 979               |
 | Registry-only bytes             | 3.97 MiB          | 5.95 MiB          |
-| Registry-only `lunora/` modules | 307 of 329 (93 %) | 347 of 534 (65 %) |
+| Registry-only `lunora/` modules | 307 of 330 (93 %) | 347 of 534 (65 %) |
 | Bundle, minified                | 13.2 MiB          | 11.1 MiB          |
-| Eager Active, median            | 158 ms (load ~2)  | 421 ms (load ~16) |
-| Lazy Active, median             | 115 ms (−27 %)    | 290 ms (−31 %)    |
+| Eager Active, median            | 162 ms (load ~2)  | 421 ms (load ~16) |
+| Lazy Active, median             | 104 ms (−36 %)    | 290 ms (−31 %)    |
 
 The remaining gaps are left as they are, because closing them would mean
 overfitting:
 
-- **Absolute Active ms is about 2.7× lower.** Part of that is load (~2 against
+- **Absolute Active ms is about 2.6× lower.** Part of that is load (~2 against
   ~16). Part is the real app's ~100 ms of agent modules, which the bench does not
   model: it has one agent.
 - **The app-module split differs.** In the real app, 187 `lunora/` modules stayed
@@ -95,33 +95,45 @@ Findings 1 and 2 are the two that a lazy registry cannot reach.
 `node scripts/chunked.mjs`: 7 interleaved `wrangler check startup` runs per
 artifact; Active ms median / min / max; JS modules and bytes of the frozen upload.
 
-| Artifact                      | core (load 1.9 → 2.5)  | customer (load 1.7 → 1.8) | Modules core / customer | JS bytes, customer |
-| ----------------------------- | ---------------------- | ------------------------- | ----------------------- | ------------------ |
-| esbuild single file, eager    | 75.8 / 75.0 / 76.9     | 163.1 / 159.9 / 165.5     | 1 / 1                   | 13.16 MiB          |
-| esbuild single file, lazy     | 91.4 / 90.9 / 93.5     | 114.1 / 113.7 / 119.2     | 1 / 1                   | 13.66 MiB          |
-| rolldown chunks, eager        | **does not boot**      | 104.6 / 103.2 / 108.6     | 32 / 60                 | 12.57 MiB          |
-| rolldown chunks, lazy         | **47.8** / 46.3 / 51.3 | **55.6** / 54.4 / 55.8    | 65 / 391                | 12.88 MiB          |
-| rolldown, strict order, eager | 133.7 / 132.6 / 133.9  | 202.3 / 199.5 / 203.4     | 39 / 62                 | 12.76 MiB          |
-| rolldown, strict order, lazy  | 125.2 / 124.3 / 126.2  | 153.7 / 153.4 / 154.5     | 72 / 390                | 13.09 MiB          |
+| Artifact                      | core (load 2.4 → 2.7) | customer (load 3.5 → 2.4) | Modules core / customer | JS bytes, customer |
+| ----------------------------- | --------------------- | ------------------------- | ----------------------- | ------------------ |
+| esbuild single file, eager    | 75.4 / 74.8 / 77.2    | 160.5 / 159.3 / 163.6     | 1 / 1                   | 13.16 MiB          |
+| esbuild single file, lazy     | 84.0 / 83.2 / 84.7    | 103.4 / 102.6 / 106.7     | 1 / 1                   | 13.64 MiB          |
+| rolldown chunks, eager        | **does not boot**     | 103.6 / 102.7 / 106.7     | 32 / 60                 | 12.57 MiB          |
+| rolldown chunks, lazy         | **does not boot**     | **does not boot**         | 63 / 389                | 12.88 MiB          |
+| rolldown, strict order, eager | 134.1 / 133.4 / 137.3 | 200.8 / 199.6 / 203.2     | 39 / 62                 | 12.76 MiB          |
+| rolldown, strict order, lazy  | 127.1 / 125.3 / 129.0 | 156.5 / 155.8 / 157.8     | 70 / 388                | 13.10 MiB          |
 
-Core at `a6af40122`, customer at `00cde8ca9`; both rolldown builds are
-`vite build --minify` (Vite 8.3.5).
+Both at `18edf37e6`; the rolldown builds are `vite build --minify` (Vite 8.3.5).
+Every "does not boot" is the tsyringe ordering failure of finding 15.
 
-- **A chunked lazy build starts 3× faster than the eager single file:** 55.6
-  against 163.1 ms on the customer preset, and 48 against 76 ms even on the core.
-  With chunks, a module behind `import()` is uploaded but never compiled or run at
-  startup. In a single file it is at least parsed, and it carries esbuild's
-  lazy-init wrappers. Plan 490 §5.1 measured esbuild `--splitting` on the real app
-  and saw no gain. That result does not carry over to rolldown chunks.
+At the two commits before it (`a6af40122` core, `00cde8ca9` customer), the same
+rolldown lazy builds **did** boot, at **47.8** (core) and **55.6** ms (customer).
+Esbuild eager was 75.8 and 163.1 ms there. Between those runs and this one, the
+app gained `lunora/env.ts` and the onboarding change (one or two modules), and
+that was enough to reorder rolldown's output into a crash.
+
+- **When it boots, a chunked lazy build starts about 3× faster than the eager
+  single file.** With chunks, a module behind `import()` is uploaded but never
+  compiled or run at startup. In a single file it is at least parsed, and it
+  carries esbuild's lazy-init wrappers. Plan 490 §5.1 measured esbuild
+  `--splitting` on the real app and saw no gain. That result does not carry over
+  to rolldown chunks.
 - **These numbers do not justify shipping chunked lazy builds yet:**
-    - The default rolldown output's evaluation order is not safe. The eager core
-      does not boot (finding 15). The order-safe `strictExecutionOrder` output is
-      the slowest artifact here.
+    - The default rolldown output's evaluation order is not safe. Whether a build
+      boots changes with unrelated edits (finding 15). The order-safe
+      `strictExecutionOrder` output is the slowest artifact here.
     - A parallel branch (`test/lazy-input-gate`) found that a real `import()` in a
       chunked or uploaded-module build yields to the event loop, which broke Durable
       Object request ordering. This branch does not include that fix, and the
       chunked lazy artifacts were not exercised at runtime here, only profiled at
       startup.
+- **Why rolldown's eager output beats esbuild's by ~35 % is unexplained.** No
+  `import()` is involved there. The measurement does not separate the candidate
+  causes: fewer lazy-init wrappers, different tree-shaking, or compile time
+  outside Active. An attempt to serve the customer rolldown builds through the
+  cold-start harness never reached `ready` and was not diagnosed. These artifacts
+  have been profiled at startup only, never served.
 - **Active may not count compile time.** Whether `wrangler check startup`'s
   Active includes V8 parse and compile time is not documented. If it does not,
   neither the single file's parse of deferred code nor the chunks' compile of
@@ -131,8 +143,8 @@ Core at `a6af40122`, customer at `00cde8ca9`; both rolldown builds are
 ## Cold start
 
 See finding 18: the cost a lazy registry moves to first calls is small (about
-+11 ms over 60 first calls on the customer preset, ~16 ms p95 for a heavy-SDK
-action).
++42 ms over 94 sampled first calls on the customer preset, ~15 ms p95 for a
+heavy-SDK action, against 58 ms less startup).
 
 ---
 
@@ -387,7 +399,7 @@ Vite build.
 **Suggestion:** have `lunora build --no-framework-build` ignore or refuse the
 redirect, since the flag says no framework build is involved.
 
-## 15. Rolldown's default output of the core app does not boot (high, for the Vite deploy path)
+## 15. Rolldown's default output boots or crashes depending on unrelated edits (high, for the Vite deploy path)
 
 `vite build` of the core app (with or without `--minify`) fails at module
 evaluation: `Uncaught Error: tsyringe requires a reflect polyfill`.
@@ -397,18 +409,20 @@ evaluation: `Uncaught Error: tsyringe requires a reflect polyfill`.
 - In rolldown's output, the hoisted `tsyringe` module runs before the CJS polyfill
   it depends on.
 
-The lazy core build boots, and so do both customer builds. Whether a build boots
-therefore depends on the shape of the graph, so an unrelated change can break a
-deploy.
+Whether a build boots depends on the shape of the graph. At `00cde8ca9` the lazy
+core build and both customer builds booted. Then two small app edits landed, a
+new `lunora/env.ts` and the onboarding change. At `18edf37e6` the lazy core and
+lazy customer builds crash the same way, while the customer eager build still
+boots. So an unrelated change can break a deploy.
 
 rolldown's `output.strictExecutionOrder: true` fixes it, at a high cost. Active
 becomes 1.9–2.8× that of the default output, and slower than the esbuild bundle:
-134 against 76 ms on the core, 202 against 163 ms on the customer preset (see
+134 against 75 ms on the core, 201 against 161 ms on the customer preset (see
 "Chunked builds" above). Only local `wrangler check startup` and `wrangler dev`
 were run; no deploy was attempted.
 
 **Repro:** `node scripts/chunked.mjs --preset core` reports `rolldown-eager`
-as failed. `wrangler dev --local` on that output prints the tsyringe error.
+(and at `18edf37e6`, `rolldown-lazy`) as failed. `wrangler dev --local` on that output prints the tsyringe error.
 
 **Suggestion:** have `@lunora/vite` set `strictExecutionOrder` for the worker
 environment, or add a smoke-load of the Vite output to `lunora build`/`deploy`
@@ -420,7 +434,7 @@ upload.
 `ActionCtx.env` is typed `Record<string, unknown> | undefined`. It is populated
 only when the app declares a `defineEnv` contract in `lunora/env.ts`. The common
 `ctx.env as unknown as { KEY?: string }` therefore compiles and reads nothing. The
-bench had two such reads:
+bench had three such reads:
 
 - **The generated S3 action.** It failed with
   `Cannot destructure property 'S3_ACCESS_KEY_ID' of 'ctx.env'`.
@@ -429,13 +443,27 @@ bench had two such reads:
   built in the same isolate. Locally, the Worker and the Durable Object share an
   isolate. A Durable Object isolate that never served a Worker request would
   have thrown.
+- **The onboarding workflow's `recipient` action.** It made the same call to
+  look up the user's email.
 
-The bench now declares `lunora/env.ts`, and nothing reads `authApi`. The
-`@lunora/server` `env.ts` docblock says Workers receive their secrets "on
-`ctx.env` in actions", which holds only with a contract.
+Declaring a contract does not fix the auth reads. The proxy returns `undefined`
+for every key the contract does not declare, `DB` and the auth secret included,
+so `getAuth` would then memoise an auth instance with no database. Functions
+have no way to reach the Worker's `env`, so the bench moved the lookups to where
+it is:
+
+- `lunora/env.ts` declares only the integration keys.
+- `authAction` no longer builds `authApi`, which nothing read.
+- `resolveIdentity` adds a `verifiedEmail` claim, which `onboarding:start` passes
+  to the workflow.
+
+The `@lunora/server` `env.ts` docblock says Workers receive their secrets "on
+`ctx.env` in actions", which holds only for declared keys.
 
 **Suggestion:** without a contract, either type `ctx.env` as `undefined` or emit
 an advisory on any `ctx.env` read. Otherwise, populate it with the raw `env`.
+Separately, give actions a documented way to reach a binding the contract cannot
+describe, such as a D1 database for an auth lookup.
 
 ## 17. A hand-written function reference to a wrong path compiles and fails at runtime (low)
 
@@ -450,32 +478,51 @@ every call. Neither tool had ever worked.
 
 **Fixed in the bench:** the tools use `internal.assistant.*`.
 
+**Not fixed, and probably still broken:** the tools now name a registered
+function and filter by the run's organisation. They still most likely return
+nothing. `AgentRunOptions` has only `timeoutMs`, so a tool's `run` cannot name a
+`shardKey`, and `tasks` is `.shardBy("organizationId")`. The dispatch then lands
+on the default shard rather than the tenant's. This conclusion comes from
+reading `packages/agent`; it was not run, since a run needs Workers AI.
+
+**Suggestion:** let `AgentToolContext.run` take a `shardKey`, or default it to
+the shard the run was started from.
+
 **Suggestion:** have the agent tool `run` accept only generated references, or
 have codegen check `__lunoraRef` literals against the registry.
 
 ## 18. Lazy loading costs little at the first call (measurement)
 
-`node scripts/cold-start.mjs --preset customer`: 20 isolates per mode, 60
-functions, 2 warm rounds, at `b309bc448`, load 2.1 → 2.7, 0 failures. Figures are
+`node scripts/cold-start.mjs --preset customer --warm 1`: 20 isolates per mode, 94
+functions, 1 warm round, at `18edf37e6`, load 2.6 → 3.5, 0 failures. Figures are
 ms p50 / p95 / p99.
+
+The sample covers, per domain, `queries:list` and `admin:exportSummary` (which
+loads `jobs` and `validators`), plus every heavy domain's integration action.
+That is 4–5 of each domain's 6–8 modules; `lines`, `notes`, `mutations` and
+`catalog` are not called. The deferred cost measured here is therefore a lower
+bound on what all first calls together would pay.
 
 | Metric                          | eager                 | lazy                  |
 | ------------------------------- | --------------------- | --------------------- |
-| boot (start → ready)            | 586 / 594 / 596       | 595 / 608 / 608       |
-| first response (`saas:me`)      | 643 / 652 / 655       | 617 / 628 / 628       |
-| cold → first response           | 1,228 / 1,242 / 1,248 | 1,212 / 1,229 / 1,235 |
-| first call per function, all    | 4.0 / 9.0 / 23.6      | 4.2 / 10.9 / 16.8     |
-| first call, heavy-SDK action    | 3.4 / 8.9 / 24.0      | 3.5 / 15.9 / 17.7     |
-| first call, plain query         | 4.2 / 9.0 / 23.4      | 4.4 / 9.2 / 11.5      |
-| all 60 first calls, per isolate | 287 / 323 / 330       | 298 / 345 / 349       |
-| warm call                       | 3.5 / 8.6 / 10.0      | 3.5 / 8.6 / 12.7      |
+| boot (start → ready)            | 594 / 604 / 607       | 601 / 612 / 614       |
+| first response (`saas:me`)      | 648 / 660 / 664       | 616 / 621 / 626       |
+| cold → first response           | 1,244 / 1,259 / 1,259 | 1,216 / 1,235 / 1,238 |
+| first call per function, all    | 3.6 / 8.4 / 23.3      | 3.8 / 10.0 / 15.7     |
+| first call, heavy-SDK action    | 3.2 / 8.1 / 27.1      | 3.4 / 15.1 / 21.6     |
+| first call, other               | 3.7 / 8.4 / 15.4      | 3.9 / 9.1 / 12.0      |
+| all 94 first calls, per isolate | 395 / 457 / 461       | 437 / 493 / 504       |
+| warm call                       | 3.3 / 8.0 / 9.8       | 3.4 / 8.2 / 11.4      |
 
 - **Lazy moves startup CPU to first calls, and the cost there is small.** The
-  ~43 ms saved at startup reappears as about +11 ms (median) across all 60 first
-  calls. The heavy-SDK actions pay most of it: their p95 rises from 9 to 16 ms.
-  No first call exceeded ~18 ms p99 in lazy mode.
-- **The first response is ~25 ms faster in lazy mode.** It is the only
-  wall-clock figure that moves, and it moves by about the startup CPU difference.
+  ~58 ms of startup Active saved (162 → 104 ms) reappears as about +42 ms
+  (median) across the 94 sampled first calls. The heavy-SDK actions pay most per
+  call: their p95 rises from 8 to 15 ms. No sampled first call exceeded ~22 ms
+  p99 in lazy mode.
+- **The first response is ~32 ms faster in lazy mode** (median, against 58 ms
+  less startup Active). Boot (start → ready) does not move. That suggests
+  workerd evaluates the script on the first request rather than before `ready`,
+  but this was not verified.
 - **One cost dominates a local cold start, and it is not module evaluation.**
   About 600 ms of boot plus about 620 ms for the first response go to something
   else, the same in both modes. The cause is not established. Candidates are

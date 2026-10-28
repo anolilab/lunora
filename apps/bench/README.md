@@ -35,9 +35,13 @@ The app has two parts:
 | MCP over HTTP; OTLP or console telemetry            | `lunora/server.ts`                                            | `@lunora/mcp`, `lunorash/runtime` sinks                |
 
 `lunora/lib/crpc.ts` matters most for the benchmark. It is the shared-builder
-module real apps grow. It imports the better-auth instance, the rate limiter and
-zod at value level, and every function module builds on it. That is the pattern
-that kept auth on the startup path in the app behind #1166.
+module real apps grow. It imports the rate limiter and zod at value level, and
+every function module builds on it, so whatever it reaches stays on the startup
+path however the registry is loaded. That is the pattern the app behind #1166
+had. better-auth is on that path too, through `.auth()` in `lunora/server.ts`.
+Actions cannot reach better-auth themselves: functions run without the Worker's
+`env`, which is why onboarding takes the caller's address from the
+`verifiedEmail` identity claim.
 
 The following are left out on purpose:
 
@@ -160,12 +164,15 @@ build` bundle) and waits on its `ready` promise;
 4. calls each sampled function once (cold), in a shuffled order;
 5. calls each again `--warm` times.
 
-The sample has one function per module: each domain's `queries:list`, plus the
-offline action of every heavy domain's integration module. Each isolate signs in
+The sample has, per domain, `queries:list` and `admin:exportSummary` (which also
+loads `jobs` and `validators`), plus the offline action of every heavy domain's
+integration module: 4–5 of a domain's 6–8 modules, 94 functions at the customer
+preset. `lines`, `notes`, `mutations` and `catalog` are not sampled. Each isolate signs in
 as its own verified owner of its own organisation. The app's `read` rate limit
 (200 per 10 s per caller) is persisted, so a shared caller would be refused
-after the first isolate. The same limit caps `--warm`: one isolate makes
-`calls × (1 + warm)` reads, which must stay under 200.
+after the first isolate. The same limit caps `--warm`: each isolate makes
+`domains × (1 + warm)` rate-limited reads (`queries:list`; the actions are not
+limited), which must stay under 200.
 
 ### Chunked builds
 
