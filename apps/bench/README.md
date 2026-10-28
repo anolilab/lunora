@@ -1,0 +1,133 @@
+# @lunora/bench
+
+A realistic Lunora app for benchmarks and framework testing. It is private and
+never published. Issue #1166 is the motivation: a real app with about 1,000
+functions and 130 tables hit Cloudflare's 1 s startup CPU limit, and the
+synthetic app in `scripts/check-worker-startup.js` does not look like it.
+
+The app has two parts:
+
+- **A hand-written core.** The SaaS kit, composed with `lunora registry add`, plus
+  app code that reaches every server-side package that runs without credentials.
+- **A deterministic generator.** It scales the app with "domain" modules shaped
+  like the core, up to the profile of the app behind #1166.
+
+## What is in the core
+
+| Area                                                | Where                                                         | Package(s)                                             |
+| --------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------ |
+| Tenancy, projects, activity, admin projection       | `lunora/saas/`, `identity.ts` (registry `saas`)               | `@lunora/server`, `@lunora/d1` (`.global()`)           |
+| Sign-in, organisations, admin, passkey, two-factor  | `lunora/auth/` (registry `auth`)                              | `@lunora/auth`, better-auth                            |
+| Billing                                             | `lunora/payment/`, `plans.ts`, `http.ts` (registry `payment`) | `@lunora/payment` (Stripe)                             |
+| Shared builders: auth, rate limits, tenant RLS, zod | `lunora/lib/crpc.ts`                                          | `@lunora/ratelimit`, zod                               |
+| Tasks: sharded tables, RLS, full-text search        | `lunora/tasks/`                                               | `.shardBy("organizationId")`, `.searchIndex()`         |
+| Presence                                            | `lunora/presence/` (registry `presence`)                      |                                                        |
+| In-app feed and push                                | `lunora/notifications/`, `notify.ts`                          | `@lunora/notify`                                       |
+| Support agent                                       | `lunora/agents.ts`, `assistant/`                              | `@lunora/agent`, `@lunora/ai`                          |
+| Onboarding                                          | `lunora/workflows.ts`, `onboarding.ts`                        | `@lunora/workflow`                                     |
+| Domain events and outbound mail                     | `lunora/queues.ts`                                            | `@lunora/queue`                                        |
+| Nightly maintenance                                 | `lunora/crons.ts`, `crons/jobs.ts`                            | `@lunora/scheduler`                                    |
+| Mail, AI, storage, flags                            | registry `mail`, `ai`, `storage`, `flags`                     | `@lunora/mail`, `@lunora/ai`, `@lunora/storage`, flags |
+| KV cache and product analytics                      | `lunora/insights/`                                            | `@lunora/bindings`                                     |
+| Warehouse reads                                     | `lunora/reporting/`                                           | `@lunora/hyperdrive` (PGlite in dev)                   |
+| Link previews                                       | `lunora/web/`                                                 | `@lunora/browser`                                      |
+| Paid public API for agents                          | `lunora/public-api/`                                          | `@lunora/x402`                                         |
+| MCP over HTTP; OTLP or console telemetry            | `lunora/server.ts`                                            | `@lunora/mcp`, `lunorash/runtime` sinks                |
+
+`lunora/lib/crpc.ts` matters most for the benchmark. It is the shared-builder
+module real apps grow. It imports the better-auth instance, the rate limiter and
+zod at value level, and every function module builds on it. That is the pattern
+that kept auth on the startup path in the app behind #1166.
+
+The following are left out on purpose:
+
+- **`@lunora/container`** needs Docker and a Workers Paid plan.
+- **`@lunora/privacy`**: its coverage lint requires every table with a `userId`
+  column to be covered or excluded, and it needs a tombstones Durable Object plus
+  about 350 lines of ports (see `examples/privacy`). It is a candidate for a later
+  pass.
+- **Vector search** (`.vectorize()`): there is no confirmed local Vectorize
+  emulator.
+
+## Run it
+
+```bash
+pnpm --filter "@lunora/bench..." run build:prod   # once: the packages it uses
+cp apps/bench/.dev.vars.example apps/bench/.dev.vars   # then set the origins to this checkout's port
+pnpm --filter @lunora/bench dev
+```
+
+The dev server serves on the playground's per-checkout port, which it prints as
+`dev ports: playground :N`. `vite.config.ts` refuses to start when
+`LUNORA_ORIGIN_URL` names a different port, because workflow, scheduler and agent
+callbacks dispatch to that origin.
+
+None of this needs credentials. Workers AI, Browser Rendering, Stripe, x402,
+Web Push and OTLP are wired but stay inert until configured; see
+`.dev.vars.example`. Each of those calls fails on its own while the rest of the
+app runs.
+
+## Scale it
+
+```bash
+node scripts/generate.mjs --domains 12        # 12 generated domains
+node scripts/generate.mjs --preset customer   # 40 domains ≈ 970 functions / 131 tables with the core
+node scripts/generate.mjs --domains 0         # back to the committed core-only state
+```
+
+Domains are written to `lunora/domains/<name>/`, which is gitignored. The
+generator rewrites `lunora/domains/schema.ts` (committed as an empty stub).
+
+Each domain mirrors the core:
+
+- sharded tables with indexes and a search index, plus a `.global()` catalog in
+  every fourth domain;
+- queries, mutations, internal jobs and actions built on `lib/crpc`, with tenant
+  RLS and zod validators through `v.from`;
+- in some domains, a scheduler, queue or AI hook.
+
+Presets: `core` (0 domains), `small` (8), `customer` (40), `large` (80).
+
+## Benchmark it
+
+```bash
+node scripts/startup.mjs                          # core, eager vs --lazy-functions, 7 runs each
+node scripts/startup.mjs --preset customer --runs 11
+node scripts/startup.mjs --domains 20 --modes eager --keep
+```
+
+For each mode, the script:
+
+1. Runs `lunora build --no-framework-build`, which produces the same wrangler
+   single-file esbuild bundle that plan 490 §5.1 measured, plus its metafile.
+2. Freezes that bundle with `wrangler deploy --dry-run --outfile`.
+3. Runs `wrangler check startup --workerBundle` with the modes interleaved, so
+   machine load hits both modes equally.
+
+It prints a table and writes JSON to `.bench/results/`. The JSON includes the
+load average, the git SHA and the 20 largest packages in the eager graph.
+Unless `--keep` is passed, it then restores the core-only state.
+
+The figures, in the order to read them:
+
+- **Active ms** (median/min/max) is local CPU, not Cloudflare's. The only
+  calibration point is that a ~0.4 s local profile was rejected upstream.
+- **eager modules / bytes** count what is reachable through static imports.
+  This number is deterministic.
+- **registry-only modules** is what a lazy registry can defer at most: modules
+  reachable only through `_generated/functions.ts`, with the app's own `lunora/`
+  modules in brackets.
+- **packages**, in the JSON, shows which imports dominate startup. That list
+  says which import to defer next.
+
+To check a framework change, build the changed package with `build:prod` and
+run the bench at `--preset customer`. Compare the eager graph first, since it is
+deterministic, and the Active time second. `scripts/worker-startup-measure.js` is
+the shared measurement code, the same one the CI gate (`check-worker-startup.js`)
+uses.
+
+Further benches go beside `startup.mjs` as sibling scripts reusing the same
+helpers: cold-start p99 of the first call per function, a rolldown chunked build,
+and request throughput.
+
+Framework defects found while building this app are in [FINDINGS.md](./FINDINGS.md).
