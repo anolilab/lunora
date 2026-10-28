@@ -40,11 +40,12 @@
  * Runs as its own CI job, NOT from `postinstall`: a failing postinstall gate turns
  * every job red in its setup step, with the cause invisible in the job that reports it.
  */
-import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { buildWorker, eagerGraph, startupActiveMs, summarize } from "./worker-startup-measure.js";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const fixturePath = join(rootDir, "worker-startup.json");
@@ -187,113 +188,23 @@ ${tableDefinitions.join("\n")}
     }
 };
 
-/** Build the reference app with `lunora build`; returns its output directory. */
-const build = (appDirectory) => {
-    const cli = join(rootDir, "packages", "cli", "dist", "bin.mjs");
+const cli = join(rootDir, "packages", "cli", "dist", "bin.mjs");
 
-    if (!existsSync(cli)) {
-        fail(`check-worker-startup: ${cli} is missing — run \`pnpm run build:packages:prod\` first.`);
-    }
-
-    try {
-        // --no-strict-advisories: the synthetic procedures key rows on an argument
-        // on purpose; that lint is about the app's security, not its startup.
-        execFileSync(process.execPath, [cli, "build", "--no-strict-advisories", "--format", "json", "--out-dir", "out"], {
-            cwd: appDirectory,
-            encoding: "utf8",
-            env: { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" },
-            maxBuffer: 64 * 1024 * 1024,
-            stdio: ["ignore", "pipe", "inherit"],
-        });
-    } catch {
-        fail("check-worker-startup: `lunora build` failed on the reference app (its output is above).");
-    }
-
-    return join(appDirectory, "out");
-};
-
-/**
- * Modules and bytes reachable from the entry through static edges. The wrangler
- * metafile does not tag an entry point, so the roots are the inputs nothing else
- * imports; a dynamic-only module is not reachable, which is the point.
- */
-const eagerGraph = (outDirectory) => {
-    const metafilePath = join(outDirectory, "bundle-meta.json");
-
-    if (!existsSync(metafilePath)) {
-        fail("check-worker-startup: `lunora build` wrote no bundle-meta.json — the out-dir layout may have changed.");
-    }
-
-    const { inputs } = JSON.parse(readFileSync(metafilePath, "utf8"));
-    const imported = new Set();
-
-    for (const input of Object.values(inputs)) {
-        for (const edge of input.imports) {
-            imported.add(edge.path);
-        }
-    }
-
-    const roots = Object.keys(inputs).filter((path) => !imported.has(path));
-    const seen = new Set();
-    const stack = [...roots];
-
-    while (stack.length > 0) {
-        const path = stack.pop();
-
-        if (seen.has(path) || !inputs[path]) {
-            continue;
-        }
-
-        seen.add(path);
-
-        for (const edge of inputs[path].imports) {
-            if (edge.kind !== "dynamic-import") {
-                stack.push(edge.path);
-            }
-        }
-    }
-
-    if (roots.length === 0 || seen.size < 50) {
-        fail(`check-worker-startup: measured ${seen.size} modules from ${roots.length} roots — the metafile layout may have changed.`);
-    }
-
-    let bytes = 0;
-
-    for (const path of seen) {
-        bytes += inputs[path].bytes;
-    }
-
-    return { bytes, modules: seen.size, total: Object.keys(inputs).length };
-};
-
-/** Advisory only: `wrangler check startup`, median Active ms over a few runs. */
+/** Advisory only: `wrangler check startup`, median Active ms over a few runs; `undefined` when a run fails. */
 const advisoryCpu = (appDirectory, runs) => {
     const wrangler = join(appDirectory, "node_modules", ".bin", "wrangler");
     const samples = [];
 
-    for (let index = 0; index < runs; index++) {
-        try {
-            const output = execFileSync(wrangler, ["check", "startup", "--outfile", join(appDirectory, "startup.cpuprofile")], {
-                cwd: appDirectory,
-                encoding: "utf8",
-                env: { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" },
-                stdio: ["ignore", "pipe", "ignore"],
-                // Advisory output must never cost the job its budget: a hung workerd is abandoned.
-                timeout: 120_000,
-            });
-            const match = /Active:\s+([\d.]+) ms/.exec(output);
-
-            if (match) {
-                samples.push(Number(match[1]));
-            }
-        } catch {
-            return undefined;
+    try {
+        for (let index = 0; index < runs; index++) {
+            // Advisory output must never cost the job its budget: a hung workerd is abandoned (the helper's timeout).
+            samples.push(startupActiveMs(appDirectory, { profile: join(appDirectory, "startup.cpuprofile"), wrangler }));
         }
+    } catch {
+        return undefined;
     }
 
-    samples.sort((a, b) => a - b);
-
-    return samples.length > 0 ? { max: samples.at(-1), median: samples[Math.floor(samples.length / 2)], min: samples[0] } : undefined;
+    return summarize(samples);
 };
 
 const baseline = JSON.parse(readFileSync(fixturePath, "utf8"));
@@ -305,9 +216,17 @@ let cpu;
 
 try {
     materialize(appDirectory, baseline);
-    const outDirectory = build(appDirectory);
 
-    graph = eagerGraph(outDirectory);
+    let outDirectory;
+
+    try {
+        // --no-strict-advisories (set by the helper): the synthetic procedures key rows on an argument on purpose.
+        outDirectory = buildWorker(appDirectory, { cli });
+        graph = eagerGraph(outDirectory);
+    } catch (error) {
+        fail(`check-worker-startup: ${error.message}`);
+    }
+
     cpu = skipCpu ? undefined : advisoryCpu(appDirectory, 5);
 } finally {
     rmSync(root, { force: true, recursive: true });
