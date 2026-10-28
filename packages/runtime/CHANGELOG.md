@@ -1,3 +1,11 @@
+## @lunora/runtime [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.248...@lunora/runtime@1.0.0-alpha.249) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.257
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.99
+
 ## @lunora/runtime [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.247...@lunora/runtime@1.0.0-alpha.248) (2026-10-28)
 
 ### ⚠ BREAKING CHANGES
