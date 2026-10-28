@@ -141,9 +141,10 @@ export interface PostgresJsLike {
  * `query`, not `execute`: `execute` is a protocol-level prepared statement
  * (`COM_STMT_PREPARE` + the binary protocol), which Hyperdrive does not support
  * for MySQL. `query` interpolates the `?` placeholders client-side and sends
- * plain text. That escaping writes a quote as `\'`, so a server whose
- * `sql_mode` includes `NO_BACKSLASH_ESCAPES` is unsupported: there a string
- * value could end its own literal.
+ * plain text. Strings are quoted with `''` for a quote and `\\` for a
+ * backslash, so a server whose `sql_mode` includes `NO_BACKSLASH_ESCAPES` is
+ * unsupported: there a backslash is stored twice. No value can end its literal
+ * under either mode.
  *
  * Method syntax, not an arrow property — see {@link PostgresJsLike} — but here
  * that is necessary and NOT sufficient, which is why `params` is `unknown`.

@@ -102,7 +102,7 @@ describe("fromPostgresJs", () => {
 
 describe("fromMysql2", () => {
     it("returns the first element of the [rows, fields] tuple", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const rows = [{ id: 7 }];
         const mysqlQuery = vi.fn<Mysql2Like["query"]>().mockResolvedValue([rows, []]);
@@ -112,7 +112,8 @@ describe("fromMysql2", () => {
         const result = await sql.query<{ id: number }>("select id from t where org = ?", ["acme"]);
 
         expect(result).toBe(rows);
-        expect(mysqlQuery).toHaveBeenCalledWith("select id from t where org = ?", ["acme"]);
+        expect(mysqlQuery).toHaveBeenCalledWith("select id from t where org = ?", [{ toSqlString: expect.any(Function) }]);
+        expect((mysqlQuery.mock.calls[0]?.[1] as [{ toSqlString: () => string }])[0].toSqlString()).toBe("'acme'");
     });
 
     it("defaults params to an empty array", async () => {

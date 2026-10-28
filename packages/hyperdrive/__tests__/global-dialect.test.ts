@@ -222,7 +222,7 @@ describe("exec adapters", () => {
         const result = await exec.all("SELECT `id` FROM `t` WHERE `id` = ?", ["x"]);
 
         expect(result).toBe(rows);
-        expect(params).toEqual(["x"]);
+        expect(params.map((parameter) => (parameter as { toSqlString: () => string }).toSqlString())).toStrictEqual(["'x'"]);
     });
 
     it("buildMysqlExec.run defaults rowsAffected to 0 when the driver omits it", async () => {

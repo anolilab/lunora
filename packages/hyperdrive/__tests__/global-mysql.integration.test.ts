@@ -415,6 +415,48 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
             TEST_TIMEOUT,
         );
 
+        it(
+            "keeps a quote-bearing value inside its literal when the session sets NO_BACKSLASH_ESCAPES",
+            async () => {
+                expect.assertions(3);
+
+                const [{ mode }] = (await harness.query("SELECT @@SESSION.sql_mode AS mode")) as [{ mode: string }];
+
+                await harness.query("SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',NO_BACKSLASH_ESCAPES')");
+
+                try {
+                    const injection = "a' OR '1'='1";
+                    const jsonDocument = { q: "it's" };
+
+                    await expect(harness.exec.all("SELECT ? AS v", [injection])).resolves.toStrictEqual([{ v: injection }]);
+                    await expect(harness.exec.all("SELECT ? AS v", [jsonDocument])).resolves.toStrictEqual([{ v: JSON.stringify(jsonDocument) }]);
+
+                    // Under this mode mysql2's `\'` would close the literal after `x\\\`
+                    // and run `OR 1=1` with the rest commented out; doubled quotes keep
+                    // the whole value one column (its backslashes do come back doubled).
+                    const [row] = await harness.exec.all("SELECT ? AS v", [String.raw`x\' OR 1=1 -- `]);
+
+                    expect(Object.keys(row ?? {})).toStrictEqual(["v"]);
+                } finally {
+                    await harness.query("SET SESSION sql_mode = ?", [mode]);
+                }
+            },
+            TEST_TIMEOUT,
+        );
+
+        it(
+            "round-trips quotes, backslashes and control characters, and compares with the connection collation",
+            async () => {
+                expect.assertions(2);
+
+                const tricky = "it's \\ \"q\" \\' \0 \n \r \u001A é";
+
+                await expect(harness.exec.all("SELECT ? AS v", [tricky])).resolves.toStrictEqual([{ v: tricky }]);
+                await expect(harness.exec.all("SELECT ? = 'x' AS same", ["X"])).resolves.toStrictEqual([{ same: 1 }]);
+            },
+            TEST_TIMEOUT,
+        );
+
         it("rejects an undefined bind value instead of binding NULL", async () => {
             expect.assertions(1);
 

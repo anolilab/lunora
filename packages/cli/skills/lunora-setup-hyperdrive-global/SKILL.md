@@ -196,7 +196,8 @@ cutover is still in D1 afterwards, so remove those by hand.
    75 s behind writes. Disable caching on the config (`--caching-disabled`). Local dev
    has no cache, so this shows up only once deployed.
 6. **MySQL with `NO_BACKSLASH_ESCAPES` in `sql_mode`.** Unsupported: statements are
-   sent as text with values escaped by mysql2, which writes a quote as `\'`. Under that
-   mode a stored string could end its literal. MySQL's default `sql_mode` doesn't include it.
+   sent as text and a backslash in a string is escaped as `\\`, which that mode stores as
+   two backslashes. Quotes are doubled, so no value can leave its literal under either
+   mode. MySQL's default `sql_mode` doesn't include it.
 7. **Writing to the database directly.** Live queries won't see those writes. Route writes
    through `ctx.db`.
