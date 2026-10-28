@@ -87,7 +87,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/errors": ">=1.0.0-alpha.75 <2.0.0-0",
         "@lunora/scheduler": "1.0.0-alpha.157",
         "@lunora/shard-engine": "1.0.0-alpha.172",
         "@lunora/values": "1.0.0-alpha.85",
