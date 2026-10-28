@@ -6,6 +6,7 @@
  */
 
 import { constantTimeEqual } from "./constant-time-equal";
+import { importHmacKey } from "./hmac-key";
 
 /** Env var carrying the optional internal control-channel HMAC secret. */
 const RELAY_SECRET_KEY = "LUNORA_RELAY_SECRET";
@@ -33,9 +34,8 @@ const siblingSecretOf = (env: unknown): string | undefined => {
  * before they verify.
  */
 const signSiblingBody = async (secret: string, body: string): Promise<string> => {
-    const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
-    const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
+    // Signed and verified on every control frame, so the key comes from the per-secret cache.
+    const signature = await crypto.subtle.sign("HMAC", await importHmacKey(secret), new TextEncoder().encode(body));
 
     return [...new Uint8Array(signature)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 };
