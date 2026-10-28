@@ -12,11 +12,13 @@ import { internal } from "./_generated/internal.js";
  * and nudge after a day if nothing was created. Every `ctx.run` names the
  * tenant's shard, so the writes land where the tenant's rows live.
  */
-export const onboarding = defineWorkflow<{ email: string; organizationId: string; userId: string }, { nudged: boolean }>({
+export const onboarding = defineWorkflow<{ organizationId: string; userId: string }, { nudged: boolean }>({
     handler: async (ctx) => {
-        const { email, organizationId, userId } = ctx.params;
+        const { organizationId, userId } = ctx.params;
 
         await ctx.step.do("seed", () => ctx.run(internal.onboarding.seedOrganization, { organizationId, userId }, { shardKey: organizationId }));
+        // Resolved server-side from better-auth, never taken from the caller; see `lunora/onboarding.ts`.
+        const { email } = (await ctx.step.do("recipient", () => ctx.run(internal.onboarding.recipient, { userId }))) as { email: string };
         await ctx.step.do("welcome", () => ctx.run(internal.mail.sendEmail, { subject: "Welcome to the bench", text: "Your workspace is ready.", to: email }));
         await ctx.step.sleep("settle", "1 day");
 

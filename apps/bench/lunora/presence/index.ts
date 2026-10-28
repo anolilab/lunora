@@ -31,7 +31,23 @@ import { RateLimiter, rateLimit, createMemoryStore } from "lunorash/ratelimit";
 import type { MutationCtx } from "#lunora/_generated/server.js";
 import { internalMutation, mutation, query, v } from "#lunora/_generated/server.js";
 
+import { requireOrg } from "../lib/crpc.js";
 import { PRESENCE_TABLE, PRESENCE_TTL_MS } from "./schema.js";
+
+/**
+ * Bench edit to the registry copy: a room belongs to one organisation. The
+ * caller must have an active organisation, and the room must be that
+ * organisation's id or `<organizationId>:<anything>`. The registry item takes the
+ * room id from the caller as-is, so on a shard every signed-in user can reach
+ * (`__root__` here), anyone could read or join any room (FINDINGS.md).
+ */
+const requireTenantRoom = async (ctx: Parameters<typeof requireOrg>[0], roomId: string): Promise<void> => {
+    const { organizationId } = await requireOrg(ctx);
+
+    if (roomId !== organizationId && !roomId.startsWith(`${organizationId}:`)) {
+        throw new LunoraError("FORBIDDEN", "presence: the room belongs to another organization");
+    }
+};
 
 export { presence } from "./schema.js";
 
@@ -118,6 +134,8 @@ export const heartbeat = mutation
     // them — see the `ratelimit_key_spoofable_or_global` advisor lint.
     .use(rateLimit(limiter, "heartbeat", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .mutation(async ({ args: { data, roomId, sessionId }, ctx }): Promise<{ lastSeen: number }> => {
+        await requireTenantRoom(ctx, roomId);
+
         if (data !== undefined) {
             const entries = Object.keys(data).length;
             const bytes = new TextEncoder().encode(JSON.stringify(data)).byteLength;
@@ -179,6 +197,8 @@ export const heartbeat = mutation
  * Subscribe to it for a reactive present-list.
  */
 export const listPresent = query.input({ roomId: v.string().max(256) }).query(async ({ args: { roomId }, ctx }): Promise<PresenceMember[]> => {
+    await requireTenantRoom(ctx, roomId);
+
     const cutoff = ctx.now - PRESENCE_TTL_MS;
 
     const rows = await ctx.db
