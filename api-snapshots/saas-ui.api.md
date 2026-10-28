@@ -48,6 +48,93 @@ interface ActivityRow {
 }
 ```
 
+### `AdminSubscriptionRow` (interface)
+
+```ts
+interface AdminSubscriptionRow extends SubscriptionLike {
+    providerSubscriptionId: string;
+    referenceId: string;
+}
+```
+
+### `AdminUserRow` (interface)
+
+```ts
+interface AdminUserRow {
+    banExpires?: Date | number | string | null;
+    banned?: boolean | null;
+    banReason?: string | null;
+    createdAt?: Date | number | string;
+    email: string;
+    id: string;
+    name?: string | null;
+    role?: string | null;
+}
+```
+
+### `AdminUsersClient` (interface)
+
+```ts
+interface AdminUsersClient {
+    banUser: (input: {
+        banReason?: string;
+        userId: string;
+    }) => Promise<AuthClientResult<unknown>>;
+    impersonateUser: (input: {
+        userId: string;
+    }) => Promise<AuthClientResult<unknown>>;
+    listUsers: (input: {
+        query: AdminUsersQuery;
+    }) => Promise<AuthClientResult<{
+        total?: number;
+        users: ReadonlyArray<AdminUserRow>;
+    }>>;
+    stopImpersonating: () => Promise<AuthClientResult<unknown>>;
+    unbanUser: (input: {
+        userId: string;
+    }) => Promise<AuthClientResult<unknown>>;
+}
+```
+
+### `AdminUsersController` (interface)
+
+```ts
+interface AdminUsersController {
+    actions: {
+        impersonate: (userId: string) => Promise<boolean>;
+        load: () => Promise<void>;
+        search: (term: string) => Promise<void>;
+        suspend: (userId: string, reason?: string) => Promise<boolean>;
+        unsuspend: (userId: string) => Promise<boolean>;
+    };
+    destroy: () => void;
+    getState: () => AdminUsersState;
+    subscribe: (onChange: () => void) => () => void;
+}
+```
+
+### `AdminUsersOptions` (interface)
+
+```ts
+interface AdminUsersOptions {
+    limit?: number;
+    onSessionChange: () => void;
+}
+```
+
+### `AdminUsersState` (interface)
+
+```ts
+interface AdminUsersState {
+    error?: string;
+    pendingUserId?: string;
+    search: string;
+    status: FlowStatus;
+    total?: number;
+    users?: ReadonlyArray<AdminUserRow>;
+}
+```
+
 ### `AdminView` (interface)
 
 ```ts
@@ -59,10 +146,29 @@ interface AdminView {
 }
 ```
 
+### `AuthClientResult` (interface)
+
+```ts
+interface AuthClientResult<T> {
+    data?: T | null;
+    error?: {
+        code?: string;
+        message?: string;
+        status?: number;
+    } | null;
+}
+```
+
 ### `DEFAULT_ADMIN_VIEW` (const)
 
 ```ts
 const DEFAULT_ADMIN_VIEW: AdminView;
+```
+
+### `DEFAULT_SUBSCRIPTIONS_VIEW` (const)
+
+```ts
+const DEFAULT_SUBSCRIPTIONS_VIEW: SubscriptionsView;
 ```
 
 ### `DEFAULT_VIEW` (const)
@@ -118,6 +224,20 @@ interface FormState<TFields extends string> {
     formError?: string;
     status: FlowStatus;
     values: Record<TFields, string>;
+}
+```
+
+### `ImpersonationSessionLike` (interface)
+
+```ts
+interface ImpersonationSessionLike {
+    session: {
+        impersonatedBy?: string | null;
+    };
+    user: {
+        email: string;
+        name?: string | null;
+    };
 }
 ```
 
@@ -273,6 +393,26 @@ interface StatTile {
 }
 ```
 
+### `StopImpersonatingController` (interface)
+
+```ts
+interface StopImpersonatingController {
+    destroy: () => void;
+    getState: () => StopImpersonatingState;
+    stop: () => Promise<boolean>;
+    subscribe: (onChange: () => void) => () => void;
+}
+```
+
+### `StopImpersonatingState` (interface)
+
+```ts
+interface StopImpersonatingState {
+    error?: string;
+    status: FlowStatus;
+}
+```
+
 ### `Store` (interface)
 
 ```ts
@@ -298,10 +438,50 @@ interface SubscriptionLike {
 }
 ```
 
+### `SubscriptionListing` (interface)
+
+```ts
+interface SubscriptionListing {
+    cancelAtPeriodEnd: boolean;
+    currentPeriodEnd?: number;
+    id: string;
+    organization: string;
+    plan: string;
+    quantity: number;
+    renewal: string;
+    state: string;
+}
+```
+
+### `SubscriptionsView` (interface)
+
+```ts
+interface SubscriptionsView {
+    search: string;
+    state: string;
+}
+```
+
+### `UserActions` (interface)
+
+```ts
+interface UserActions {
+    impersonate: boolean;
+    suspend: boolean;
+    unsuspend: boolean;
+}
+```
+
 ### `adminTotals` (const)
 
 ```ts
 const adminTotals: (rows: ReadonlyArray<OrganizationRow>) => { organizations: number; seats: number; };
+```
+
+### `createAdminUsersController` (const)
+
+```ts
+const createAdminUsersController: (client: AdminUsersClient, options: AdminUsersOptions) => AdminUsersController;
 ```
 
 ### `createFormController` (const)
@@ -314,6 +494,12 @@ const createFormController: <TFields extends string>(options: FormOptions<TField
 
 ```ts
 const createProjectFormController: (onCreate: (name: string) => Promise<unknown>, onSuccess?: () => void) => FormController<"name">;
+```
+
+### `createStopImpersonatingController` (const)
+
+```ts
+const createStopImpersonatingController: (client: Pick<AdminUsersClient, "stopImpersonating">, options: Pick<AdminUsersOptions, "onSessionChange">) => StopImpersonatingController;
 ```
 
 ### `createStore` (const)
@@ -358,10 +544,22 @@ const formatMoney: (amountMinor: number, currency: string, locale?: string) => s
 const groupActivityByDay: (rows: ReadonlyArray<ActivityRow>, now: number, timeZone?: string) => ReadonlyArray<ActivityGroup>;
 ```
 
+### `impersonatedUser` (const)
+
+```ts
+const impersonatedUser: (session: ImpersonationSessionLike | null | undefined) => string | undefined;
+```
+
 ### `initials` (const)
 
 ```ts
 const initials: (name: string) => string;
+```
+
+### `isAdminRole` (const)
+
+```ts
+const isAdminRole: (role: string | null | undefined) => boolean;
 ```
 
 ### `isEntitled` (const)
@@ -374,6 +572,12 @@ const isEntitled: (plans: ReadonlyArray<Plan>, subscription: SubscriptionLike | 
 
 ```ts
 const isFirstRun: (payload: OverviewPayload) => boolean;
+```
+
+### `isSuspended` (const)
+
+```ts
+const isSuspended: (user: AdminUserRow, now: number) => boolean;
 ```
 
 ### `mapError` (const)
@@ -460,10 +664,52 @@ const selectOrganizations: (rows: ReadonlyArray<OrganizationRow>, view?: AdminVi
 const selectProjects: (rows: ReadonlyArray<ProjectRow>, view?: ProjectsView) => ReadonlyArray<ProjectRow>;
 ```
 
+### `selectSubscriptions` (const)
+
+```ts
+const selectSubscriptions: (subscriptions: ReadonlyArray<AdminSubscriptionRow>, organizations: ReadonlyArray<OrganizationRow>, plans: ReadonlyArray<Plan>, view?: SubscriptionsView) => ReadonlyArray<SubscriptionListing>;
+```
+
 ### `subscriptionNotice` (const)
 
 ```ts
 const subscriptionNotice: (subscription: SubscriptionLike | undefined) => string | undefined;
+```
+
+### `subscriptionStateOptions` (const)
+
+```ts
+const subscriptionStateOptions: (subscriptions: ReadonlyArray<AdminSubscriptionRow>) => ReadonlyArray<{ label: string; value: string; }>;
+```
+
+### `subscriptionTotals` (const)
+
+```ts
+const subscriptionTotals: (subscriptions: ReadonlyArray<AdminSubscriptionRow>) => { pastDue: number; paying: number; };
+```
+
+### `userActions` (const)
+
+```ts
+const userActions: (user: AdminUserRow, viewerId: string, now: number) => UserActions;
+```
+
+### `userJoined` (const)
+
+```ts
+const userJoined: (user: Pick<AdminUserRow, "createdAt">, now: number) => string;
+```
+
+### `userLabel` (const)
+
+```ts
+const userLabel: (user: Pick<AdminUserRow, "email" | "name">) => string;
+```
+
+### `userStatusLabel` (const)
+
+```ts
+const userStatusLabel: (user: AdminUserRow, now: number) => string;
 ```
 
 ## `@lunora/saas-ui/react`
@@ -498,6 +744,39 @@ interface AdminOrganizationsProps {
     now: number;
     rows: ReadonlyArray<OrganizationRow> | undefined;
     timeZone?: string;
+}
+```
+
+### `AdminSubscriptions` (const)
+
+```ts
+const AdminSubscriptions: ({ organizations, plans, rows }: AdminSubscriptionsProps) => ReactNode;
+```
+
+### `AdminSubscriptionsProps` (interface)
+
+```ts
+interface AdminSubscriptionsProps {
+    organizations: ReadonlyArray<OrganizationRow> | undefined;
+    plans: ReadonlyArray<Plan>;
+    rows: ReadonlyArray<AdminSubscriptionRow> | undefined;
+}
+```
+
+### `AdminUsers` (const)
+
+```ts
+const AdminUsers: ({ client, now, onSessionChange, viewerId }: AdminUsersProps) => ReactNode;
+```
+
+### `AdminUsersProps` (interface)
+
+```ts
+interface AdminUsersProps {
+    client: AdminUsersClient;
+    now: number;
+    onSessionChange: () => void;
+    viewerId: string;
 }
 ```
 
@@ -583,6 +862,22 @@ interface GatedProps {
 }
 ```
 
+### `ImpersonationBanner` (const)
+
+```ts
+const ImpersonationBanner: ({ client, onSessionChange, session }: ImpersonationBannerProps) => ReactNode;
+```
+
+### `ImpersonationBannerProps` (interface)
+
+```ts
+interface ImpersonationBannerProps {
+    client: Pick<AdminUsersClient, "stopImpersonating">;
+    onSessionChange: () => void;
+    session: ImpersonationSessionLike | null | undefined;
+}
+```
+
 ### `OverviewProps` (interface)
 
 ```ts
@@ -663,6 +958,14 @@ Re-exported from `svelte` — signature tracked at its source.
 
 Re-exported from `svelte` — signature tracked at its source.
 
+### `AdminSubscriptions` (const+type)
+
+Re-exported from `svelte` — signature tracked at its source.
+
+### `AdminUsers` (const+type)
+
+Re-exported from `svelte` — signature tracked at its source.
+
 ### `BillingPanel` (const+type)
 
 Re-exported from `svelte` — signature tracked at its source.
@@ -676,6 +979,10 @@ Re-exported from `svelte` — signature tracked at its source.
 Re-exported from `svelte` — signature tracked at its source.
 
 ### `Gated` (const+type)
+
+Re-exported from `svelte` — signature tracked at its source.
+
+### `ImpersonationBanner` (const+type)
 
 Re-exported from `svelte` — signature tracked at its source.
 
@@ -695,8 +1002,33 @@ Re-exported from `svelte` — signature tracked at its source.
 
 Re-exported from `svelte` — signature tracked at its source.
 
+### `bindController` (const)
+
+```ts
+const bindController: <TState>(controller: { destroy: () => void; getState: () => TState; subscribe: (onChange: () => void) => () => void; }) => { readonly state: TState; };
+```
+
 ### `createFormState` (const)
 
 ```ts
 const createFormState: <TFields extends string>(controller: FormController<TFields>) => { readonly controller: FormController<TFields>; readonly state: FormState<TFields>; };
+```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `AdminUsersQuery` (interface)
+
+```ts
+interface AdminUsersQuery {
+    limit: number;
+    searchField?: "email";
+    searchOperator?: "contains";
+    searchValue?: string;
+    sortBy?: string;
+    sortDirection?: "asc" | "desc";
+}
 ```
