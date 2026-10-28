@@ -14,10 +14,11 @@
  *   3. one cold call per sampled module, in a per-sample shuffled order;
  *   4. `--warm` further calls of each.
  *
- * The sample is one function per generated module that a caller can reach without
- * writing: each domain's `queries:list`, plus the offline action of every heavy
- * domain's `integrations` module (S3 presign, e2b template, protobuf, tldts, the
- * OpenAI provider). Modes alternate per sample, so drift in machine load hits both.
+ * The sample is the functions a caller can reach without writing (see
+ * `sampleCalls`): each domain's `queries:list` and `admin:exportSummary`, plus the
+ * offline action of every heavy domain's `integrations` module (S3 presign, e2b
+ * template, protobuf, tldts, the OpenAI provider). Modes alternate per sample, so
+ * drift in machine load hits both.
  *
  *   node scripts/cold-start.mjs --preset customer
  *   node scripts/cold-start.mjs --preset customer --samples 30 --warm 3
@@ -193,15 +194,25 @@ const signUp = async (mode, count) => {
     }
 };
 
-/** One cold-callable function per generated module: each domain's `queries:list`, and every heavy domain's offline integration action. */
+/**
+ * The functions a caller can reach without writing, one module each, per domain:
+ * `queries:list`; `admin:exportSummary`, which also loads `jobs` and `validators`
+ * (skipped where the domain's AI hook makes it call remote-only Workers AI); and a
+ * heavy domain's offline integration action. That reaches 4–5 of a domain's 6–8
+ * modules; `lines`, `notes`, `mutations` and `catalog` are not sampled.
+ */
 const sampleCalls = () => {
     const calls = [];
 
     for (let index = 0; index < size.domains; index++) {
         const key = domainKey(index);
-        const { integration } = shapeOf(index, size.heavyShare);
+        const { aiHook, integration } = shapeOf(index, size.heavyShare);
 
         calls.push({ args: {}, heavy: false, kind: "query", path: `domains_${key}_queries:list` });
+
+        if (!aiHook) {
+            calls.push({ args: {}, heavy: false, kind: "action", path: `domains_${key}_admin:exportSummary` });
+        }
 
         if (integration) {
             const { args, name } = OFFLINE_CALLS[integration];
