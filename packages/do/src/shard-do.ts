@@ -304,6 +304,7 @@ import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/o
 import { buildTraceparent, LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { RAY_ID_HEADER } from "../../../shared/ray-id";
+import { BATCH_END_FRAME, BATCH_START_FRAME, REFRESH_BATCH_CAPABILITY } from "../../../shared/refresh-batch";
 import { parseRelayName } from "../../../shared/relay-name";
 import { parseReplicaName } from "../../../shared/replica-name";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
@@ -2750,6 +2751,12 @@ abstract class ShardDO {
 
     /** True while {@link ShardDO.drainSubscriptionRefreshes} is running; the single-waiter gate that coalesces concurrent flushes. */
     private refreshInFlight = false;
+
+    /**
+     * Sockets inside a bracketed refresh visit (see {@link ShardDO.inRefreshBatch}):
+     * `false` until the visit sends its first frame, which opens the bracket.
+     */
+    private readonly refreshBatches = new WeakMap<ShardSocketLike, boolean>();
 
     /** Subscription memos and the socket table index the write-flush fan-outs filter on. */
     private readonly socketIndex = new SocketTableIndex();
@@ -8211,6 +8218,7 @@ abstract class ShardDO {
             // it understands, so keeping them would store input with no reader.
             if (Array.isArray(envelope.caps)) {
                 attachment.pageDeltas = envelope.caps.includes(PAGE_DELTA_CAPABILITY);
+                attachment.refreshBatch = envelope.caps.includes(REFRESH_BATCH_CAPABILITY);
             }
 
             attachment.connected = true;
@@ -9323,7 +9331,49 @@ abstract class ShardDO {
                 return false;
             }
         }
+        // Opened lazily, so a visit that sends nothing costs the socket nothing.
+        if (this.refreshBatches.get(ws) === false) {
+            this.refreshBatches.set(ws, true);
+            trySendFrame(ws, BATCH_START_FRAME);
+        }
         return trySendFrame(ws, frame);
+    }
+
+    /**
+     * Run one socket's refresh visit inside a `batchStart`/`batchEnd` bracket, so a
+     * write that changes two of its subscriptions (a count and the list it counts)
+     * reaches the client as one atomic update instead of one render per frame.
+     *
+     * Brackets rather than one combined message: every frame keeps its own send
+     * verdict, which is what advances (or holds) that subscription's diff baseline,
+     * and no combined message can outgrow the platform's per-message cap.
+     *
+     * Only for a socket that announced {@link REFRESH_BATCH_CAPABILITY} and holds more
+     * than one subscription — a single frame is already atomic. A frame another path
+     * sends to the socket while the bracket is open (a seed) lands inside it, which
+     * the client applies with the rest. Passes never overlap (`refreshInFlight`), so
+     * one socket has at most one bracket open.
+     */
+    private async inRefreshBatch(ws: ShardSocketLike, visit: () => Promise<void>): Promise<void> {
+        const attachment = this.readAttachment(ws);
+
+        if (attachment.refreshBatch !== true || Object.keys(attachment.subs).length < 2) {
+            await visit();
+
+            return;
+        }
+
+        this.refreshBatches.set(ws, false);
+
+        try {
+            await visit();
+        } finally {
+            if (this.refreshBatches.get(ws) === true) {
+                trySendFrame(ws, BATCH_END_FRAME);
+            }
+
+            this.refreshBatches.delete(ws);
+        }
     }
 
     private async authorizeSubscription(
@@ -13948,7 +13998,7 @@ abstract class ShardDO {
         // Bounded fan-out (default 8 in flight): each worker drains its sockets
         // one at a time so the per-subscription `awaitWsDrain` gate above paces a
         // slow consumer. See {@link runSocketPool}.
-        await runSocketPool(sockets, refreshOne);
+        await runSocketPool(sockets, (ws) => this.inRefreshBatch(ws, () => refreshOne(ws)));
     }
 
     /**

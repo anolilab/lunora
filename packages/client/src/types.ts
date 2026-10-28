@@ -1092,8 +1092,18 @@ export interface ServerPokeEndMessage {
     type: "pokeEnd";
 }
 
+/**
+ * Brackets the frames one write sends to this socket (`batchStart` … `batchEnd`).
+ * Sent only to a client that announced `refreshBatch` on `connect`; the frames
+ * between the two are applied together and their listeners notified once.
+ */
+export interface ServerBatchMessage {
+    type: "batchEnd" | "batchStart";
+}
+
 export type ServerMessage =
     | ServerAckMessage
+    | ServerBatchMessage
     | ServerChunkMessage
     | ServerCompleteMessage
     | ServerDataMessage

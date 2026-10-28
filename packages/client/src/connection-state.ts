@@ -1,7 +1,7 @@
 import type { PollingFallback } from "./polling-fallback";
 import type { ReconnectCalculator } from "./reconnect";
 import type { SubscriptionState } from "./subscription";
-import type { ClientMessage } from "./types";
+import type { ClientMessage, ServerMessage } from "./types";
 
 type WSState = "idle" | "connecting" | "open" | "closed";
 
@@ -33,6 +33,13 @@ interface ShardConnection {
 
     /** Active keepalive interval while the socket is open; cleared on disconnect/close. */
     heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+
+    /**
+     * Frames held since this socket's `batchStart`, applied together at its `batchEnd`.
+     * Dropped with the socket: nothing held was applied, so the reconnect's resume or
+     * snapshot answers from the cursor before the batch.
+     */
+    heldFrames?: ServerMessage[];
 
     /**
      * The `LunoraClient.identityFingerprint` captured when this connection's

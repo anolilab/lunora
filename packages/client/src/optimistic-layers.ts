@@ -39,6 +39,19 @@ import type { OptimisticLayer, SubscriptionState } from "./subscription";
  */
 let acknowledgements = 0;
 
+/** Subscriptions whose value moved inside {@link withDeferredNotifications}, notified when it returns. */
+let deferredNotifications: Set<SubscriptionState> | undefined;
+
+const fanValue = (state: SubscriptionState): void => {
+    for (const callback of state.callbacks) {
+        try {
+            callback(state.lastValue);
+        } catch {
+            /* user callback threw — ignore */
+        }
+    }
+};
+
 /** The latest acknowledgement, sampled by a poll before it sends. */
 export const acknowledgementMark = (): number => acknowledgements;
 
@@ -76,11 +89,36 @@ export const notifySubscription = (state: SubscriptionState, value: unknown): vo
     // eslint-disable-next-line no-param-reassign -- in-place update of the shared subscription state
     state.lastValue = value;
 
-    for (const callback of state.callbacks) {
-        try {
-            callback(value);
-        } catch {
-            /* user callback threw — ignore */
+    if (deferredNotifications === undefined) {
+        fanValue(state);
+    } else {
+        deferredNotifications.add(state);
+    }
+};
+
+/**
+ * Run `apply` with value callbacks held, then notify each subscription whose value
+ * moved — once, with its final value. Every value is committed before any callback
+ * runs, so a listener reading a sibling query never sees it a frame behind.
+ */
+export const withDeferredNotifications = (apply: () => void): void => {
+    if (deferredNotifications !== undefined) {
+        apply();
+
+        return;
+    }
+
+    const moved = new Set<SubscriptionState>();
+
+    deferredNotifications = moved;
+
+    try {
+        apply();
+    } finally {
+        deferredNotifications = undefined;
+
+        for (const state of moved) {
+            fanValue(state);
         }
     }
 };

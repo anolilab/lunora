@@ -612,9 +612,10 @@ what an SDK should do until it implements a token: the server then keeps to the
 behaviour every client has always understood. A server that does not recognise a
 token ignores it, so the field is additive in both directions.
 
-| Token       | The client guarantees                                                                     |
-| ----------- | ----------------------------------------------------------------------------------------- |
-| `pageDelta` | It can merge a `delta` frame's `RowOp` into the `page` array of a paginated query result. |
+| Token          | The client guarantees                                                                          |
+| -------------- | ---------------------------------------------------------------------------------------------- |
+| `pageDelta`    | It can merge a `delta` frame's `RowOp` into the `page` array of a paginated query result.      |
+| `refreshBatch` | It holds the frames between `batchStart` and `batchEnd` and applies them as one update (§5.5). |
 
 **`pageDelta` in detail.** A paginated read (`.paginate()`) returns
 `{ page: [...], isDone, continueCursor }` — an object, not an array. Without this
@@ -788,6 +789,31 @@ A single-frame run is its own last frame and carries the cursor as before; so
 does the `data` snapshot.
 
 Golden cases: [`fixtures/ws-frames.json`](./fixtures/ws-frames.json).
+
+### 5.5 Refresh batches (`refreshBatch`)
+
+One write can change several live queries on one socket — a count and the list
+it counts. Sent one frame at a time, a client renders the first before the
+second arrives, and for that moment its views disagree. A socket that announced
+`refreshBatch` (§5.1.1) and holds more than one subscription receives the frames
+one write produces for it between two markers:
+
+| `type`       | Shape      | Effect                                                                          |
+| ------------ | ---------- | ------------------------------------------------------------------------------- |
+| `batchStart` | `{ type }` | start holding `data`, `delta`, `settled`, `resume` and any `error` with an `id` |
+| `batchEnd`   | `{ type }` | apply every held frame in arrival order, then notify each changed query once    |
+
+Every other frame (pokes, whispers, stream chunks, `identity`, an `error` with
+no `id`) is handled as it arrives. A frame another path sends while a bracket is
+open — a fresh subscription's seed — is held with the rest. The server opens a
+bracket only when the visit sends a frame, never nests one, and always closes
+it; a socket that closes mid-bracket drops what it held (nothing was applied, so
+the reconnect resumes from the cursor before the batch). Each held frame keeps
+its own `cursor`, so §5.4's rules apply inside a batch unchanged.
+
+A client that does not announce the token never sees either marker, and a
+client that ignores unknown types applies the frames unbracketed — which is
+what every `sdks/*` port does today.
 
 ## 6. WebSocket credentials and the upgrade gate
 

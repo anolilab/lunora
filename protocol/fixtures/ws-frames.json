@@ -7,7 +7,7 @@
             "type": "connect"
         },
         "connect-with-caps": {
-            "caps": ["pageDelta"],
+            "caps": ["pageDelta", "refreshBatch"],
             "clientId": "client-test",
             "id": "connect",
             "type": "connect"

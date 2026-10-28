@@ -5,6 +5,7 @@ import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { encodeExpectedSubjectHeader, EXPECT_SUBJECT_HEADER } from "../../../shared/identity-header";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
+import { REFRESH_BATCH_CAPABILITY } from "../../../shared/refresh-batch";
 import { onSessionChanged } from "../../../shared/session-change";
 import { encodeBearerProtocol, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
 import type { AdminHost } from "./admin/host";
@@ -52,6 +53,7 @@ import {
     dropConfirmedLayers,
     refoldSubscription,
     rollbackOptimistic,
+    withDeferredNotifications,
 } from "./optimistic-layers";
 import isStaleVersion from "./persisted-version";
 import { resolvePersistenceAdapter } from "./persistence";
@@ -441,10 +443,26 @@ type ReplayIdentityVerdict = { credential: ReplayCredential; verdict: "match" } 
  * query with row deltas instead of re-sending the whole page on every write.
  *
  * Strictly additive: a server that does not recognise a token ignores it and
- * keeps sending what it always did. The token comes from `shared/` rather than
+ * keeps sending what it always did. `REFRESH_BATCH_CAPABILITY` says the client
+ * holds a `batchStart` … `batchEnd` bracket and applies it as one update.
+ *
+ * The tokens come from `shared/` rather than
  * being retyped here, so a mismatch with the server's gate is impossible.
  */
-const CLIENT_CAPABILITIES = [PAGE_DELTA_CAPABILITY] as const;
+const CLIENT_CAPABILITIES = [PAGE_DELTA_CAPABILITY, REFRESH_BATCH_CAPABILITY] as const;
+
+/**
+ * Whether a frame arriving inside a `batchStart` bracket waits for its `batchEnd`:
+ * every frame that moves a subscription's value or position. The rest (pokes, rooms,
+ * streams, identity) is not part of a refresh and is handled as it lands. An `error`
+ * without an id is the socket's own (`TOKEN_EXPIRED` before a close), never held.
+ */
+const isHeldInBatch = (message: ServerMessage): boolean =>
+    message.type === "data" ||
+    message.type === "delta" ||
+    message.type === "settled" ||
+    message.type === "resume" ||
+    (message.type === "error" && typeof message.id === "string");
 
 /** Room sends held before the socket opens; past this a `send` is refused rather than queued without bound. */
 const ROOM_PENDING_LIMIT = 100;
@@ -6455,6 +6473,7 @@ class LunoraClient {
                 // A new socket has confirmed no identity and rejoined no room yet.
                 conn.identityConfirmed = false;
                 conn.connectionId = undefined;
+                conn.heldFrames = undefined;
                 conn.roomsRejoined = false;
 
                 // See `ShardConnection.stableTimer` for why `open` is not proof.
@@ -6619,6 +6638,7 @@ class LunoraClient {
         // The socket's connection id names a socket that no longer exists: clear it so no grant
         // (or unsubscribe) posts against it, and drop the joins still waiting on its ack.
         conn.connectionId = undefined;
+        conn.heldFrames = undefined;
         conn.whisperAck = undefined;
         this.dropWhisperJoinWaiters(connectionKey(conn.shardKey));
         // Before the emit, so a listener never sees the dead socket's answers still counted.
@@ -6951,16 +6971,60 @@ class LunoraClient {
         // `error` that refuses it, or a `data`/`resume`/`settled` that overtakes
         // its own ack. Releasing here rather than in each handler is what keeps a
         // frame shape nobody anticipated from stalling the drain.
-        if (typeof (message as { id?: unknown }).id === "string") {
-            const conn = this.getConnection(shardKey);
+        const conn = this.getConnection(shardKey);
 
-            if (conn) {
-                const { id } = message as { id: string };
+        if (conn && typeof (message as { id?: unknown }).id === "string") {
+            const { id } = message as { id: string };
 
-                this.settleSubscribeWatchdog(conn, id);
-            }
+            this.settleSubscribeWatchdog(conn, id);
         }
 
+        if (message.type === "batchStart") {
+            if (conn) {
+                conn.heldFrames = [];
+            }
+
+            return;
+        }
+
+        if (message.type === "batchEnd") {
+            this.releaseHeldFrames(conn, shardKey);
+
+            return;
+        }
+
+        if (conn?.heldFrames !== undefined && isHeldInBatch(message)) {
+            conn.heldFrames.push(message);
+
+            return;
+        }
+
+        this.dispatchServerMessage(message, shardKey);
+    }
+
+    /**
+     * Apply every frame held since `batchStart`, in arrival order, then notify each
+     * subscription they moved once. Without the hold, a write that changed a count and
+     * the list it counts rendered one of them a frame ahead of the other.
+     */
+    private releaseHeldFrames(conn: ShardConnection | undefined, shardKey: string | undefined): void {
+        const held = conn?.heldFrames;
+
+        if (conn === undefined || held === undefined) {
+            return;
+        }
+
+        // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+        conn.heldFrames = undefined;
+
+        withDeferredNotifications(() => {
+            for (const message of held) {
+                this.dispatchServerMessage(message, shardKey);
+            }
+        });
+    }
+
+    private dispatchServerMessage(message: ServerMessage, shardKey: string | undefined): void {
         switch (message.type) {
             case "ack": {
                 const state = this.subscriptions.getById(message.id);
