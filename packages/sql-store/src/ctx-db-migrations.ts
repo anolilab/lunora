@@ -252,7 +252,7 @@ const assertNoDuplicatesUnder = async (
 
     if (duplicates.length > 0) {
         throw new LunoraError(
-            "INTERNAL",
+            "UNIQUE_INDEX_DUPLICATES",
             `unique index "${spec.name}" on "${spec.table}" ${situation}: existing rows are duplicates under it. De-duplicate the table with a data migration first.`,
         );
     }

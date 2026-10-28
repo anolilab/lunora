@@ -134,6 +134,19 @@ describe.each(routes)("global framework index ownership (%s)", (_route, makeHarn
         await expect(writer.insert("Notes", { slug: "dup" })).resolves.toBeTypeOf("string");
     });
 
+    it("refuses a unique index over duplicate rows under the code that names the fix", async () => {
+        expect.assertions(1);
+
+        const writer = await migrate(global("notes", { slug: column("string") }));
+
+        await writer.insert("notes", { slug: "dup" });
+        await writer.insert("notes", { slug: "dup" });
+
+        await expect(migrate(global("notes", { slug: column("string") }, [{ fields: ["slug"], name: "by_slug", unique: true }]))).rejects.toMatchObject({
+            code: "UNIQUE_INDEX_DUPLICATES",
+        });
+    });
+
     it("rebuilds a unique index that gained a column after the table name changed only in case", async () => {
         expect.assertions(2);
 

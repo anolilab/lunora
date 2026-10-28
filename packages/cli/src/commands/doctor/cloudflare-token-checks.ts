@@ -125,7 +125,8 @@ const judgeToken = async (token: string, accountIds: ReadonlyArray<string>, fetc
 const configuredAccountIds = (parsed: WranglerConfig | undefined): string[] => {
     const ids = [parsed?.account_id, ...Object.values(parsed?.env ?? {}).map((block) => (block as WranglerConfig | null | undefined)?.account_id)];
 
-    return [...new Set(ids.filter((id): id is string => typeof id === "string" && id !== ""))];
+    // Trimmed like the credential resolver, so the probe URL names the account the config means.
+    return [...new Set(ids.map((id) => nonEmpty(id)).filter((id): id is string => id !== undefined))];
 };
 
 const checkCloudflareToken = async (parsed: WranglerConfig | undefined, options: CloudflareTokenCheckOptions, findings: Finding[]): Promise<void> => {
