@@ -2,12 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SchedulerDO, TERMINAL_RETENTION_MS } from "../src/scheduler-do";
 import type { ScheduledJobView } from "../src/types";
-import { BlockingScheduler, post, scheduleDue, settle } from "./blocking-scheduler";
+import { BlockingScheduler, post, scheduleDue } from "./blocking-scheduler";
 import { createFakeState } from "./fake-state";
 
 const env = { LUNORA_ORIGIN_URL: "https://app.test" };
 
-/** Pin `Date.now()`; `setTimeout` stays real so `settle()` still works. */
+/** Pin `Date.now()` only; timers and promises run for real. */
 const pinClock = (at: number): ((to: number) => void) => {
     const now = vi.spyOn(Date, "now").mockReturnValue(at);
 
@@ -60,7 +60,7 @@ describe("schedulerDO job lifecycle", () => {
 
         const drain = scheduler.alarm();
 
-        await settle();
+        await scheduler.entered("job-0");
 
         await expect(getJob(scheduler, "job-0")).resolves.toMatchObject({ state: "running" });
 
@@ -158,7 +158,7 @@ describe("schedulerDO job lifecycle", () => {
 
         const drain = scheduler.alarm();
 
-        await settle();
+        await Promise.all([scheduler.entered("job-0"), scheduler.entered("job-1")]);
         await scheduler.fetch(post("/cancel", { id: "job-0" }));
         await scheduler.fetch(post("/cancel", { id: "job-1" }));
         scheduler.release("job-0", true);
@@ -189,7 +189,7 @@ describe("schedulerDO job lifecycle", () => {
         const header = state.storageMap.get("id:job-0");
         const drain = scheduler.alarm();
 
-        await settle();
+        await scheduler.entered("job-0");
         scheduler.release("job-0", true);
         await drain;
         // What a swallowed post-dispatch delete leaves behind.
@@ -214,7 +214,7 @@ describe("schedulerDO job lifecycle", () => {
 
         const drain = scheduler.alarm();
 
-        await settle();
+        await scheduler.entered("job-0");
         scheduler.release("job-0", true);
         await drain;
 
@@ -231,7 +231,7 @@ describe("schedulerDO job lifecycle", () => {
 
         const next = scheduler.alarm();
 
-        await settle();
+        await scheduler.entered("next");
         scheduler.release("next", true);
         await next;
 

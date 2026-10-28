@@ -158,6 +158,7 @@ describe("schedulerDO cron runs", () => {
             await begin(scheduler, "digest");
         }
 
+        setNow(1_700_000_061_000);
         await end(scheduler, { name: "digest", runId: long, status: "succeeded" });
 
         const { runs: recorded } = await runs(scheduler);

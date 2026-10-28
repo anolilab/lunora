@@ -12,15 +12,21 @@ const fakeContext: ExecutionContextLike = {
 const CRON = "*/5 * * * *";
 const ADMIN_TOKEN = "admin-bear";
 
-/** A shard whose dispatches block until the test releases them, so "is a run still in flight?" is deterministic. */
-const blockingShard = (status = 200): { namespace: ShardNamespaceLike; release: () => void; started: number } => {
+/** A shard whose dispatches block until the test releases them, so "is a run still in flight?" is deterministic; `entered` resolves once one has begun. */
+const blockingShard = (status = 200): { entered: Promise<void>; namespace: ShardNamespaceLike; release: () => void; started: number } => {
     const waiting: (() => void)[] = [];
+    let markEntered: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+        markEntered = resolve;
+    });
     const shard = {
+        entered,
         namespace: {
             get: () => {
                 return {
                     fetch: async () => {
                         shard.started += 1;
+                        markEntered();
                         await new Promise<void>((resolve) => {
                             waiting.push(resolve);
                         });
@@ -88,12 +94,6 @@ const leaseScheduler = (failWith?: number): { calls: { body: Record<string, unkn
     };
 };
 
-const settle = async (): Promise<void> => {
-    await new Promise((resolve) => {
-        setTimeout(resolve, 0);
-    });
-};
-
 describe("createWorker — cron overlap guard", () => {
     afterEach(() => {
         vi.restoreAllMocks();
@@ -112,7 +112,7 @@ describe("createWorker — cron overlap guard", () => {
 
         const first = worker.scheduled({ cron: CRON, scheduledTime: 0 }, {}, fakeContext);
 
-        await settle();
+        await shard.entered;
         await worker.scheduled({ cron: CRON, scheduledTime: 300_000 }, {}, fakeContext);
 
         expect(shard.started).toBe(1);
@@ -137,7 +137,7 @@ describe("createWorker — cron overlap guard", () => {
 
         const fire = worker.scheduled({ cron: CRON, scheduledTime: 0 }, {}, fakeContext);
 
-        await settle();
+        await shard.entered;
         shard.release();
 
         await expect(fire).rejects.toThrow("failed with shard status 500");
@@ -159,7 +159,7 @@ describe("createWorker — cron overlap guard", () => {
 
         const fire = worker.scheduled({ cron: CRON, scheduledTime: 0 }, {}, fakeContext);
 
-        await settle();
+        await shard.entered;
 
         expect(shard.started).toBe(1);
 
@@ -180,7 +180,7 @@ describe("createWorker — cron overlap guard", () => {
 
         const fire = worker.scheduled({ cron: CRON, scheduledTime: 0 }, {}, fakeContext);
 
-        await settle();
+        await shard.entered;
 
         const manual = await worker.fetch(
             new Request("https://app.example/_lunora/admin/cron-jobs/run", {

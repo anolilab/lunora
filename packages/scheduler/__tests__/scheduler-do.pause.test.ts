@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SchedulerDO } from "../src/scheduler-do";
 import type { ScheduleRecord } from "../src/types";
-import { BlockingScheduler, indexKeysFor, post, scheduleDue, settle } from "./blocking-scheduler";
+import { BlockingScheduler, indexKeysFor, post, scheduleDue } from "./blocking-scheduler";
 import { createFakeState } from "./fake-state";
 
 const env = { LUNORA_ORIGIN_URL: "https://app.test" };
@@ -66,7 +66,7 @@ describe("schedulerDO deployment pause", () => {
         const ids = await scheduleDue(scheduler, 8);
         const drain = scheduler.alarm();
 
-        await settle();
+        await Promise.all(ids.slice(0, 6).map(async (id) => scheduler.entered(id)));
 
         expect(scheduler.started).toHaveLength(6);
 
