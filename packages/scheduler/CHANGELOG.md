@@ -1,3 +1,9 @@
+## @lunora/scheduler [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.154...@lunora/scheduler@1.0.0-alpha.155) (2026-10-28)
+
+### Performance Improvements
+
+* single-pass email render, cached scheduler hmac key, linear notify grouping ([#1382](https://github.com/anolilab/lunora/issues/1382)) ([7ac5bb2](https://github.com/anolilab/lunora/commit/7ac5bb2bb9e839ed4da1c2667031c880531cc02e))
+
 ## @lunora/scheduler [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.153...@lunora/scheduler@1.0.0-alpha.154) (2026-10-28)
 
 ### Miscellaneous Chores
