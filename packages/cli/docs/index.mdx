@@ -1486,11 +1486,13 @@ While paused, app function calls (`/_lunora/rpc`, batches, REST routes) and new
 WebSocket, socket-route and voice connections answer `503 DEPLOYMENT_PAUSED`
 with a `Retry-After`. A realtime socket opened before the pause keeps serving its
 subscriptions until it reconnects; writes go over HTTP, so they are refused. Scheduled jobs stay where they are, with their attempt budgets
-untouched, and run when you resume. Cron ticks are skipped and recorded as such.
+untouched, and run when you resume. Cron ticks are skipped and recorded as such,
+and a raw `crons` handler is skipped too; the built-in scheduled backup still runs.
 Queue batches are retried after five minutes, and each retry spends one of the
 consumer's `max_retries`, so a pause longer than that sends held messages to the
-dead-letter queue. Calls carrying the admin token keep working, so Studio, the
-CLI and health checks stay usable. Studio shows a banner on every page while
+dead-letter queue. A Workers-for-Platforms tenant answers forwarded batches with
+every message marked for retry. Calls carrying the admin token or an `adminGate`
+grant keep working, so Studio, the CLI and health checks stay usable. Studio shows a banner on every page while
 paused, and the Schedule tab has the switch.
 
 A pause reaches every isolate within five seconds. The flag lives in the
