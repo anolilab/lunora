@@ -346,9 +346,9 @@ const createFlags = (definition: FlagsDefinition, env: Record<string, unknown>, 
      *
      * {@link bindClient}'s own memo drops the client promise on rejection so the
      * next request re-attempts — which is right across requests and wrong within
-     * one. The generated `evaluateFlags` reads flags SEQUENTIALLY (`await` per
-     * key), so with only that memo the first read's rejection clears the entry
-     * before the second read asks for it: every distinct flag in the request
+     * one. When a handler reads flags one after another (`await` per key), the
+     * first read's rejection clears that entry before the second read asks for
+     * it, so with only that memo every distinct flag in the request
      * starts its own bind, hits the same broken config, and logs again. A
      * hundred-flag app turns one misconfiguration into a hundred provider
      * `initialize` attempts and a hundred log lines per request.
