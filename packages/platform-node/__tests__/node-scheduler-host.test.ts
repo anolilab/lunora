@@ -49,6 +49,44 @@ describe("createNodeSchedulerHost", () => {
             }
         });
 
+        it.each([
+            ["succeeds", true, "succeeded"],
+            ["fails", false, "canceled"],
+        ])("records a job cancelled mid-dispatch by how its attempt ended when it %s", async (_label, ok, expected) => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            const database = new Database(":memory:");
+            let settle: { reject: (error: Error) => void; resolve: () => void } | undefined;
+            const host = createNodeSchedulerHost(database, {
+                onDispatch: async () =>
+                    new Promise<void>((resolve, reject) => {
+                        settle = { reject, resolve };
+                    }),
+            });
+
+            try {
+                const job = await host.scheduler.schedule("jobs:run", {}, { delayMs: 10, retry: { maxAttempts: 1 } });
+
+                await vi.advanceTimersByTimeAsync(20);
+                await host.scheduler.cancel(job.id);
+                if (ok) {
+                    settle?.resolve();
+                } else {
+                    settle?.reject(new Error("handler failed"));
+                }
+
+                await vi.advanceTimersByTimeAsync(0);
+
+                await expect(host.scheduler.get?.(job.id)).resolves.toMatchObject({ state: expected });
+                await expect(host.scheduler.list?.()).resolves.toHaveLength(0);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
         it("forgets a finished job after seven days and deletes its row on the next construction", async () => {
             expect.assertions(3);
 

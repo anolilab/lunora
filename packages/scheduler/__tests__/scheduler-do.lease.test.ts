@@ -368,7 +368,7 @@ describe("schedulerDO dispatch lease — cancelled mid-dispatch", () => {
     it.each([
         ["fails", false],
         ["succeeds", true],
-    ])("stays cancelled when the in-flight attempt %s", async (_label, ok) => {
+    ])("stays cancelled, never re-fired, when the in-flight attempt %s", async (_label, ok) => {
         expect.hasAssertions();
 
         pinClock(Date.now());

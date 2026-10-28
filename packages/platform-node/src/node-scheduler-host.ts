@@ -254,8 +254,10 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     );
     const selectJob = database.prepare<[string], JobRow>("SELECT * FROM _lunora_scheduler_jobs WHERE id = ?");
     const selectByState = database.prepare<[string], JobRow>("SELECT * FROM _lunora_scheduler_jobs WHERE state = ? ORDER BY scheduled_for");
+    // `claimed_at` survives a cancel that lands mid-dispatch: if that attempt then
+    // succeeds, the job ran, and `succeedClaimedJob` (keyed on the claim) records so.
     const cancelPendingJob = database.prepare<[number, string]>(
-        "UPDATE _lunora_scheduler_jobs SET state = 'canceled', completed_at = ?, claimed_at = NULL WHERE id = ? AND state = 'pending'",
+        "UPDATE _lunora_scheduler_jobs SET state = 'canceled', completed_at = ? WHERE id = ? AND state = 'pending'",
     );
     const parkJob = database.prepare<[number, number, string]>(
         "UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ?, completed_at = ?, claimed_at = NULL WHERE id = ?",
@@ -270,10 +272,10 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         "UPDATE _lunora_scheduler_jobs SET claimed_at = ? WHERE id = ? AND claimed_at = ? AND state = 'pending'",
     );
     const updateClaimedAttempt = database.prepare<[number, number, string, number]>(
-        "UPDATE _lunora_scheduler_jobs SET attempts = ?, scheduled_for = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ?",
+        "UPDATE _lunora_scheduler_jobs SET attempts = ?, scheduled_for = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ? AND state = 'pending'",
     );
     const parkClaimedJob = database.prepare<[number, number, string, number]>(
-        "UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ?, completed_at = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ?",
+        "UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ?, completed_at = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ? AND state = 'pending'",
     );
     // One statement, so two processes on one file cannot both take the row: the
     // loser's WHERE no longer matches and it gets zero rows back. `scheduled_for`
