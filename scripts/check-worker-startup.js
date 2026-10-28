@@ -28,7 +28,9 @@
  * The reference app is synthetic, not a template. `templates/standalone` has four
  * procedures and cannot show per-procedure growth; this one has N procedures over T
  * tables, every function module importing one shared module that statically imports
- * `@lunora/auth`, the shape of a real app's shared auth / limiter / validator graph.
+ * `@lunora/auth`, the shape of a real app's shared auth / limiter / validator graph. It also
+ * declares one push queue, one workflow and one agent that import the same shared module, so a
+ * `LUNORA_LAZY_FUNCTIONS=1` run shows what the lazy build defers beyond the function registry.
  *
  * Usage:
  *   pnpm run worker-startup:check     # fail when the eager graph exceeds the ceiling
@@ -69,6 +71,30 @@ const materialize = (appDirectory, { procedures, tables }) => {
 
         writeFileSync(path, readFileSync(path, "utf8").replaceAll("{{name}}", "lunora-worker-startup-reference"), "utf8");
     }
+
+    const manifestPath = join(appDirectory, "package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+
+    manifest.dependencies = { ...manifest.dependencies, "@lunora/agent": "^0.0.0", "@lunora/queue": "^0.0.0", "@lunora/workflow": "^0.0.0" };
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, undefined, 4)}\n`, "utf8");
+
+    // The bindings `generateApp`'s queue, workflow and agent need. The template's config is JSONC,
+    // so they are spliced in ahead of its first key rather than parsed and rewritten.
+    const wranglerPath = join(appDirectory, "wrangler.jsonc");
+
+    writeFileSync(
+        wranglerPath,
+        readFileSync(wranglerPath, "utf8").replace(
+            '"main":',
+            `"queues": { "producers": [{ "binding": "QUEUE_JOBS", "queue": "jobs" }], "consumers": [{ "queue": "jobs" }] },
+    "workflows": [
+        { "name": "nightly", "binding": "WORKFLOW_NIGHTLY", "class_name": "NightlyWorkflow" },
+        { "name": "agent-support", "binding": "AGENT_SUPPORT", "class_name": "SupportAgentWorkflow" },
+    ],
+    "main":`,
+        ),
+        "utf8",
+    );
 
     // npm-shaped so the CLI's `pnpm exec` does not verify an absent lockfile.
     writeFileSync(join(appDirectory, "package-lock.json"), '{ "lockfileVersion": 3 }\n', "utf8");
@@ -135,6 +161,59 @@ ${tableDefinitions.join("\n")}
     writeFileSync(
         join(lunora, "lib", "shared.ts"),
         'import { createAuth } from "@lunora/auth";\n\nexport const shared = (): typeof createAuth => createAuth;\n',
+        "utf8",
+    );
+
+    // One push queue, one workflow and one agent, each reaching the shared module the way a real
+    // consumer, workflow body or agent tool reaches the app's graph. They are what a lazy build
+    // defers past the function registry: the queue registry, and the modules behind the exported
+    // `WorkflowEntrypoint` classes, which the entry re-exports for wrangler.
+    writeFileSync(
+        join(lunora, "queues.ts"),
+        `import { defineQueue } from "@lunora/queue";
+
+import { shared } from "./lib/shared.js";
+
+export const jobs = defineQueue<{ id: string }>({
+    handler: async (_ctx, batch) => {
+        shared();
+        batch.ackAll();
+    },
+});
+`,
+        "utf8",
+    );
+    writeFileSync(
+        join(lunora, "workflows.ts"),
+        `import { defineWorkflow } from "@lunora/workflow";
+
+import { shared } from "./lib/shared.js";
+
+export const nightly = defineWorkflow<{ day: string }>({
+    handler: async (ctx) => ctx.step.do("run", async () => typeof shared()),
+});
+`,
+        "utf8",
+    );
+    writeFileSync(
+        join(lunora, "agents.ts"),
+        `import { defineAgent } from "@lunora/agent";
+
+import { shared } from "./lib/shared.js";
+
+export const support = defineAgent({ instructions: typeof shared(), model: "@cf/meta/llama-3.1-8b-instruct" });
+`,
+        "utf8",
+    );
+
+    const entry = join(appDirectory, "src", "server.ts");
+
+    writeFileSync(
+        entry,
+        `${readFileSync(entry, "utf8")}
+export * from "../lunora/_generated/agents.js";
+export * from "../lunora/_generated/workflows.js";
+`,
         "utf8",
     );
 
