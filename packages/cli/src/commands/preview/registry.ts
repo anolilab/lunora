@@ -280,7 +280,7 @@ const workersSubdomain = async (request: Request): Promise<string> => {
     return subdomain;
 };
 
-export type { PreviewRecord, RecordedResource, Request };
+export type { PreviewRecord, Request };
 export {
     createResource,
     deleteRecord,
@@ -290,7 +290,6 @@ export {
     listRecords,
     readRecord,
     recordKey,
-    REGISTRY_TITLE,
     registryNamespace,
     workerMarker,
     workersSubdomain,
