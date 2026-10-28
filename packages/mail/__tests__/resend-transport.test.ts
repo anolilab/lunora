@@ -149,10 +149,10 @@ describe("resend transport error mapping", () => {
             expect(isRetryableMailError(await failure(Object.assign(new Error("Request failed with status 500"), { code: "500" })))).toBe(true);
         });
 
-        it("refuses a message the provider rejected before any request", async () => {
+        it("retries a provider error that carries no status", async () => {
             expect.assertions(1);
 
-            expect(isRetryableMailError(await failure(new Error("Invalid email options: to is required")))).toBe(false);
+            expect(isRetryableMailError(await failure(new Error("Invalid email options: to is required")))).toBe(true);
         });
 
         it("retries a network failure, which carries a cause and no status", async () => {

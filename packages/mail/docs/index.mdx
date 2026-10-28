@@ -108,9 +108,11 @@ each successful send: Cloudflare Queues are at-least-once, so without a per-mess
 ack a single throw retries the WHOLE batch — resending every already-delivered
 email in it, not just the one that failed. A failed send is either retryable or a
 refusal, and the consumer branches on `isRetryableMailError(error)`: a provider
-outage, rate limit or network failure is retried with `message.retry()`, while a
-refused address, a rejected message or a malformed body is acked and logged,
-because a retry would fail the same way and only fill the dead-letter queue. Build the consumer's mailer with
+outage, rate limit, network failure or any failure the provider did not classify
+is retried with `message.retry()` (until the dead-letter queue), while a send the
+provider refused with an explicit permanent HTTP status (for example a rejected
+address or message) or a malformed body is acked and logged, because a retry
+would fail the same way and only fill the dead-letter queue. Build the consumer's mailer with
 `createMailerFromEnv` so that in dev the queued message is captured into the
 studio inbox at consume time instead of delivered:
 
@@ -314,7 +316,7 @@ rules; that lifecycle stays in Cloudflare.
 | `renderEmail(element)`                | Render a React Email element to `{ html, text }`                                                                                                                                                                    |
 | `toQueuedPayload(options)`            | Narrow `SendOptions` to its serializable `QueuedSend` (drops `react`)                                                                                                                                               |
 | `consumeQueuedSend(mailer, body)`     | Validate a queued payload and `mailer.send(...)` it; returns `{ id }`                                                                                                                                               |
-| `isRetryableMailError(error)`         | Whether a failed send is worth a redelivery: `true` for a provider outage, rate limit or network failure, `false` for a refusal                                                                                     |
+| `isRetryableMailError(error)`         | Whether a failed send is worth a redelivery: `false` only for a refusal carrying an explicit permanent HTTP status, `true` for everything else                                                                      |
 | `MailSendError`                       | The error a failed send throws; `retryable` and `data.retryable` carry the decision                                                                                                                                 |
 | Type-only                             | `Mailer`, `MailTransport`, `SendOptions`, `SendPayload`, `QueueLike`, `LunoraMailOptions`, `QueuedSend`, `CapturedMail`, `MailboxSink`, `CloudflareSend`, `CloudflareTransportOptions`, `FromEnvOptions`, `MailEnv` |
 

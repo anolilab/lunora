@@ -78,10 +78,10 @@ const httpStatusOf = (code: unknown): number | undefined => {
 /**
  * Whether a provider's failed send is worth repeating. `@visulima/email` puts an
  * HTTP status on the error as a numeric `code`, so 408, 429 and 5xx are
- * transient and any other status is a refusal. A validation refusal has neither
- * a status nor a `cause`. A network or timeout failure has a `cause`, or the
- * `ETIMEDOUT` code. Anything the provider did not classify is retried, because a
- * wrong retry dead-letters the message and a wrong drop loses it.
+ * transient and any other 1xx-5xx status is a refusal. A send is dropped only on
+ * that explicit permanent status; anything the provider did not classify (a plain
+ * `Error`, a network failure, a non-`Error` result) is retried, because a wrong
+ * retry only dead-letters the message and a wrong drop loses it.
  */
 const isRetryableProviderError = (rawError: unknown): boolean => {
     if (!(rawError instanceof Error)) {
@@ -89,26 +89,21 @@ const isRetryableProviderError = (rawError: unknown): boolean => {
     }
 
     // `@visulima/email` wraps a callback's failure as a `cause`, so the status can sit one or more levels down.
-    let code: unknown;
+    let status: number | undefined;
 
     for (let current: unknown = rawError, depth = 0; current instanceof Error && depth < 5; current = current.cause, depth += 1) {
-        const candidate = "code" in current ? current.code : undefined;
+        status = httpStatusOf("code" in current ? current.code : undefined);
 
-        if (httpStatusOf(candidate) !== undefined) {
-            code = candidate;
+        if (status !== undefined) {
             break;
         }
-
-        code ??= candidate;
     }
-
-    const status = httpStatusOf(code);
 
     if (status !== undefined && status >= 100 && status <= 599) {
         return status === 408 || status === 429 || status >= 500;
     }
 
-    return !(code === undefined && rawError.cause === undefined);
+    return true;
 };
 
 /** Resolve the validated recipient list + its first entry, throwing when empty. */

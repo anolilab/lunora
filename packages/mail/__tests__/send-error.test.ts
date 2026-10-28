@@ -24,6 +24,20 @@ describe("mail send classification", () => {
         expect(isRetryableProviderError(wrap(new Error("socket reset")))).toBe(true);
     });
 
+    it("retries unless the provider gave an explicit permanent status", () => {
+        expect.assertions(7);
+
+        const withCode = (code: number | string): Error => Object.assign(new Error("failed"), { code });
+
+        expect(isRetryableProviderError(new Error("socket reset"))).toBe(true);
+        expect(isRetryableProviderError("accepted: false")).toBe(true);
+        expect(isRetryableProviderError(withCode(422))).toBe(false);
+        expect(isRetryableProviderError(withCode("403"))).toBe(false);
+        expect(isRetryableProviderError(withCode(429))).toBe(true);
+        expect(isRetryableProviderError(withCode(503))).toBe(true);
+        expect(isRetryableProviderError(withCode("ETIMEDOUT"))).toBe(true);
+    });
+
     it("treats a transport error it did not classify as retryable, without leaking its text", async () => {
         expect.assertions(3);
 

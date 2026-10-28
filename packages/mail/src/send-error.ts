@@ -8,9 +8,10 @@ interface MailSendErrorData {
 
 /**
  * A send that did not deliver. `retryable` is the decision a queue consumer
- * needs: a provider outage or rate limit may clear on a redelivery, while a
- * refused recipient or a rejected message will fail the same way every time.
- * Retrying the latter only drains the queue into its dead-letter queue.
+ * needs: a send is a refusal only when the provider answered with an explicit
+ * permanent HTTP status (anything but 408, 429 and 5xx); every other failure may
+ * clear on a redelivery. Retrying a refusal only drains the queue into its
+ * dead-letter queue.
  */
 class MailSendError extends LunoraError {
     public readonly retryable: boolean;
