@@ -30,7 +30,7 @@ type ParsedImportRow = { error: ImportRowError; ok: false } | { doc: Record<stri
  * owns line numbering and accumulation.
  * @returns a discriminated-union result — `{ ok: true, doc, table }` or `{ ok: false, error }`.
  */
-const parseImportRow = (trimmed: string, lineNumber: number): ParsedImportRow => {
+const parseImportRow = (trimmed: string, lineNumber: number, deletes: boolean): ParsedImportRow => {
     let parsed: unknown;
 
     try {
@@ -51,6 +51,20 @@ const parseImportRow = (trimmed: string, lineNumber: number): ParsedImportRow =>
 
     if (!candidate.doc || typeof candidate.doc !== "object" || Array.isArray(candidate.doc)) {
         return { error: { code: "BAD_ROW", line: lineNumber, message: "row is missing or malformed `doc`", table: candidate.table }, ok: false };
+    }
+
+    // A delete row is honoured only on a request that asked for deletes, so a file line that happens to carry
+    // `op: "delete"` (a change-feed dump, say) is refused by a plain import rather than deleting the stored row.
+    if (candidate.op === "delete" && !deletes) {
+        return {
+            error: {
+                code: "BAD_ROW",
+                line: lineNumber,
+                message: 'a row with `op: "delete"` needs `?deletes=true` on the import request',
+                table: candidate.table,
+            },
+            ok: false,
+        };
     }
 
     if (candidate.op !== undefined && candidate.op !== "delete") {
@@ -127,6 +141,7 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         throw new LunoraError("Import endpoint requires a request body", { code: "BAD_REQUEST", status: 400 });
     }
 
+    const deletes = new URL(request.url).searchParams.get("deletes") === "true";
     const errors: ImportRowError[] = [];
     // Each global row carries its true physical source line so error attribution
     // survives interspersed shard rows / blank lines — a single `startLine` can
@@ -161,7 +176,7 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
 
         received += 1;
 
-        const row = parseImportRow(trimmed, physicalLine);
+        const row = parseImportRow(trimmed, physicalLine, deletes);
 
         if (!row.ok) {
             errors.push(row.error);

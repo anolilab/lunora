@@ -25,7 +25,7 @@ const json = (value: unknown): Awaited<ReturnType<StreamingFetchLike>> => {
 
 /**
  * A worker over an in-memory store that speaks the admin export and import
- * endpoints, including `?onConflict=replace` and `op: "delete"` rows. `refuse`
+ * endpoints, including `?onConflict=replace` and `op: "delete"` rows (only under `?deletes=true`). `refuse`
  * names `_id`s whose write it reports as a row error.
  */
 const fakeWorker = (initial: Record<string, Doc[]>, options: { canDelete?: boolean; refuse?: ReadonlyArray<string> } = {}) => {
@@ -72,6 +72,7 @@ const fakeWorker = (initial: Record<string, Doc[]>, options: { canDelete?: boole
 
         const dryRun = searchParams.get("dryRun") === "true";
         const replace = searchParams.get("onConflict") === "replace";
+        const deletes = searchParams.get("deletes") === "true";
         const result = { conflicts: 0, deleted: 0, errors: [] as unknown[], inserted: {} as Record<string, number>, received: 0, replaced: 0 };
         const rows = body.split("\n").filter((entry) => entry.trim().length > 0);
 
@@ -80,6 +81,14 @@ const fakeWorker = (initial: Record<string, Doc[]>, options: { canDelete?: boole
         if (!dryRun) {
             rows.forEach((raw, index) => {
                 const row = JSON.parse(raw) as { doc: Doc; op?: string; table: string };
+
+                // As the runtime does: a delete row counts only on a request that asked for deletes.
+                if (row.op === "delete" && !deletes) {
+                    result.errors.push({ code: "BAD_ROW", line: index + 1, message: "delete without ?deletes=true", table: row.table });
+
+                    return;
+                }
+
                 const outcome = apply(row, replace);
 
                 if (outcome === "refused") {

@@ -1032,7 +1032,8 @@ const planAndConfirm = async (
  * carries the row as exported, so it routes to the shard that holds it.
  */
 const pruneMissingRows = async (plan: ImportPlan, target: ImportPassTarget): Promise<{ batcher: ImportBatcher; failure: unknown }> => {
-    const batcher = createImportBatcher({ ...target, maxBatchBytes: MAX_IMPORT_BATCH_BYTES });
+    // Only this pass asks for deletes; the endpoint refuses a delete row on any other request.
+    const batcher = createImportBatcher({ ...target, maxBatchBytes: MAX_IMPORT_BATCH_BYTES, requestUrl: `${target.requestUrl}?deletes=true` });
 
     try {
         for (const row of plan.deletions) {

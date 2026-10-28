@@ -387,6 +387,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         // `?dryRun=true` checks the body and reports what it would reject, writing nothing.
         const dryRun = searchParams.get("dryRun") === "true";
         // `?onConflict=replace` overwrites rows whose `_id` already exists; absent, they are conflicts left unchanged.
+        // `?deletes=true` (read by the import stream) is what lets an `op: "delete"` row remove a stored row.
         const onConflictParameter = searchParams.get("onConflict") ?? "skip";
 
         if (onConflictParameter !== "replace" && onConflictParameter !== "skip") {

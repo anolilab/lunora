@@ -1036,6 +1036,7 @@ describe("createWorker — admin import endpoint", () => {
         const deleteImport = async (
             lines: ReadonlyArray<Record<string, unknown>>,
             workerOptions: { importGlobalsSupportsDelete?: boolean },
+            query = "?deletes=true",
         ): Promise<{ body: Record<string, unknown>; importGlobals: ReturnType<typeof vi.fn>; status: number }> => {
             const importGlobals = vi.fn<(request: { rows: ReadonlyArray<{ op?: string }> }) => Promise<unknown>>(async (request) => {
                 return { conflicts: 0, deleted: request.rows.filter((row) => row.op === "delete").length, errors: [], inserted: {} };
@@ -1061,7 +1062,7 @@ describe("createWorker — admin import endpoint", () => {
                 ...workerOptions,
             });
             const response = await worker.fetch(
-                new Request("https://app.example/_lunora/admin/import", {
+                new Request(`https://app.example/_lunora/admin/import${query}`, {
                     body: lines.map((line) => JSON.stringify(line)).join("\n"),
                     headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                     method: "POST",
@@ -1103,6 +1104,29 @@ describe("createWorker — admin import endpoint", () => {
             );
 
             expect(status).toBe(400);
+            expect(importGlobals).not.toHaveBeenCalled();
+            expect(orchestrateImport).not.toHaveBeenCalled();
+        });
+
+        it("refuses a delete row on a request that did not ask for deletes, and deletes nothing", async () => {
+            expect.assertions(3);
+
+            const { body, importGlobals } = await deleteImport(
+                [
+                    { doc: { _id: "u1", orgId: "acme" }, op: "delete", table: "users" },
+                    { doc: { _id: "g1" }, op: "delete", table: "settings" },
+                ],
+                { importGlobalsSupportsDelete: true },
+                "",
+            );
+
+            expect(body).toMatchObject({
+                deleted: 0,
+                errors: [
+                    { code: "BAD_ROW", line: 1 },
+                    { code: "BAD_ROW", line: 2 },
+                ],
+            });
             expect(importGlobals).not.toHaveBeenCalled();
             expect(orchestrateImport).not.toHaveBeenCalled();
         });
