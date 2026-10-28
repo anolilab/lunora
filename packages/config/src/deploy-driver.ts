@@ -70,6 +70,10 @@ export interface DeployRequest {
     outDir?: string;
     /** A file of secrets (JSON object of name to value) uploaded with the deployment, so a Worker's first version boots with them. */
     secretsFile?: string;
+    /** Also write the upload-ready artifact (what the host would receive) to this file, for tools that profile it. */
+    outFile?: string;
+    /** Upload a preview/versioned artifact instead of taking production traffic. */
+    preview?: boolean;
     /** Deploy to a short-lived, unauthenticated account where the host offers one. */
     temporary?: boolean;
 }

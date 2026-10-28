@@ -33,6 +33,9 @@ describe("cLOUDFLARE_DRIVER toolchain", () => {
             "dist",
             "--metafile",
         ]);
+        expect(
+            toolchain?.deploy({ dryRun: true, entry: "src/worker.ts", environment: "prod", outDir: "dist", outFile: "w.bundle", temporary: true }).args,
+        ).toStrictEqual(["deploy", "src/worker.ts", "--env", "prod", "--temporary", "--dry-run", "--outdir", "dist", "--metafile", "--outfile", "w.bundle"]);
     });
 
     it("builds tail argv with the worker positional before flags", () => {

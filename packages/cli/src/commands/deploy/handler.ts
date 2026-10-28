@@ -349,6 +349,8 @@ const deployRequestFor = (cwd: string, options: DeployCommandOptions): DeployReq
         environment: options.env,
         outDir: options.outDir,
         secretsFile: options.secretsFile,
+        outFile: options.outFile,
+        preview: options.preview,
         temporary: options.temporary,
     };
 };
