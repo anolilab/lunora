@@ -21,6 +21,12 @@
  * **MySQL connections must enable `CLIENT_FOUND_ROWS`** (mysql2:
  * `createPool({ flags: ["FOUND_ROWS"] })`) so the affected-rows OCC guard sees
  * matched (not changed) rows — see {@link buildMysqlExec}.
+ *
+ * **The Hyperdrive config must have query caching disabled**
+ * (`wrangler hyperdrive create … --caching-disabled`). Hyperdrive caches reads by
+ * default and a write does not invalidate them, so OCC re-reads, change-log polls
+ * and live-query re-runs would read rows up to `max_age + stale_while_revalidate`
+ * old.
  */
 import type { CdcChange, DatabaseWriterLike, ImportConflictMode, SchemaLike } from "@lunora/shard-engine";
 import { applyCdcChanges, CDC_LOG_TABLE } from "@lunora/shard-engine";

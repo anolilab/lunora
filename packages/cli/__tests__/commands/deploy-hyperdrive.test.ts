@@ -210,6 +210,78 @@ describe("hyperdrive on deploy", () => {
             expect(api).toHaveBeenCalledTimes(2);
         });
 
+        describe("query caching", () => {
+            const bodyOf = (api: ReturnType<typeof hyperdriveApi>, method: string): Record<string, unknown> =>
+                JSON.parse(api.mock.calls.find(([, init]) => init?.method === method)?.[1]?.body as string) as Record<string, unknown>;
+
+            it("creates the config with caching off when asked, so a .global() store never reads a cached row", async () => {
+                expect.assertions(1);
+
+                writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" });
+
+                const api = hyperdriveApi([]);
+
+                await provisionHyperdrive({
+                    cwd: root,
+                    disableCaching: true,
+                    environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@h/db" },
+                    fetch: api,
+                    logger: recordingLogger().logger,
+                });
+
+                expect(bodyOf(api, "POST").caching).toStrictEqual({ disabled: true });
+            });
+
+            it("turns caching off on a reused config too", async () => {
+                expect.assertions(1);
+
+                writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" });
+
+                const api = hyperdriveApi([
+                    { id: "existing-id", name: "app-hyperdrive", origin: { database: "db", host: "h", port: 5432, scheme: "postgres", user: "u" } } as never,
+                ]);
+
+                await provisionHyperdrive({
+                    cwd: root,
+                    disableCaching: true,
+                    environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@h/db" },
+                    fetch: api,
+                    logger: recordingLogger().logger,
+                });
+
+                expect(bodyOf(api, "PATCH").caching).toStrictEqual({ disabled: true });
+            });
+
+            it.each([
+                ['.global({ backend: "hyperdrive" })', { disabled: true }],
+                [".global()", undefined],
+            ])("a deploy of an app with %s tables sends caching %o", async (marker, expected) => {
+                expect.assertions(1);
+
+                writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" });
+                mkdirSync(join(root, "lunora"));
+                writeFileSync(
+                    join(root, "lunora", "schema.ts"),
+                    `import { defineSchema, defineTable, v } from "@lunora/server";\n\nexport const schema = defineSchema({\n    users: defineTable({ email: v.string() })${marker},\n});\n`,
+                    "utf8",
+                );
+                vi.stubEnv(URL_VARIABLE, "postgres://u:p@h/db");
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const api = hyperdriveApi([]);
+
+                vi.stubGlobal("fetch", api);
+
+                await provisionDeployHyperdrive(root, { clientBuildEnvironment: undefined, logger: recordingLogger().logger }, "deploy", "cloudflare");
+
+                vi.unstubAllGlobals();
+                vi.unstubAllEnvs();
+
+                expect(bodyOf(api, "POST").caching).toStrictEqual(expected);
+            });
+        });
+
         it("does nothing, and calls nothing, once the binding has a real id", async () => {
             expect.assertions(2);
 

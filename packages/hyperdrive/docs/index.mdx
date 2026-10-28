@@ -104,6 +104,12 @@ Prefer to manage it yourself? Run `wrangler hyperdrive create my-db --connection
 and put the `id` in the binding; Lunora then leaves it alone. Lunora validates the binding
 (it errors when `binding` is missing).
 
+Hyperdrive caches read results for up to a minute by default, and a write does not
+invalidate them, so a `ctx.sql` read can miss a row your own action just wrote. For reads
+that must be fresh, follow Cloudflare's advice and add a second config created with
+`--caching-disabled`, bound under another name. A `.global()` backend always needs caching
+off: see [below](#turn-hyperdrives-query-cache-off).
+
 ## The canonical recipe
 
 `ctx.sql` is **wired once, at the app level**, not inside a handler: the
@@ -415,6 +421,31 @@ const globalDb = createMysqlGlobalCtxDb(pool, { schema });
 ```
 
 </Tabs>
+
+### Turn Hyperdrive's query cache off
+
+The Hyperdrive config behind a `.global()` store **must have query caching
+disabled.** Hyperdrive caches read results by default (`max_age` 60 s plus 15 s
+of `stale_while_revalidate`), and a write does not invalidate that cache. The
+store's own reads would then lag its writes: an optimistic-concurrency re-read
+returns the old version, so the conditional write misses and every retry rereads
+the same cached row (spurious `ConflictError`s), and change-log polls and
+live-query re-runs serve rows up to 75 s old.
+
+`lunora deploy` creates (or updates) its configs with caching off when the
+schema has `.global({ backend: "hyperdrive" })` tables. A config you made
+yourself needs it set once:
+
+```bash
+wrangler hyperdrive create my-db --connection-string="postgres://user:pass@host/db" --caching-disabled # gitleaks:allow -- placeholder
+# or, for an existing config:
+wrangler hyperdrive update <id> --caching-disabled
+```
+
+Local dev (`localConnectionString`, the embedded Postgres) has no cache, so it
+won't reproduce the problem. Node and celld have no Hyperdrive: their
+`.global()` store is SQLite (a local file on Node, a D1 binding on celld), so
+this does not apply there.
 
 ### Tables provisioned by an earlier version
 

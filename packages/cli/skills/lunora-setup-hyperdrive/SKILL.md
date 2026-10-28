@@ -57,6 +57,10 @@ its `id` into `wrangler.jsonc`. The connection string is never written or logged
 To manage the config yourself, run `wrangler hyperdrive create my-db --connection-string=...`
 and put the `id` in the binding. Validation fails without a `binding`.
 
+Hyperdrive caches read results (up to 60 s plus 15 s stale by default) and a write does not
+invalidate them. For reads that must see your own writes, add a second config created with
+`--caching-disabled` and bind it under another name.
+
 ## Step 3: Regenerate types
 
 ```bash

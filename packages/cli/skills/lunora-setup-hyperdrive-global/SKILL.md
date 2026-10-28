@@ -47,8 +47,16 @@ your engine. Drivers are optional peer dependencies.
 ## Step 2: Create the Hyperdrive binding
 
 ```bash
-wrangler hyperdrive create my-db --connection-string="postgres://user:pass@host/db" # gitleaks:allow -- placeholder
+wrangler hyperdrive create my-db --connection-string="postgres://user:pass@host/db" --caching-disabled # gitleaks:allow -- placeholder
 ```
+
+**Query caching must be off** for the config behind `.global()`. Hyperdrive
+caches reads by default (60 s plus 15 s stale-while-revalidate) and a write does
+not invalidate them, so the store would read its own rows stale: OCC retries
+reread the cached version and fail with spurious conflicts, and live queries
+re-run onto old data. For a config that already exists, run
+`wrangler hyperdrive update <id> --caching-disabled`. When `lunora deploy`
+creates the config from `LUNORA_<BINDING>_URL`, it turns caching off itself.
 
 ```jsonc
 {
@@ -183,5 +191,8 @@ cutover is still in D1 afterwards, so remove those by hand.
 2. **Mixing D1 and Hyperdrive global tables.** Codegen rejects this.
 3. **Missing `FOUND_ROWS` on MySQL.** It causes spurious OCC conflicts on idempotent writes.
 4. **Stale-replica reads.** Point Hyperdrive at the primary.
-5. **Writing to the database directly.** Live queries won't see those writes. Route writes
+5. **Query caching left on.** Spurious OCC conflicts and live queries stuck up to
+   75 s behind writes. Disable caching on the config (`--caching-disabled`). Local dev
+   has no cache, so this shows up only once deployed.
+6. **Writing to the database directly.** Live queries won't see those writes. Route writes
    through `ctx.db`.
