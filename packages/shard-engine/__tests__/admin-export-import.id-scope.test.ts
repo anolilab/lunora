@@ -63,6 +63,35 @@ describe("shard admin import — `_id` conflict probe", () => {
         expect(result.inserted).toStrictEqual({});
     });
 
+    it('overwrites a same-table `_id` under onConflict: "replace", keeping the row\'s `_creationTime`', async () => {
+        expect.assertions(2);
+
+        const writer = writerFor(harness);
+
+        await writer.insert("notes", { _id: "n1", title: "original" }, { allowExplicitId: true });
+
+        const result = await importShardRows(writer, schema, {
+            onConflict: "replace",
+            rows: [{ doc: { _creationTime: 42, _id: "n1", title: "incoming" }, table: "notes" }],
+        });
+
+        expect(result).toStrictEqual({ conflicts: 0, errors: [], inserted: {}, replaced: 1 });
+        await expect(writer.get("notes", "n1")).resolves.toMatchObject({ _creationTime: 42, title: "incoming" });
+    });
+
+    it('still refuses a cross-table `_id` under onConflict: "replace"', async () => {
+        expect.assertions(2);
+
+        const writer = writerFor(harness);
+
+        await writer.insert("notes", { _id: "shared-1", title: "taken over here" }, { allowExplicitId: true });
+
+        const result = await importShardRows(writer, schema, { onConflict: "replace", rows: [{ doc: { _id: "shared-1", label: "todo" }, table: "tasks" }] });
+
+        expect(result.replaced).toBe(0);
+        expect(result.errors).toStrictEqual([expect.objectContaining({ code: "ID_COLLISION" })]);
+    });
+
     it("reports a cross-table `_id` collision per row instead of skipping it silently", async () => {
         expect.assertions(3);
 

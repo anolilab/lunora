@@ -555,6 +555,8 @@ interface ImportFanOutRequest {
     /** Check the rows and return their shape errors without writing. Off unless set: a write is the default. */
     dryRun?: boolean;
     headers?: Record<string, string>;
+    /** `"replace"` overwrites a row whose `_id` already exists; the default `"skip"` reports it as a conflict and leaves it unchanged. */
+    onConflict?: "replace" | "skip";
 }
 
 interface ShardImportOutcome {
@@ -563,6 +565,7 @@ interface ShardImportOutcome {
         conflicts: number;
         errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
         inserted: Record<string, number>;
+        replaced: number;
     };
     shardKey: string;
 }
@@ -576,6 +579,8 @@ interface ImportFanOutResult {
     /** Per-table summed insert counts. */
     inserted: Record<string, number>;
     ok: number;
+    /** Total existing rows overwritten under `onConflict: "replace"`. */
+    replaced: number;
     shards: ReadonlyArray<ShardImportOutcome>;
 }
 
@@ -1137,6 +1142,7 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
     const inserted: Record<string, number> = {};
     const errors: { code: string; line: number; message: string; table: string }[] = [];
     let conflicts = 0;
+    let replaced = 0;
     let ok = 0;
     let failed = 0;
 
@@ -1155,6 +1161,7 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
                   conflicts?: number;
                   errors?: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
                   inserted?: Record<string, number>;
+                  replaced?: number;
               };
         const shardInserted = payload?.inserted ?? {};
 
@@ -1169,18 +1176,20 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
         }
 
         conflicts += payload?.conflicts ?? 0;
+        replaced += payload?.replaced ?? 0;
 
         shards.push({
             result: {
                 conflicts: payload?.conflicts ?? 0,
                 errors: payload?.errors ?? [],
                 inserted: shardInserted,
+                replaced: payload?.replaced ?? 0,
             },
             shardKey: result.shardKey,
         });
     }
 
-    return { conflicts, errors, failed, inserted, ok, shards };
+    return { conflicts, errors, failed, inserted, ok, replaced, shards };
 };
 
 interface ShardRpcOk {
@@ -1952,7 +1961,12 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                     }
                 }
 
-                return importOnShard(batch.shardKey, { dryRun: request.dryRun === true, rows: [...batch.rows], startLine: batch.startLine ?? 1 });
+                return importOnShard(batch.shardKey, {
+                    dryRun: request.dryRun === true,
+                    onConflict: request.onConflict ?? "skip",
+                    rows: [...batch.rows],
+                    startLine: batch.startLine ?? 1,
+                });
             });
 
             return rollUpImport(outcomes);

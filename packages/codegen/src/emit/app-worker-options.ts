@@ -148,8 +148,10 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 // plane: the rows \`resolveTableSharding\` classifies as \`.global()\`
                 // land here, and without it they are reported, not written.
                 options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
-                // The importer above skips the write for a dry run.
+                // The importer above skips the write for a dry run, and
+                // overwrites an existing \`_id\` under \`onConflict: "replace"\`.
                 options.importGlobalsSupportsDryRun = true;
+                options.importGlobalsSupportsReplace = true;
                 // The read/replay half of the same admin plane. Each one is the
                 // only reason its endpoint can see the global storage plane at
                 // all, and every one of them fails SILENTLY when unset — export
@@ -162,6 +164,56 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 options.syncGlobals = buildGlobalCdcSync(database);
                 options.applyGlobals = buildGlobalCdcApplier(database, this.cdcEnabled);
             }
+        }`,
+          ]
+        : []),
+    // The Hyperdrive twin of the D1 admin plane above — same six options, same
+    // reason each one exists. \`declaration.exec(env)\` is called inside every
+    // request's closure, never hoisted: a Postgres/MySQL socket opened while
+    // serving one request cannot do I/O for another on Workers.
+    ...(options.hasHyperdriveGlobal
+        ? [
+              `        const hyperdriveDeclaration = this.hyperdriveGlobalDeclaration;
+
+        if (hyperdriveDeclaration) {
+            const engine = hyperdriveDeclaration.engine;
+            const hyperdriveSchema = schema as unknown as SqlCtxDbOptions["schema"];
+            const exec = (): SqlExec => hyperdriveDeclaration.exec(env);
+            const cdc = this.cdcEnabled;
+
+            options.globalIntrospector = {
+                facetColumn: (request) => createHyperdriveGlobalIntrospector(engine, exec(), hyperdriveSchema).facetColumn(request),
+                listTables: () => createHyperdriveGlobalIntrospector(engine, exec(), hyperdriveSchema).listTables(),
+                readTablePage: (request) => createHyperdriveGlobalIntrospector(engine, exec(), hyperdriveSchema).readTablePage(request),
+            };
+            options.importGlobals = (request) =>
+                importHyperdriveGlobalRows({
+                    cdc,
+                    dryRun: request.dryRun === true,
+                    engine,
+                    exec: exec(),
+                    onConflict: request.onConflict ?? "skip",
+                    rows: request.rows,
+                    schema: hyperdriveSchema,
+                    ...(request.startLine === undefined ? {} : { startLine: request.startLine }),
+                });
+            options.importGlobalsSupportsDryRun = true;
+            options.importGlobalsSupportsReplace = true;
+            options.exportGlobals = (request) => exportHyperdriveGlobalRows({ engine, exec: exec(), schema: hyperdriveSchema, tables: request.tables });
+            options.syncGlobals = async (request) => {
+                const page = await readHyperdriveGlobalCdc(engine, exec(), request);
+
+                // \`as unknown as\`: \`CdcChange\` is an interface, which carries no implicit index signature.
+                return { changes: page.changes as unknown as ReadonlyArray<Record<string, unknown>>, cursor: page.cursor };
+            };
+            options.applyGlobals = (request) =>
+                applyHyperdriveGlobalCdc({
+                    cdc,
+                    changes: request.changes as unknown as Parameters<typeof applyHyperdriveGlobalCdc>[0]["changes"],
+                    engine,
+                    exec: exec(),
+                    schema: hyperdriveSchema,
+                });
         }`,
           ]
         : []),

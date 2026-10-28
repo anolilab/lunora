@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import type { HyperdriveEngine } from "@lunora/hyperdrive/global";
-import { createHyperdriveGlobalCtxDb } from "@lunora/hyperdrive/global";
+import { applyHyperdriveGlobalCdc, createHyperdriveGlobalCtxDb, createHyperdriveGlobalIntrospector, exportHyperdriveGlobalRows, importHyperdriveGlobalRows, readHyperdriveGlobalCdc } from "@lunora/hyperdrive/global";
 import type { SqlCtxDbOptions, SqlExec } from "@lunora/sql-store";
 import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, ShardRegistryRpc, WorkerOptions } from "@lunora/runtime";
 import { createCrossShardRelationCapabilities, createDynamicShardRegistry, createQueryCoordinator, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
@@ -37,7 +37,7 @@ const loadDeferredModules = (): Promise<DeferredModules> =>
 interface HyperdriveGlobalDeclaration<Env> {
     /** The Hyperdrive engine — selects the Postgres or MySQL dialect. */
     engine: HyperdriveEngine;
-    /** Build the `SqlExec` from `env` — e.g. `buildPgExec(fromPostgresJs(postgres(env.HYPERDRIVE.connectionString)))`. Cache the driver on the DO instance; rebuild lazily after hibernation. */
+    /** Build the `SqlExec` from `env` — e.g. `buildPgExec(fromPostgresJs(postgres(env.HYPERDRIVE.connectionString)))`. Called per request, by the shard and by the stateless worker's admin plane, so return an exec on a connection opened for that call: never cache a driver or socket at module scope, since Workers refuse I/O across requests. */
     exec: (env: Env) => SqlExec;
     /** The worker origin used to fan reverse cross-backend relations across shards. Without it, such a relation throws a clear error. */
     origin?: Selector<Env, string>;
@@ -310,6 +310,49 @@ class AppBuilder<Env extends object> {
 
         if (shardRegistry) {
             options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ env, namespace: shardRegistry }) });
+        }
+
+        const hyperdriveDeclaration = this.hyperdriveGlobalDeclaration;
+
+        if (hyperdriveDeclaration) {
+            const engine = hyperdriveDeclaration.engine;
+            const hyperdriveSchema = schema as unknown as SqlCtxDbOptions["schema"];
+            const exec = (): SqlExec => hyperdriveDeclaration.exec(env);
+            const cdc = this.cdcEnabled;
+
+            options.globalIntrospector = {
+                facetColumn: (request) => createHyperdriveGlobalIntrospector(engine, exec(), hyperdriveSchema).facetColumn(request),
+                listTables: () => createHyperdriveGlobalIntrospector(engine, exec(), hyperdriveSchema).listTables(),
+                readTablePage: (request) => createHyperdriveGlobalIntrospector(engine, exec(), hyperdriveSchema).readTablePage(request),
+            };
+            options.importGlobals = (request) =>
+                importHyperdriveGlobalRows({
+                    cdc,
+                    dryRun: request.dryRun === true,
+                    engine,
+                    exec: exec(),
+                    onConflict: request.onConflict ?? "skip",
+                    rows: request.rows,
+                    schema: hyperdriveSchema,
+                    ...(request.startLine === undefined ? {} : { startLine: request.startLine }),
+                });
+            options.importGlobalsSupportsDryRun = true;
+            options.importGlobalsSupportsReplace = true;
+            options.exportGlobals = (request) => exportHyperdriveGlobalRows({ engine, exec: exec(), schema: hyperdriveSchema, tables: request.tables });
+            options.syncGlobals = async (request) => {
+                const page = await readHyperdriveGlobalCdc(engine, exec(), request);
+
+                // `as unknown as`: `CdcChange` is an interface, which carries no implicit index signature.
+                return { changes: page.changes as unknown as ReadonlyArray<Record<string, unknown>>, cursor: page.cursor };
+            };
+            options.applyGlobals = (request) =>
+                applyHyperdriveGlobalCdc({
+                    cdc,
+                    changes: request.changes as unknown as Parameters<typeof applyHyperdriveGlobalCdc>[0]["changes"],
+                    engine,
+                    exec: exec(),
+                    schema: hyperdriveSchema,
+                });
         }
 
         const logArchive = resolveLogArchiveFromEnv(env);

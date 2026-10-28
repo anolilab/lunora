@@ -929,6 +929,108 @@ describe("createWorker — admin import endpoint", () => {
         await expect(post("https://app.example/_lunora/admin/import?dryRun=true")).resolves.toMatchObject({ dryRun: true });
         await expect(post("https://app.example/_lunora/admin/import")).resolves.not.toHaveProperty("dryRun");
     });
+
+    describe("onConflict=replace", () => {
+        const replaceImport = async (
+            url: string,
+            workerOptions: { importGlobals?: never; importGlobalsSupportsDryRun?: boolean; importGlobalsSupportsReplace?: boolean },
+        ): Promise<{ body: Record<string, unknown>; importGlobals: ReturnType<typeof vi.fn>; status: number }> => {
+            const importGlobals = vi.fn<(request: { onConflict?: string }) => Promise<unknown>>(async () => {
+                return { conflicts: 0, errors: [], inserted: {}, replaced: 1 };
+            });
+            const worker = createWorker({
+                adminToken: ADMIN_TOKEN,
+                importGlobals: importGlobals as never,
+                queryCoordinator: {
+                    fanOut: vi.fn<() => never>(),
+                    orchestrateApplyCdc: vi.fn<() => never>(),
+                    orchestrateCdcSync: vi.fn<() => never>(),
+                    orchestrateExport: vi.fn<() => never>(),
+                    orchestrateImport: orchestrateImport as never,
+                    orchestrateMigration: vi.fn<() => never>(),
+                    orchestrateRank: vi.fn<() => never>(),
+                    orchestrateRankPage: vi.fn<() => never>(),
+                    orchestrateShardTraffic: vi.fn<() => never>(),
+                    registry: {} as never,
+                },
+                resolveTableSharding: (table: string): ShardingInfo | undefined =>
+                    table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
+                shardDO: noopNamespace,
+                ...workerOptions,
+            });
+            const response = await worker.fetch(
+                new Request(url, {
+                    body: [JSON.stringify({ doc: { _id: "g1" }, table: "settings" }), JSON.stringify({ doc: { _id: "u1" }, table: "users" })].join("\n"),
+                    headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            return { body: await response.json(), importGlobals, status: response.status };
+        };
+
+        it("passes the mode to both planes, sums `replaced`, and echoes it", async () => {
+            expect.assertions(4);
+
+            const { body, importGlobals } = await replaceImport("https://app.example/_lunora/admin/import?onConflict=replace", {
+                importGlobalsSupportsReplace: true,
+            });
+
+            expect(importGlobals).toHaveBeenCalledWith(expect.objectContaining({ onConflict: "replace" }));
+            expect(orchestrateImport).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ onConflict: "replace" }));
+            expect(body).toMatchObject({ onConflict: "replace", replaced: 1 });
+            expect(body["errors"]).toStrictEqual([]);
+        });
+
+        it("defaults to skip, with no echo", async () => {
+            expect.assertions(2);
+
+            const { body } = await replaceImport("https://app.example/_lunora/admin/import", { importGlobalsSupportsReplace: true });
+
+            expect(orchestrateImport).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ onConflict: "skip" }));
+            expect(body).not.toHaveProperty("onConflict");
+        });
+
+        it("refuses the whole import (400) for a global importer that has not opted in, before any shard row is overwritten", async () => {
+            expect.assertions(3);
+
+            const { importGlobals, status } = await replaceImport("https://app.example/_lunora/admin/import?onConflict=replace", {});
+
+            expect(status).toBe(400);
+            expect(importGlobals).not.toHaveBeenCalled();
+            expect(orchestrateImport).not.toHaveBeenCalled();
+        });
+
+        it("refuses the whole import (400) when no global importer is configured, before any shard row is overwritten", async () => {
+            expect.assertions(2);
+
+            const { status } = await replaceImport("https://app.example/_lunora/admin/import?onConflict=replace", { importGlobals: undefined });
+
+            expect(status).toBe(400);
+            expect(orchestrateImport).not.toHaveBeenCalled();
+        });
+
+        it("refuses it in a dry run too, so a client's check catches it before anything is written", async () => {
+            expect.assertions(2);
+
+            const { importGlobals, status } = await replaceImport("https://app.example/_lunora/admin/import?dryRun=true&onConflict=replace", {
+                importGlobalsSupportsDryRun: true,
+            });
+
+            expect(status).toBe(400);
+            expect(importGlobals).not.toHaveBeenCalled();
+        });
+
+        it("rejects an unknown mode", async () => {
+            expect.assertions(1);
+
+            const { status } = await replaceImport("https://app.example/_lunora/admin/import?onConflict=merge", { importGlobalsSupportsReplace: true });
+
+            expect(status).toBe(400);
+        });
+    });
 });
 
 /**

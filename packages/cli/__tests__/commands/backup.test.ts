@@ -49,7 +49,10 @@ const capturingImportFetch =
     (calls: string[]): StreamingFetchLike =>
     async (url) => {
         // The check before the import writes nothing, so it is not one of the calls the import made.
-        const check = new URL(url).searchParams.get("dryRun") === "true";
+        const { searchParams } = new URL(url);
+        const check = searchParams.get("dryRun") === "true";
+        // A worker that can replace echoes the mode, which the CLI checks before sending a row.
+        const echo = searchParams.get("onConflict") === "replace" ? { onConflict: "replace" } : {};
 
         if (!check) {
             calls.push(url);
@@ -58,7 +61,7 @@ const capturingImportFetch =
         return {
             body: null,
             json: async () => {
-                return { inserted: check ? {} : { users: 1 }, ...(check ? { dryRun: true } : {}) };
+                return { inserted: check ? {} : { users: 1 }, ...(check ? { dryRun: true } : {}), ...echo };
             },
             ok: true,
             status: 200,
@@ -190,6 +193,35 @@ describe("lunora backup", () => {
 
         expect(result.code).toBe(0);
         expect(importCalls[0]).toContain("/_lunora/admin/import");
+    });
+
+    it("restore --replace imports in overwrite mode", async () => {
+        expect.assertions(2);
+
+        const { logger } = capturingLogger();
+        const created = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+        const importCalls: string[] = [];
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: capturingImportFetch(importCalls),
+            logger,
+            replace: true,
+            subcommand: "restore",
+            target: created.entry?.id,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(0);
+        expect(importCalls[0]).toContain("onConflict=replace");
     });
 
     it("restore refuses --prod without --yes (no import request)", async () => {

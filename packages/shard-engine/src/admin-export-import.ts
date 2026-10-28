@@ -49,6 +49,14 @@ interface ExportShardArgs {
     tables?: ReadonlyArray<string>;
 }
 
+/**
+ * What an import row whose `_id` already exists in its table does: `"skip"`
+ * counts it as a conflict and leaves the stored row unchanged; `"replace"`
+ * overwrites the stored row with the row's fields, keeping its `_id` and taking
+ * its `_creationTime`.
+ */
+type ImportConflictMode = "replace" | "skip";
+
 interface ImportShardArgs {
     /**
      * Check every row and report what the import would reject, writing nothing.
@@ -61,6 +69,8 @@ interface ImportShardArgs {
      * partial answer: a clean dry run does not promise a clean import.
      */
     dryRun?: boolean;
+    /** See {@link ImportConflictMode}. Defaults to `"skip"`. A dry run probes nothing, so the mode does not change its answer. */
+    onConflict?: ImportConflictMode;
     /** Inbound NDJSON rows. Order is preserved on disk. */
     rows: ReadonlyArray<ExportRow>;
     /** Starting line number (1-based) for error attribution. Defaults to 1. */
@@ -73,6 +83,8 @@ interface ImportShardResult {
     errors: ImportError[];
     /** Number of rows successfully inserted, per table. */
     inserted: Record<string, number>;
+    /** Existing rows overwritten under `onConflict: "replace"`. */
+    replaced: number;
 }
 
 const DEFAULT_BATCH_SIZE = 200;
@@ -233,7 +245,7 @@ const validateImportRow = (schema: SchemaLike, table: string, record: Record<str
  * writes nothing and reports only the shape errors (see `ImportShardArgs.dryRun`).
  */
 /** Outcome of importing one row: a recorded error, a skipped conflict, or a successful insert into `table`. */
-type RowOutcome = { error: ImportError; kind: "error" } | { kind: "conflict" } | { kind: "inserted"; table: string };
+type RowOutcome = { error: ImportError; kind: "error" } | { kind: "conflict" } | { kind: "inserted"; table: string } | { kind: "replaced" };
 
 /**
  * The name of the table that already holds `explicitId`, or `undefined` when the
@@ -304,7 +316,13 @@ const rowShapeError = (schema: SchemaLike, row: ExportRow, line: number): Import
 };
 
 /** Validate, conflict-check and insert one inbound row, returning its outcome. */
-const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row: ExportRow, line: number): Promise<RowOutcome> => {
+const importOneRow = async (
+    writer: DatabaseWriterLike,
+    schema: SchemaLike,
+    row: ExportRow,
+    line: number,
+    onConflict: ImportConflictMode,
+): Promise<RowOutcome> => {
     const shapeError = rowShapeError(schema, row, line);
 
     if (shapeError !== undefined) {
@@ -319,15 +337,31 @@ const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row:
     // it is unrepresentable (ids resolve per shard, not per table), so say so.
     const explicitId = typeof stripped["_id"] === "string" ? stripped["_id"] : undefined;
 
-    if (explicitId !== undefined) {
-        const owner = await locateExistingId(writer, table, explicitId);
+    const owner = explicitId === undefined ? undefined : await locateExistingId(writer, table, explicitId);
 
-        if (owner === table) {
+    if (owner !== undefined && owner !== table) {
+        return { error: { code: "ID_COLLISION", line, message: `_id "${String(explicitId)}" already belongs to table "${owner}"`, table }, kind: "error" };
+    }
+
+    if (owner === table && explicitId !== undefined) {
+        if (onConflict !== "replace") {
             return { kind: "conflict" };
         }
 
-        if (owner !== undefined) {
-            return { error: { code: "ID_COLLISION", line, message: `_id "${explicitId}" already belongs to table "${owner}"`, table }, kind: "error" };
+        try {
+            // `replace` takes the id as its own argument; the trusted-replay
+            // `allowExplicitId` is what lets the row's `_creationTime` stand.
+            const fields = { ...stripped };
+
+            delete fields["_id"];
+
+            await writer.replace(table, explicitId, fields, { allowExplicitId: true });
+
+            return { kind: "replaced" };
+        } catch (error: unknown) {
+            const { body } = toErrorBody(error, { fallbackCode: "REPLACE_FAILED" });
+
+            return { error: { code: body.code, line, message: body.message, table }, kind: "error" };
         }
     }
 
@@ -355,6 +389,7 @@ const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, a
     const errors: ImportError[] = [];
     const inserted: Record<string, number> = {};
     let conflicts = 0;
+    let replaced = 0;
     let line = (args.startLine ?? 1) - 1;
 
     for (const row of args.rows) {
@@ -374,18 +409,31 @@ const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, a
         }
 
         // eslint-disable-next-line no-await-in-loop -- rows are inserted in stream order through one SQLite handle; line-number attribution depends on the sequence
-        const outcome = await importOneRow(writer, schema, row, line);
+        const outcome = await importOneRow(writer, schema, row, line, args.onConflict ?? "skip");
 
-        if (outcome.kind === "error") {
-            errors.push(outcome.error);
-        } else if (outcome.kind === "conflict") {
-            conflicts += 1;
-        } else {
-            inserted[outcome.table] = (inserted[outcome.table] ?? 0) + 1;
+        switch (outcome.kind) {
+            case "conflict": {
+                conflicts += 1;
+
+                break;
+            }
+            case "error": {
+                errors.push(outcome.error);
+
+                break;
+            }
+            case "replaced": {
+                replaced += 1;
+
+                break;
+            }
+            default: {
+                inserted[outcome.table] = (inserted[outcome.table] ?? 0) + 1;
+            }
         }
     }
 
-    return { conflicts, errors, inserted };
+    return { conflicts, errors, inserted, replaced };
 };
 
 /** Arguments accepted by the `__lunora_admin__:exportShard` admin RPC. */
@@ -397,6 +445,7 @@ interface ExportShardAdminArgs {
 /** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
 interface ImportShardAdminArgs {
     dryRun: boolean;
+    onConflict: ImportConflictMode;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -438,8 +487,8 @@ const parseImportShardArgs = (args: Record<string, unknown>): ImportShardAdminAr
     const startLine = typeof args["startLine"] === "number" ? args["startLine"] : undefined;
 
     // Off unless asked for: a caller that never heard of a dry run keeps writing, as it always has.
-    return { dryRun: args["dryRun"] === true, rows, startLine };
+    return { dryRun: args["dryRun"] === true, onConflict: args["onConflict"] === "replace" ? "replace" : "skip", rows, startLine };
 };
 
 export { exportShardRows, importShardRows, parseExportShardArgs, parseImportShardArgs, selectExportTables, validateImportRow };
-export type { ExportRow, ExportShardAdminArgs, ExportShardArgs, ImportError, ImportShardAdminArgs, ImportShardArgs, ImportShardResult };
+export type { ExportRow, ExportShardAdminArgs, ExportShardArgs, ImportConflictMode, ImportError, ImportShardAdminArgs, ImportShardArgs, ImportShardResult };

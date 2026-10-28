@@ -344,6 +344,7 @@ interface ImportCommandOptions {
     from?: ImportSourceName;
     logger: Logger;
     prod?: boolean;
+    replace?: boolean;
     scan?: boolean;
     storageDir?: string;
     table?: string;
@@ -361,6 +362,7 @@ interface ImportCommandOptions {
 interface ImportCommandResult extends CommandResult<ImportCommandData> {
     body: ImportSummary | undefined;
     inserted: number;
+    replaced?: number;
 }
 ```
 
@@ -1186,6 +1188,7 @@ interface ImportSummary {
     failed?: ImportShardFailure[];
     inserted: Record<string, number>;
     received: number;
+    replaced: number;
     storage?: {
         ambiguous: StorageRemapReport["ambiguous"];
         ambiguousTotal: number;

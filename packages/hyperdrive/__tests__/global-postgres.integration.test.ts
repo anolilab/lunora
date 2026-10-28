@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createHyperdriveGlobalCtxDb } from "../src/global";
 import { postgresDialect } from "../src/global-dialect";
+import { adminPlaneCases } from "./_helpers/admin-plane-cases";
 import backendParityCases from "./_helpers/backend-parity-cases";
 import type { PgliteHarness } from "./_helpers/pglite-exec";
 import createPgliteHarness from "./_helpers/pglite-exec";
@@ -731,6 +732,26 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
                 await run();
             },
             120_000,
+        );
+    });
+
+    describe("admin plane — export, import, browser, CDC", () => {
+        it.each(
+            adminPlaneCases({
+                engine: "postgres",
+                get exec() {
+                    return harness.exec;
+                },
+                query: async (statement) => await harness.query(statement),
+            }),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            60_000,
         );
     });
 

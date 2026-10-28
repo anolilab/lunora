@@ -252,6 +252,85 @@ describe("exportImportPanel", () => {
         expect(importResult.textContent).toContain("Inserted 1");
     });
 
+    it("imports in overwrite mode when asked, and reports the replaced rows", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference !== ADMIN_FUNCTIONS.importShard) {
+                    throw new Error(`unexpected ${reference}`);
+                }
+
+                const { dryRun } = args as ImportArgs;
+
+                return dryRun === true ? { ...checkPassed(), replaced: 0 } : { conflicts: 0, errors: [], inserted: {}, replaced: 1 };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(screen.getByTestId("ei-replace"));
+        importText('{"table":"messages","doc":{"__id__":"m1","text":"changed"}}');
+
+        const importResult = await screen.findByTestId("ei-import-result");
+
+        expect(importResult.textContent).toContain("replaced 1");
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard).map((call) => (call[1] as { onConflict?: string }).onConflict)).toStrictEqual([
+            "replace",
+            "replace",
+            "replace",
+        ]);
+    });
+
+    it("counts overwritten rows as written when an overwrite import is refused part-way", async () => {
+        // An overwrite has already landed, so "nothing was written" would send the operator back to re-import over it.
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference !== ADMIN_FUNCTIONS.importShard) {
+                    throw new Error(`unexpected ${reference}`);
+                }
+
+                const { dryRun } = args as ImportArgs;
+
+                return dryRun === true
+                    ? { ...checkPassed(), replaced: 0 }
+                    : {
+                          conflicts: 0,
+                          errors: [{ code: "VALIDATION", line: 2, message: "text must be a string", table: "messages" }],
+                          inserted: {},
+                          replaced: 1,
+                      };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(screen.getByTestId("ei-replace"));
+        importText('{"table":"messages","doc":{"__id__":"m1","text":"changed"}}\n{"table":"messages","doc":{"__id__":"m2","text":2}}');
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toContain("1 rows were already written");
+    });
+
+    it("refuses an overwrite import to a shard that cannot replace, before sending a row", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+
+        render(renderPanel(mock));
+
+        fireEvent.click(screen.getByTestId("ei-replace"));
+        importText('{"table":"messages","doc":{"__id__":"m1","text":"changed"}}');
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toContain("cannot overwrite existing rows");
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(1);
+    });
+
     it("sends a large import in chunks of 500 rows, numbering lines across chunks", async () => {
         expect.assertions(2);
 
@@ -704,7 +783,7 @@ describe("exportImportPanel", () => {
         fireEvent.click(screen.getByTestId("ei-import-confirm"));
 
         // The two-row result is the milestone: the first import's result read "Inserted 1".
-        await screen.findByText("Inserted 2, 0 conflicts, 0 errors.");
+        await screen.findByText("Inserted 2, replaced 0, 0 conflicts, 0 errors.");
 
         expect(importCalls(mock)).toHaveLength(2);
         expect(importCalls(mock)[1]?.rows).toStrictEqual([

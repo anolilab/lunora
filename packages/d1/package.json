@@ -69,7 +69,6 @@
         "@lunora/platform": "1.0.0-alpha.75",
         "@lunora/shard-engine": "1.0.0-alpha.165",
         "@lunora/sql-store": "1.0.0-alpha.214",
-        "@lunora/wire": "1.0.0-alpha.3",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {
@@ -78,6 +77,7 @@
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/do": "1.0.0-alpha.254",
         "@lunora/search-core": "workspace:*",
+        "@lunora/wire": "1.0.0-alpha.3",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

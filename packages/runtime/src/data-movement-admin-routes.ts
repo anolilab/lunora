@@ -109,6 +109,7 @@ interface DataMovementAdminRouteDeps {
         request: Request,
         headers: Record<string, string>,
         dryRun: boolean,
+        onConflict: "replace" | "skip",
     ) => Promise<{
         conflicts: number;
         errors: ReadonlyArray<ImportRowError>;
@@ -116,6 +117,7 @@ interface DataMovementAdminRouteDeps {
         failed: ReadonlyArray<ImportShardFailure>;
         inserted: Record<string, number>;
         received: number;
+        replaced: number;
         warnings?: ReadonlyArray<string>;
     }>;
     /** Read a page of `.global()` (D1) CDC changes; absent when no global plane is configured. */
@@ -379,15 +381,23 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
+        const { searchParams } = new URL(request.url);
         // `?dryRun=true` checks the body and reports what it would reject, writing nothing.
-        const dryRun = new URL(request.url).searchParams.get("dryRun") === "true";
+        const dryRun = searchParams.get("dryRun") === "true";
+        // `?onConflict=replace` overwrites rows whose `_id` already exists; absent, they are conflicts left unchanged.
+        const onConflictParameter = searchParams.get("onConflict") ?? "skip";
 
-        const result = await streamingImport(request, forwardedHeaders, dryRun);
+        if (onConflictParameter !== "replace" && onConflictParameter !== "skip") {
+            throw new LunoraError(`onConflict must be "skip" or "replace", got ${JSON.stringify(onConflictParameter)}`, { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const result = await streamingImport(request, forwardedHeaders, dryRun, onConflictParameter);
 
         // A client sends a dry run only to a worker that honours the flag, and an
         // older worker answers with the same body and writes. The echo is how it
-        // tells them apart before any row is sent.
-        const body = dryRun ? { ...result, dryRun: true } : result;
+        // tells them apart before any row is sent. `onConflict` is echoed for the
+        // same reason: an older worker ignores it and reports conflicts instead.
+        const body = { ...result, ...(dryRun ? { dryRun: true } : {}), ...(onConflictParameter === "replace" ? { onConflict: "replace" } : {}) };
 
         // A shard the fan-out never reached leaves an unknown slice of the batch
         // unwritten, and its rows contribute to neither `inserted` nor `errors`.

@@ -814,6 +814,7 @@ type GlobalExportFunction = (request: {
 ```ts
 type GlobalImportFunction = (request: {
     dryRun?: boolean;
+    onConflict?: "replace" | "skip";
     rows: ReadonlyArray<{
         doc: Record<string, unknown>;
         line: number;
@@ -829,6 +830,7 @@ type GlobalImportFunction = (request: {
         table: string;
     }>;
     inserted: Record<string, number>;
+    replaced?: number;
 }>;
 ```
 
@@ -1043,6 +1045,7 @@ interface ImportFanOutRequest {
     }>;
     dryRun?: boolean;
     headers?: Record<string, string>;
+    onConflict?: "replace" | "skip";
 }
 ```
 
@@ -1060,6 +1063,7 @@ interface ImportFanOutResult {
     failed: number;
     inserted: Record<string, number>;
     ok: number;
+    replaced: number;
     shards: ReadonlyArray<ShardImportOutcome>;
 }
 ```
@@ -1993,6 +1997,7 @@ interface ShardImportOutcome {
             table: string;
         }>;
         inserted: Record<string, number>;
+        replaced: number;
     };
     shardKey: string;
 }
@@ -2341,6 +2346,7 @@ interface WorkerOptions {
     identity?: IdentityContractLike;
     importGlobals?: GlobalImportFunction;
     importGlobalsSupportsDryRun?: boolean;
+    importGlobalsSupportsReplace?: boolean;
     jurisdiction?: DurableObjectJurisdiction;
     kvIntrospector?: KvIntrospector;
     listSchemaTables?: () => ReadonlyArray<string>;

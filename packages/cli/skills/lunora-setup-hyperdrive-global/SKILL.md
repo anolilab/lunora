@@ -163,6 +163,19 @@ already exists in the target are reported as conflicts and not duplicated.
 A count mismatch is a warning: inspect it with `--out`, resolve it, and re-run.
 Tokens default to `--token` / `LUNORA_ADMIN_TOKEN`.
 
+To roll back, run `lunora migrate hyperdrive-to-d1` with the same flags, the
+Hyperdrive deployment as `--from-url` and the D1 one as `--to-url`. The target's
+`.global()` backend decides where the rows land, so the copy works the same way
+in both directions.
+
+Without `--replace` the rollback restores rows missing from D1, not edits made
+on Hyperdrive since cutover: a row D1 already holds is a conflict and keeps its
+D1 values. Add `--replace` (plus `--tables` naming the `.global()` tables, and
+`--yes` for a remote target) to overwrite those
+rows with the Hyperdrive values, or keep the dump with `--out` and reconcile by
+hand. Neither mode carries deletions over: a row deleted on Hyperdrive since
+cutover is still in D1 afterwards, so remove those by hand.
+
 ## Common Pitfalls
 
 1. **Installing `@lunora/hyperdrive/global` as a package name.** It's a subpath.

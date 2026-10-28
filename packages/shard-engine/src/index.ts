@@ -13,6 +13,7 @@ export type {
     ExportRow,
     ExportShardAdminArgs,
     ExportShardArgs,
+    ImportConflictMode,
     ImportError,
     ImportShardAdminArgs,
     ImportShardArgs,
