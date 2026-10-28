@@ -147,20 +147,25 @@ ${specEntries}
  * when the project declares no workflows (the file is not written then).
  */
 /* eslint-disable no-secrets/no-secrets -- the emitted WorkflowEntrypoint subclasses and `WorkflowParamsOf`/`WorkflowOutputOf` generics are dense generated TS, not credentials */
-const emitWorkflows = (workflows: ReadonlyArray<WorkflowIR>): string => {
+const emitWorkflows = (workflows: ReadonlyArray<WorkflowIR>, options: { lazy?: boolean } = {}): string => {
     if (workflows.length === 0) {
         return "";
     }
 
+    const lazy = options.lazy === true;
     const classes = workflows
         .map((workflow) => {
             assertIdentifier(workflow.exportName, `workflow export "${workflow.exportName}"`);
             assertIdentifier(workflow.className, `workflow class "${workflow.className}"`);
 
+            // Lazy: `LunoraWorkflow` awaits the loader at the top of `run`, so `../workflows.js` and
+            // everything it imports evaluate on the first run instead of at isolate startup.
+            const definition = lazy ? `async () => (await import("../workflows.js")).${workflow.exportName}` : workflow.exportName;
+
             return `/** WorkflowEntrypoint for the \`${workflow.exportName}\` definition, reached as \`ctx.exports.${workflow.className}\`. */
 export class ${workflow.className} extends LunoraWorkflow<WorkflowParamsOf<typeof ${workflow.exportName}>, WorkflowOutputOf<typeof ${workflow.exportName}>> {
     public constructor(ctx: ConstructorParameters<typeof LunoraWorkflow>[0], env: Record<string, unknown>) {
-        super(ctx, env, ${workflow.exportName}, "${workflow.exportName}");
+        super(ctx, env, ${definition}, "${workflow.exportName}");
     }
 }
 `;
@@ -178,7 +183,7 @@ export class ${workflow.className} extends LunoraWorkflow<WorkflowParamsOf<typeo
  */
 import LunoraWorkflow from "@lunora/workflow/do";
 
-import { ${imports} } from "../workflows.js";
+import ${lazy ? "type " : ""}{ ${imports} } from "../workflows.js";
 
 /** Params type carried by a \`defineWorkflow\` definition (its phantom \`__params\`), so each entrypoint keeps the authored \`ctx.params\` type. */
 type WorkflowParamsOf<Definition> = Definition extends { __params?: infer Params }
@@ -203,13 +208,17 @@ ${classes}`;
  * deployed worker. Returns "" when the project declares no agents (the file is
  * not written then).
  */
-const emitAgents = (agents: ReadonlyArray<AgentIR>): string => {
+const emitAgents = (agents: ReadonlyArray<AgentIR>, options: { lazy?: boolean } = {}): string => {
     if (agents.length === 0) {
         return "";
     }
 
     const voiceAgents = agents.filter((agent) => agent.voice);
     const hasVoice = voiceAgents.length > 0;
+    // A voice session is a Durable Object whose constructor and synchronous `fetch` read the agent
+    // definition, so it cannot wait for a loader: with a voice agent `../agents.js` stays eager and
+    // the workflow classes keep the eager shape too (a loader would defer nothing).
+    const lazy = options.lazy === true && !hasVoice;
 
     const classes = agents
         .map((agent) => {
@@ -219,7 +228,15 @@ const emitAgents = (agents: ReadonlyArray<AgentIR>): string => {
             const workflowClass = `/** WorkflowEntrypoint for the \`${agent.exportName}\` agent, reached as \`ctx.exports.${agent.className}\`. */
 export class ${agent.className} extends LunoraWorkflow<AgentRunInput, AgentRunResult> {
     public constructor(ctx: ConstructorParameters<typeof LunoraWorkflow>[0], env: Record<string, unknown>) {
-        super(ctx, env, compileAgentWorkflow(${agent.exportName}, "${agent.exportName}"), "${agent.exportName}");
+        super(ctx, env, ${
+            lazy
+                ? `async () => {
+            const [{ compileAgentWorkflow }, { ${agent.exportName}: definition }] = await Promise.all([import("@lunora/agent"), import("../agents.js")]);
+
+            return compileAgentWorkflow(definition, "${agent.exportName}");
+        }`
+                : `compileAgentWorkflow(${agent.exportName}, "${agent.exportName}")`
+        }, "${agent.exportName}");
     }
 }
 `;
@@ -250,9 +267,15 @@ export class ${voiceClassName} extends VoiceSessionDO {
         .join("\n");
 
     const imports = agents.map((agent) => agent.exportName).join(", ");
-    const runtimeImport = hasVoice
-        ? `import { compileAgentWorkflow, VoiceSessionDO } from "@lunora/agent";`
-        : `import { compileAgentWorkflow } from "@lunora/agent";`;
+    let runtimeImport = `import { compileAgentWorkflow } from "@lunora/agent";`;
+
+    if (hasVoice) {
+        runtimeImport = `import { compileAgentWorkflow, VoiceSessionDO } from "@lunora/agent";`;
+    } else if (lazy) {
+        // The `@lunora/agent` barrel (agent loop, model SDKs) loads with the definitions, on the first run.
+        runtimeImport = "";
+    }
+
     const voiceHeaderNote = hasVoice
         ? `\n *\n * Voice-enabled agents ALSO get a \`VoiceSessionDO\` subclass here — a real\n * Durable Object (unlike the Workflow), so wrangler needs both its\n * \`durable_objects\` binding and its \`class_name\` export (the same re-export\n * line covers it).`
         : "";
@@ -266,11 +289,8 @@ export class ${voiceClassName} extends VoiceSessionDO {
  * \`export * from "./lunora/_generated/agents.js";\`${voiceHeaderNote}
  */
 import LunoraWorkflow from "@lunora/workflow/do";
-${runtimeImport}
-import type { AgentRunInput, AgentRunResult } from "@lunora/agent";
-
-import { ${imports} } from "../agents.js";
-
+${runtimeImport === "" ? "" : `${runtimeImport}\n`}import type { AgentRunInput, AgentRunResult } from "@lunora/agent";
+${lazy ? "" : `\nimport { ${imports} } from "../agents.js";\n`}
 ${classes}`;
 };
 

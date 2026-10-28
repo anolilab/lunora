@@ -746,8 +746,8 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // `writeIfPresent` skips it.
     const collectionsContent = emitCollections(shapes, dependencies.has("@lunora/db"), useUmbrella);
     const containersContent = emitContainers(containers, schema.jurisdiction);
-    const workflowsContent = emitWorkflows(workflows);
-    const agentsContent = emitAgents(agents);
+    const workflowsContent = emitWorkflows(workflows, { lazy: lazyFunctions });
+    const agentsContent = emitAgents(agents, { lazy: lazyFunctions });
     const queuesContent = emitQueues(queues, options.wranglerQueueProducers);
     const liveContent = emitLive(liveStreams, useUmbrella);
     const cronsContent = emitCrons(crons);
