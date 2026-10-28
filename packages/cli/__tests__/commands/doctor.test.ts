@@ -1028,6 +1028,14 @@ describe("runDoctor", () => {
         });
     });
 
+    it("completes when an env block's d1_databases is not an array", async () => {
+        expect.assertions(1);
+
+        seed(workdir, JSON.stringify({ ...(JSON.parse(CLEAN_WRANGLER) as object), env: { staging: { d1_databases: "bad" } } }));
+
+        await expect(runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger })).resolves.toHaveProperty("findings");
+    });
+
     describe("d1 placeholder in an env block on celld", () => {
         const envWrangler = JSON.stringify({
             compatibility_date: "2026-04-07",

@@ -407,10 +407,17 @@ const checkVectorMetadataIndexes = (cwd: string, findings: Finding[]): void => {
     }
 };
 
+type D1Declaration = { binding?: string; database_id?: string };
+
+/** A block's `d1_databases` entries. An env block is read as written, so a malformed value yields none rather than throwing. */
+const declaredD1Databases = (config: unknown): D1Declaration[] => {
+    const declared = (config as { d1_databases?: unknown } | undefined)?.d1_databases;
+
+    return Array.isArray(declared) ? ((declared as (D1Declaration | null | undefined)[]).filter(Boolean) as D1Declaration[]) : [];
+};
+
 const d1PlaceholderFindings = (config: unknown, suffix: string, celld: boolean): Finding[] => {
-    const databases = ((config as { d1_databases?: ReadonlyArray<{ binding?: string; database_id?: string }> } | undefined)?.d1_databases ?? []).filter(
-        Boolean,
-    );
+    const databases = declaredD1Databases(config);
     const found: Finding[] = [];
 
     for (const database of databases) {

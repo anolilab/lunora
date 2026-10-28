@@ -127,7 +127,8 @@ export default {
             // A body without its key is malformed, and no retry fixes that; reading it
             // unguarded would throw out of the loop and retry the whole batch.
             if (typeof idempotencyKey !== "string") {
-                console.error("malformed mail message", message.body);
+                // Not the body: a malformed message can still carry recipients and content.
+                console.error("malformed mail message: no idempotencyKey");
                 message.ack();
                 continue;
             }

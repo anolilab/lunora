@@ -169,6 +169,18 @@ describe("lunora doctor --fix", () => {
         expect(environments).toStrictEqual(["staging", "staging", "staging"]);
     });
 
+    it("leaves a real D1 id that merely contains replace untouched", async () => {
+        expect.hasAssertions();
+
+        writeFileSync(join(workdir, "wrangler.jsonc"), WRANGLER.replace(PLACEHOLDER, "replacement-orders"));
+        const { calls, runner } = stubWrangler([{ name: "app-db", uuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }]);
+
+        await applyDoctorFixes({ configPath: join(workdir, "wrangler.jsonc"), cwd: workdir, dryRun: false, logger: silentLogger, runner });
+
+        expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toContain('"database_id": "replacement-orders"');
+        expect(calls).toHaveLength(0);
+    });
+
     it("points a placeholder D1 id at the existing database and keeps the config's comments", async () => {
         expect.hasAssertions();
 

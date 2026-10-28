@@ -39,8 +39,11 @@ const REPLACE_STAND_IN = /replace[-_\s]?(?:with|me)(?![a-z])/iu;
  */
 const isUnfinishedD1Id = (databaseId: string): boolean => isTemplateD1Id(databaseId) || REPLACE_STAND_IN.test(databaseId);
 
-/** A D1 `database_id` placeholder that still needs `wrangler d1 create` run. */
-const isD1PlaceholderId = (databaseId: string): boolean => isTemplateD1Id(databaseId) || databaseId.trim().toLowerCase().includes("replace");
+/**
+ * A D1 `database_id` placeholder that still needs `wrangler d1 create` run: the same stand-ins as
+ * {@link isUnfinishedD1Id}, so `--fix` never overwrites a real id that merely contains "replace".
+ */
+const isD1PlaceholderId = (databaseId: string): boolean => isUnfinishedD1Id(databaseId);
 
 const LINE_BREAK = /\r?\n/u;
 
