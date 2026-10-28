@@ -1,3 +1,23 @@
+## @lunora/runtime [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.247...@lunora/runtime@1.0.0-alpha.248) (2026-10-28)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** `runMigrateToHyperdriveCommand` is now `runMigrateBackendCommand`
+and requires a `direction`.
+* **hyperdrive:** ImportShardResult and the global ImportResult gain a required
+`replaced` count; `streamingImport` takes an `onConflict` argument.
+
+### Features
+
+* **hyperdrive:** wire the admin global plane, add replace imports and migrate hyperdrive-to-d1 ([#1360](https://github.com/anolilab/lunora/issues/1360)) ([f25b400](https://github.com/anolilab/lunora/commit/f25b400a13fbf76d19e5e587f4d20f00242a7ece)), closes [#1274](https://github.com/anolilab/lunora/issues/1274)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.179
+* **@lunora/do:** upgraded to 1.0.0-alpha.256
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.167
+
 ## @lunora/runtime [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.246...@lunora/runtime@1.0.0-alpha.247) (2026-10-28)
 
 
