@@ -1,3 +1,14 @@
+## @lunora/scheduler [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.153...@lunora/scheduler@1.0.0-alpha.154) (2026-10-28)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.74
+
 ## @lunora/scheduler [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.152...@lunora/scheduler@1.0.0-alpha.153) (2026-10-27)
 
 
