@@ -1,3 +1,4 @@
+import toMysqlParams from "./mysql-params";
 import type { HyperdriveConnection, HyperdriveLike, Mysql2Like, NodePgLike, PostgresJsLike, SqlClient } from "./types";
 
 /**
@@ -95,7 +96,7 @@ export const fromMysql2 = (connection: Mysql2Like): SqlClient => {
     return {
         dbSystem: "mysql",
         query: async <Row = Record<string, unknown>>(text: string, params: ReadonlyArray<unknown> = []): Promise<Row[]> => {
-            const [rows] = await connection.query(text, params);
+            const [rows] = await connection.query(text, toMysqlParams(params));
 
             return Array.isArray(rows) ? (rows as Row[]) : [];
         },

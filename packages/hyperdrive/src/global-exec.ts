@@ -10,6 +10,7 @@
 import { LunoraError } from "@lunora/errors";
 import type { SqlExec, SqlRunResult } from "@lunora/sql-store";
 
+import toMysqlParams from "./mysql-params";
 import type { Mysql2Like, SqlClient } from "./types";
 
 /**
@@ -194,7 +195,7 @@ export const buildMysqlExec = (connection: Mysql2Execute): SqlExec => {
 
     return {
         all: async (sql, params) => {
-            const [rows] = await connection.query(sql, params);
+            const [rows] = await connection.query(sql, toMysqlParams(params));
 
             // mysql2 hands back a `ResultSetHeader`, not a row array, for a
             // statement that returns no rows. Normalised to `[]` here the same
@@ -204,10 +205,10 @@ export const buildMysqlExec = (connection: Mysql2Execute): SqlExec => {
             return Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
         },
         batch: async (statements) => {
-            await Promise.all(statements.map((statement) => connection.query(statement.sql, statement.params)));
+            await Promise.all(statements.map((statement) => connection.query(statement.sql, toMysqlParams(statement.params))));
         },
         run: async (sql, params): Promise<SqlRunResult> => {
-            const [result] = await connection.query(sql, params);
+            const [result] = await connection.query(sql, toMysqlParams(params));
 
             return { rowsAffected: (result as { affectedRows?: number }).affectedRows ?? 0 };
         },

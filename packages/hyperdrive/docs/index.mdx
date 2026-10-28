@@ -174,8 +174,9 @@ The package never rewrites SQL; use your driver's native positional syntax.
 
 `fromMysql2` (and `buildMysqlExec`) call mysql2's `query`, not `execute`: Hyperdrive does
 not support MySQL protocol-level prepared statements, so the `?` values are escaped
-client-side and the statement goes over as text. Create the mysql2 connection with
-`disableEval: true`, which Workers require.
+client-side and the statement goes over as text. An array or object value binds as its
+JSON text (mysql2 alone would expand it into SQL), and an `undefined` value throws. Create
+the mysql2 connection with `disableEval: true`, which Workers require.
 
 ### Telemetry
 

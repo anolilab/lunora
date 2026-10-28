@@ -402,6 +402,26 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
         );
 
         it(
+            "binds an object, an array and bytes as one value each, never as SQL fragments",
+            async () => {
+                expect.assertions(3);
+
+                // mysql2's `query` would expand an object into `key = value` pairs and
+                // an array into a comma list, changing the statement's shape.
+                await expect(harness.exec.all("SELECT ? AS v", [{ a: 1, "b` = 1 OR `1": 2 }])).resolves.toStrictEqual([{ v: '{"a":1,"b` = 1 OR `1":2}' }]);
+                await expect(harness.exec.all("SELECT ? AS v, ? AS w", [[1, 2], "x"])).resolves.toStrictEqual([{ v: "[1,2]", w: "x" }]);
+                await expect(harness.exec.all("SELECT HEX(?) AS v", [new Uint8Array([0, 255])])).resolves.toStrictEqual([{ v: "00FF" }]);
+            },
+            TEST_TIMEOUT,
+        );
+
+        it("rejects an undefined bind value instead of binding NULL", async () => {
+            expect.assertions(1);
+
+            await expect(harness.exec.all("SELECT ? AS v", [undefined])).rejects.toThrow(/parameter 1 is undefined/u);
+        });
+
+        it(
             "round-trips doubles exactly over the text protocol",
             async () => {
                 // `buildMysqlExec` uses `query` (client-side interpolation, text
