@@ -55,12 +55,16 @@ describe("paginatedQuery frame cost (Svelte)", () => {
         for (let page = 0; page < PAGE_COUNT; page += 1) {
             calls.findLast((call) => call.active)?.callback({ continueCursor: `cur-${String(page + 1)}`, isDone: false, page: rows(page) });
             // eslint-disable-next-line no-await-in-loop -- each page must settle before the next loadMore reads its cursor
-            await vi.waitFor(() => undefined);
+            await vi.waitFor(() => { expect(get(results)).toHaveLength((page + 1) * NUM_ITEMS); });
 
             if (page < PAGE_COUNT - 1) {
                 loadMore(NUM_ITEMS);
                 // eslint-disable-next-line no-await-in-loop -- each page must settle before the next loadMore reads its cursor
-                await vi.waitFor(() => undefined);
+                await vi.waitFor(() => {
+                    if (calls.filter((call) => call.active).length !== page + 2) {
+                        throw new Error("the pinned page has not been replaced yet");
+                    }
+                });
             }
         }
 

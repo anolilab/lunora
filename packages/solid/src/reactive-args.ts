@@ -31,6 +31,15 @@ import { trackedEffect } from "./solid-compat";
  */
 // eslint-disable-next-line import/prefer-default-export -- named export so it composes with the other named imports at its call sites; a default would not.
 export const trackedArgsEffect = <T>(resolveArgs: Accessor<T>, apply: (value: T) => Disposer): void => {
+    // `createEffect` is inert during SSR, so the accessor was never read there; the
+    // memo below runs eagerly on the server and would call an accessor such as
+    // `() => ({ path: window.location.pathname })` that only works in a browser.
+    // Stay idle until the client takes over. `solid-js/web`'s `isServer` is not
+    // importable from both majors, so probe for the browser global instead.
+    if ((globalThis as { window?: unknown }).window === undefined) {
+        return;
+    }
+
     const argsKey = createMemo(() => stableWireKey(resolveArgs()));
 
     trackedEffect(argsKey, () => apply(resolveArgs()));

@@ -39,12 +39,18 @@ describe("createPaginatedQuery frame cost (Solid)", () => {
         for (let page = 0; page < PAGE_COUNT; page += 1) {
             fake.subscriptions.findLast((sub) => !sub.unsubscribed)?.push({ continueCursor: `cur-${String(page + 1)}`, isDone: false, page: rows(page) });
             // eslint-disable-next-line no-await-in-loop -- each page must settle before the next loadMore reads its cursor
-            await vi.waitFor(() => undefined);
+            await vi.waitFor(() => {
+                expect(feed?.results()).toHaveLength((page + 1) * NUM_ITEMS);
+            });
 
             if (page < PAGE_COUNT - 1) {
                 feed?.loadMore(NUM_ITEMS);
                 // eslint-disable-next-line no-await-in-loop -- each page must settle before the next loadMore reads its cursor
-                await vi.waitFor(() => undefined);
+                await vi.waitFor(() => {
+                    if (fake.subscriptions.filter((sub) => !sub.unsubscribed).length !== page + 2) {
+                        throw new Error("the pinned page has not been replaced yet");
+                    }
+                });
             }
         }
 
