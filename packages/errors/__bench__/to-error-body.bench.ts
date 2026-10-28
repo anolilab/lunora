@@ -1,7 +1,7 @@
 import { bench, describe } from "vitest";
 
 import { LunoraError } from "../src/base";
-import { findSolutionByMessage, flattenHint, resolveHint } from "../src/catalog";
+import { findSolutionByMessage, flattenHint, resolveHint } from "../src/hints";
 import { toErrorBody } from "../src/to-error-body";
 
 /*

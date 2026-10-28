@@ -6,9 +6,12 @@
  * `renderError` renders it (and its actionable hint) directly at the CLI/overlay
  * edge, and adds the transport fields Lunora needs: a machine `code`, an HTTP/RPC
  * `status`, an optional `docsUrl`, and an optional wire-encodable `data` payload.
- * Constructing one looks its defaults up in the central `ERROR_CATALOG` by
- * `code`, so a bare `new LunoraError("NOT_FOUND")` already carries the right
- * status/title/hint.
+ * Constructing one looks its status and title up in the central `ERROR_CATALOG`
+ * by `code`, so a bare `new LunoraError("NOT_FOUND")` already carries the right
+ * status/title. The catalog `hint` is NOT copied on: it lives in `hints.ts` so
+ * browser bundles (which construct errors but never render a fix) do not ship
+ * it. `hint` holds only an explicit or wire-received hint; renderers call
+ * `resolveHint(error)` for the catalog fallback, as `toErrorBody` does.
  *
  * It intentionally does NOT `extend` `@visulima/error`'s `VisulimaError` class:
  * that class's module (`@visulima/error/error`) statically pulls the Node-only
@@ -24,8 +27,9 @@
  * for the client, CLI, and Studio to render. The one exception is `internal`
  * (operator-only context), which is non-enumerable so it never reaches a client.
  */
-import type { ErrorCatalogEntry, ErrorHint, LunoraErrorCode } from "./catalog";
+import type { ErrorCatalogEntry, LunoraErrorCode } from "./catalog";
 import { getCatalogEntry } from "./catalog";
+import type { ErrorHint } from "./hints";
 
 /**
  * Cross-copy brand. `Symbol.for` resolves to the same symbol in every copy of
@@ -57,7 +61,7 @@ export interface LunoraErrorOptions {
      */
     headers?: Readonly<Record<string, string>>;
 
-    /** Actionable fix (Markdown). Defaults to the catalog entry's hint. */
+    /** Actionable fix (Markdown). Not defaulted from the catalog: see `resolveHint`. */
     hint?: ErrorHint;
 
     /**
@@ -153,12 +157,12 @@ export class LunoraError extends Error {
         super(message ?? code, options.cause === undefined ? undefined : { cause: options.cause });
 
         this.name = options.name ?? "LunoraError";
-        this.hint = options.hint ?? entry?.hint;
+        this.hint = options.hint;
         this.title = options.title ?? entry?.title;
         this.loc = options.location;
         this.code = code;
         this.status = options.status ?? entry?.status ?? 500;
-        this.docsUrl = options.docsUrl ?? entry?.docsUrl;
+        this.docsUrl = options.docsUrl;
         this.data = options.data;
         this.why = options.why;
 

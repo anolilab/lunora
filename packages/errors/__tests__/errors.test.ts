@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
     CLOUDFLARE_PLATFORM_ERRORS,
     ERROR_CATALOG,
+    ERROR_HINTS,
     findCloudflarePlatformSolution,
     findIssueSolution,
     findSolutionByMessage,
@@ -32,13 +33,14 @@ describe("lunoraError", () => {
         expect(error.title).toBe(ERROR_CATALOG.NOT_FOUND.title);
     });
 
-    it("carries a catalog hint for CONFLICT", () => {
-        expect.assertions(2);
+    it("leaves the catalog hint to resolveHint rather than copying it on", () => {
+        expect.assertions(3);
 
         const error = new LunoraError("CONFLICT", "boom");
 
         expect(error.message).toBe("boom");
-        expect(error.hint).toBe(ERROR_CATALOG.CONFLICT.hint);
+        expect(error.hint).toBeUndefined();
+        expect(resolveHint(error)).toBe(ERROR_HINTS.CONFLICT);
     });
 
     it("lets options override status, name, hint, data, docsUrl", () => {
@@ -217,7 +219,7 @@ describe("toErrorBody", () => {
         expect(status).toBe(409);
         expect(body.code).toBe("CONFLICT");
         expect(body.message).toBe("stale");
-        expect(body.hint).toBe(ERROR_CATALOG.CONFLICT.hint);
+        expect(body.hint).toBe(ERROR_HINTS.CONFLICT);
         expect(body.docsUrl).toBe("https://lunora.sh/docs/errors");
     });
 
@@ -287,8 +289,8 @@ describe("catalog message solutions", () => {
         expect.assertions(3);
 
         expect(resolveHint({ hint: "explicit" })).toBe("explicit");
-        expect(resolveHint({ code: "CONFLICT" })).toBe(ERROR_CATALOG.CONFLICT.hint);
-        expect(resolveHint("optimistic concurrency conflict on row")).toBe(ERROR_CATALOG.CONFLICT.hint.join("\n"));
+        expect(resolveHint({ code: "CONFLICT" })).toBe(ERROR_HINTS.CONFLICT);
+        expect(resolveHint("optimistic concurrency conflict on row")).toBe((ERROR_HINTS.CONFLICT as ReadonlyArray<string>).join("\n"));
     });
 });
 

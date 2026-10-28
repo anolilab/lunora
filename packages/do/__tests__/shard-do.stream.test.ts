@@ -1,4 +1,4 @@
-import { LunoraError } from "@lunora/errors";
+import { LunoraError, resolveHint } from "@lunora/errors";
 import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { encodeWire } from "@lunora/wire";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -704,7 +704,26 @@ describe("shardDO streaming queries", () => {
 
         expect((errorFrame?.error as { code?: string })?.code).toBe("CONFLICT");
         // The explanation reaches the client; the operator-only `internal` must not.
-        expect(errorFrame?.error).toStrictEqual({ code: "CONFLICT", message: "stale", why: "row moved" });
+        expect(errorFrame?.error).toStrictEqual({ code: "CONFLICT", hint: resolveHint({ code: "CONFLICT" }), message: "stale", why: "row moved" });
+    });
+
+    it("sends no hint on a redacted stream error frame", async () => {
+        expect.assertions(1);
+
+        const shard = new StreamShard(state, {});
+
+        shard.registered.set("metrics:boom", async function* boomGen() {
+            yield 1;
+            throw new LunoraError("INTERNAL", "secret path /etc/passwd");
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: {} });
+        await shard.driveMessage(ws, { id: "stream_boom", query: { functionPath: "metrics:boom" }, type: "stream" });
+        await waitForTerminator(ws);
+
+        expect(parseFrames(ws).find((f) => f.type === "error")?.error).toStrictEqual({ code: "INTERNAL", message: "internal error" });
     });
 
     // -----------------------------------------------------------------------

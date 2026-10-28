@@ -52,29 +52,16 @@ const ERROR_CATALOG: {
     readonly DELIVERY_FENCED: {
         readonly status: 409;
         readonly title: "Delivery authorization changed";
-        readonly hint: "The operation may have committed. Retry with the same transport key; a committed result from an older authority epoch returns DELIVERY_RECEIPT_FENCED. Do not automatically retry with a new transport key.";
     };
     readonly DELIVERY_RECEIPT_FENCED: {
         readonly status: 409;
         readonly title: "Committed receipt authorization changed";
-        readonly hint: "The operation committed, but its stored result belongs to an older authority epoch. Do not automatically retry with a new transport ID. Recover through the application's durable operation key under current authorization.";
     };
     readonly CONFLICT: {
-        readonly hint: readonly [
-            "Another write changed this row while your mutation was running (optimistic concurrency conflict).",
-            "",
-            "Re-read the row and retry the mutation with the fresh value. Lunora serializes a DO's mutations, so a persistent conflict usually means the handler conflicts **with itself** (e.g. a trigger or cascade touching the same row) — split that work rather than adding a retry loop."
-        ];
         readonly status: 409;
         readonly title: "Conflict";
     };
     readonly NOT_UNIQUE: {
-        readonly hint: readonly [
-            "`.unique()` matched more than one document — it expects the query to identify at most one row.",
-            "",
-            "- If several matches are legitimate, use `.first()` (take one) or `.collect()` (take all) instead.",
-            "- Otherwise tighten the query (e.g. filter on a unique/indexed field) so it can only match one row."
-        ];
         readonly status: 400;
         readonly title: "Query matched more than one document";
     };
@@ -134,11 +121,6 @@ const ERROR_CATALOG: {
         readonly title: "Relation predicate is unsupported in a write policy";
     };
     readonly RLS_REQUIRED: {
-        readonly hint: readonly [
-            "This table is secure-by-default: it has no `.public()` marker and no RLS policy resolved for the caller, so the read fails closed.",
-            "",
-            "Add a read policy with `.rls(...)`, or mark the table `.public()` if it is intentionally world-readable."
-        ];
         readonly status: 403;
         readonly title: "RLS policy required";
     };
@@ -152,13 +134,6 @@ const ERROR_CATALOG: {
         readonly title: "Function kind may not be composed from a query";
     };
     readonly TRANSACTION_LIMIT_EXCEEDED: {
-        readonly hint: readonly [
-            "A single mutation may only read and write a bounded amount before it is stopped.",
-            "",
-            "Narrow the read with an index (`.withIndex(...)`) instead of scanning the table, or split the write across several mutations — for a large backfill use `defineMigration` + `lunora migrate up`, which batches and checkpoints for you.",
-            "",
-            "The ceilings are deliberately conservative — they exist to stop one request taking down the whole shard. A deployment that genuinely needs bigger transactions can raise them by overriding the `transactionLimits()` seam on its generated shard class."
-        ];
         readonly status: 413;
         readonly title: "Transaction limit exceeded";
     };
@@ -167,12 +142,6 @@ const ERROR_CATALOG: {
         readonly title: "Data migration not found";
     };
     readonly MIGRATION_DRIFT: {
-        readonly hint: readonly [
-            "An applied SQL migration is never re-run, so the runner stopped before applying anything.",
-            "",
-            "- **Its text changed after it ran:** revert the edit and put the change in a new migration. If the edit is inert (a comment, whitespace, line endings), record the new hash with the `UPDATE` the message prints.",
-            "- **Tracking rows predate versions and match no migration:** set each row's `version` with the `UPDATE` the message prints, so the runner can tell what already ran."
-        ];
         readonly status: 409;
         readonly title: "Migration drift";
     };
@@ -221,16 +190,10 @@ const ERROR_CATALOG: {
         readonly title: "Offline identity changed";
     };
     readonly OFFLINE_NOT_QUEUED: {
-        readonly hint: "A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).";
         readonly status: 503;
         readonly title: "Offline, write not queued";
     };
     readonly IDENTITY_MISMATCH: {
-        readonly hint: readonly [
-            "A write queued offline was replayed on a session that now belongs to someone else (a sign-out, or another user's sign-in, while it waited), so the worker refused it rather than commit it as them.",
-            "",
-            "`@lunora/client` re-resolves the session on this refusal and settles the write itself. If every replay is refused while the same user stays signed in, your worker's `resolveIdentity` returns a different `userId` than better-auth's `user.id`, or the RPC request carries no session cookie."
-        ];
         readonly status: 409;
         readonly title: "Session changed since the write was queued";
     };
@@ -239,16 +202,10 @@ const ERROR_CATALOG: {
         readonly title: "Codegen diagnostic";
     };
     readonly JURISDICTION_MOVE: {
-        readonly hint: readonly [
-            "The schema declares `.jurisdiction(...)` and the project has DO-backed auth (`.auth({ namespace })`). Pinning the auth object to the jurisdiction resolves it to a new, empty one: every user, account and session stays in the unpinned object until copied across. Voice sessions are pinned without an acknowledgement: they store nothing, and their transcripts are rows in the already-pinned shards.",
-            "",
-            "Acknowledge with `.jurisdiction(\"eu\", { pinAuth: true })` and deploy, then copy the auth tables across with the `__lunora_admin__:copyAuthToJurisdiction` admin op and, once the counts check out, purge the unpinned copy with `__lunora_admin__:purgeUnpinnedAuth` (see [Pinning auth and voice](/docs/concepts/data-residency#pinning-auth-and-voice)). For D1-mode auth the acknowledgement changes nothing."
-        ];
         readonly status: 422;
         readonly title: "Unacknowledged jurisdiction move";
     };
     readonly INDEX_FIELD_NESTED_PATH: {
-        readonly hint: "Indexes cover top-level columns only. Denormalise the nested value into its own column, index that, and keep it in sync with a table `.triggers()` beforeInsert/beforeUpdate.";
         readonly status: 500;
         readonly title: "Index field is a nested path";
     };
@@ -284,20 +241,10 @@ const ERROR_CATALOG: {
         readonly title: "Recent sign-in required";
     };
     readonly EMAIL_DOMAIN_BLOCKED: {
-        readonly hint: readonly [
-            "This address's domain is on the disposable/throwaway blocklist (or your configured deny-list).",
-            "",
-            "Sign up with a permanent mailbox. To tune the policy, pass `blockDisposable` / `allowDomains` / `denyDomains` in the `EmailGateConfig` you hand `assertEmailAllowed` / `classifyEmail` / `emailGateMiddleware` (`@lunora/auth/email-guard`)."
-        ];
         readonly status: 400;
         readonly title: "Email domain not allowed";
     };
     readonly EMAIL_UNDELIVERABLE: {
-        readonly hint: readonly [
-            "The address's domain publishes no MX (or fallback A/AAAA) records, so it can't receive mail.",
-            "",
-            "Check for a typo in the domain. MX verification is opt-in (`mx: true`) and needs DNS — leave it off on the edge path if DNS is unavailable."
-        ];
         readonly status: 400;
         readonly title: "Email domain cannot receive mail";
     };
@@ -355,13 +302,6 @@ const ERROR_CATALOG: {
         readonly title: "Admin token not configured";
     };
     readonly AUTH_MIGRATOR_UNSUPPORTED: {
-        readonly hint: readonly [
-            "better-auth migrates only through its Kysely adapter, so `ensureMigrated` / `compileMigrationsSql` need the raw D1 binding as `database` — a custom adapter (`lunoraD1Adapter`, `lunoraAuthAdapter`, `lunoraDoAdapter`) cannot be migrated through, and neither can an absent `database`.",
-            "",
-            "Build a SECOND, migration-only instance over the raw binding — `createMigrationAuth({ ...options, database: env.DB })` (from `@lunora/auth/migrate`) — and hand that one to `ensureMigrated`. Keep the adapter on the instance that serves requests: the adapter exists to dodge a dev-runner hang in `$context`, which the migration instance never resolves.",
-            "",
-            "To compile the SQL off-platform (`compileMigrationsSql`), diff against an empty local database — `new DatabaseSync(':memory:')` from `node:sqlite` — rather than passing no `database` at all."
-        ];
         readonly status: 500;
         readonly title: "Auth migrator cannot drive the configured database";
     };
@@ -374,22 +314,18 @@ const ERROR_CATALOG: {
         readonly title: "Auth admin operation not supported";
     };
     readonly AUTH_CIMD_FETCH_NOT_PUBLIC: {
-        readonly hint: "Add \"global_fetch_strictly_public\" to \"compatibility_flags\" in wrangler.jsonc, so CIMD metadata fetches cannot reach private addresses. `lunora doctor` reports it as `cimd-fetch-not-strictly-public`.";
         readonly status: 500;
         readonly title: "CIMD transport needs the global_fetch_strictly_public flag";
     };
     readonly AUTH_MCP_RESOURCE_AMBIGUOUS: {
-        readonly hint: "Use `mcp` from \"@lunora/auth/plugins\" (not `@better-auth/mcp`) and pass the plugin object as is: it records its `resource`, which the worker needs to serve the protected-resource metadata when the provider names several resources.";
         readonly status: 500;
         readonly title: "MCP resource cannot be told apart from the provider's other resources";
     };
     readonly AUTH_MCP_RESOURCE_INVALID: {
-        readonly hint: "Pass `resource` to `requireMcpAuth` (and `mcp()`) as the absolute URL of the MCP route, e.g. `https://app.example.com/mcp`: issued tokens are audience-bound to it.";
         readonly status: 500;
         readonly title: "MCP resource missing or not an absolute URL";
     };
     readonly MCP_STEP_UP_MISCONFIGURED: {
-        readonly hint: "Give `createAuthedMcpFetchHandler`'s `stepUp` a non-empty `scope` (such as `lunora:write`) and a `challenge` (`createInsufficientScopeError` from `@lunora/auth/plugins`), or leave `stepUp` out.";
         readonly status: 500;
         readonly title: "MCP step-up misconfigured";
     };
@@ -398,22 +334,10 @@ const ERROR_CATALOG: {
         readonly title: "Scheduled backup not configured";
     };
     readonly BACKUP_RETENTION_NOT_CONFIGURED: {
-        readonly hint: readonly [
-            "`lunora backup prune` removes snapshots past the retention window, and this worker has no window: set `backupRetain` (how many to keep) and `backupCron` (which decides whose snapshots retention owns) on `createWorker`.",
-            "",
-            "Nothing was deleted. A default is deliberately not invented here — retention deleting on its own is exactly what this command exists to replace."
-        ];
         readonly status: 400;
         readonly title: "Backup retention window not configured";
     };
     readonly BACKUP_TOO_LARGE: {
-        readonly hint: readonly [
-            "The scheduled backup is assembled inside the Worker isolate, so it caps the snapshot it will build. Nothing was written.",
-            "",
-            "The cap is on the NDJSON, not on peak memory: the export fan-out resolves every shard's rows before the first row is encoded, so a snapshot under the cap can still exhaust the isolate. It is set well below the isolate's limit for that reason.",
-            "",
-            "Narrow the snapshot with `backupTables`, or take this backup off-platform with `lunora backup create --bucket`, which runs on a machine rather than in an isolate. Backing up more often does not help — every run is a full snapshot."
-        ];
         readonly status: 507;
         readonly title: "Backup too large to assemble in a Worker";
     };
@@ -426,11 +350,6 @@ const ERROR_CATALOG: {
         readonly title: "Cron job not found";
     };
     readonly EXPORT_SHARD_FAILED: {
-        readonly hint: readonly [
-            "One or more shards failed to export, so the snapshot would have been short. Nothing is written when this fires — a partial export must never be mistaken for a complete one.",
-            "",
-            "The message names each failed shard key and its error. Re-run the export once those shards are reachable; a shard that fails repeatedly is usually over the per-request memory budget, which `backupTables` narrows."
-        ];
         readonly status: 502;
         readonly title: "Export failed on one or more shards";
     };
@@ -447,11 +366,6 @@ const ERROR_CATALOG: {
         readonly title: "Global-table introspector not configured";
     };
     readonly ID_COLLISION: {
-        readonly hint: readonly [
-            "The imported row carries an `_id` that is already held by a DIFFERENT table in this shard. Ids are per-table, so inserting it would leave two tables claiming one id and make a later lookup resolve to whichever one it reached first.",
-            "",
-            "This is reported per row rather than aborting the import: the remaining rows still apply. Re-mint the id on the source side, or import that table into a shard that does not already hold it."
-        ];
         readonly status: 409;
         readonly title: "Document id already belongs to another table";
     };
@@ -472,11 +386,6 @@ const ERROR_CATALOG: {
         readonly title: "Scheduler not configured";
     };
     readonly STORAGE_CHECKSUM_MISMATCH: {
-        readonly hint: readonly [
-            "The upload body did not match the declared `expectedSize` or `expectedSha256`, so nothing was written — this check fails closed.",
-            "",
-            "Re-read the bytes from the source export and retry the transfer. A persistent mismatch means the source blob is corrupt or truncated; fix the export rather than bypassing the check."
-        ];
         readonly status: 400;
         readonly title: "Storage checksum mismatch";
     };
@@ -485,11 +394,6 @@ const ERROR_CATALOG: {
         readonly title: "Storage delete not configured";
     };
     readonly STORAGE_DOWNLOAD_NOT_CONFIGURED: {
-        readonly hint: readonly [
-            "`GET /_lunora/admin/storage/object` needs a `storageDownload` function on the worker. The generated app worker wires it up; a hand-written `createWorker({ ... })` has to pass `(key, opts) => pick(opts?.bucket).download(key)` — forwarding `opts.bucket` to the right bucket, and wrapping rather than passing `createStorage(...).download` itself, whose second parameter is a byte range.",
-            "",
-            "Without it a bucket-backed `lunora backup restore --bucket` cannot read the snapshot. The object is still readable out of band with `wrangler r2 object get`."
-        ];
         readonly status: 400;
         readonly title: "Storage download not configured";
     };
@@ -514,11 +418,6 @@ const ERROR_CATALOG: {
         readonly title: "Unknown image model";
     };
     readonly RAG_DIMENSION_MISMATCH: {
-        readonly hint: readonly [
-            "A stored vector and the query embedding have different widths, so they cannot be compared.",
-            "",
-            "This is what changing a RAG index's `embeddingModel` (or a provider's `dimensions` option) without reindexing looks like. Either put the previous model back, or reindex the namespace under the new one — bump `embeddingModelVersion` so the index rebuilds instead of mixing widths."
-        ];
         readonly status: 409;
         readonly title: "Embedding dimension mismatch";
     };
@@ -544,37 +443,30 @@ const ERROR_CATALOG: {
         readonly title: "Auth audit read failed";
     };
     readonly AUTH_MOVE_NOT_CONFIGURED: {
-        readonly hint: "The copy needs DO-backed auth (`.auth({ namespace })`) pinned with `.jurisdiction(…, { pinAuth: true })`, and the auth object's `internalSecret` set.";
         readonly status: 400;
         readonly title: "Auth jurisdiction move not configured";
     };
     readonly AUTH_MOVE_TARGET_NOT_EMPTY: {
-        readonly hint: "The pinned auth object holds users the copy did not write (someone signed up there), so copying into it would merge two user bases. Pass `force: true` to copy anyway: a copied row that collides with one of the pinned object's rows is left out and counted under `conflicts`.";
         readonly status: 409;
         readonly title: "Pinned auth object is not empty";
     };
     readonly AUTH_MOVE_CONFLICT: {
-        readonly hint: "A copied row has the same key or unique value (such as an email) as a row the pinned auth object holds on its own, or the pinned object changed a row the source changed too. Nothing from that page was written. Pass `force: true` to keep the pinned object's rows and count the collisions under `conflicts`.";
         readonly status: 409;
         readonly title: "Auth copy conflict";
     };
     readonly AUTH_MOVE_SOURCE_CHANGED: {
-        readonly hint: "The un-pinned auth object changed after the copy read it (an update, a delete, or a new row), for example during a gradual rollout or a rollback. Run the copy again: it reconciles the changed tables. Then purge.";
         readonly status: 409;
         readonly title: "Un-pinned auth object changed since the copy";
     };
     readonly AUTH_MOVE_SOURCE_PURGED: {
-        readonly hint: "The un-pinned auth object was already purged. Its tables may exist again (a rollback served requests there), but they hold only rows written since, so the copy refuses rather than read them as deletions and remove the pinned object's users. Nothing is left to copy.";
         readonly status: 409;
         readonly title: "Un-pinned auth object already purged";
     };
     readonly AUTH_MOVE_INCOMPLETE: {
-        readonly hint: "Run `__lunora_admin__:copyAuthToJurisdiction` until it answers `done: true`, check the per-table counts, then purge.";
         readonly status: 409;
         readonly title: "Auth copy not finished";
     };
     readonly AUTH_MOVE_FAILED: {
-        readonly hint: "The message names the step, the table and the class of the SQLite error; the auth object's log has the full error. The copy resumes where it stopped once the cause is fixed.";
         readonly status: 500;
         readonly title: "Auth jurisdiction move failed";
     };
@@ -716,12 +608,10 @@ const ERROR_CATALOG: {
         readonly title: "Cross-shard rank() is unsupported";
     };
     readonly DISPATCH_UNAUTHENTICATED: {
-        readonly hint: "The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current.";
         readonly status: 403;
         readonly title: "Dispatch caller not authenticated";
     };
     readonly DISPATCH_IN_PROGRESS: {
-        readonly hint: "A dispatch with this idempotency id is still running on the shard. Retry it; once the first attempt settles the same id is served from the replay cache.";
         readonly status: 409;
         readonly title: "Dispatch already in progress";
     };
@@ -884,11 +774,6 @@ const ERROR_CATALOG: {
         readonly title: "Subscription result too large";
     };
     readonly TOKEN_EXPIRED: {
-        readonly hint: readonly [
-            "The caller's credential verified but its expiry has passed. The worker refuses an HTTP call with this code before it runs; a shard drops a socket with close code `4001` and the same code.",
-            "",
-            "It is a refusal of the credential, not of the call: `@lunora/client` holds a queued write, fires `onTokenExpired`, and re-sends it after `setAuthToken`. The held write survives the refresh only if you pass the same `subject` (the user id) with the new token, `setAuthToken(freshToken, user.id)`; without one a refresh reads as a user switch and the write is rejected `OFFLINE_IDENTITY_CHANGED`. Under a cookie session there is no token to replace: renew the cookie and the write is re-sent on a backoff. The worker can only tell expired from anonymous if your `resolveIdentity` returns the identity with its past `exp` (or `expiresAtMs`), or throws a `LunoraError` with this code. Returning `null` runs the call anonymous."
-        ];
         readonly status: 401;
         readonly title: "Authentication token expired";
     };
@@ -901,7 +786,6 @@ const ERROR_CATALOG: {
         readonly title: "Too many streams";
     };
     readonly TOO_MANY_WHISPER_TOPICS: {
-        readonly hint: "Reuse a stable set of whisper topic names, or reconnect — the per-socket verdict memo is in-memory, so a new connection starts empty. Leaving a topic does not free its entry.";
         readonly status: 429;
         readonly title: "Too many whisper topics";
     };
@@ -968,10 +852,6 @@ const ERROR_CATALOG: {
         readonly title: "HTTP stream missing path parameter";
     };
     readonly HTTP_STREAM_NO_BODY: {
-        readonly hint: readonly [
-            "The `fetch` implementation resolved with a response that exposes neither a `body` stream nor a `text()` read — a broken `fetch` substitute, not a runtime limitation.",
-            "A response with no `body` stream that can still be read as text (React Native's `whatwg-fetch` polyfill) is buffered through `text()` instead and never raises this code. Check the `fetch` override passed to the client or the `httpStream` call."
-        ];
         readonly status: 502;
         readonly title: "HTTP stream response has no body";
     };
@@ -1000,15 +880,16 @@ const ERROR_CATALOG: {
         readonly title: "Unknown mutation function";
     };
     readonly LOCAL_DEPENDENCY_MISSING: {
-        readonly hint: readonly [
-            "The command Lunora tried to run is not on your PATH, so nothing ran.",
-            "",
-            "Install it (or put it on PATH) and retry — `wrangler` ships as a dependency of a Lunora app, so `pnpm install` usually fixes that one; `git` and `docker` are installed separately."
-        ];
         readonly status: 500;
         readonly title: "Required local tool not found";
     };
 };
+```
+
+### `ERROR_HINTS` (const)
+
+```ts
+const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>>;
 ```
 
 ### `ErrorBody` (interface)
@@ -1028,8 +909,6 @@ interface ErrorBody {
 
 ```ts
 interface ErrorCatalogEntry {
-    docsUrl?: string;
-    hint?: ErrorHint;
     internal?: boolean;
     status: number;
     title: string;
@@ -1050,6 +929,12 @@ interface ErrorLocation {
     file?: string;
     line?: number;
 }
+```
+
+### `HTTP_STREAM_NO_BODY_HINT` (const)
+
+```ts
+const HTTP_STREAM_NO_BODY_HINT: ReadonlyArray<string>;
 ```
 
 ### `LunoraError` (class)
@@ -1122,6 +1007,12 @@ interface LunoraErrorOptions {
 const MESSAGE_SOLUTIONS: ReadonlyArray<SolutionRule>;
 ```
 
+### `OFFLINE_NOT_QUEUED_HINT` (const)
+
+```ts
+const OFFLINE_NOT_QUEUED_HINT = "A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).";
+```
+
 ### `Solution` (interface)
 
 ```ts
@@ -1188,6 +1079,12 @@ const flattenHint: (hint: ErrorHint) => string;
 
 ```ts
 const getCatalogEntry: (code: string) => ErrorCatalogEntry | undefined;
+```
+
+### `getCatalogHint` (const)
+
+```ts
+const getCatalogHint: (code: string) => ErrorHint | undefined;
 ```
 
 ### `invariant` (const)

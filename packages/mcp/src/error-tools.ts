@@ -78,17 +78,12 @@ const readText = (raw: unknown): string | undefined => (typeof raw === "string" 
 const flatten = (hint: ErrorHint): string => (typeof hint === "string" ? hint : hint.join("\n"));
 
 /**
- * Where to send the caller for more. A code's own `docsUrl` wins when the
- * catalog carries one; otherwise the generated reference, anchored on the
+ * Where to send the caller for more: the generated reference, anchored on the
  * heading it emits for that code (`### \`CONFLICT\`` → `#conflict`). Internal
  * codes have no section there — they are deliberately unpublished — so they get
  * the bare page.
  */
 const documentationUrlFor = (code: string | undefined, entry: ErrorCatalogEntry | undefined): string => {
-    if (entry?.docsUrl !== undefined) {
-        return entry.docsUrl;
-    }
-
     if (code === undefined || entry === undefined || isInternalCode(code)) {
         return ERROR_REFERENCE_URL;
     }

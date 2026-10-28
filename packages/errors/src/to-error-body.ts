@@ -6,9 +6,10 @@
  * unrecognized error never echoes its message" holds identically everywhere,
  * instead of being re-derived (and drifting) per edge.
  */
-import type { ErrorHint } from "./catalog";
-import { isInternalCode, resolveHint } from "./catalog";
+import { isInternalCode } from "./catalog";
 import { isLunoraError } from "./guards";
+import type { ErrorHint } from "./hints";
+import { resolveHint } from "./hints";
 
 /** The client-facing error envelope body. */
 export interface ErrorBody {

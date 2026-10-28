@@ -112,7 +112,11 @@ describe("online-only mutation with a durable outbox", () => {
         connect(client, sockets);
         sockets.at(-1)?.triggerClose();
 
-        await expect(client.mutation(fnRef("todos.set"), { text: "KEY" }, { onlineOnly: true })).rejects.toMatchObject({ code: "OFFLINE_NOT_QUEUED" });
+        // The client raises this itself, so no server envelope supplies the hint; the error has to carry it.
+        await expect(client.mutation(fnRef("todos.set"), { text: "KEY" }, { onlineOnly: true })).rejects.toMatchObject({
+            code: "OFFLINE_NOT_QUEUED",
+            hint: expect.stringContaining("issue the call again once the connection is back"),
+        });
 
         expect(enqueued).toStrictEqual([]);
         expect(fetchSpy).not.toHaveBeenCalled();

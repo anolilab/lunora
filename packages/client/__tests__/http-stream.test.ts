@@ -201,6 +201,16 @@ describe("httpStream", () => {
         expect((error as Error & { code?: string }).code).toBe("FORBIDDEN");
     });
 
+    it("keeps the server's hint on an `event: error` frame", async () => {
+        expect.assertions(1);
+
+        const { fetchImpl } = fetchReturning(['event: error\ndata: {"code":"CONFLICT","message":"stale","hint":["retry"]}\n\n']);
+
+        const error = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl })).catch((error_: unknown) => error_ as Error & { hint?: unknown });
+
+        expect((error as Error & { hint?: unknown }).hint).toStrictEqual(["retry"]);
+    });
+
     it("keeps the server's why explanation on an `event: error` frame", async () => {
         expect.assertions(1);
 

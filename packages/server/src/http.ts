@@ -830,7 +830,17 @@ const buildStreamHandler =
                     // this catch.
                     if (!ac.signal.aborted) {
                         controller.enqueue(
-                            encoder.encode(sseFrame({ code: body.code, message: body.message, ...(body.why === undefined ? {} : { why: body.why }) }, "error")),
+                            encoder.encode(
+                                sseFrame(
+                                    {
+                                        code: body.code,
+                                        hint: body.hint,
+                                        message: body.message,
+                                        why: body.why,
+                                    },
+                                    "error",
+                                ),
+                            ),
                         );
                     }
                 } finally {
