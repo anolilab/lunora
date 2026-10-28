@@ -858,7 +858,7 @@ ${sourceBootstrap}${ttlBootstrap}        }
                 return;
             }
 
-            return loadFunction(functionPath).then(() => undefined);
+            return this.holdShardWhileLoading(() => loadFunction(functionPath));
         }
 `
         : "";

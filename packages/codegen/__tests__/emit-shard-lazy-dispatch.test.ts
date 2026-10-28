@@ -96,7 +96,7 @@ ${generatedDispatchRun()}`,
         );
         expect(shard).toContain('const allowsInternal = reason === "reactor" || (reason === "rpc" && this.isSystemDispatch());');
         expect(shard).toContain("if (getLoadedFunction(functionPath) !== undefined) {");
-        expect(shard).toContain("return loadFunction(functionPath).then(() => undefined);");
+        expect(shard).toContain("return this.holdShardWhileLoading(() => loadFunction(functionPath));");
         expect(shard).toContain("let loaded = getLoadedFunction(functionPath);");
         expect(shard).toContain("const requestScope = this.captureRequestScope();");
         expect(shard).toContain('const preparation = this.prepareFunction(functionPath, "rpc");');
