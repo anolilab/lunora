@@ -141,7 +141,7 @@ const emitFlagsFragments = (hasFlags: boolean, flagsSpecifier: string): HelperFr
         build: `
             const flags: import("${flagsSpecifier}").LunoraFlags = createFlags(flagsConfig, env, {
                 provider: () => config.flags?.(env),
-                targetingKey: () => flagsConfig.identify?.({ identity: identity ?? null, userId: userId ?? null }),
+                targetingKey: () => flagsConfig.identify?.({ identity: readIdentity() ?? null, userId: readUserId() ?? null }),
             });
 `,
         configField: `\n    flags?: (env: Record<string, unknown>) => import("${flagsSpecifier}").Provider;`,
@@ -352,12 +352,14 @@ const emitAiFragments = (): CapabilityShardFragments => {
  * `ctx.access` adds only one object construction per request: no I/O, and no
  * JWT re-verification (that happened once at the edge in `resolveIdentity`).
  * `accessFacade` returns the anonymous facade when no identity is present, so
- * there is no config thunk and no stub fallback.
+ * there is no config thunk and no stub fallback. Being built eagerly, it marks
+ * every ctx as reading its caller, so an app using `ctx.access` never shares a
+ * live-query run across subscribers.
  */
 const emitAccessFragments = (): CapabilityShardFragments => {
     return {
         build: `
-            const access = accessFacade(identity, userId);
+            const access = accessFacade(readIdentity(), readUserId());
 `,
         configField: "",
         importLines: [`import { accessFacade } from "@lunora/cloudflare-access/context";`],

@@ -559,8 +559,17 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     const globalDatabaseField = hasGlobalTables ? "\n                globalDb," : "";
     // Resolved request auth handed to `.serverDefault(fn)` column factories so
     // server-trusted columns (owner/tenant ids) stamp from the verified caller,
-    // never the client. `userId`/`identity` are resolved above in `buildCtx`.
-    const authField = "\n                auth: { identity: identity ?? null, userId: userId ?? null },";
+    // never the client. Getters, so only a write that actually stamps such a
+    // column counts as reading the caller (see `readIdentity` in `buildCtx`).
+    const authField = `
+                auth: {
+                    get identity() {
+                        return readIdentity() ?? null;
+                    },
+                    get userId() {
+                        return readUserId() ?? null;
+                    },
+                },`;
     // `ctxDbTuning()` FIRST, so every per-request option below still wins. It
     // carries the reactive cache (row + index-range invalidation — without it a
     // write only invalidates table-wide) and the two relation knobs
@@ -640,7 +649,10 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     // Pass the per-request identity into the \`d1\` factory so a cross-backend
     // reader it builds (reverse relations) can forward \`x-lunora-userid\` /
     // \`x-lunora-identity\` on the fan-out — each shard then applies its own
-    // identity-scoped read. \`userId\`/\`identity\` are in scope from \`buildCtx\`.
+    // identity-scoped read. Read eagerly through \`buildCtx\`'s readers, so every
+    // ctx of an app with global tables counts as reading its caller: its live
+    // queries are never shared across subscribers.
+    // ponytail: eager over-keying; a lazily built \`globalDb\` would lift it.
     // Resolve `globalDb` from the active backend's thunk. A schema uses exactly
     // one global backend (mixed is rejected above), so this is a single writer —
     // D1 by default, or Hyperdrive when `.global({ backend: "hyperdrive" })`.
@@ -666,6 +678,8 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     // error; the Hyperdrive factory simply never reads the extra properties.
     const globalDatabaseLine = hasGlobalTables
         ? `            const bookmark = this.getInboundBookmark();
+            const identity = readIdentity();
+            const userId = readUserId();
             const globalRequest = {
                 ...this.globalCdcOptions(config.cdc ?? false),
                 ...(bookmark === undefined ? {} : { bookmark }),

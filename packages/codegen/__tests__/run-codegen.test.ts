@@ -1087,7 +1087,7 @@ export const whoAmI = query({ args: {}, handler: async (ctx) => ({ email: ctx.ac
             const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.shard).toContain('import { accessFacade } from "@lunora/cloudflare-access/context"');
-            expect(result.generated.shard).toContain("const access = accessFacade(identity, userId);");
+            expect(result.generated.shard).toContain("const access = accessFacade(readIdentity(), readUserId());");
             expect(result.generated.shard).toContain("\n                access,");
             // Access rides every ctx, so it must NOT be gated behind the action-only block.
             expect(result.generated.shard).not.toContain("ctx.access = access;");

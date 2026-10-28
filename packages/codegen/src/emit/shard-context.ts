@@ -118,7 +118,37 @@ ${actionOnlyBuild.replaceAll(/^(?=.)/gmu, "    ")}${actionOnlyFields.map((field)
                     ...(userId === undefined ? {} : { userId }),
                 };
             })();
-            const { identity, ip, userId } = caller;
+            // The ONLY way to the caller: there are deliberately no \`identity\` /
+            // \`userId\` / \`ip\` locals. Each reader marks this function path as
+            // reading its caller, which is what keeps a live query that reads it from
+            // sharing one run across subscribers (see \`noteIdentityRead\`). A consumer
+            // that copies a value at build time marks every ctx of the app; one that
+            // reads it lazily marks only the handlers that reach it.
+            //
+            // Only a registered path is marked: only one can ever be shared, and a
+            // client-chosen name (a shape, a relation fan-out) must not grow the set.
+            const identityPath = Object.hasOwn(LUNORA_FUNCTIONS, options.functionPath ?? "") ? options.functionPath : undefined;
+            const noteCallerRead = (): void => {
+                if (identityPath !== undefined) {
+                    this.noteIdentityRead(identityPath);
+                }
+            };
+            const readIdentity = (): Record<string, unknown> | undefined => {
+                noteCallerRead();
+
+                return caller.identity;
+            };
+            const readUserId = (): string | undefined => {
+                noteCallerRead();
+
+                return caller.userId;
+            };
+            const readIp = (): string | undefined => {
+                noteCallerRead();
+                options.scope?.markIpRead();
+
+                return caller.ip;
+            };
 ${vectorsBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBuild}${topicsBuild}${agentsBuild}
             // Which dispatch this ctx belongs to. Drives the two deferral facades
             // below and the \`ctx.run*\` caller guard; a ctx built for an
@@ -262,15 +292,17 @@ ${notifyBuild}
             // inherit the writer's key: every run would restart the same id and random sequence.
             const stableKey = options.replayKey !== false && options.identity === undefined && this.idempotencyNamespace() !== undefined ? this.getCurrentMutationId() : undefined;
             // Both factories ignore the scope without a replay key, and most dispatches have none.
-            const stableScope = stableKey === undefined ? "" : JSON.stringify([this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? "", userId ?? ""]);
+            const stableScope = stableKey === undefined ? "" : JSON.stringify([this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? "", readUserId() ?? ""]);
             // One sequence for every mutation this run composes: their ids share one counter (the copied \`newId\`), so their draws must too.
             // Created on the first composed mutation that gets a ctx of its own; most dispatches compose none.
             let composedRandom: (() => number) | undefined;
 
             const ctx: Record<string, unknown> = {
                 auth: {
-                    getIdentity: async () => identity ?? null,
-                    userId: userId ?? null,
+                    getIdentity: async () => readIdentity() ?? null,
+                    get userId() {
+                        return readUserId() ?? null;
+                    },
                 },
                 db,
                 // \`ctx.newId()\`: a replay of the same top-level mutation gets the same ids. A nested or
@@ -297,9 +329,7 @@ ${notifyBuild}
                 // Reading it here marks the dispatch's scope; \`runCachedQuery\`
                 // folds the address into the key for this function from then on.
                 get ip() {
-                    options.scope?.markIpRead();
-
-                    return ip;
+                    return readIp();
                 },
                 log,
                 metrics,
