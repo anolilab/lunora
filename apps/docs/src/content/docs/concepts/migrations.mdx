@@ -83,10 +83,14 @@ The rows are read through the deployed worker's admin export, from the URL
 for this `--env`), with `LUNORA_ADMIN_TOKEN` as the bearer. With no URL or no
 token the check does not run and the block stands. The URL must be the worker
 this deploy ships to: a local or private address (`localhost`, `127.0.0.1`, a
-LAN address) is refused, a URL other than the one this checkout is linked to for
-the `--env` is refused, and a `*.workers.dev` URL must carry the Worker name
-Wrangler deploys for that `--env`. A refused URL keeps the block and the message
-names it. A celld deploy prints no worker URL to link, so record the fleet's URL
+LAN address) is refused, and so is a URL other than the one this checkout is
+linked to for the `--env` (path included) or a URL linked to a different `--env`.
+A `*.workers.dev` URL must carry the Worker name Wrangler deploys for that
+`--env`. A custom domain must match a `route`/`routes` pattern that `--env`
+declares in the Wrangler config, and is refused when it matches another env's
+route; only a project that declares no routes at all has nothing to compare it
+with, and its URL is taken as given. A refused URL keeps the block and the
+message names it. A celld deploy prints no worker URL to link, so record the fleet's URL
 once with `lunora link --url` or pass `--migrate-url`. The Node target has no
 `lunora deploy`. The scaffolded CI pipelines pass `LUNORA_DEPLOY_URL` and
 `LUNORA_ADMIN_TOKEN` from the provider's secrets.

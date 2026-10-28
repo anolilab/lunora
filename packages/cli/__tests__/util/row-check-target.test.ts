@@ -1,0 +1,70 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import rowCheckTargetRefusal from "../../src/util/row-check-target";
+
+let cwd: string;
+
+const wrangler = (config: Record<string, unknown>): void => {
+    writeFileSync(join(cwd, "wrangler.jsonc"), JSON.stringify(config), "utf8");
+};
+
+const link = (workerUrl: string, environment?: string): void => {
+    mkdirSync(join(cwd, ".lunora"), { recursive: true });
+    writeFileSync(join(cwd, ".lunora", "project.json"), JSON.stringify({ env: environment, workerUrl }), "utf8");
+};
+
+describe(rowCheckTargetRefusal, () => {
+    beforeEach(() => {
+        cwd = mkdtempSync(join(tmpdir(), "lunora-row-target-"));
+        wrangler({ name: "app" });
+    });
+
+    afterEach(() => {
+        rmSync(cwd, { force: true, recursive: true });
+    });
+
+    it("accepts the linked deployment and refuses another path on the same host", () => {
+        expect.assertions(2);
+
+        link("https://acme.com/app");
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://acme.com/app/")).toBeUndefined();
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://acme.com/other")).toContain("this checkout is linked to https://acme.com/app");
+    });
+
+    it.each([
+        ["staging", "--env staging", undefined],
+        [undefined, "production", "staging"],
+    ])("refuses the URL linked to %s for a deploy of another env", (linkedEnvironment, named, deployEnvironment) => {
+        expect.assertions(1);
+
+        link("https://acme.com", linkedEnvironment);
+
+        expect(rowCheckTargetRefusal(cwd, deployEnvironment, "https://acme.com")).toContain(`this checkout links it to ${named}`);
+    });
+
+    it("checks a custom domain against the routes wrangler declares per env", () => {
+        expect.assertions(4);
+
+        wrangler({
+            env: { staging: { routes: [{ custom_domain: true, pattern: "staging.acme.com" }] } },
+            name: "app",
+            routes: [{ custom_domain: true, pattern: "api.acme.com" }, "*.acme.io/*"],
+        });
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://api.acme.com")).toBeUndefined();
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://eu.acme.io")).toBeUndefined();
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://staging.acme.com")).toContain("wrangler routes it to --env staging");
+        expect(rowCheckTargetRefusal(cwd, "staging", "https://elsewhere.acme.net")).toContain("routes to staging.acme.com");
+    });
+
+    it("takes a custom domain at its word when no routes are declared", () => {
+        expect.assertions(1);
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://api.acme.com")).toBeUndefined();
+    });
+});
