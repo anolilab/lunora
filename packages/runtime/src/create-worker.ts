@@ -3585,7 +3585,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const deploymentPause = createDeploymentPause({
         assertAdmin: assertAdminAuthorized,
         // The WS ticket too: Studio's live views upgrade `/_lunora/ws` with `?token=`, since a browser socket cannot carry the bearer header.
-        isAdmin: async (request) => requestIsAdmin(request) || checkAdminWsToken(request, effectiveAdminToken()),
+        // The `adminGate` grant is recorded here because `applyAdminGate` only covers `/_lunora/admin/*`: an Access-only operator's
+        // RPCs carry no bearer and would otherwise be refused.
+        isAdmin: async (request) => {
+            await recordAdminGrant(request);
+
+            return requestIsAdmin(request) || checkAdminWsToken(request, effectiveAdminToken());
+        },
         stub: cronRunStub,
     });
 

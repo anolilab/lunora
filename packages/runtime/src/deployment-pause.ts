@@ -47,7 +47,7 @@ interface DeploymentPauseState {
 interface DeploymentPauseOptions {
     /** Admin-gate a request; throws when unauthorized. */
     assertAdmin: (request: Request) => void;
-    /** Whether a request carries the admin credential (bearer, or Studio's WS ticket), which a pause never refuses. */
+    /** Whether a request carries an admin credential (bearer, `adminGate` grant, or Studio's WS ticket), which a pause never refuses. */
     isAdmin: (request: Request) => boolean | Promise<boolean>;
     /** The clock the cache window is measured on. */
     now?: () => number;
@@ -113,13 +113,11 @@ const createDeploymentPause = (options: DeploymentPauseOptions): DeploymentPause
 
     /** The `503` a function call gets while paused, or `undefined` to let it through. */
     const refusal = async (request: Request): Promise<Response | undefined> => {
-        if (await options.isAdmin(request)) {
-            return undefined;
-        }
-
         const state = await read();
 
-        if (!state.paused) {
+        // The flag first: `isAdmin` may run the async `adminGate`, which only a
+        // paused deployment should pay for on the function-call path.
+        if (!state.paused || (await options.isAdmin(request))) {
             return undefined;
         }
 

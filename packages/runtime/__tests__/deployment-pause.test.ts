@@ -117,6 +117,32 @@ describe("createWorker — deployment pause", () => {
         expect(shard.calls()).toBe(2);
     });
 
+    it("lets an adminGate-only operator's function calls through while paused", async () => {
+        expect.hasAssertions();
+
+        const shard = countingShard();
+        const access = { "cf-access-jwt-assertion": "operator", "content-type": "application/json" };
+        const worker = createWorker({
+            adminGate: (request) => request.headers.get("cf-access-jwt-assertion") === "operator",
+            schedulerDO: pausableScheduler().namespace,
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(
+            new Request("https://app.example/_lunora/admin/pause", { body: JSON.stringify({ paused: true }), headers: access, method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        const refused = await worker.fetch(rpc(), {}, fakeContext);
+
+        expect(refused.status).toBe(503);
+
+        await worker.fetch(rpc(access), {}, fakeContext);
+
+        expect(shard.calls()).toBe(1);
+    });
+
     it("lets Studio's ticketed WebSocket upgrade through while refusing an anonymous one", async () => {
         expect.hasAssertions();
 
