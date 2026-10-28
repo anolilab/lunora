@@ -13029,8 +13029,14 @@ abstract class ShardDO {
      * runs any getter the handler left on it, and such a getter may read the
      * caller too; it is the same encoding (cached per outcome) every delivery
      * reuses. A result that fails to encode proves nothing and promotes nothing.
+     * A path already marked can never be promoted (marks are never cleared), so
+     * it skips the encode, which no delivery may need.
      */
     private settleIdentityUse(functionPath: string, outcome: SubscriptionOutcome): void {
+        if (this.identityReadPaths.has(functionPath)) {
+            return;
+        }
+
         try {
             this.encodeOutcome(outcome);
         } catch {
