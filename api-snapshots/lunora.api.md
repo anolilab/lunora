@@ -2019,6 +2019,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `ScheduledHistoryPage` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `ScheduledJobState` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.

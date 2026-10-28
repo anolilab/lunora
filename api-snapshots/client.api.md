@@ -1142,6 +1142,15 @@ interface ScheduleRetryPolicy {
 }
 ```
 
+### `ScheduledHistoryPage` (interface)
+
+```ts
+interface ScheduledHistoryPage {
+    cursor?: string;
+    records: ScheduledJobView[];
+}
+```
+
 ### `ScheduledJobState` (type)
 
 ```ts
@@ -1751,7 +1760,9 @@ class LunoraAdminClient extends LunoraClient {
     listScheduledJobs(): Promise<ScheduleRecord[]>;
     schedulerStatus(): Promise<SchedulerStatus>;
     getScheduledJob(id: string): Promise<ScheduledJobView | null>;
-    listScheduledHistory(): Promise<ScheduledJobView[]>;
+    listScheduledHistory(options?: {
+        cursor?: string;
+    }): Promise<ScheduledHistoryPage>;
     listCronRuns(): Promise<CronRunsResult>;
     cancelScheduledJob(id: string): Promise<{
         cancelled: boolean;
