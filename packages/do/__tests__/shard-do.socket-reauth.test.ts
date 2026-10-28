@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 interface FakeWebSocket {
     attachment: SocketAttachment | undefined;
@@ -227,6 +228,95 @@ describe("socket re-authentication", () => {
         );
 
         expect(response.status).toBe(400);
+        expect(ws.attachment?.expiresAt).toBe(NOW + HOUR);
+    });
+});
+
+describe("socket re-authentication through a relay", () => {
+    const databases: ReturnType<typeof createSqliteExec>[] = [];
+
+    afterEach(() => {
+        vi.useRealTimers();
+
+        for (const database of databases.splice(0)) {
+            database.close();
+        }
+    });
+
+    /** An owner with one attached relay holding the socket; each DO has its own SQLite and reaches the other in-process. */
+    const makeRig = async (): Promise<{ owner: ReauthShard; ws: FakeWebSocket }> => {
+        const ownerDb = createSqliteExec();
+        const relayDb = createSqliteExec();
+
+        databases.push(ownerDb, relayDb);
+
+        const ws = createFakeWebSocket();
+        const state = (name: string, database: ReturnType<typeof createSqliteExec>, sockets: FakeWebSocket[]): ShardDOState =>
+            ({
+                acceptWebSocket() {},
+                getWebSockets: () => sockets,
+                id: { name },
+                storage: { sql: database.sql },
+            }) as unknown as ShardDOState;
+        const peers: { owner?: ReauthShard; relay?: ReauthShard } = {};
+        const reach = (target: () => ReauthShard | undefined) => {
+            return {
+                get: () => {
+                    return { fetch: (url: string, init?: RequestInit): Promise<Response> => (target() as ReauthShard).fetch(new Request(url, init)) };
+                },
+                idFromName: (name: string) => name,
+            };
+        };
+
+        peers.owner = new ReauthShard(state("shard-a", ownerDb, []), { SHARD: reach(() => peers.relay) });
+        peers.relay = new ReauthShard(state("shard-a::relay::0", relayDb, [ws]), { SHARD: reach(() => peers.owner) });
+        Object.assign(peers.owner, { shardBinding: "SHARD" });
+        Object.assign(peers.relay, { shardBinding: "SHARD" });
+
+        ws.serializeAttachment({
+            connectionId: "conn-1",
+            expiresAt: NOW + HOUR,
+            identity: { role: "member" },
+            subs: { "sub-1": { args: {}, functionPath: "messages:list" } },
+            userId: "user-1",
+        });
+
+        await peers.owner.fetch(
+            new Request("https://shard.internal/_lunora/relay", {
+                body: JSON.stringify({ relayIndex: 0, type: "relay_attach" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+
+        return { owner: peers.owner, ws };
+    };
+
+    it("reaches a relay-held socket through the owner and moves its expiry", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+
+        const { owner, ws } = await makeRig();
+        const response = await reauth(owner, { claims: { role: "member" }, expiresAt: NOW + 2 * HOUR, userId: "user-1" });
+
+        expect(response.status).toBe(200);
+        expect(ws.attachment?.expiresAt).toBe(NOW + 2 * HOUR);
+    });
+
+    it("carries the claims to the relay, which refuses a changed identity", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+
+        const { owner, ws } = await makeRig();
+        const response = await reauth(owner, { claims: { role: "admin" }, expiresAt: NOW + 2 * HOUR, userId: "user-1" });
+
+        expect(response.status).toBe(409);
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("IDENTITY_CHANGED");
         expect(ws.attachment?.expiresAt).toBe(NOW + HOUR);
     });
 });
