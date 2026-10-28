@@ -225,7 +225,12 @@ const sqlLexicalStore = (options: SqlLexicalStoreOptions): RagLexicalStore => {
                     [namespace, ...batch],
                 );
 
-                rows.push(...batchRows);
+                // A loop, not `push(...batchRows)`: a term common to a large namespace
+                // returns more rows than a call can take as arguments, and the spread
+                // throws `RangeError: Maximum call stack size exceeded`.
+                for (const row of batchRows) {
+                    rows.push(row);
+                }
             }
 
             // Document frequency per term, needed for IDF before any score is
