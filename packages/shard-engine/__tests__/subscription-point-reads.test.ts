@@ -132,6 +132,17 @@ describe("subscription point reads", () => {
         ).resolves.toBe(true);
     });
 
+    it("lookupById narrows like get", async () => {
+        expect.assertions(2);
+
+        const idA = await seed.insert("notes", { body: "a" });
+        const idB = await seed.insert("notes", { body: "b" });
+        const memo = await subscribe(async (database) => database.lookupById?.(idA, "notes"));
+
+        await expect(reruns(memo, async (database) => database.patch("notes", idB, { body: "b2" }))).resolves.toBe(false);
+        await expect(reruns(memo, async (database) => database.patch("notes", idA, { body: "a2" }))).resolves.toBe(true);
+    });
+
     it("a get of a missing id re-runs when that id is written", async () => {
         expect.assertions(3);
 
