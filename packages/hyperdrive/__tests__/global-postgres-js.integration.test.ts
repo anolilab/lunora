@@ -7,6 +7,7 @@ import { v } from "../../values/src/v";
 import { fromPostgresJs } from "../src/create-hyperdrive";
 import { createPostgresGlobalCtxDb, postgresDialect } from "../src/global";
 import { buildPgExec } from "../src/global-exec";
+import { createPgVectorIndex } from "../src/pg-vector";
 import type { PgliteWireHarness } from "./_helpers/pglite-wire";
 import createPgliteWireHarness from "./_helpers/pglite-wire";
 
@@ -96,5 +97,25 @@ describe("hyperdrive global — postgres.js (fetch_types: false) over the wire",
         const list = [...Array.from({ length: 40_000 }, (_, index) => index + 100), 30];
 
         await expect(labelsWhere({ "profile.age": { in: list } })).resolves.toStrictEqual(["hit"]);
+    }, 60_000);
+
+    it("reads, filters and deletes pgvector rows through postgres.js", async () => {
+        expect.assertions(3);
+
+        // Without fetched array types postgres.js sends `[["a,b", "c"]]` bound to
+        // `ANY($1::text[])` as the literal `a,b,c`, which Postgres rejects.
+        const store = createPgVectorIndex({ client: fromPostgresJs(sql as never), dimensions: 2, name: "wire" });
+
+        await store.upsert([
+            { id: "a,b", metadata: { kind: "x" }, values: [1, 0] },
+            { id: "c", values: [0, 1] },
+        ]);
+
+        // A `jsonb` parameter postgres.js encoded twice would store the string `"{\"kind\":\"x\"}"`.
+        const read = await store.getByIds(["a,b", "c"]);
+
+        expect(read.toSorted((left, right) => left.id.localeCompare(right.id))).toMatchObject([{ id: "a,b", metadata: { kind: "x" } }, { id: "c" }]);
+        await expect(store.query([1, 0], { filter: { kind: "x" }, topK: 5 })).resolves.toMatchObject({ matches: [{ id: "a,b" }] });
+        await expect(store.deleteByIds(["a,b", "c"])).resolves.toMatchObject({ count: 2 });
     }, 60_000);
 });
