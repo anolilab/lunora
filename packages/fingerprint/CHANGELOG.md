@@ -1,3 +1,9 @@
+## @lunora/fingerprint [1.0.0-alpha.10](https://github.com/anolilab/lunora/compare/@lunora/fingerprint@1.0.0-alpha.9...@lunora/fingerprint@1.0.0-alpha.10) (2026-10-28)
+
+### Performance Improvements
+
+* **fingerprint:** drop per-call allocations from sha256Hex ([#1390](https://github.com/anolilab/lunora/issues/1390)) ([e567704](https://github.com/anolilab/lunora/commit/e5677040d9a712e96261d323bd96eef0521ec0b5))
+
 ## @lunora/fingerprint [1.0.0-alpha.9](https://github.com/anolilab/lunora/compare/@lunora/fingerprint@1.0.0-alpha.8...@lunora/fingerprint@1.0.0-alpha.9) (2026-08-28)
 
 ### ⚠ BREAKING CHANGES
