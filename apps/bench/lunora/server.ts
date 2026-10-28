@@ -55,12 +55,12 @@ interface Env extends Record<string, unknown> {
 const telemetry = (env: Env) =>
     env.LUNORA_OTLP_ENDPOINT ? otlpSink({ endpoint: env.LUNORA_OTLP_ENDPOINT, token: env.LUNORA_OTLP_TOKEN ?? "" }) : consoleSink();
 
+const BEARER = /^Bearer\s+/iu;
+
 /**
  * MCP over HTTP: one tool per public function, run as the caller's own bearer
  * through the public RPC path, so auth and RLS apply as in the app. Read-only.
  */
-const BEARER = /^Bearer\s+/iu;
-
 const serveMcp = async (request: Request, env: Env): Promise<Response> => {
     const token = request.headers.get("authorization")?.replace(BEARER, "");
 

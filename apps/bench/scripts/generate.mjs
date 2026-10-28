@@ -4,8 +4,8 @@
  * `lunora/domains/` (gitignored, except the `schema.ts` stub) shaped like the hand-written core —
  * `.shardBy("organizationId")` tables with indexes plus the odd `.global()` lookup
  * table, queries / mutations / internal jobs / actions built on `lib/crpc`, tenant
- * RLS, zod validators through `v.from`, and the occasional scheduler, queue, AI or
- * workflow hook. Nothing here is a stub that the bundler could drop: every module
+ * RLS, zod validators through `v.from`, and the occasional scheduler, queue or AI
+ * hook. Nothing here is a stub that the bundler could drop: every module
  * evaluates its builder chains and validators at load, like a real one.
  *
  *   node scripts/generate.mjs --domains 12
@@ -79,7 +79,7 @@ const pascal = (word) => word[0].toUpperCase() + word.slice(1);
 /** Domain i's identifier: a noun, suffixed once the list wraps so names stay unique. */
 const domainKey = (index) => `${NOUNS[index % NOUNS.length]}${index >= NOUNS.length ? String(Math.floor(index / NOUNS.length)) : ""}`;
 
-/** Which entity tables a domain has: every domain has records and lines; odd ones add notes; every fourth a global catalog. */
+/** Every domain has records and lines; odd ones add notes, every fourth a global catalog, and some a scheduler, queue or AI hook. */
 const shapeOf = (index) => {
     return { catalog: index % 4 === 3, notes: index % 2 === 1, queueHook: index % 5 === 2, schedulerHook: index % 3 === 0, aiHook: index % 7 === 4 };
 };
@@ -149,7 +149,7 @@ const tableDefinitions = (key, shape) => {
     return tables;
 };
 
-const validatorsModule = (key) => `${header(key)}import { z } from "zod";
+const validatorsModule = (key) => `${header(key)}import * as z from "zod";
 
 import { moneySchema, tagsSchema } from "../../lib/crpc.js";
 

@@ -1,17 +1,17 @@
-// lunora:add:presence:start
-// lunora:add:ratelimit:end
 import { agentExtension } from "@lunora/agent";
 import { paymentExtension } from "@lunora/payment";
 import { defineSchema, defineTable, v } from "lunorash/server";
 
 import { domains } from "./domains/schema";
+// lunora:add:presence:start
 import { presence } from "./presence/schema";
-// lunora:add:saas:end
+// lunora:add:presence:end
 // lunora:add:ratelimit:start
 import { ratelimit } from "./ratelimit/schema";
-// lunora:add:presence:end
+// lunora:add:ratelimit:end
 // lunora:add:saas:start
 import { saas } from "./saas/schema";
+// lunora:add:saas:end
 
 /**
  * Your tables go in the `defineSchema({ … })` call; the kit's arrive through the
