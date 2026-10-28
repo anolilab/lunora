@@ -20,7 +20,8 @@ import { orgBulkMutation, requireWriter } from "./lib/crpc.js";
  */
 export const start = orgBulkMutation.mutation(async ({ ctx }) => {
     const { organizationId, userId } = await requireWriter(ctx);
-    const email = (await ctx.auth.getIdentity())?.verifiedEmail;
+    const identity = await ctx.auth.getIdentity();
+    const email = identity?.verifiedEmail;
 
     if (email === undefined) {
         throw new LunoraError("UNPROCESSABLE", "onboarding: verify your email address first");
