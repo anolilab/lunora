@@ -1,3 +1,31 @@
+## @lunora/sql-store [1.0.0-alpha.215](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.214...@lunora/sql-store@1.0.0-alpha.215) (2026-10-28)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** `runMigrateToHyperdriveCommand` is now `runMigrateBackendCommand`
+and requires a `direction`.
+* **hyperdrive:** ImportShardResult and the global ImportResult gain a required
+`replaced` count; `streamingImport` takes an `onConflict` argument.
+* **storage,search-core:** countSearchTokens takes (document, index) instead of
+(text, analyzer).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+### Features
+
+* **hyperdrive:** wire the admin global plane, add replace imports and migrate hyperdrive-to-d1 ([#1360](https://github.com/anolilab/lunora/issues/1360)) ([f25b400](https://github.com/anolilab/lunora/commit/f25b400a13fbf76d19e5e587f4d20f00242a7ece)), closes [#1274](https://github.com/anolilab/lunora/issues/1274)
+
+### Performance Improvements
+
+* **storage,search-core:** signing key reuse, parallel chunk reads, linear dedup ([#1376](https://github.com/anolilab/lunora/issues/1376)) ([ececf5e](https://github.com/anolilab/lunora/commit/ececf5e579b8e142c88033c0dd3d86ea522a5376))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.167
+* **@lunora/do:** upgraded to 1.0.0-alpha.256
+
 ## @lunora/sql-store [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.213...@lunora/sql-store@1.0.0-alpha.214) (2026-10-27)
 
 ### Performance Improvements
