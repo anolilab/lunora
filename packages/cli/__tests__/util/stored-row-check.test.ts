@@ -156,4 +156,62 @@ describe(checkStoredRows, () => {
             kind: "inconclusive",
         });
     });
+
+    it("checks a record's keys against its new key validator, without naming the key", async () => {
+        expect.assertions(2);
+
+        const prefs = table("prefs", {
+            flags: {
+                keyType: {
+                    kind: "union",
+                    members: [
+                        { kind: "literal", literalValue: '"dark"' },
+                        { kind: "literal", literalValue: '"compact"' },
+                    ],
+                },
+                kind: "record",
+                valueType: { kind: "boolean" },
+            },
+        });
+        const verdict = await checkStoredRows({
+            changes: [change("prefs", "flags")],
+            tables: [prefs],
+            target: target([{ doc: { _id: "p1", flags: { dark: true, "secret-key": false } }, table: "prefs" }]),
+        });
+
+        expect(verdict).toMatchObject({ failures: [{ field: "flags[*]", id: "p1", table: "prefs" }], kind: "fails" });
+        expect(JSON.stringify(verdict)).not.toContain("secret-key");
+    });
+
+    it.each([
+        ["a malformed export line", { body: '{"name":SENTINEL}\n', ok: true, status: 200 }],
+        ["an export line that is not a row", { body: '{"name":"SENTINEL"}\n', ok: true, status: 200 }],
+        ["an HTTP error body", { body: '{"error":"row SENTINEL-VALUE failed"}', ok: false, status: 500 }],
+    ])("never puts stored text from %s into the inconclusive reason", async (_label, response) => {
+        expect.assertions(2);
+
+        const users = table("users", { name: { kind: "number" } });
+        const fetchImpl: StreamingFetchLike = async () => {
+            return {
+                body: new ReadableStream<Uint8Array>({
+                    start(controller) {
+                        controller.enqueue(new TextEncoder().encode(response.body));
+                        controller.close();
+                    },
+                }),
+                json: async () => undefined,
+                ok: response.ok,
+                status: response.status,
+                text: async () => response.body,
+            };
+        };
+        const verdict = await checkStoredRows({
+            changes: [change("users", "name")],
+            tables: [users],
+            target: { baseUrl: "https://app.example", fetchImpl, token: "t" },
+        });
+
+        expect(verdict).toMatchObject({ kind: "inconclusive" });
+        expect(JSON.stringify(verdict)).not.toContain("SENTINEL");
+    });
 });

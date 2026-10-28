@@ -36,10 +36,10 @@ const forEachExportedRow = async (target: ExportTarget, tables: ReadonlyArray<st
         method: "POST",
     });
 
+    // Messages here name a status, a line number and a length, never response text: the drift gate prints
+    // them, and a row fragment in an error body or a `JSON.parse` complaint would put stored values in CI logs.
     if (!response.ok) {
-        const text = await response.text().catch(() => "<no body>");
-
-        throw new LunoraError("INTERNAL", `reading the deployment's rows failed (HTTP ${String(response.status)}): ${text}`);
+        throw new LunoraError("INTERNAL", `reading the deployment's rows failed (HTTP ${String(response.status)})`);
     }
 
     if (!response.body) {
@@ -49,18 +49,28 @@ const forEachExportedRow = async (target: ExportTarget, tables: ReadonlyArray<st
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let lineNumber = 0;
 
     // A line that is not a `{ table, doc }` row is a corrupt read, never a row to skip: a caller deciding
     // what to delete or whether data conforms must not act on a partial picture.
     const deliver = (line: string): boolean => {
+        lineNumber += 1;
+
         if (line.trim().length === 0) {
             return true;
         }
 
-        const parsed = JSON.parse(line) as { doc?: unknown; table?: unknown };
+        const corrupt = `reading the deployment's rows failed: export line ${String(lineNumber)} (${String(line.length)} characters) is not a { table, doc } row`;
+        let parsed: { doc?: unknown; table?: unknown } | null;
 
-        if (typeof parsed.table !== "string" || parsed.doc === null || typeof parsed.doc !== "object") {
-            throw new LunoraError("INTERNAL", `reading the deployment's rows failed: unexpected export line ${line.slice(0, 120)}`);
+        try {
+            parsed = JSON.parse(line) as { doc?: unknown; table?: unknown } | null;
+        } catch {
+            throw new LunoraError("INTERNAL", corrupt);
+        }
+
+        if (parsed === null || typeof parsed.table !== "string" || parsed.doc === null || typeof parsed.doc !== "object") {
+            throw new LunoraError("INTERNAL", corrupt);
         }
 
         return onRow({ doc: parsed.doc as Record<string, unknown>, table: parsed.table }) !== false;
