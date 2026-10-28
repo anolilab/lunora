@@ -396,6 +396,21 @@ describe(EventLog, () => {
         expect(log2.size).toBe(2);
     });
 
+    it("rejects a snapshot whose entries are not in ascending seq order", () => {
+        expect.assertions(1);
+
+        const log = new EventLog();
+
+        log.append("a", 1);
+        log.append("b", 2);
+
+        const snap = log.snapshot();
+
+        expect(() => {
+            new EventLog().load({ ...snap, entries: snap.entries.toReversed() });
+        }).toThrow(RangeError);
+    });
+
     it("snapshot captures headSeq", () => {
         expect.assertions(2);
 

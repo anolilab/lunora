@@ -13,6 +13,11 @@ import type { RateLimitStore, RateLimitValue } from "./types";
  */
 const createMemoryStore = (): RateLimitStore => {
     const map = new Map<string, RateLimitValue>();
+    // Whether every write so far carried a `ts` at least as large as the one before. Limiters
+    // sharing a store read their own clocks, and a window store keeps the window start as `ts`,
+    // so one inversion is enough to put an expired entry behind a live one for good.
+    let ordered = true;
+    let lastTs = Number.NEGATIVE_INFINITY;
 
     return {
         delete: (storageKey) => {
@@ -24,6 +29,12 @@ const createMemoryStore = (): RateLimitStore => {
             // tracks write time, and the oldest entries sit at the front for `sweep`.
             map.delete(storageKey);
             map.set(storageKey, value);
+
+            if (value.ts < lastTs) {
+                ordered = false;
+            }
+
+            lastTs = value.ts;
         },
         sweep: (olderThanTs, limit, owns) => {
             let examined = 0;
@@ -33,12 +44,11 @@ const createMemoryStore = (): RateLimitStore => {
                     break;
                 }
 
-                // An owned live entry ends the sweep instead of rotating to the end: every
-                // entry behind it was written later. Rotating it would cost a delete and a set
-                // per live key on every consume. ponytail: a window store keeps the window
-                // start as `ts`, so an expired entry can sit behind a live one; it waits at
-                // most one more retention horizon, until that entry leaves the front.
-                if (value.ts > olderThanTs && owns?.(storageKey) !== false) {
+                // While writes arrived in `ts` order, an owned live entry ends the sweep instead
+                // of rotating to the end: every entry behind it was written later. Rotating it
+                // would cost a delete and a set per live key on every consume. After an
+                // inversion that no longer holds, so live entries rotate like they used to.
+                if (ordered && value.ts > olderThanTs && owns?.(storageKey) !== false) {
                     break;
                 }
 
@@ -46,11 +56,11 @@ const createMemoryStore = (): RateLimitStore => {
                 map.delete(storageKey);
 
                 // An entry is kept when it is a reserved debt (which outlives any age bound,
-                // since reserves stack), or belongs to another limiter sharing this store. A
+                // since reserves stack), is still live, or belongs to another limiter sharing this store. A
                 // kept entry moves to the end, so it cannot stop the sweep from reaching the
                 // entries behind it. ponytail: a debt key stays until a consume rewrites it
                 // or reset; add a debt-aware bound if abandoned debts show up in memory profiles.
-                if (value.value < 0 || owns?.(storageKey) === false) {
+                if (value.value < 0 || value.ts > olderThanTs || owns?.(storageKey) === false) {
                     map.set(storageKey, value);
                 }
             }

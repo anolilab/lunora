@@ -334,4 +334,19 @@ describe("sweep horizon ownership and clock", () => {
 
         expect(replayed.ok).toBe(false);
     });
+
+    it("still reaches an expired entry written behind a live one with an older timestamp", async () => {
+        expect.assertions(2);
+
+        // Two limiters sharing a store read different clocks: the second write is older
+        // than the first, so insertion order no longer tracks `ts`.
+        const store = createMemoryStore();
+
+        await store.set("send:future", { ts: 1000, value: 1 });
+        await store.set("send:stale", { ts: 0, value: 1 });
+        await store.sweep?.(500, 10, () => true);
+
+        await expect(Promise.resolve(store.get("send:stale"))).resolves.toBeUndefined();
+        await expect(Promise.resolve(store.get("send:future"))).resolves.toBeDefined();
+    });
 });

@@ -94,6 +94,21 @@ describe("spanBuffer", () => {
 
         expect(buffer.size).toBe(0);
     });
+
+    it("keeps trace membership consistent when a retained span is edited", () => {
+        expect.assertions(3);
+
+        const buffer = new SpanBuffer(1);
+        const first = span({ spanId: "a", traceId: "t1" });
+
+        buffer.push(first);
+        first.traceId = "t2";
+        buffer.push(span({ spanId: "b", traceId: "t3" }));
+
+        expect(buffer.hasTrace("t1")).toBe(false);
+        expect(buffer.hasTrace("t2")).toBe(false);
+        expect(buffer.hasTrace("t3")).toBe(true);
+    });
 });
 
 describe("spanBuffer capacity normalization", () => {

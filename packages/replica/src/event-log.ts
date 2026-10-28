@@ -343,8 +343,16 @@ export class EventLog {
      * Runs `#enforceCap()` after restoring so a snapshot captured under a
      * different (or no) `maxEntries` can never leave this log over its
      * configured capacity.
+     * @throws RangeError when `snapshot.entries` is not in strictly ascending
+     * `seq` order, which the tail reads binary-search over.
      */
     public load(snapshot: EventLogSnapshot): void {
+        for (let index = 1; index < snapshot.entries.length; index += 1) {
+            if ((snapshot.entries[index] as EventLogEntry).seq <= (snapshot.entries[index - 1] as EventLogEntry).seq) {
+                throw new RangeError("EventLog snapshot entries must be in strictly ascending seq order");
+            }
+        }
+
         this.#entries = [...snapshot.entries];
         this.#headOffset = 0;
         this.#nextSeq = snapshot.nextSeq;
