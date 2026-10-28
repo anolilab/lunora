@@ -58,6 +58,32 @@ describe("sha256Hex scratch-buffer reuse", () => {
         expect(sha256Hex("abc")).toBe(nodeSha256("abc"));
     });
 
+    it("hashes huge multi-byte inputs that outgrow the optimistic buffer", () => {
+        expect.assertions(3);
+
+        const twoByte = "é".repeat(50_000);
+        const mixed = `${"a".repeat(70_000)}${"世".repeat(3000)}`;
+        const nearFull = `${"a".repeat(70_000)}${"é".repeat(30)}`;
+
+        expect(sha256Hex(twoByte)).toBe(nodeSha256(twoByte));
+        expect(sha256Hex(mixed)).toBe(nodeSha256(mixed));
+        expect(sha256Hex(nearFull)).toBe(nodeSha256(nearFull));
+    });
+
+    it("does not size a huge ASCII buffer for worst-case UTF-8", () => {
+        expect.assertions(2);
+
+        const huge = "q".repeat(100_000);
+        const encodeInto = vi.spyOn(TextEncoder.prototype, "encodeInto");
+
+        try {
+            expect(sha256Hex(huge)).toBe(nodeSha256(huge));
+            expect((encodeInto.mock.calls[0]?.[1] as Uint8Array).length).toBeLessThan(huge.length * 2);
+        } finally {
+            encodeInto.mockRestore();
+        }
+    });
+
     it("encodes into the reused buffer instead of allocating a fresh copy per call", () => {
         expect.assertions(1);
 

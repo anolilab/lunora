@@ -58,14 +58,25 @@ export const sha256Hex = (message: string): string => {
     let buffer = scratch;
 
     if (capacity > buffer.length) {
-        buffer = new Uint8Array(capacity);
-
         if (capacity <= SCRATCH_MAX) {
+            buffer = new Uint8Array(capacity);
             scratch = buffer;
+        } else {
+            // Size a huge buffer for ASCII (one byte per unit) rather than the
+            // worst case, so an unbounded message does not triple its footprint.
+            buffer = new Uint8Array(message.length + 72);
         }
     }
 
-    const length = textEncoder.encodeInto(message, buffer).written;
+    const first = textEncoder.encodeInto(message, buffer);
+    let length = first.written;
+
+    // Multi-byte input outgrew the optimistic buffer (or left no room for the
+    // padding): redo it at worst-case size.
+    if (first.read < message.length || length + 72 > buffer.length) {
+        buffer = new Uint8Array(capacity);
+        length = textEncoder.encodeInto(message, buffer).written;
+    }
 
     // Padded length: message + 0x80 marker + zero fill + 8-byte length, rounded
     // up to a whole number of 64-byte blocks.
