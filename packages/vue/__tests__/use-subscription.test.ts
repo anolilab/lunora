@@ -1,6 +1,6 @@
 import type { FunctionReference } from "@lunora/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { effectScope, nextTick, ref } from "vue";
+import { effectScope, isReactive, nextTick, ref } from "vue";
 
 import { useSubscription } from "../src/use-subscription";
 import { createFakeClient } from "./fake-client";
@@ -46,6 +46,22 @@ describe(useSubscription, () => {
 
         expect(data.value).toStrictEqual([{ id: "1", text: "hello" }]);
         expect(error.value).toBeUndefined();
+
+        scope.stop();
+    });
+
+    it("holds the pushed value as-is, without a reactive proxy", () => {
+        const fake = createFakeClient();
+        const scope = effectScope();
+        const { data } = scope.run(() => fake.provide(() => useSubscription(msgRef, args)))!;
+        const payload = [{ author: { name: "ada" }, id: "1" }];
+
+        fake.push("messages:subscribe", { channelId: "c1" }, payload);
+
+        // Every push replaces the value wholesale; a deep proxy would make each
+        // nested read of a large payload pay a proxy trap for nothing.
+        expect(data.value).toBe(payload);
+        expect(isReactive(data.value)).toBe(false);
 
         scope.stop();
     });

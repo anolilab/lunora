@@ -1,6 +1,6 @@
 import type { FunctionReference } from "@lunora/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { effectScope, nextTick, ref } from "vue";
+import { effectScope, isReactive, nextTick, ref } from "vue";
 
 import type { UseStreamResult } from "../src/use-stream";
 import { useStream } from "../src/use-stream";
@@ -46,6 +46,25 @@ describe(useStream, () => {
         await fake.flush();
 
         expect(result.status.value).toBe("complete");
+
+        scope.stop();
+    });
+
+    it("holds chunks as-is, without reactive proxies", async () => {
+        expect.hasAssertions();
+
+        const fake = createFakeClient();
+        const scope = effectScope();
+        const result = scope.run(() => fake.provide((): UseStreamResult<unknown> => useStream(makeStreamRef(TICK_REF), { since: 0 })))!;
+        const chunk = { delta: { text: "hi" } };
+
+        fake.pushStream(TICK_REF, { since: 0 }, chunk);
+        await fake.flush();
+
+        // Chunks are appended by replacing the array; deep proxies would make each
+        // nested read of a long stream pay a proxy trap for nothing.
+        expect(result.chunks.value[0]).toBe(chunk);
+        expect(isReactive(result.chunks.value)).toBe(false);
 
         scope.stop();
     });
