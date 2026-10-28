@@ -21,6 +21,14 @@ export const buildWorker = (appDirectory, { cli, extraArgs = [], outDir = "out" 
         throw new Error(`${cli} is missing — build the CLI first (\`pnpm --filter "lunorash..." run build:prod\`).`);
     }
 
+    // `@cloudflare/vite-plugin` leaves this redirect after a `vite build`; wrangler then
+    // deploys, and profiles, the Vite output in `dist/` instead of the source build.
+    const redirect = join(appDirectory, ".wrangler", "deploy", "config.json");
+
+    if (existsSync(redirect)) {
+        throw new Error(`${redirect} redirects wrangler to a Vite build's output — delete it to measure \`lunora build\`.`);
+    }
+
     try {
         execFileSync(process.execPath, [cli, "build", "--no-strict-advisories", "--format", "json", "--out-dir", outDir, ...extraArgs], {
             cwd: appDirectory,
@@ -108,7 +116,8 @@ export const eagerGraph = (outDirectory) => {
 /**
  * The eager graph split by whether a module stays reachable once the generated
  * function registry is cut off: `registryOnly` is what a lazy registry can defer at
- * most. `appPrefix` (e.g. `"lunora/"`) counts the app's own modules in each part.
+ * most. `appPrefix` (e.g. `"lunora/"`) counts the app's own modules in each part;
+ * `registryOnly.packages` names the largest owners of the deferrable part.
  */
 export const registrySplit = (outDirectory, { appPrefix, registry = "_generated/functions.ts" }) => {
     const inputs = readMetafile(outDirectory);
@@ -119,7 +128,12 @@ export const registrySplit = (outDirectory, { appPrefix, registry = "_generated/
 
     return {
         all: { appModules: [...all].filter(isApp).length, bytes: sumBytes(inputs, all), modules: all.size },
-        registryOnly: { appModules: registryOnly.filter(isApp).length, bytes: sumBytes(inputs, registryOnly), modules: registryOnly.length },
+        registryOnly: {
+            appModules: registryOnly.filter(isApp).length,
+            bytes: sumBytes(inputs, registryOnly),
+            modules: registryOnly.length,
+            packages: byOwner(inputs, registryOnly).slice(0, 15),
+        },
     };
 };
 
@@ -168,13 +182,11 @@ const ownerOf = (path) => {
     return app ? `<app>/${app[1]}` : path.split("/")[0];
 };
 
-/** The eager graph's source bytes per owning package, largest first. */
-export const eagerPackages = (outDirectory, limit = 25) => {
-    const inputs = readMetafile(outDirectory);
-    const { seen } = reach(inputs, () => false);
+/** Source bytes and module count per owning package of `paths`, largest first. */
+function byOwner(inputs, paths) {
     const totals = new Map();
 
-    for (const path of seen) {
+    for (const path of paths) {
         const owner = ownerOf(path);
         const entry = totals.get(owner) ?? { bytes: 0, modules: 0 };
 
@@ -183,8 +195,12 @@ export const eagerPackages = (outDirectory, limit = 25) => {
         totals.set(owner, entry);
     }
 
-    return [...totals.entries()]
-        .map(([name, entry]) => ({ name, ...entry }))
-        .sort((a, b) => b.bytes - a.bytes)
-        .slice(0, limit);
+    return [...totals.entries()].map(([name, entry]) => ({ name, ...entry })).sort((a, b) => b.bytes - a.bytes);
+}
+
+/** The eager graph's source bytes per owning package, largest first. */
+export const eagerPackages = (outDirectory, limit = 25) => {
+    const inputs = readMetafile(outDirectory);
+
+    return byOwner(inputs, reach(inputs, () => false).seen).slice(0, limit);
 };

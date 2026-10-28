@@ -19,6 +19,10 @@
         "lint:types": "node node_modules/lunorash/dist/bin.mjs codegen --api-spec both && tsc --noEmit"
     },
     "dependencies": {
+        "@ai-sdk/openai": "catalog:ai",
+        "@aws-sdk/client-s3": "3.1157.0",
+        "@aws-sdk/s3-request-presigner": "3.1157.0",
+        "@bufbuild/protobuf": "2.16.0",
         "@cloudflare/playwright": "catalog:cloudflare",
         "@lunora/agent": "workspace:*",
         "@lunora/ai": "workspace:*",
@@ -41,11 +45,13 @@
         "@lunora/x402": "workspace:*",
         "@x402/evm": "catalog:web3",
         "better-auth": "catalog:auth",
+        "e2b": "2.61.0",
         "lunorash": "workspace:*",
         "postgres": "catalog:sql",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend",
         "stripe": "catalog:payment",
+        "tldts": "7.4.19",
         "viem": "catalog:web3",
         "zod": "catalog:web"
     },

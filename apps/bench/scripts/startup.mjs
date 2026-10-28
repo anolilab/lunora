@@ -13,6 +13,7 @@
  *   node scripts/startup.mjs                       # core only, eager + lazy, 7 runs each
  *   node scripts/startup.mjs --preset customer     # ≈ the app behind #1166
  *   node scripts/startup.mjs --domains 20 --runs 11 --modes eager
+ *   node scripts/startup.mjs --domains 20 --heavy-share 0.5
  *   node scripts/startup.mjs --keep                # leave the generated domains in place
  *
  * Results go to `.bench/results/` (gitignored) as JSON; a table is printed.
@@ -27,11 +28,12 @@ import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
 import { buildWorker, eagerGraph, eagerPackages, registrySplit, startupActiveMs, summarize } from "../../../scripts/worker-startup-measure.js";
-import { appDirectory, generate, PRESETS } from "./generate.mjs";
+import { appDirectory, generate, sizeFromArgs } from "./generate.mjs";
 
 const { values } = parseArgs({
     options: {
         domains: { type: "string" },
+        "heavy-share": { type: "string" },
         keep: { default: false, type: "boolean" },
         modes: { default: "eager,lazy", type: "string" },
         preset: { type: "string" },
@@ -50,12 +52,9 @@ if (modes.some((mode) => mode !== "eager" && mode !== "lazy")) {
     throw new Error(`--modes takes eager and/or lazy, got "${values.modes}"`);
 }
 
-const presetName = values.preset ?? (values.domains === undefined ? "core" : `domains-${values.domains}`);
-const domains = values.preset === undefined ? Number(values.domains ?? 0) : PRESETS[values.preset]?.domains;
-
-if (domains === undefined || Number.isNaN(domains)) {
-    throw new Error(`unknown preset "${values.preset}" — one of ${Object.keys(PRESETS).join(", ")}`);
-}
+const size = sizeFromArgs({ domains: values.domains, heavyShare: values["heavy-share"], preset: values.preset });
+const presetName =
+    values.preset ?? (values.domains === undefined ? "core" : `domains-${values.domains}${size.heavyShare > 0 ? `-heavy-${String(size.heavyShare)}` : ""}`);
 
 const env = { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" };
 const mib = (bytes) => `${(bytes / 1024 / 1024).toFixed(2)} MiB`;
@@ -68,7 +67,7 @@ mkdirSync(join(benchDirectory, "results"), { recursive: true });
 // `lunora build` advances the schema baseline; the committed one describes the core-only app.
 const schemaBaseline = join(appDirectory, "lunora", ".lunora-schema.json");
 const committedBaseline = readFileSync(schemaBaseline, "utf8");
-const shape = generate({ domains });
+const shape = generate(size);
 const loadBefore = loadavg();
 const results = {};
 
@@ -122,8 +121,9 @@ try {
 const gitSha = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: rootDirectory, encoding: "utf8" }).trim();
 const report = {
     at: new Date().toISOString(),
-    domains,
+    domains: size.domains,
     gitSha,
+    heavyShare: size.heavyShare,
     loadavg: { after: loadavg(), before: loadBefore },
     modes: Object.fromEntries(Object.entries(results).map(([mode, result]) => [mode, { ...result, active: summarize(result.samples) }])),
     preset: presetName,
