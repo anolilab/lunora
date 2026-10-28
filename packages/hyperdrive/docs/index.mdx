@@ -172,6 +172,11 @@ determinism/realtime caveat.
 
 The package never rewrites SQL; use your driver's native positional syntax.
 
+`fromMysql2` (and `buildMysqlExec`) call mysql2's `query`, not `execute`: Hyperdrive does
+not support MySQL protocol-level prepared statements, so the `?` values are escaped
+client-side and the statement goes over as text. Create the mysql2 connection with
+`disableEval: true`, which Workers require.
+
 ### Telemetry
 
 With an observability sink configured, `ctx.sql` is instrumented automatically
@@ -415,7 +420,8 @@ import mysql from "mysql2/promise";
 
 // CLIENT_FOUND_ROWS is REQUIRED — the affected-rows OCC guard must see matched
 // (not changed) rows, or an idempotent patch reports 0 and raises a false conflict.
-const pool = mysql.createPool({ uri: env.HYPERDRIVE.connectionString, flags: ["FOUND_ROWS"] });
+// `disableEval` is required for mysql2 on Workers.
+const pool = mysql.createPool({ uri: env.HYPERDRIVE.connectionString, disableEval: true, flags: ["FOUND_ROWS"] });
 
 const globalDb = createMysqlGlobalCtxDb(pool, { schema });
 ```

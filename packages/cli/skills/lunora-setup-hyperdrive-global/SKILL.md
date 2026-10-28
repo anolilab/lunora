@@ -122,7 +122,8 @@ import mysql from "mysql2/promise";
 // inside the builder chain:
 .hyperdriveGlobal({
     engine: "mysql",
-    exec: (env) => buildMysqlExec(mysql.createPool({ uri: env.HYPERDRIVE.connectionString, flags: ["FOUND_ROWS"] })),
+    // disableEval: mysql2 needs it to run on Workers.
+    exec: (env) => buildMysqlExec(mysql.createPool({ uri: env.HYPERDRIVE.connectionString, disableEval: true, flags: ["FOUND_ROWS"] })),
 })
 ```
 

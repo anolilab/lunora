@@ -25,7 +25,7 @@ interface MysqlHarness {
     close: () => Promise<void>;
     /** Connection details, e.g. for building an `env.HYPERDRIVE`-shaped binding double. */
     connection: { database: string; host: string; port: number; user: string };
-    /** The {@link SqlExec} the store core / migrations run against (wraps `connection.execute`). */
+    /** The {@link SqlExec} the store core / migrations run against (wraps `connection.query`). */
     exec: SqlExec;
     /** Raw query escape hatch (text protocol) for assertions + per-test table resets. */
     query: (sql: string, parameters?: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;

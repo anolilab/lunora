@@ -3,8 +3,10 @@ import { sqliteEncode } from "@lunora/sql-store";
 import type { Pool } from "mysql2/promise";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { fromMysql2 } from "../src/create-hyperdrive";
 import { mysqlDialect, postgresDialect } from "../src/global-dialect";
 import { buildMysqlExec, buildPgExec } from "../src/global-exec";
+import type { Mysql2Like } from "../src/types";
 
 /** The MySQL wire-protocol `CLIENT_FOUND_ROWS` bit — matches `global-exec.ts`'s probe. */
 const CLIENT_FOUND_ROWS_FLAG = 0x00_00_00_02;
@@ -169,7 +171,7 @@ describe("exec adapters", () => {
         const calls: string[] = [];
         const exec = buildMysqlExec({
             config: { clientFlags: CLIENT_FOUND_ROWS_FLAG },
-            execute: async (text) => {
+            query: async (text) => {
                 calls.push(text);
 
                 return [{ affectedRows: 3 }, undefined];
@@ -182,6 +184,25 @@ describe("exec adapters", () => {
         expect(result).toEqual({ rowsAffected: 3 });
     });
 
+    it("buildMysqlExec and fromMysql2 send text queries, never a protocol-level prepared statement", async () => {
+        expect.assertions(2);
+
+        // Hyperdrive does not support MySQL protocol-level prepared statements,
+        // which is what mysql2's `execute` sends.
+        const execute = vi.fn<Mysql2Like["query"]>();
+        const query = vi.fn<Mysql2Like["query"]>(async () => [{ affectedRows: 1 }, undefined]);
+        const connection = { config: { clientFlags: CLIENT_FOUND_ROWS_FLAG }, execute, query };
+        const exec = buildMysqlExec(connection);
+
+        await exec.all("SELECT ?", [1]);
+        await exec.run("DELETE FROM `t` WHERE `id` = ?", ["x"]);
+        await exec.batch?.([{ params: ["y"], sql: "DELETE FROM `t` WHERE `id` = ?" }]);
+        await fromMysql2(connection).query("SELECT ?", [2]);
+
+        expect(execute).not.toHaveBeenCalled();
+        expect(query).toHaveBeenCalledTimes(4);
+    });
+
     it("buildMysqlExec.all returns the first element (the rows) of the [rows, fields] tuple", async () => {
         expect.assertions(2);
 
@@ -189,7 +210,7 @@ describe("exec adapters", () => {
         const params: unknown[] = [];
         const exec = buildMysqlExec({
             config: { clientFlags: CLIENT_FOUND_ROWS_FLAG },
-            execute: async (_text, parameters) => {
+            query: async (_text, parameters) => {
                 // `Mysql2Like` types this `unknown` so the real driver is
                 // assignable; a double that reads it narrows first.
                 params.push(...(Array.isArray(parameters) ? (parameters as ReadonlyArray<unknown>) : []));
@@ -209,7 +230,7 @@ describe("exec adapters", () => {
 
         const exec = buildMysqlExec({
             config: { clientFlags: CLIENT_FOUND_ROWS_FLAG },
-            execute: async () => [{}, undefined],
+            query: async () => [{}, undefined],
         });
 
         const result = await exec.run("UPDATE `t` SET `a` = 1", []);
@@ -246,7 +267,7 @@ describe("exec adapters", () => {
         const calls: { params: ReadonlyArray<unknown>; sql: string }[] = [];
         const exec = buildMysqlExec({
             config: { clientFlags: CLIENT_FOUND_ROWS_FLAG },
-            execute: async (text, rawParams) => {
+            query: async (text, rawParams) => {
                 // See above: narrow before reading, since the projection hands
                 // this over as `unknown`.
                 const params: ReadonlyArray<unknown> = Array.isArray(rawParams) ? (rawParams as ReadonlyArray<unknown>) : [];
@@ -276,7 +297,7 @@ describe("buildMysqlExec CLIENT_FOUND_ROWS probe", () => {
 
         // A real merged clientFlags bitmask, but with the FOUND_ROWS bit (0x2) unset —
         // e.g. a connection created with `flags: ["-FOUND_ROWS"]`.
-        const connection = { config: { clientFlags: 0x00_00_00_01 }, execute: async () => [{}, undefined] as [Record<string, unknown>, undefined] };
+        const connection = { config: { clientFlags: 0x00_00_00_01 }, query: async () => [{}, undefined] as [Record<string, unknown>, undefined] };
 
         let caught: unknown;
 
@@ -295,7 +316,7 @@ describe("buildMysqlExec CLIENT_FOUND_ROWS probe", () => {
         expect.assertions(2);
 
         const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-        const connection = { config: { clientFlags: CLIENT_FOUND_ROWS_FLAG }, execute: async () => [{}, undefined] as [Record<string, unknown>, undefined] };
+        const connection = { config: { clientFlags: CLIENT_FOUND_ROWS_FLAG }, query: async () => [{}, undefined] as [Record<string, unknown>, undefined] };
 
         expect(() => buildMysqlExec(connection)).not.toThrow();
         expect(warn).not.toHaveBeenCalled();
@@ -308,7 +329,7 @@ describe("buildMysqlExec CLIENT_FOUND_ROWS probe", () => {
         // Mirrors mysql2/promise's real Pool wrapper: `pool.config` is undefined; the
         // merged flags live on the core pool it wraps (`pool.pool.config.connectionConfig`).
         const connection = {
-            execute: async () => [{}, undefined] as [Record<string, unknown>, undefined],
+            query: async () => [{}, undefined] as [Record<string, unknown>, undefined],
             pool: { config: { connectionConfig: { clientFlags: CLIENT_FOUND_ROWS_FLAG } } },
         };
 
@@ -320,10 +341,10 @@ describe("buildMysqlExec CLIENT_FOUND_ROWS probe", () => {
         expect.assertions(4);
 
         const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-        // A minimal `Mysql2Like` double — only `execute`, no `config`/`pool`. This
+        // A minimal `Mysql2Like` double — only `query`, no `config`/`pool`. This
         // is the shape `types.ts` documents, so it is what a hand-written adapter
         // actually passes.
-        const connection = { execute: async () => [{}, undefined] as [Record<string, unknown>, undefined] };
+        const connection = { query: async () => [{}, undefined] as [Record<string, unknown>, undefined] };
 
         expect(() => buildMysqlExec(connection)).not.toThrow();
 
@@ -337,7 +358,7 @@ describe("buildMysqlExec CLIENT_FOUND_ROWS probe", () => {
         expect(warn.mock.calls[0]?.[0]).toContain("CLIENT_FOUND_ROWS");
 
         // A DIFFERENT connection is a different unknown, and still gets its warning.
-        buildMysqlExec({ execute: async () => [{}, undefined] as [Record<string, unknown>, undefined] });
+        buildMysqlExec({ query: async () => [{}, undefined] as [Record<string, unknown>, undefined] });
 
         expect(warn).toHaveBeenCalledTimes(2);
     });
@@ -409,7 +430,7 @@ describe("buildMysqlExec CLIENT_FOUND_ROWS probe", () => {
 
         let configReads = 0;
         const connection = {
-            execute: async () => [{ affectedRows: 1 }, undefined] as [Record<string, unknown>, undefined],
+            query: async () => [{ affectedRows: 1 }, undefined] as [Record<string, unknown>, undefined],
             get config() {
                 configReads += 1;
 

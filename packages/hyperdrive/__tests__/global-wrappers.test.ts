@@ -74,7 +74,7 @@ const recordingConnection = (): { calls: string[]; connection: Mysql2Execute } =
         connection: {
             // `CLIENT_FOUND_ROWS`; without it `buildMysqlExec` throws before recording anything.
             config: { clientFlags: 0x00_00_00_02 },
-            execute: async (sql: string) => {
+            query: async (sql: string) => {
                 calls.push(sql);
 
                 return /^\s*select/i.test(sql)

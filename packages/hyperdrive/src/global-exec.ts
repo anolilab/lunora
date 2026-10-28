@@ -24,7 +24,7 @@ const CLIENT_FOUND_ROWS_FLAG = 0x00_00_00_02;
  * `buildMysqlExec` is called by `createMysqlGlobalCtxDb`, which the generated
  * shard factory invokes through its `hyperdriveGlobal` thunk PER REQUEST — so
  * any driver that doesn't expose flag introspection (including the package's own
- * documented minimal `Mysql2Like`, which has only `execute`) printed this on
+ * documented minimal `Mysql2Like`, which has only `query`) printed this on
  * every single request.
  */
 const warnedConnections = new WeakSet<object>();
@@ -104,7 +104,7 @@ const assertFoundRows = (connection: Mysql2Execute): void => {
 export type RowClient = SqlClient;
 
 /**
- * Minimal `mysql2/promise` connection/pool surface — `execute` resolves to
+ * Minimal `mysql2/promise` connection/pool surface — `query` resolves to
  * `[rows | ResultSetHeader, fields]`. Aliases {@link Mysql2Like} so the /global
  * entry's driver surface can never drift from the main entry's, widened with the
  * (optional, structural) shape {@link assertFoundRows}'s `CLIENT_FOUND_ROWS`
@@ -131,7 +131,7 @@ export type RowClient = SqlClient;
  * typings, so spelling them out made a real `createPool(...)` fail to type-check
  * (TS2345, weak-type mismatch on `config`). {@link readMysqlClientFlags} reads
  * them through the internal `FlagProbeShape` instead, and a minimal test double
- * (only `execute`) resolves to "undeterminable" rather than a `TypeError`.
+ * (only `query`) resolves to "undeterminable" rather than a `TypeError`.
  */
 export type Mysql2Execute = Mysql2Like & { config?: unknown; pool?: unknown };
 
@@ -184,7 +184,7 @@ export const buildPgExec = (client: RowClient): SqlExec => {
  *
  * `batch` dispatches every statement concurrently (`Promise.all`), same
  * rationale as {@link buildPgExec}'s `batch` — `Mysql2Like` only exposes a
- * single-statement `execute`, so this is "spread across a pool's connections"
+ * single-statement `query`, so this is "spread across a pool's connections"
  * rather than one wire-level multi-statement command; still non-atomic,
  * at-least-once, and unordered between elements, safe only for statements
  * with no cross-effect (what every current caller batches).
@@ -194,7 +194,7 @@ export const buildMysqlExec = (connection: Mysql2Execute): SqlExec => {
 
     return {
         all: async (sql, params) => {
-            const [rows] = await connection.execute(sql, params);
+            const [rows] = await connection.query(sql, params);
 
             // mysql2 hands back a `ResultSetHeader`, not a row array, for a
             // statement that returns no rows. Normalised to `[]` here the same
@@ -204,10 +204,10 @@ export const buildMysqlExec = (connection: Mysql2Execute): SqlExec => {
             return Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
         },
         batch: async (statements) => {
-            await Promise.all(statements.map((statement) => connection.execute(statement.sql, statement.params)));
+            await Promise.all(statements.map((statement) => connection.query(statement.sql, statement.params)));
         },
         run: async (sql, params): Promise<SqlRunResult> => {
-            const [result] = await connection.execute(sql, params);
+            const [result] = await connection.query(sql, params);
 
             return { rowsAffected: (result as { affectedRows?: number }).affectedRows ?? 0 };
         },

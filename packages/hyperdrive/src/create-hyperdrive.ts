@@ -85,7 +85,7 @@ export const fromNodePg = (client: NodePgLike): SqlClient => {
 /**
  * Wrap a `mysql2/promise` connection or pool as a {@link SqlClient}.
  *
- * Use `?` placeholders (MySQL positional syntax). `mysql2`'s `execute` resolves
+ * Use `?` placeholders (MySQL positional syntax). `mysql2`'s `query` resolves
  * to a `[rows, fields]` tuple; the adapter returns the first element. For a
  * non-`SELECT` (DML), `mysql2` yields a `ResultSetHeader` object rather than a
  * row array, so the adapter normalises that to `[]` — matching the empty-array
@@ -95,7 +95,7 @@ export const fromMysql2 = (connection: Mysql2Like): SqlClient => {
     return {
         dbSystem: "mysql",
         query: async <Row = Record<string, unknown>>(text: string, params: ReadonlyArray<unknown> = []): Promise<Row[]> => {
-            const [rows] = await connection.execute(text, params);
+            const [rows] = await connection.query(text, params);
 
             return Array.isArray(rows) ? (rows as Row[]) : [];
         },

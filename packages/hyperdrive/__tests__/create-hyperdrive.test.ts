@@ -103,24 +103,24 @@ describe("fromMysql2", () => {
         expect.assertions(2);
 
         const rows = [{ id: 7 }];
-        const execute = vi.fn<Mysql2Like["execute"]>().mockResolvedValue([rows, []]);
-        const connection: Mysql2Like = { execute };
+        const mysqlQuery = vi.fn<Mysql2Like["query"]>().mockResolvedValue([rows, []]);
+        const connection: Mysql2Like = { query: mysqlQuery };
 
         const sql = fromMysql2(connection);
         const result = await sql.query<{ id: number }>("select id from t where org = ?", ["acme"]);
 
         expect(result).toBe(rows);
-        expect(execute).toHaveBeenCalledWith("select id from t where org = ?", ["acme"]);
+        expect(mysqlQuery).toHaveBeenCalledWith("select id from t where org = ?", ["acme"]);
     });
 
     it("defaults params to an empty array", async () => {
         expect.assertions(1);
 
-        const execute = vi.fn<Mysql2Like["execute"]>().mockResolvedValue([[], []]);
+        const mysqlQuery = vi.fn<Mysql2Like["query"]>().mockResolvedValue([[], []]);
 
-        await fromMysql2({ execute }).query("select 1");
+        await fromMysql2({ query: mysqlQuery }).query("select 1");
 
-        expect(execute).toHaveBeenCalledWith("select 1", []);
+        expect(mysqlQuery).toHaveBeenCalledWith("select 1", []);
     });
 
     it("yields [] for a non-SELECT ResultSetHeader (DML)", async () => {
@@ -130,9 +130,9 @@ describe("fromMysql2", () => {
         // INSERT/UPDATE/DELETE — the adapter must normalise it to [] to honour
         // the empty-array-for-non-SELECT contract.
         const header = { affectedRows: 1, fieldCount: 0, insertId: 42, warningStatus: 0 };
-        const execute = vi.fn<Mysql2Like["execute"]>().mockResolvedValue([header, undefined]);
+        const mysqlQuery = vi.fn<Mysql2Like["query"]>().mockResolvedValue([header, undefined]);
 
-        const result = await fromMysql2({ execute }).query("insert into t (id) values (?)", [42]);
+        const result = await fromMysql2({ query: mysqlQuery }).query("insert into t (id) values (?)", [42]);
 
         expect(result).toStrictEqual([]);
     });
@@ -144,13 +144,13 @@ describe("adapter dbSystem stamp (read by ctx.sql auto-instrumentation)", () => 
 
         const unsafe = vi.fn<PostgresJsLike["unsafe"]>();
         const query = vi.fn<NodePgLike["query"]>();
-        const execute = vi.fn<Mysql2Like["execute"]>();
+        const mysqlQuery = vi.fn<Mysql2Like["query"]>();
 
         // The OTel `db.system.name` values: the span's system must be the real
         // engine, decided by which adapter built the client.
         expect(fromPostgresJs({ unsafe }).dbSystem).toBe("postgresql");
         expect(fromNodePg({ query }).dbSystem).toBe("postgresql");
-        expect(fromMysql2({ execute }).dbSystem).toBe("mysql");
+        expect(fromMysql2({ query: mysqlQuery }).dbSystem).toBe("mysql");
     });
 });
 

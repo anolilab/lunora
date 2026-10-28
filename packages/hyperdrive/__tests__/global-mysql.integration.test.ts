@@ -400,6 +400,36 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
             },
             TEST_TIMEOUT,
         );
+
+        it(
+            "round-trips doubles exactly over the text protocol",
+            async () => {
+                // `buildMysqlExec` uses `query` (client-side interpolation, text
+                // results), not `execute`'s binary protocol, so a double travels
+                // as a decimal string both ways and must still come back bit-exact.
+                expect.assertions(5);
+
+                const doubles = [0.1 + 0.2, 1e-300, 1.797_693_134_862_315_7e308, -2.5e-8, 123_456_789.123_456_78];
+
+                await runSqlGlobalTableMigrations(harness.exec, typesSchema, mysqlDialect);
+                const writer = writerFor(typesSchema);
+
+                const read = await Promise.all(
+                    doubles.map(async (n) => {
+                        const id = await writer.insert("things", { big: 1n, blob: new Uint8Array([0]), flag: false, meta: {}, n, title: "d" });
+
+                        const row = await writer.findFirst("things", { where: { _id: id } });
+
+                        return row?.["n"];
+                    }),
+                );
+
+                for (const [index, n] of doubles.entries()) {
+                    expect(read[index]).toBe(n);
+                }
+            },
+            TEST_TIMEOUT,
+        );
     });
 
     describe("aggregate + rank companions", () => {
