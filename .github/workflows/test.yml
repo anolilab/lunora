@@ -858,9 +858,10 @@
                   "retention-days": 7
                   "if-no-files-found": "ignore"
 
-    # Weighs the Worker a `templates/standalone` app deploys against the ceiling in
-    # `worker-size.json`. Nothing else in CI measures bytes, and noticing late means a
-    # user's deploy rejected by Cloudflare over a dependency added here weeks earlier.
+    # Weighs the Worker a `templates/standalone` app and a `templates/saas` app deploy
+    # against their ceilings in `worker-size.json`. Nothing else in CI measures bytes, and
+    # noticing late means a user's deploy rejected by Cloudflare over a dependency added
+    # here weeks earlier.
     #
     # Its own job, not a `postinstall` gate: a failing postinstall turns every job red
     # in its setup step, with the cause invisible in the job that reports it.
