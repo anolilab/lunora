@@ -344,13 +344,20 @@ export class EventLog {
      * different (or no) `maxEntries` can never leave this log over its
      * configured capacity.
      * @throws RangeError when `snapshot.entries` is not in strictly ascending
-     * `seq` order, which the tail reads binary-search over.
+     * `seq` order, or `snapshot.nextSeq` is not above the last entry's `seq`;
+     * the tail reads binary-search over a log whose appends stay ascending.
      */
     public load(snapshot: EventLogSnapshot): void {
         for (let index = 1; index < snapshot.entries.length; index += 1) {
             if ((snapshot.entries[index] as EventLogEntry).seq <= (snapshot.entries[index - 1] as EventLogEntry).seq) {
                 throw new RangeError("EventLog snapshot entries must be in strictly ascending seq order");
             }
+        }
+
+        const last = snapshot.entries.at(-1);
+
+        if (last !== undefined && snapshot.nextSeq <= last.seq) {
+            throw new RangeError("EventLog snapshot nextSeq must be above the last entry seq");
         }
 
         this.#entries = [...snapshot.entries];

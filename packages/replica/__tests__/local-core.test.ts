@@ -411,6 +411,24 @@ describe(EventLog, () => {
         }).toThrow(RangeError);
     });
 
+    it("rejects a snapshot whose nextSeq is not above the last entry seq", () => {
+        expect.assertions(2);
+
+        const log = new EventLog();
+
+        log.append("a", 1);
+        log.append("b", 2);
+
+        const snap = log.snapshot();
+
+        expect(() => {
+            new EventLog().load({ ...snap, nextSeq: snap.entries.at(-1)!.seq });
+        }).toThrow(RangeError);
+        expect(() => {
+            new EventLog().load({ ...snap, nextSeq: 0 });
+        }).toThrow(RangeError);
+    });
+
     it("snapshot captures headSeq", () => {
         expect.assertions(2);
 
