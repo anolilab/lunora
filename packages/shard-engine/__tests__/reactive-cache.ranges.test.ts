@@ -70,8 +70,8 @@ describe("range-precise reactive invalidation", () => {
         writer = createShardContextDatabase({
             cache,
             clock: () => 1_700_000_000_000,
-            onRead: (table, idOrScan) => {
-                footprint?.onRead(table);
+            onRead: (table, idOrScan, exact) => {
+                footprint?.onRead(table, idOrScan, exact);
                 tracker?.recordRead(table, idOrScan ?? "*scan");
             },
             onReadRange: (range) => footprint?.onReadRange(range),
@@ -177,6 +177,34 @@ describe("range-precise reactive invalidation", () => {
         await writer.insert("messages", { body: "inside", channelId: "A", seq: 15 });
 
         await expect(isCached("q:window")).resolves.toBe(false);
+    });
+
+    it("invalidates a cached point read by its row dep alone", async () => {
+        expect.assertions(4);
+
+        const idA = await writer.insert("messages", { body: "a", channelId: "A", seq: 1 });
+        const idB = await writer.insert("messages", { body: "b", channelId: "A", seq: 2 });
+        const readA = async (): Promise<void> => {
+            await cacheRead("q:get", async () => writer.get("messages", idA));
+        };
+
+        await readA();
+        await writer.patch("messages", idB, { body: "b2" });
+
+        await expect(isCached("q:get")).resolves.toBe(true);
+
+        await writer.patch("messages", idA, { body: "a2" });
+
+        await expect(isCached("q:get")).resolves.toBe(false);
+
+        await cacheRead("q:miss", async () => writer.get("messages", "missing-id"));
+        await writer.insert("messages", { body: "other", channelId: "A", seq: 3 });
+
+        await expect(isCached("q:miss")).resolves.toBe(true);
+
+        await writer.insert("messages", { _id: "missing-id", body: "late", channelId: "A", seq: 4 }, { allowExplicitId: true });
+
+        await expect(isCached("q:miss")).resolves.toBe(false);
     });
 
     it("still invalidates on every write when the read could not be narrowed", async () => {

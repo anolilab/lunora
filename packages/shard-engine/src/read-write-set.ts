@@ -373,6 +373,23 @@ const groupByIndex = <T extends { index: string }, V>(items: ReadonlyArray<T>, v
     return groups;
 };
 
+/** One-range form of {@link keysTouchRanges}, under the same rule: no key on its index counts as touched. */
+const keysTouchRange = (range: KeyRange, keys: ReadonlyArray<IndexKeyEntry>): boolean => {
+    let keyed = false;
+
+    for (const entry of keys) {
+        if (entry.index === range.index) {
+            if (entry.key >= range.lo && entry.key < range.hi) {
+                return true;
+            }
+
+            keyed = true;
+        }
+    }
+
+    return !keyed;
+};
+
 /**
  * Did any of `keys` land inside any of `ranges`?
  *
@@ -386,6 +403,12 @@ const groupByIndex = <T extends { index: string }, V>(items: ReadonlyArray<T>, v
 const keysTouchRanges = (ranges: ReadonlyArray<KeyRange> | undefined, keys: ReadonlyArray<IndexKeyEntry> | undefined): boolean => {
     if (!ranges || ranges.length === 0 || !keys || keys.length === 0) {
         return true;
+    }
+
+    // The reactive cache tests one range at a time on every write; skip the
+    // grouping allocations for it.
+    if (ranges.length === 1) {
+        return keysTouchRange(ranges[0] as KeyRange, keys);
     }
 
     const keysByIndex = groupByIndex(keys, (entry) => entry.key);
