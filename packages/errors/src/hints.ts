@@ -69,6 +69,11 @@ const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> = {
         "- **Its text changed after it ran:** revert the edit and put the change in a new migration. If the edit is inert (a comment, whitespace, line endings), record the new hash with the `UPDATE` the message prints.",
         "- **Tracking rows predate versions and match no migration:** set each row's `version` with the `UPDATE` the message prints, so the runner can tell what already ran.",
     ],
+    UNIQUE_INDEX_DUPLICATES: [
+        "The index was not built, so the shard refuses user traffic until it is.",
+        "",
+        "Write a `defineMigration` in `lunora/migrations.ts` that deletes or merges the duplicate rows so one row keeps each key. Deploy it, then run `lunora migrate up <id>` with that migration's id. The shard retries the index build on its own, so no second deploy is needed. The `lunora-migration-helper` skill covers the pattern.",
+    ],
     OFFLINE_NOT_QUEUED:
         "A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).",
     IDENTITY_MISMATCH: [
