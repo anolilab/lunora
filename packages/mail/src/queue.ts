@@ -64,7 +64,9 @@ export const toQueuedPayload = (options: SendOptions): QueuedSend => {
  *     // createMailerFromEnv, so dev captures the message here instead of sending it.
  *     const mailer = createMailerFromEnv(env);
  *     for (const message of batch.messages) {
- *       const { idempotencyKey } = message.body;
+ *       const idempotencyKey = message.body?.idempotencyKey;
+ *       // Malformed, and no retry fixes it; unguarded, this would throw and retry the whole batch.
+ *       if (typeof idempotencyKey !== "string") { console.error("malformed mail message", message.body); message.ack(); continue; }
  *       if (await env.SENT.get(idempotencyKey)) { message.ack(); continue; }
  *       try {
  *         await consumeQueuedSend(mailer, message.body);

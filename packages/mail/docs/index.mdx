@@ -122,7 +122,15 @@ export default {
         const mailer = createMailerFromEnv(env);
 
         for (const message of batch.messages) {
-            const { idempotencyKey } = message.body;
+            const idempotencyKey = message.body?.idempotencyKey;
+
+            // A body without its key is malformed, and no retry fixes that; reading it
+            // unguarded would throw out of the loop and retry the whole batch.
+            if (typeof idempotencyKey !== "string") {
+                console.error("malformed mail message", message.body);
+                message.ack();
+                continue;
+            }
 
             // The dedupe is YOURS to do. Nothing downstream does it for you: no
             // transport forwards the key to the provider (Resend dedupes on an
