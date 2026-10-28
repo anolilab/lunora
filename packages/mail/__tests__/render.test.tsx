@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import createMailer from "../src/create-mailer";
 import renderEmail from "../src/render";
@@ -32,16 +32,16 @@ describe("renderEmail", () => {
     it("renders the element once for both the HTML and the plain text", async () => {
         expect.assertions(3);
 
-        let renders = 0;
+        const onRender = vi.fn<() => number>();
         const Counted = () => {
-            renders += 1;
+            onRender();
 
-            return <p>render {String(renders)}</p>;
+            return <p>render {String(onRender.mock.calls.length)}</p>;
         };
 
         const result = await renderEmail(<Counted />);
 
-        expect(renders).toBe(1);
+        expect(onRender).toHaveBeenCalledTimes(1);
         expect(result.html).toContain("render <!-- -->1");
         expect(result.text).toBe("render 1");
     });
