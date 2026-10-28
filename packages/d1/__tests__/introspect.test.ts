@@ -158,6 +158,22 @@ describe("d1 introspect", () => {
             expect(page.total).toBe(2);
         });
 
+        it("pages a WITHOUT ROWID table with a composite key by that key", async () => {
+            // Such a table has no `rowid` to order by, so only its key columns make a valid ORDER BY.
+            expect.assertions(1);
+
+            harness.ddl(`CREATE TABLE "memberships" ("org" TEXT, "member" TEXT, PRIMARY KEY ("org", "member")) WITHOUT ROWID`);
+            await harness.exec.run(`INSERT INTO "memberships" VALUES ('b', 'x'), ('a', 'y'), ('a', 'x')`, []);
+
+            const page = await readGlobalTablePage(harness.exec, schema, { table: "memberships" });
+
+            expect(page.rows).toStrictEqual([
+                { member: "x", org: "a" },
+                { member: "y", org: "a" },
+                { member: "x", org: "b" },
+            ]);
+        });
+
         it("answers a huge or non-finite offset with an empty page rather than invalid SQL", async () => {
             // Inlined as a literal, 1e21 would print as `1e+21` and NaN as `NaN`, neither of which parses.
             expect.assertions(2);

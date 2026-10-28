@@ -331,13 +331,20 @@ const assertParameterBudget = (table: string, count: number): void => {
 };
 
 /**
- * The bound form of an eq filter value: the writer's own {@link sqliteEncode},
- * given the column's kind. A `v.bigint()` column stores a zero-padded TEXT sort
+ * The bound form of an eq filter value. An external Postgres/MySQL table stores
+ * native values, and its facets hand those back (a `timestamp` as a `Date`), so
+ * the value binds as it came, with only the wire's `ArrayBuffer` turned into the
+ * `Uint8Array` the drivers bind as bytes. Anywhere else it is the writer's own
+ * {@link sqliteEncode}, given the column's kind. A `v.bigint()` column stores a zero-padded TEXT sort
  * key, and a browser sends the operator's `10` as a number (or, past 2^53, as the
  * exact digit string) — bound raw, that never equals the key. Integer input is
  * parsed to a `bigint` first so it encodes to the key the row was written with.
  */
-const bindGlobalFilterValue = (value: unknown, kind: string | undefined): unknown => {
+const bindGlobalFilterValue = (value: unknown, kind: string | undefined, nativeStorage: boolean): unknown => {
+    if (nativeStorage) {
+        return value instanceof ArrayBuffer ? new Uint8Array(value) : value;
+    }
+
     if (kind !== "bigint") {
         // Only bigint needs its kind here. An untyped column (`union`/`any`/
         // `from`) stores its scalars in the marked form, and the facet hands that
@@ -379,19 +386,18 @@ const assertEqOnlyClause = (filter: GlobalFilterClause): void => {
  * displayed columns (typed 404 if unknown) and mapped to its physical, quoted
  * identifier; a nullish value compiles to `IS NULL` (SQL's `= NULL` never
  * matches), everything else to `= ?` with the value bound through
- * {@link sqliteEncode}. That encode is the identity on the strings and numbers a
- * stored scalar almost always is; it earns its place on the BLOB case, where the
- * wire decode can hand back either an `ArrayBuffer` or a view of one and only one
- * of those binds. No clauses yields an empty `where`, so callers append it
- * unconditionally.
+ * {@link bindGlobalFilterValue}. No clauses yields an empty `where`, so callers
+ * append it unconditionally.
  */
 const buildEqPredicate = (
     schema: SchemaLike,
+    dialect: SqlDialect,
     table: string,
     displayColumns: string[],
     filters: GlobalFilterClause[] | undefined,
 ): { bound: number; where: SQL } => {
     const clauses: SQL[] = [];
+    const nativeStorage = globalTableDefinition(schema, table) === undefined && dialect.name !== "sqlite";
     let bound = 0;
 
     for (const filter of filters ?? []) {
@@ -415,7 +421,16 @@ const buildEqPredicate = (
         if (filter.value === null || filter.value === undefined) {
             clauses.push(sql`${column} IS NULL`);
         } else {
-            clauses.push(sql`${column} = ${bindGlobalFilterValue(filter.value, globalColumnKind(schema, table, filter.column))}`);
+            const value = bindGlobalFilterValue(filter.value, globalColumnKind(schema, table, filter.column), nativeStorage);
+
+            // A Postgres driver reads a zone-less `timestamp`/`date` as local time but binds a `Date` as
+            // UTC text, whose offset such a column drops, so outside a UTC process the two never meet.
+            // Comparing both sides as instants reads the column in the session zone the driver parsed it in.
+            clauses.push(
+                nativeStorage && dialect.name === "postgres" && value instanceof Date
+                    ? sql`${column}::timestamptz = ${value}::timestamptz`
+                    : sql`${column} = ${value}`,
+            );
             bound += 1;
         }
     }
@@ -531,7 +546,7 @@ const pageOrderKey = async (exec: SqlContextExec, dialect: SqlDialect, schema: S
 
     const primaryKey = await catalog.primaryKey(exec, dialect, table);
 
-    if (primaryKey.length === 1 || (primaryKey.length > 1 && dialect.name !== "sqlite")) {
+    if (primaryKey.length > 0) {
         return sql.join(
             primaryKey.map((name) => sql.identifier(name)),
             sql`, `,
@@ -543,9 +558,8 @@ const pageOrderKey = async (exec: SqlContextExec, dialect: SqlDialect, schema: S
         return sql`${sql.identifier("id")}`;
     }
 
-    // SQLite: a composite key orders by no single column; `rowid` is stable and
-    // every ordinary table has one (a `WITHOUT ROWID` table always declares a
-    // primary key, so it took the branch above). Postgres/MySQL have no rowid, so
+    // SQLite: a keyless table always has a stable `rowid` (a `WITHOUT ROWID`
+    // table must declare a primary key, so it took the branch above). Postgres/MySQL have no rowid, so
     // a keyless external table is ordered by every column: ordering by one
     // column alone leaves ties in an undefined order, and OFFSET pages would
     // then overlap or skip rows. Rows equal in every column are indistinguishable.
@@ -582,7 +596,7 @@ const readSqlGlobalTablePage = async (
     const limit = pagingBound(options.limit, DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE);
     const offset = pagingBound(options.offset, 0, 0, Number.MAX_SAFE_INTEGER);
     const columns = await resolveColumns(exec, dialect, schema, table);
-    const { bound, where } = buildEqPredicate(schema, table, columns, options.filters);
+    const { bound, where } = buildEqPredicate(schema, dialect, table, columns, options.filters);
 
     assertParameterBudget(table, bound);
 
@@ -651,7 +665,7 @@ const facetSqlGlobalColumn = async (
         throw new LunoraError("UNKNOWN_COLUMN", `unknown column: ${column}`, { status: 404 });
     }
 
-    const { bound, where } = buildEqPredicate(schema, table, columns, options.filters);
+    const { bound, where } = buildEqPredicate(schema, dialect, table, columns, options.filters);
 
     assertParameterBudget(table, bound);
 

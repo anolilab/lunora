@@ -133,6 +133,30 @@ const conflictCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
     await expect(writer.get("extras", "x1")).resolves.toMatchObject({ label: "target" });
 };
 
+const crossTableIdCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
+    const writer = writerFor(target);
+
+    await writer.insert("assets", asset("x1", 1), { allowExplicitId: true });
+
+    // An id-only read probes every global table, so a second table holding `x1` would make it ambiguous.
+    const result = await importHyperdriveGlobalRows({
+        cdc: false,
+        engine: target.engine,
+        exec: target.exec,
+        onConflict: "replace",
+        rows: [{ doc: { _id: "x1", label: "elsewhere" }, table: "extras" }],
+        schema,
+    });
+
+    expect(result).toStrictEqual({
+        conflicts: 0,
+        errors: [{ code: "ID_COLLISION", line: 1, message: '_id "x1" already belongs to table "assets"', table: "extras" }],
+        inserted: {},
+        replaced: 0,
+    });
+    await expect(writer.get("extras", "x1")).resolves.toBeNull();
+};
+
 const replaceCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
     const writer = writerFor(target, true);
 
@@ -274,6 +298,20 @@ const keylessJsonTablePagingCase = (target: AdminPlaneTarget) => async (): Promi
     expect(page.rows.map((row) => row["kind"])).toStrictEqual(["a", "b"]);
 };
 
+const externalTimestampFilterCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
+    // The driver hands a timestamp back as a `Date`; the clicked facet value must filter as that `Date`, not as encoded text.
+    await target.query("CREATE TABLE ext_visits (id INTEGER PRIMARY KEY, seen_at TIMESTAMP)");
+    await target.query("INSERT INTO ext_visits (id, seen_at) VALUES (1, '2026-01-02 03:04:05'), (2, '2026-02-03 04:05:06')");
+
+    const introspector = createHyperdriveGlobalIntrospector(target.engine, target.exec, schema);
+    const facet = await introspector.facetColumn({ column: "seen_at", table: "ext_visits" });
+    // What the browser does with the facet before sending the click back.
+    const clicked = decodeWire(facet.values[0]?.value);
+
+    expect(clicked).toBeInstanceOf(Date);
+    await expect(introspector.readTablePage({ filters: [{ column: "seen_at", value: clicked }], table: "ext_visits" })).resolves.toMatchObject({ total: 1 });
+};
+
 const d1PrefixedTableCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
     // `d1_*` names D1's own internals only on D1; on Postgres or MySQL it is an ordinary table.
     await target.query("CREATE TABLE d1_orders (id VARCHAR(8) PRIMARY KEY, total INTEGER)");
@@ -327,6 +365,7 @@ const adminPlaneCases = (target: AdminPlaneTarget): [string, () => Promise<void>
     ["exports then re-imports rows intact (bigint, bytes, unset optional)", roundTripCase(target)],
     ["dry-run import checks shapes and writes nothing, not even the table", dryRunCase(target)],
     ["reports an existing _id as a conflict and leaves the stored row unchanged", conflictCase(target)],
+    ["refuses an _id another global table already holds, even under replace", crossTableIdCase(target)],
     ['overwrites an existing _id under onConflict: "replace", keeping the snapshot _creationTime and recording CDC', replaceCase(target)],
     ["exports a never-written table as empty instead of failing", neverWrittenCase(target)],
     ["exports only the allowlisted tables", allowlistCase(target)],
@@ -335,6 +374,7 @@ const adminPlaneCases = (target: AdminPlaneTarget): [string, () => Promise<void>
     ["shows external tables keyed by their own primary key, with secrets masked and foreign keys named", externalTablesCase(target)],
     ["pages a keyless external table in a stable order even when its first column ties", keylessTablePagingCase(target)],
     ["pages a keyless external table that has a native json column", keylessJsonTablePagingCase(target)],
+    ["filters an external table by a timestamp facet value", externalTimestampFilterCase(target)],
     ["lists and reads an external table whose name starts with d1_", d1PrefixedTableCase(target)],
     ["does not link a foreign key into another schema to a same-named local table", crossSchemaForeignKeyCase(target)],
     ["reads and replays the global changelog", cdcCase(target)],

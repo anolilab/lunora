@@ -302,13 +302,8 @@ interface ImportGlobalArgs {
     startLine?: number;
 }
 
-/**
- * Probe whether `explicitId` already exists in `table`. Prefers a direct
- * table+id `SELECT` when an exec handle is available; otherwise it reads the same
- * table through the writer. A probe error is swallowed — the writer's insert path
- * will surface any hard error instead.
- */
-const explicitIdConflicts = async (
+/** Whether `explicitId` is a row of `table`. A probe error reads as "absent": the writer's insert path surfaces any hard error instead. */
+const holdsId = async (
     writer: DatabaseWriterLike,
     dialect: SqlDialect,
     exec: ImportGlobalArgs["exec"],
@@ -326,13 +321,37 @@ const explicitIdConflicts = async (
             return probe.length > 0;
         }
 
-        const existing = await writer.get(table, explicitId);
-
-        return existing !== null;
+        return (await writer.get(table, explicitId)) !== null;
     } catch {
-        // The writer's insert path will surface a hard error if one is real.
         return false;
     }
+};
+
+/**
+ * The `.global()` table that already holds `explicitId`, or `undefined` when the
+ * id is free. `table` itself is probed first, so a conflict in the row's own
+ * table wins over a collision. Any other name is a cross-table collision: an
+ * id-only `get`/`patch`/`delete` resolves by probing every global table, so a
+ * second table holding the same id would make that resolution ambiguous.
+ */
+const explicitIdOwner = async (
+    writer: DatabaseWriterLike,
+    schema: SchemaLike,
+    dialect: SqlDialect,
+    exec: ImportGlobalArgs["exec"],
+    table: string,
+    explicitId: string,
+): Promise<string | undefined> => {
+    const others = Object.keys(schema.tables).filter((name) => name !== table && schema.tables[name]?.shardMode?.kind === "global");
+
+    for (const candidate of [table, ...others]) {
+        // eslint-disable-next-line no-await-in-loop -- probed in order so the row's own table answers first, and the scan stops at the first owner
+        if (await holdsId(writer, dialect, exec, candidate, explicitId)) {
+            return candidate;
+        }
+    }
+
+    return undefined;
 };
 
 type RowOutcome =
@@ -447,7 +466,13 @@ const importOneRow = async (
     }
 
     const explicitId = typeof decoded["_id"] === "string" ? decoded["_id"] : undefined;
-    const existingId = explicitId !== undefined && (await explicitIdConflicts(writer, dialect, args.exec, table, explicitId)) ? explicitId : undefined;
+    const owner = explicitId === undefined ? undefined : await explicitIdOwner(writer, schema, dialect, args.exec, table, explicitId);
+
+    if (owner !== undefined && owner !== table) {
+        return { error: { code: "ID_COLLISION", line, message: `_id "${String(explicitId)}" already belongs to table "${owner}"`, table }, kind: "error" };
+    }
+
+    const existingId = owner === table ? explicitId : undefined;
 
     if (existingId !== undefined && args.onConflict !== "replace") {
         return { kind: "conflict" };
