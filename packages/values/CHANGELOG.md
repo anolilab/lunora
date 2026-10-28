@@ -1,3 +1,9 @@
+## @lunora/values [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.84...@lunora/values@1.0.0-alpha.85) (2026-10-28)
+
+### Performance Improvements
+
+* **values:** hoist output key check, skip certain literal union misses ([#1388](https://github.com/anolilab/lunora/issues/1388)) ([fecf322](https://github.com/anolilab/lunora/commit/fecf3224652825afa31976be6eb0f529f23bde0e))
+
 ## @lunora/values [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.83...@lunora/values@1.0.0-alpha.84) (2026-10-28)
 
 
