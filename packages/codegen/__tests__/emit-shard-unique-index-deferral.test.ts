@@ -109,6 +109,7 @@ const compileShard = () => {
                 Base,
                 buildReprojectionMigration: () => {},
                 config: {},
+                console,
                 LUNORA_MIGRATIONS: { dedupe: {} },
                 LunoraError,
                 runDataMigration: async () => {
@@ -177,6 +178,32 @@ describe("emitShard — blocked unique index retry", () => {
             shard.ensureServable();
         }).toThrow("blocked by duplicates");
         expect(scan).toHaveBeenCalledTimes(2);
+    });
+
+    it("logs a blocked index once per retry window, not on every refused call", () => {
+        expect.assertions(9);
+
+        const { build, retryMs } = compileShard();
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        const shard = build(() => ["unique index users_email blocked by duplicates"]);
+
+        for (let call = 0; call < 5; call += 1) {
+            expect(() => {
+                shard.ensureServable();
+            }).toThrow("blocked by duplicates");
+        }
+
+        expect(logged).toHaveBeenCalledTimes(1);
+
+        vi.advanceTimersByTime(retryMs + 1);
+
+        expect(() => {
+            shard.ensureServable();
+        }).toThrow("blocked by duplicates");
+        expect(logged).toHaveBeenCalledTimes(2);
+        expect(logged).toHaveBeenLastCalledWith(expect.stringContaining("users_email"));
+
+        logged.mockRestore();
     });
 
     it("stops migrating once nothing is blocked", () => {
