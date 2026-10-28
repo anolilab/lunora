@@ -174,6 +174,25 @@ describe("subscription point reads", () => {
         ).resolves.toBe(expectedTable === undefined);
     });
 
+    it("a patch carries one id key for its before and after images", async () => {
+        expect.assertions(1);
+
+        const idA = await seed.insert("messages", { body: "a", channel: "c1" });
+        const keys: string[] = [];
+        const database = createShardContextDatabase({
+            broadcast: (delta) => {
+                keys.push(...(delta.indexKeys ?? []).filter((entry) => entry.index === "!id").map((entry) => entry.key));
+            },
+            clock: () => 1_700_000_000_000,
+            schema,
+            sql: harness.sql,
+        });
+
+        await database.patch("messages", idA, { channel: "c2" });
+
+        expect(keys).toStrictEqual([idA]);
+    });
+
     it("a get mixed with a predicated read of the same table stays whole-table", async () => {
         expect.assertions(2);
 

@@ -2146,14 +2146,18 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const rowIndexKeys = (tableName: string, ...images: (Record<string, unknown> | undefined)[]): IndexKeyEntry[] | undefined => {
         const indexes = schema.tables[tableName]?.indexes ?? [];
         const entries: IndexKeyEntry[] = [];
+        let keyedId: string | undefined;
 
         for (const image of images) {
             if (image) {
                 // The implicit id index, so a subscription that only `get`s rows
                 // re-runs for writes to those rows and no others. An image
                 // without `_id` yields no id key, which reads as "touched".
-                if (typeof image["_id"] === "string") {
-                    entries.push(idIndexKey(image["_id"]));
+                // Before and after images share their id, and a repeat would
+                // spend the gate's per-table key budget twice.
+                if (typeof image["_id"] === "string" && image["_id"] !== keyedId) {
+                    keyedId = image["_id"];
+                    entries.push(idIndexKey(keyedId));
                 }
 
                 entries.push(...indexKeysForRow(indexes, image, serializeSqlValue));
