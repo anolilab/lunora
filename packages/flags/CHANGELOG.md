@@ -1,3 +1,14 @@
+## @lunora/flags [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.88...@lunora/flags@1.0.0-alpha.89) (2026-10-28)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.74
+
 ## @lunora/flags [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.87...@lunora/flags@1.0.0-alpha.88) (2026-10-27)
 
 
