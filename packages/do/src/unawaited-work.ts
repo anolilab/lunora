@@ -80,24 +80,37 @@ const watchPendingWork = (context: Record<string, unknown>): (() => string[]) =>
         }
     }
 
+    const watchFacade = (label: string, facade: object): object =>
+        new Proxy(facade, {
+            get: (target, property) => {
+                const member: unknown = Reflect.get(target, property);
+
+                if (typeof member !== "function" || typeof property !== "string") {
+                    return member;
+                }
+
+                // Bound to the facade itself, not the proxy: a class-backed facade's
+                // private fields only resolve on the real instance.
+                return (...args: unknown[]): unknown => {
+                    const result: unknown = Reflect.apply(member, target, args);
+
+                    // `storage.bucket(name)` hands back a sub-facade whose methods are
+                    // the I/O, so it is watched the same way.
+                    if (property === "bucket" && typeof result === "object" && result !== null && !isThenable(result)) {
+                        return watchFacade(`${label}.bucket`, result);
+                    }
+
+                    return track(`${label}.${property}`, result);
+                };
+            },
+        });
+
     for (const name of FACADE_KINDS) {
         const original = context[name];
 
         if (typeof original === "object" && original !== null) {
             originals.set(name, original);
-            context[name] = new Proxy(original, {
-                get: (target, property) => {
-                    const member: unknown = Reflect.get(target, property);
-
-                    if (typeof member !== "function" || typeof property !== "string") {
-                        return member;
-                    }
-
-                    // Bound to the facade itself, not the proxy: a class-backed facade's
-                    // private fields only resolve on the real instance.
-                    return (...args: unknown[]): unknown => track(`ctx.${name}.${property}`, Reflect.apply(member, target, args));
-                },
-            });
+            context[name] = watchFacade(`ctx.${name}`, original);
         }
     }
 

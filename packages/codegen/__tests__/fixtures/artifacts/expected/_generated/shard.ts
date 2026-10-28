@@ -410,10 +410,15 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             // An action's unawaited I/O can be cancelled after the response, so its
             // ctx counts what is still in flight when the handler returns.
+            // Reported on a throw too: the pending calls are just as abandoned.
             const finishActionWork = registered.kind === "action" ? this.watchActionWork(functionPath, ctx) : undefined;
-            const result = await registered.handler(ctx, args);
+            let result: unknown;
 
-            finishActionWork?.();
+            try {
+                result = await registered.handler(ctx, args);
+            } finally {
+                finishActionWork?.();
+            }
 
             // Composed mutations settle their own delete queues. An action can
             // also queue deletes outside those mutations; drain its own queue here.
@@ -559,7 +564,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // Identity is threaded EXPLICITLY from the (deferred/interleaved)
             // subscription caller — never read from the shared per-request field
             // here — so a concurrent RPC can't leak its identity into this re-run.
-            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange });
+            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange });
             const result = await registered.handler(ctx, args);
 
             // Ranges come from THIS run's reads, never a shared field on the DO:
@@ -670,7 +675,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.ensureServable();
 
             const footprint = createReadFootprint();
-            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, replayKey: false, trusted: true });
+            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath), onRead: footprint.onRead, onReadRange: footprint.onReadRange, replayKey: false, trusted: true });
             const outcome = (await this.runMutationTransaction(ctx, async () =>
                 registered.handler(ctx, { previousDigest } as unknown as Record<string, unknown>),
             )) as {

@@ -86,6 +86,26 @@ describe("watchPendingWork", () => {
         expect(ctx.storage).not.toBe(bucket);
     });
 
+    it("names a call left running on a bucket sub-facade", async () => {
+        expect.assertions(1);
+
+        const slow = deferred();
+        const ctx: Record<string, unknown> = {
+            storage: {
+                bucket: () => {
+                    return { put: async () => slow.promise };
+                },
+            },
+        };
+        const finish = watchPendingWork(ctx);
+        const write = (ctx.storage as { bucket: (name: string) => { put: () => Promise<string> } }).bucket("avatars").put();
+
+        expect(finish()).toStrictEqual(["ctx.storage.bucket.put"]);
+
+        slow.resolve();
+        await write;
+    });
+
     it("restores the original members so identity-keyed queues still find the facade", () => {
         expect.assertions(2);
 
@@ -112,6 +132,9 @@ class ActionShard extends ShardDO {
     /** The call `jobs:leaky` starts and never awaits. */
     public leaked: Promise<string> | undefined;
 
+    /** The shared per-request user field; the dispatch starts as `alice`. */
+    public currentUser = "alice";
+
     public override async handleRpc(functionPath: string): Promise<unknown> {
         const ctx: Record<string, unknown> = { runMutation: () => this.slow.promise };
         const finish = this.watchActionWork(functionPath, ctx);
@@ -122,6 +145,8 @@ class ActionShard extends ShardDO {
             await (ctx.runMutation as () => Promise<string>)();
         }
 
+        // What an `await`-interleaved dispatch does to the shared field before this one finishes.
+        this.currentUser = "someone-else";
         finish();
 
         return { ok: true };
@@ -130,9 +155,13 @@ class ActionShard extends ShardDO {
     public loggedLines(): LoggedLine[] {
         return (this as unknown as { logs: { entries: () => LoggedLine[] } }).logs.entries();
     }
+
+    protected override getCurrentUserId(): string | undefined {
+        return this.currentUser;
+    }
 }
 
-const createShard = (): ActionShard => {
+const createShard = (events: { eventName?: string; userId?: string }[] = []): ActionShard => {
     const harness = createSqliteExec();
 
     runShardMigrations(harness.sql, { tables: {} } satisfies SchemaLike);
@@ -144,6 +173,15 @@ const createShard = (): ActionShard => {
             storage: { sql: harness.sql as unknown as ShardDOState["storage"]["sql"] },
         },
         {},
+        {
+            telemetrySink: () => {
+                return {
+                    onLog: (event) => {
+                        events.push(event);
+                    },
+                };
+            },
+        },
     );
 };
 
@@ -167,6 +205,17 @@ describe("shardDO.watchActionWork", () => {
         expect(shard.loggedLines().filter((line) => line.level === "warn")).toStrictEqual([
             expect.objectContaining({ fields: { pending: ["ctx.runMutation"] }, functionPath: "jobs:leaky" }),
         ]);
+    });
+
+    it("files the warning under the action's own user, not an interleaved one", async () => {
+        expect.assertions(1);
+
+        const events: { eventName?: string; userId?: string }[] = [];
+        const shard = createShard(events);
+
+        await rpc(shard, "jobs:leaky");
+
+        expect(events.filter((event) => event.eventName === "lunora.action.unawaited_work").map((event) => event.userId)).toStrictEqual(["alice"]);
     });
 
     it("stays quiet when the action awaited its work", async () => {

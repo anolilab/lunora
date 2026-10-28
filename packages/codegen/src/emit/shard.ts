@@ -1127,7 +1127,7 @@ ${lazyFunctions ? '            const requestScope = this.captureRequestScope();\
             this.ensureServable();
 
             const footprint = createReadFootprint();
-            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, replayKey: false, trusted: true });
+            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath), onRead: footprint.onRead, onReadRange: footprint.onReadRange, replayKey: false, trusted: true });
             const outcome = (await this.runMutationTransaction(ctx, async () =>
                 registered.handler(ctx, { previousDigest } as unknown as Record<string, unknown>),
             )) as {

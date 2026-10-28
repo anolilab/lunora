@@ -7530,7 +7530,7 @@ abstract class ShardDO {
      * "this caller is that dispatch".
      */
     protected transactionHeadroom(): TransactionHeadroomTracker {
-        return this.mintHeadroom("transaction");
+        return this.mintHeadroom("transaction", { trace: this.currentRequestTrace, userId: this.getCurrentUserId() });
     }
 
     /**
@@ -7549,8 +7549,10 @@ abstract class ShardDO {
      * background: a concurrent `/rpc` dispatch building its `ctx.db` during the
      * drain would take the refresh branch and lose its own ceiling entirely.
      */
-    protected subscriptionHeadroom(): TransactionHeadroomTracker {
-        return this.mintHeadroom("subscription");
+    protected subscriptionHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker {
+        // A re-run has no dispatch of its own; the shared trace belongs to whichever
+        // write triggered it, so its warning carries the subscriber and no trace.
+        return this.mintHeadroom(functionPath, { trace: undefined, userId: identity?.userId });
     }
 
     /**
@@ -7567,7 +7569,7 @@ abstract class ShardDO {
      * substituting the wrong tracker mid-flight.
      */
     protected alarmHeadroom(): TransactionHeadroomTracker {
-        return this.mintHeadroom("alarm");
+        return this.mintHeadroom("alarm", { trace: undefined, userId: undefined });
     }
 
     /**
@@ -7637,6 +7639,10 @@ abstract class ShardDO {
         // the Error sat in a `with()` bound field, which `fields` has already
         // stringified by the time it gets here.
         error: ErrorDetail | undefined = findLoggedError(fields === undefined ? args : [...args, fields]),
+        // Trace AND user pinned by a caller that runs after the handler's awaits,
+        // for the same reason as `anchor`. Taken as given — an absent trace or
+        // user stays absent rather than falling back to the shared fields.
+        pinned?: { trace: TraceAnchor | undefined; userId: string | undefined },
     ): void {
         // Correlate the line to its dispatch span. Read from the resolved anchor
         // rather than re-parsing the inbound `traceparent`, so a dispatch that
@@ -7648,7 +7654,7 @@ abstract class ShardDO {
         // An explicit `anchor` pins the trace for a caller that runs AFTER the
         // handler's awaits — the dispatch `finally` emitting the wide event —
         // where the shared field may already belong to an interleaved dispatch.
-        const trace = anchor ?? this.currentRequestTrace;
+        const trace = pinned === undefined ? (anchor ?? this.currentRequestTrace) : pinned.trace;
 
         // One canonical event built once, fed to all three destinations. Only the
         // console event drops raw `args` (see emitLogEvent); the buffer and sink
@@ -7666,7 +7672,7 @@ abstract class ShardDO {
             spanId: trace?.rootSpanId,
             traceId: trace?.traceId,
             ts: Date.now(),
-            userId: this.getCurrentUserId(),
+            userId: pinned === undefined ? this.getCurrentUserId() : pinned.userId,
         };
 
         this.logs.push({ fields, functionPath, level, message, timestamp: event.ts, traceId: event.traceId });
@@ -7876,9 +7882,9 @@ abstract class ShardDO {
      */
     protected watchActionWork(functionPath: string, context: unknown): () => void {
         const finish = watchPendingWork(context as Record<string, unknown>);
-        // Pinned now: `finish` runs after the handler's awaits, when the shared field
+        // Pinned now: `finish` runs after the handler's awaits, when the shared fields
         // may already belong to an interleaved dispatch.
-        const anchor = this.currentRequestTrace;
+        const pinned = { trace: this.currentRequestTrace, userId: this.getCurrentUserId() };
 
         return () => {
             const pending = finish();
@@ -7892,7 +7898,9 @@ abstract class ShardDO {
                     { pending },
                     this.lastTelemetrySink,
                     "lunora.action.unawaited_work",
-                    anchor,
+                    undefined,
+                    undefined,
+                    pinned,
                 );
             }
         };
@@ -15941,8 +15949,12 @@ abstract class ShardDO {
      * fails after deploy is the one that only ever got close here — the line is
      * how a developer sees it coming. `functionPath` names the work; callers
      * without one pass the kind of work instead.
+     *
+     * The warning fires mid-handler, after awaits an interleaved dispatch can
+     * use to re-set the shared trace and user, so both are pinned here. A `trace` of `undefined` files the line under no trace rather than
+     * borrowing an unrelated one.
      */
-    private mintHeadroom(functionPath: string, anchor?: TraceAnchor): TransactionHeadroomTracker {
+    private mintHeadroom(functionPath: string, pin: { trace: TraceAnchor | undefined; userId: string | undefined }): TransactionHeadroomTracker {
         return new TransactionHeadroomTracker(this.transactionLimits(), (warning: TransactionLimitWarning) => {
             this.recordUserLog(
                 functionPath,
@@ -15952,7 +15964,9 @@ abstract class ShardDO {
                 { ...warning },
                 this.lastTelemetrySink,
                 "lunora.transaction.near_limit",
-                anchor,
+                undefined,
+                undefined,
+                pin,
             );
         });
     }
@@ -16062,7 +16076,7 @@ abstract class ShardDO {
         // VALUE (see its docstring), so this dispatch's ctx-build never depends
         // on a shared field still pointing at THIS tracker by the time an
         // `await`-interleaved concurrent dispatch's `finally` runs.
-        const dispatchHeadroom = this.mintHeadroom(functionPath, dispatchTrace);
+        const dispatchHeadroom = this.mintHeadroom(functionPath, { trace: dispatchTrace, userId: this.getCurrentUserId() });
 
         // Collect the declared indexes this dispatch exercises (stamped by
         // the ctx-db index-use hook) so `recordFunctionCall` can persist the

@@ -618,11 +618,14 @@ abstract class ShardDO {
     protected isCacheableQuery(_functionPath: string): boolean;
     protected transactionLimits(): Partial<TransactionLimits>;
     protected transactionHeadroom(): TransactionHeadroomTracker;
-    protected subscriptionHeadroom(): TransactionHeadroomTracker;
+    protected subscriptionHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker;
     protected alarmHeadroom(): TransactionHeadroomTracker;
     protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void;
     protected flushMigrationProgress(): Promise<void>;
-    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor, error?: ErrorDetail | undefined): void;
+    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor, error?: ErrorDetail | undefined, pinned?: {
+        trace: TraceAnchor | undefined;
+        userId: string | undefined;
+    }): void;
     protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>, scope?: SensitiveScope): ContextLogger;
     protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor, scope?: SensitiveScope): ContextTracer;
     protected resolveDispatchAnchor(identityScoped: boolean): TraceAnchor;

@@ -75,7 +75,7 @@ describe("emitShard — ctx.random", () => {
         const shard = emitShard({ schema: discover(PLAIN) });
 
         expect(shard).toContain(
-            "functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, replayKey: false, trusted: true });",
+            "functionPath, headroom: this.subscriptionHeadroom(functionPath), onRead: footprint.onRead, onReadRange: footprint.onReadRange, replayKey: false, trusted: true });",
         );
     });
 });

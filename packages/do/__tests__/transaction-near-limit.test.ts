@@ -41,6 +41,16 @@ class NearLimitShard extends ShardDO {
         return { ok: true };
     }
 
+    /** Fill through a live-query re-run's tracker, as the generated `executeSubscription` mints it. */
+    public async fillAsSubscription(functionPath: string, userId: string): Promise<void> {
+        const writer = createShardContextDatabase({ headroom: this.subscriptionHeadroom(functionPath, { userId }), schema, sql: this.sql as SqlExec });
+
+        for (let index = 0; index < this.writes; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- writes land in order against the one tracker under test
+            await writer.insert("items", { value: String(index) });
+        }
+    }
+
     public loggedLines(): LoggedLine[] {
         return (this as unknown as { logs: { entries: () => LoggedLine[] } }).logs.entries();
     }
@@ -60,7 +70,7 @@ const rpc = (shard: ShardDO, functionPath: string): Promise<Response> =>
         }),
     );
 
-const createShard = (): NearLimitShard => {
+const createShard = (events: { functionPath?: string; traceId?: string; userId?: string }[] = []): NearLimitShard => {
     const harness = createSqliteExec();
 
     runShardMigrations(harness.sql, schema);
@@ -71,7 +81,19 @@ const createShard = (): NearLimitShard => {
         storage: { sql: harness.sql as unknown as ShardDOState["storage"]["sql"] },
     };
 
-    return new NearLimitShard(state, {});
+    return new NearLimitShard(
+        state,
+        {},
+        {
+            telemetrySink: () => {
+                return {
+                    onLog: (event) => {
+                        events.push(event);
+                    },
+                };
+            },
+        },
+    );
 };
 
 describe("transaction near-limit warning", () => {
@@ -88,6 +110,18 @@ describe("transaction near-limit warning", () => {
         expect(response.status).toBe(200);
         expect(warnings).toHaveLength(1);
         expect(warnings[0]).toMatchObject({ fields: { kind: "writtenRows", limit: 10, used: 8 }, functionPath: "items:fill" });
+    });
+
+    it("files a live-query re-run's warning under the query and its subscriber", async () => {
+        expect.assertions(1);
+
+        const events: { functionPath?: string; traceId?: string; userId?: string }[] = [];
+        const shard = createShard(events);
+
+        shard.writes = 9;
+        await shard.fillAsSubscription("items:list", "subscriber-1");
+
+        expect(events).toStrictEqual([expect.objectContaining({ functionPath: "items:list", traceId: undefined, userId: "subscriber-1" })]);
     });
 
     it("stays quiet for a dispatch well inside its ceilings", async () => {

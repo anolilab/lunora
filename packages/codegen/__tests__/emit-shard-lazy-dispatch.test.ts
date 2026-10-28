@@ -187,4 +187,46 @@ process.stdout.write(JSON.stringify({
             rmSync(projectRoot, { force: true, recursive: true });
         }
     });
+    it("reports an action's pending work when its handler throws", async () => {
+        expect.assertions(2);
+
+        const projectRoot = mkdtempSync(join(tmpdir(), "lunora-lazy-shard-dispatch-"));
+        const runnerFile = join(projectRoot, "run-handle-rpc.mjs");
+
+        try {
+            const runnerSource = `const LUNORA_FUNCTIONS = {
+  "jobs:fail": { args: {}, kind: "action", handler() { throw new Error("handler failed"); } }
+};
+const flushDeferredDeletes = () => undefined;
+class TestShard {
+  constructor() { this.finished = 0; }
+  captureRequestScope() { return {}; }
+  openSensitiveScope() { return { clear() {} }; }
+  async prepareFunction() {}
+  restoreRequestScope() {}
+  isSystemDispatch() { return true; }
+  ensureMigrated() {}
+  ensureServable() {}
+  buildCtx() { return {}; }
+  async deferPastResponse() {}
+  watchActionWork() { return () => { this.finished += 1; }; }
+${generatedHandleRpcMethod()}
+}
+const shard = new TestShard();
+let message;
+try { await shard.handleRpc("jobs:fail", {}); } catch (error) { message = error.message; }
+process.stdout.write(JSON.stringify({ finished: shard.finished, message }));
+`;
+            const transformed = await transform(runnerSource, { format: "esm", loader: "ts", target: "node22" });
+
+            writeFileSync(runnerFile, transformed.code);
+
+            const result = JSON.parse(execFileSync(process.execPath, [runnerFile], { encoding: "utf8" })) as { finished: number; message: string };
+
+            expect(result.message).toBe("handler failed");
+            expect(result.finished).toBe(1);
+        } finally {
+            rmSync(projectRoot, { force: true, recursive: true });
+        }
+    });
 });
