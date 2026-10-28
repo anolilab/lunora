@@ -155,6 +155,25 @@ describe("subscription point reads", () => {
         );
     });
 
+    it.each([["notes"], [undefined]])("a lookupById miss (table %s) beside a get re-runs when that id is written", async (expectedTable) => {
+        expect.assertions(3);
+
+        const idA = await seed.insert("notes", { body: "a" });
+        const memo = await subscribe(async (database) => {
+            await database.get("notes", idA);
+
+            return database.lookupById?.("missing-id", expectedTable);
+        });
+
+        await expect(reruns(memo, async (database) => database.insert("notes", { body: "other" }))).resolves.toBe(false);
+        await expect(reruns(memo, async (database) => database.insert("notes", { _id: "missing-id", body: "late" }, { allowExplicitId: true }))).resolves.toBe(
+            true,
+        );
+        await expect(
+            reruns(memo, async (database) => database.insert("messages", { _id: "missing-id", body: "late", channel: "c1" }, { allowExplicitId: true })),
+        ).resolves.toBe(expectedTable === undefined);
+    });
+
     it("a get mixed with a predicated read of the same table stays whole-table", async () => {
         expect.assertions(2);
 

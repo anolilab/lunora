@@ -3712,6 +3712,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
+                // As in `get`, the miss is a result: an insert under this id into
+                // any table the probe covered must re-run the query.
+                for (const tableName of nonGlobalTableNames(expectedTable)) {
+                    reportMemoryRead(tableName);
+                    reportRead(tableName, id, true);
+                }
+
                 // eslint-disable-next-line unicorn/no-null -- the server seam contract returns `null` (not undefined) for an absent row
                 return null;
             }
