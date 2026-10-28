@@ -36,9 +36,11 @@ for (let index = 0; index < 500; index += 1) {
 
 let next = 500;
 
+const MISSING_TRACE_ID = traceId(1_000_000);
+
 describe("SpanBuffer (full ring of 500)", () => {
     bench("hasTrace miss", () => {
-        full.hasTrace(traceId(1_000_000));
+        full.hasTrace(MISSING_TRACE_ID);
     });
 
     bench("push (evicts the oldest)", () => {

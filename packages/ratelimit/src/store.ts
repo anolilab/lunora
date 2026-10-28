@@ -30,7 +30,8 @@ const createMemoryStore = (): RateLimitStore => {
             map.delete(storageKey);
             map.set(storageKey, value);
 
-            if (value.ts < lastTs) {
+            // A NaN `ts` is ordered by no comparison, so it also counts as an inversion.
+            if (Number.isNaN(value.ts) || value.ts < lastTs) {
                 ordered = false;
             }
 
@@ -65,7 +66,7 @@ const createMemoryStore = (): RateLimitStore => {
 
                     // Rotating an older entry behind newer ones (another limiter's expired key, or
                     // a debt) breaks the order the early break relies on.
-                    if (value.ts < lastTs) {
+                    if (Number.isNaN(value.ts) || value.ts < lastTs) {
                         ordered = false;
                     }
                 }
