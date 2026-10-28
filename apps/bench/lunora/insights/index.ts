@@ -17,7 +17,7 @@ export const headline = orgQuery.query(async ({ ctx }): Promise<Headline | null>
     return ctx.kv.get<Headline>(`headline:${organizationId}`);
 });
 
-/** Recomputes the cached headline; scheduled after task writes by the nightly maintenance. */
+/** Recomputes the cached headline; the hourly `headline-refresh` cron and the nightly sweep queue it per tenant. */
 export const refreshHeadline = internalMutation.input({ organizationId: v.string() }).mutation(async ({ args, ctx }) => {
     const rows = await ctx.db
         .query("tasks")

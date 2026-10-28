@@ -513,9 +513,7 @@ export const upsertCatalog = internalMutation
 const adminModule = (
     key,
     shape,
-) => `${header(key)}${shape.aiHook ? 'import { generateText } from "@lunora/ai";\n' : ""}import { LunoraError } from "@lunora/errors";
-
-import { internal } from "../../_generated/internal.js";
+) => `${header(key)}${shape.aiHook ? 'import { generateText } from "@lunora/ai";\n\n' : ""}import { internal } from "../../_generated/internal.js";
 import { v } from "../../_generated/server.js";
 import { authAction, orgBulkMutation, requireWriter, tenantWrite } from "../../lib/crpc.js";
 import { ${key}Import } from "./validators.js";
@@ -541,15 +539,10 @@ export const importMany = orgBulkMutation
         return { lines, records: args.rows.length };
     });
 
-/** Admin export: who may see it comes from better-auth, not from a Lunora table. */
-export const exportSummary = authAction.input({ organizationId: v.string() }).action(async ({ args, ctx }) => {
-    const session = await ctx.authApi.getSession({ headers: new Headers() });
-
-    if (session !== null && session.user.id !== ctx.auth.userId) {
-        throw new LunoraError("FORBIDDEN", "session mismatch");
-    }
-
-    const totals = await ctx.runQuery(internal.domains.${key}.jobs.totals, { organizationId: args.organizationId });
+/** Admin export of the caller's active organisation; the tenant comes from the verified identity, never from args. */
+export const exportSummary = authAction.action(async ({ ctx }) => {
+    const { organizationId } = await requireWriter(ctx);
+    const totals = await ctx.runQuery(internal.domains.${key}.jobs.totals, { organizationId });
 ${
     shape.aiHook
         ? `    const { text } = await generateText({

@@ -1,15 +1,16 @@
-import { internalAction } from "#lunora/_generated/server.js";
+import { internalAction, v } from "#lunora/_generated/server.js";
 
 /**
- * Crons run on the root shard, and tenant rows live on tenant shards, so the
- * nightly job reads the `.global()` organisation list and queues one
- * maintenance message per tenant; the consumer runs the sweep on that tenant's
- * shard.
+ * Crons run on the root shard, and tenant rows live on tenant shards, so each
+ * job reads the `.global()` organisation list and queues one message of `kind`
+ * per tenant; the `events` consumer runs the work on that tenant's shard.
  */
-export const fanOutMaintenance = internalAction.action(async ({ ctx }): Promise<{ queued: number }> => {
-    const { page } = await ctx.db.saas_organizations.findMany({ where: { status: { ne: "deleted" } } });
+export const fanOutMaintenance = internalAction
+    .input({ kind: v.union(v.literal("maintenance.sweep"), v.literal("headline.refresh")) })
+    .action(async ({ args, ctx }): Promise<{ queued: number }> => {
+        const { page } = await ctx.db.saas_organizations.findMany({ where: { status: { ne: "deleted" } } });
 
-    await Promise.all(page.map(async (organization) => ctx.queues.events.send({ kind: "maintenance.sweep", organizationId: organization.organizationId })));
+        await Promise.all(page.map(async (organization) => ctx.queues.events.send({ kind: args.kind, organizationId: organization.organizationId })));
 
-    return { queued: page.length };
-});
+        return { queued: page.length };
+    });

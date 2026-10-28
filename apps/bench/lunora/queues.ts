@@ -12,7 +12,7 @@ import { internal } from "./_generated/internal.js";
 
 const domainEventSchema = z.object({ kind: z.string().min(1).max(64), organizationId: z.string().min(1), subjectId: z.string().optional() });
 
-/** Domain events: fan out into the tenant's notification feed, and drive per-tenant maintenance. */
+/** Domain events: fan out into the tenant's notification feed, and drive per-tenant maintenance and headline refreshes. */
 export const events = defineQueue<z.infer<typeof domainEventSchema>>({
     handler: async (context, batch) => {
         for (const message of batch.messages) {
@@ -26,11 +26,20 @@ export const events = defineQueue<z.infer<typeof domainEventSchema>>({
             }
 
             const { kind, organizationId, subjectId } = parsed.data;
+            const onTenant = { shardKey: organizationId };
+            const refreshHeadline = async () => message.run(internal.insights.refreshHeadline, { organizationId }, onTenant);
+            let work: Promise<unknown>;
 
-            // eslint-disable-next-line no-await-in-loop -- one message at a time: each is acked only after its own write lands
-            await (kind === "maintenance.sweep"
-                ? message.run(internal.tasks.sweepDone, { before: Date.now() - 30 * 86_400_000, organizationId }, { shardKey: organizationId })
-                : message.run(internal.notifications.record, { kind, organizationId, subjectId }, { shardKey: organizationId }));
+            if (kind === "maintenance.sweep") {
+                work = message.run(internal.tasks.sweepDone, { before: Date.now() - 30 * 86_400_000, organizationId }, onTenant).then(refreshHeadline);
+            } else if (kind === "headline.refresh") {
+                work = refreshHeadline();
+            } else {
+                work = message.run(internal.notifications.record, { kind, organizationId, subjectId }, onTenant);
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- one message at a time: each is acked only after its own writes land
+            await work;
             message.ack();
         }
     },
