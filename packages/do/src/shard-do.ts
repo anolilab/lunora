@@ -415,6 +415,7 @@ import { isRegistryNamespace, isRegistryRpc, registerShardKey, SHARD_REGISTRY_DO
 import type { SubscriptionMemo } from "./socket-table-index";
 import { SocketTableIndex } from "./socket-table-index";
 import SubscriptionFailureLatch from "./subscription-backoff";
+import watchPendingWork from "./unawaited-work";
 
 /** The registry writes a shard makes, whether they reach a namespace or an entrypoint. */
 interface RegistryWriter {
@@ -7864,6 +7865,37 @@ abstract class ShardDO {
         const deps = this.databaseTelemetryDeps("sql", functionPath, anchor, sink, scope);
 
         return deps === undefined ? client : instrumentSqlClient(client, deps);
+    }
+
+    /**
+     * Count the I/O an action starts through `ctx`. The returned function, called
+     * once the handler has returned, restores `ctx` and logs one `warn` line
+     * naming every call still in flight. On Workers that work can be cancelled
+     * silently after the response; the line is how a developer finds out before
+     * production does. Nothing is awaited on the handler's behalf.
+     */
+    protected watchActionWork(functionPath: string, context: unknown): () => void {
+        const finish = watchPendingWork(context as Record<string, unknown>);
+        // Pinned now: `finish` runs after the handler's awaits, when the shared field
+        // may already belong to an interleaved dispatch.
+        const anchor = this.currentRequestTrace;
+
+        return () => {
+            const pending = finish();
+
+            if (pending.length > 0) {
+                this.recordUserLog(
+                    functionPath,
+                    "warn",
+                    [],
+                    `action returned while ${pending.join(", ")} was still running; await it, or it may be cancelled once the response is sent`,
+                    { pending },
+                    this.lastTelemetrySink,
+                    "lunora.action.unawaited_work",
+                    anchor,
+                );
+            }
+        };
     }
 
     /**

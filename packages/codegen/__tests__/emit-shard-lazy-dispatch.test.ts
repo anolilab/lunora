@@ -148,6 +148,7 @@ class TestShard {
   ensureServable() {}
   buildCtx() { return {}; }
   async deferPastResponse() {}
+  watchActionWork() { return () => undefined; }
 ${generatedMethod}
 }
 const external = new TestShard(false);

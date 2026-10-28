@@ -383,7 +383,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 });
             }
 
+            // An action's unawaited I/O can be cancelled after the response, so its
+            // ctx counts what is still in flight when the handler returns.
+            const finishActionWork = registered.kind === "action" ? this.watchActionWork(functionPath, ctx) : undefined;
             const result = await registered.handler(ctx, args);
+
+            finishActionWork?.();
 
             // Composed mutations settle their own delete queues. An action can
             // also queue deletes outside those mutations; drain its own queue here.
