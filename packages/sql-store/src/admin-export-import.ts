@@ -302,37 +302,20 @@ interface ImportGlobalArgs {
     startLine?: number;
 }
 
-/** Whether `explicitId` is a row of `table`. A probe error reads as "absent": the writer's insert path surfaces any hard error instead. */
-const holdsId = async (
-    writer: DatabaseWriterLike,
-    dialect: SqlDialect,
-    exec: ImportGlobalArgs["exec"],
-    table: string,
-    explicitId: string,
-): Promise<boolean> => {
-    try {
-        if (exec) {
-            const probe = await queryAll(
-                exec,
-                dialect,
-                sql`SELECT 1 AS hit FROM ${sql.identifier(table)} WHERE ${sql.identifier("id")} = ${explicitId} LIMIT 1`,
-            );
-
-            return probe.length > 0;
-        }
-
-        return (await writer.get(table, explicitId)) !== null;
-    } catch {
-        return false;
-    }
-};
+/** Tables per ownership probe: one bound id each, kept well under D1's 100-parameter ceiling. */
+const OWNER_PROBE_TABLES = 50;
 
 /**
  * The `.global()` table that already holds `explicitId`, or `undefined` when the
- * id is free. `table` itself is probed first, so a conflict in the row's own
- * table wins over a collision. Any other name is a cross-table collision: an
- * id-only `get`/`patch`/`delete` resolves by probing every global table, so a
- * second table holding the same id would make that resolution ambiguous.
+ * id is free. `table` itself comes first, so a conflict in the row's own table
+ * wins over a collision. Any other name is a cross-table collision: an id-only
+ * `get`/`patch`/`delete` resolves by probing every global table, so a second
+ * table holding the same id would make that resolution ambiguous.
+ *
+ * With an exec handle the tables are asked in one `UNION ALL` round trip, not
+ * one each. A probe error propagates: read as "absent", it would let the insert
+ * land an id another table holds. The importer provisions every global table
+ * before the first probe, so a table that was never written is not an error.
  */
 const explicitIdOwner = async (
     writer: DatabaseWriterLike,
@@ -343,15 +326,66 @@ const explicitIdOwner = async (
     explicitId: string,
 ): Promise<string | undefined> => {
     const others = Object.keys(schema.tables).filter((name) => name !== table && schema.tables[name]?.shardMode?.kind === "global");
+    const candidates = [table, ...others];
 
-    for (const candidate of [table, ...others]) {
-        // eslint-disable-next-line no-await-in-loop -- probed in order so the row's own table answers first, and the scan stops at the first owner
-        if (await holdsId(writer, dialect, exec, candidate, explicitId)) {
-            return candidate;
+    for (let start = 0; start < candidates.length; start += OWNER_PROBE_TABLES) {
+        const chunk = candidates.slice(start, start + OWNER_PROBE_TABLES);
+
+        if (!exec) {
+            for (const candidate of chunk) {
+                // eslint-disable-next-line no-await-in-loop -- probed in order so the row's own table answers first, and the scan stops at the first owner
+                if ((await writer.get(candidate, explicitId)) !== null) {
+                    return candidate;
+                }
+            }
+
+            continue;
+        }
+
+        const selects = chunk.map(
+            (candidate, index) => sql`SELECT ${sql.raw(String(index))} AS slot FROM ${sql.identifier(candidate)} WHERE ${sql.identifier("id")} = ${explicitId}`,
+        );
+        // eslint-disable-next-line no-await-in-loop -- chunks are asked in order so the row's own table answers first
+        const hits = await queryAll(exec, dialect, sql`${sql.join(selects, sql` UNION ALL `)} ORDER BY slot LIMIT 1`);
+        const slot = hits[0]?.["slot"];
+
+        if (slot !== undefined) {
+            return chunk[Number(slot)];
         }
     }
 
     return undefined;
+};
+
+/**
+ * `explicitId` when the row's own table already holds it (a conflict, or the
+ * row a replace overwrites), `undefined` when it is free, or the row error when
+ * another table holds it or the probe failed.
+ */
+const ownIdOrError = async (
+    writer: DatabaseWriterLike,
+    schema: SchemaLike,
+    dialect: SqlDialect,
+    exec: ImportGlobalArgs["exec"],
+    table: string,
+    explicitId: string,
+    line: number,
+): Promise<{ error: ImportError } | { existingId: string | undefined }> => {
+    let owner: string | undefined;
+
+    try {
+        owner = await explicitIdOwner(writer, schema, dialect, exec, table, explicitId);
+    } catch (error: unknown) {
+        const { body } = toErrorBody(error, { fallbackCode: "PROBE_FAILED" });
+
+        return { error: { code: body.code, line, message: body.message, table } };
+    }
+
+    if (owner !== undefined && owner !== table) {
+        return { error: { code: "ID_COLLISION", line, message: `_id "${explicitId}" already belongs to table "${owner}"`, table } };
+    }
+
+    return { existingId: owner === table ? explicitId : undefined };
 };
 
 type RowOutcome =
@@ -466,13 +500,13 @@ const importOneRow = async (
     }
 
     const explicitId = typeof decoded["_id"] === "string" ? decoded["_id"] : undefined;
-    const owner = explicitId === undefined ? undefined : await explicitIdOwner(writer, schema, dialect, args.exec, table, explicitId);
+    const ownership = explicitId === undefined ? { existingId: undefined } : await ownIdOrError(writer, schema, dialect, args.exec, table, explicitId, line);
 
-    if (owner !== undefined && owner !== table) {
-        return { error: { code: "ID_COLLISION", line, message: `_id "${String(explicitId)}" already belongs to table "${owner}"`, table }, kind: "error" };
+    if ("error" in ownership) {
+        return { error: ownership.error, kind: "error" };
     }
 
-    const existingId = owner === table ? explicitId : undefined;
+    const { existingId } = ownership;
 
     if (existingId !== undefined && args.onConflict !== "replace") {
         return { kind: "conflict" };
@@ -494,6 +528,11 @@ const importSqlGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLik
     let conflicts = 0;
     let replaced = 0;
     let line = (args.startLine ?? 1) - 1;
+
+    // The ownership probe reads every global table, so each must exist first. A dry run touches no table.
+    if (args.exec && args.dryRun !== true) {
+        await runSqlGlobalTableMigrations(args.exec, schema, dialect);
+    }
 
     for (const row of args.rows) {
         line += 1;

@@ -363,6 +363,30 @@ describe("d1 admin export/import globals", () => {
             expect(result.errors.map((error) => error.line)).toStrictEqual([5, 6]);
         });
 
+        it("refuses an _id another global table holds, probing tables the import has not written yet", async () => {
+            expect.assertions(2);
+
+            // Neither table exists yet: the import provisions both before it asks them who owns an id.
+            const fresh = createD1Exec();
+            const twoTables: SchemaLike = {
+                tables: {
+                    flags: { indexes: [], shape: { label: col("string") }, shardMode: { kind: "global" } as never },
+                    notes: { indexes: [], shape: { label: col("string") }, shardMode: { kind: "global" } as never },
+                },
+            };
+
+            try {
+                const freshWriter = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: fresh.exec, schema: twoTables });
+                const first = await importGlobalRows(freshWriter, twoTables, { exec: fresh.exec, rows: [{ doc: { _id: "n1", label: "a" }, table: "notes" }] });
+                const second = await importGlobalRows(freshWriter, twoTables, { exec: fresh.exec, rows: [{ doc: { _id: "n1", label: "b" }, table: "flags" }] });
+
+                expect(first).toMatchObject({ errors: [], inserted: { notes: 1 } });
+                expect(second).toMatchObject({ errors: [{ code: "ID_COLLISION", line: 1, table: "flags" }], inserted: {} });
+            } finally {
+                fresh.close();
+            }
+        });
+
         it("counts _id collisions as conflicts and skips them", async () => {
             expect.assertions(3);
 
