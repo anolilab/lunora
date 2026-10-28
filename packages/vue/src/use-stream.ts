@@ -65,10 +65,18 @@ const useStream = <F extends FunctionReference<"stream">>(
     // Keyed on the args' CONTENT (`stableWireKey`), not object identity: a getter
     // that re-runs and produces equal args must not cancel the live stream,
     // drop its chunks and restart the generation server-side. See `use-query`.
+    // The args are resolved once, in the source, and the stream opens with that
+    // same value: a getter read twice could return something the key does not describe.
+    let resolvedArgs: "skip" | ArgsOf<F> = "skip";
+
     watch(
-        () => stableWireKey(toValue(args)),
+        () => {
+            resolvedArgs = toValue(args);
+
+            return stableWireKey(resolvedArgs);
+        },
         (_key, _previousKey, onCleanup) => {
-            const currentArgs = toValue(args);
+            const currentArgs = resolvedArgs;
 
             // Reset for the new (or torn-down) stream.
             chunks.value = [];

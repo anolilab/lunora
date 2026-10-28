@@ -86,6 +86,30 @@ describe(useStream, () => {
         scope.stop();
     });
 
+    it("opens the stream with the args the watch key was computed from, even when a getter changes between reads", () => {
+        expect.hasAssertions();
+
+        const fake = createFakeClient();
+        const scope = effectScope();
+        let reads = 0;
+
+        // An impure getter: every read returns new content.
+        scope.run(() =>
+            fake.provide(() =>
+                useStream(makeStreamRef(TICK_REF), () => {
+                    reads += 1;
+
+                    return { since: reads };
+                }),
+            ),
+        );
+
+        // The key came from the first read, so the stream must open with that read's value.
+        expect(fake.streamCalls[0]?.args).toStrictEqual({ since: 1 });
+
+        scope.stop();
+    });
+
     it('"skip" keeps the composable mounted without opening a stream', () => {
         expect.hasAssertions();
 
