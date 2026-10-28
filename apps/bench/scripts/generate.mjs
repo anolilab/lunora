@@ -43,6 +43,15 @@ export const PRESETS = {
 /** The SDK an integration module is built on, in the order heavy domains take them. */
 export const INTEGRATIONS = ["s3", "sandbox", "protobuf", "links", "openai"];
 
+/** Per integration, the action and args that complete without network access (S3 needs only dummy credentials). */
+export const OFFLINE_CALLS = {
+    links: { args: { urls: ["https://docs.example.co.uk/guide", "http://192.168.1.10/x"] }, name: "inspectLinks" },
+    openai: { args: { tone: "brief" }, name: "draftPrompt" },
+    protobuf: { args: {}, name: "exportBinary" },
+    s3: { args: {}, name: "exportUploadUrl" },
+    sandbox: { args: {}, name: "sandboxSpec" },
+};
+
 const NOUNS = [
     "invoice",
     "contract",
@@ -89,7 +98,7 @@ const NOUNS = [
 const pascal = (word) => word[0].toUpperCase() + word.slice(1);
 
 /** Domain i's identifier: a noun, suffixed once the list wraps so names stay unique. */
-const domainKey = (index) => `${NOUNS[index % NOUNS.length]}${index >= NOUNS.length ? String(Math.floor(index / NOUNS.length)) : ""}`;
+export const domainKey = (index) => `${NOUNS[index % NOUNS.length]}${index >= NOUNS.length ? String(Math.floor(index / NOUNS.length)) : ""}`;
 
 /** Spreads `share` of `index`'s domains evenly: domain i is heavy when the running count of heavy domains steps up at i. */
 const heavyOrdinal = (index, share) => {
@@ -103,7 +112,7 @@ const heavyOrdinal = (index, share) => {
  * catalog, some a scheduler, queue or AI hook, and `heavyShare` of them an SDK
  * integration.
  */
-const shapeOf = (index, heavyShare) => {
+export const shapeOf = (index, heavyShare) => {
     const heavy = heavyOrdinal(index, heavyShare);
 
     return {

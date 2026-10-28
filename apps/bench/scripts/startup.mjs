@@ -27,8 +27,9 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
-import { buildWorker, eagerGraph, eagerPackages, registrySplit, startupActiveMs, summarize } from "../../../scripts/worker-startup-measure.js";
-import { appDirectory, generate, sizeFromArgs } from "./generate.mjs";
+import { eagerGraph, eagerPackages, registrySplit, startupActiveMs, summarize } from "../../../scripts/worker-startup-measure.js";
+import { appDirectory, sizeFromArgs } from "./generate.mjs";
+import { benchDirectory, buildMode, parseModes, quietEnv, sizeLabel, withSizedApp, wrangler } from "./sized-app.mjs";
 
 const { values } = parseArgs({
     options: {
@@ -42,21 +43,12 @@ const { values } = parseArgs({
 });
 
 const rootDirectory = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const cli = join(appDirectory, "node_modules", "lunorash", "dist", "bin.mjs");
-const wrangler = join(appDirectory, "node_modules", ".bin", "wrangler");
-const benchDirectory = join(appDirectory, ".bench");
-const modes = values.modes.split(",").map((mode) => mode.trim());
+const modes = parseModes(values.modes);
 const runs = Number(values.runs);
 
-if (modes.some((mode) => mode !== "eager" && mode !== "lazy")) {
-    throw new Error(`--modes takes eager and/or lazy, got "${values.modes}"`);
-}
-
 const size = sizeFromArgs({ domains: values.domains, heavyShare: values["heavy-share"], preset: values.preset });
-const presetName =
-    values.preset ?? (values.domains === undefined ? "core" : `domains-${values.domains}${size.heavyShare > 0 ? `-heavy-${String(size.heavyShare)}` : ""}`);
+const presetName = sizeLabel(values, size);
 
-const env = { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" };
 const mib = (bytes) => `${(bytes / 1024 / 1024).toFixed(2)} MiB`;
 const countMatches = (path, pattern) => (readFileSync(path, "utf8").match(pattern) ?? []).length;
 /** Registered function paths (`"ns:name":` keys) — present in both the eager map and the lazy manifest. */
@@ -64,38 +56,29 @@ const countFunctions = (path) => new Set(readFileSync(path, "utf8").match(/"[\w/
 
 mkdirSync(join(benchDirectory, "results"), { recursive: true });
 
-// `lunora build` advances the schema baseline; the committed one describes the core-only app.
-const schemaBaseline = join(appDirectory, "lunora", ".lunora-schema.json");
-const committedBaseline = readFileSync(schemaBaseline, "utf8");
-const shape = generate(size);
 const loadBefore = loadavg();
 const results = {};
-
-try {
+const shape = await withSizedApp(size, { keep: values.keep }, (generated) => {
     for (const mode of modes) {
         process.stderr.write(`[bench] ${presetName}: building ${mode}…\n`);
 
-        const outDirectory = buildWorker(appDirectory, {
-            cli,
-            extraArgs: ["--no-framework-build", "--api-spec", "both", ...(mode === "lazy" ? ["--lazy-functions"] : [])],
-            outDir: `.bench/out-${mode}`,
-        });
+        const outDirectory = buildMode(mode);
         const bundle = join(benchDirectory, `${mode}.bundle`);
 
         // Freezes exactly what `lunora build` just bundled (same config, same `_generated/`).
-        execFileSync(wrangler, ["deploy", "--dry-run", "--outfile", bundle], { cwd: appDirectory, env, stdio: ["ignore", "ignore", "inherit"] });
+        execFileSync(wrangler, ["deploy", "--dry-run", "--outfile", bundle], { cwd: appDirectory, env: quietEnv, stdio: ["ignore", "ignore", "inherit"] });
 
         const script = readFileSync(join(outDirectory, "server.js"));
-        const generated = join(appDirectory, "lunora", "_generated");
+        const generatedDirectory = join(appDirectory, "lunora", "_generated");
 
         results[mode] = {
             bundle: { bytes: script.length, gzipBytes: gzipSync(script).length },
             eager: eagerGraph(outDirectory),
-            functions: countFunctions(join(generated, "functions.ts")),
+            functions: countFunctions(join(generatedDirectory, "functions.ts")),
             packages: eagerPackages(outDirectory, 20),
             registry: registrySplit(outDirectory, { appPrefix: "lunora/" }),
             samples: [],
-            tables: countMatches(join(generated, "dataModel.ts"), /^export interface Doc_/gmu),
+            tables: countMatches(join(generatedDirectory, "dataModel.ts"), /^export interface Doc_/gmu),
             workerBundle: bundle,
         };
     }
@@ -109,14 +92,9 @@ try {
 
         process.stderr.write(`[bench] run ${run + 1}/${runs}: ${modes.map((mode) => `${mode} ${results[mode].samples.at(-1)} ms`).join(", ")}\n`);
     }
-} finally {
-    if (!values.keep) {
-        generate({ domains: 0 });
-        writeFileSync(schemaBaseline, committedBaseline, "utf8");
-        // Leave `_generated/` eager and core-only, matching the tree, so `tsc` and `lunora dev` see what is committed.
-        execFileSync(process.execPath, [cli, "codegen", "--api-spec", "both"], { cwd: appDirectory, env, stdio: "ignore" });
-    }
-}
+
+    return generated;
+});
 
 const gitSha = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: rootDirectory, encoding: "utf8" }).trim();
 const report = {

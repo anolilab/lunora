@@ -9,6 +9,7 @@
         "#lunora/*": "./lunora/*"
     },
     "scripts": {
+        "bench:cold-start": "node scripts/cold-start.mjs",
         "bench:startup": "node scripts/startup.mjs",
         "build": "vite build",
         "codegen": "node node_modules/lunorash/dist/bin.mjs codegen --api-spec both",
