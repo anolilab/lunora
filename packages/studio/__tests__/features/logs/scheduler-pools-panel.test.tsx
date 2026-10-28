@@ -5,6 +5,7 @@ import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
 import { SchedulerPoolsPanel } from "../../../src/features/logs/scheduler-pools-panel";
+import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
@@ -101,5 +102,53 @@ describe("schedulerPoolsPanel", () => {
         await screen.findByTestId("pools-table");
 
         expect(status.pools.map((pool) => pool.name)).toStrictEqual(["quiet", "busy"]);
+    });
+});
+
+describe("schedulerPoolsPanel lag", () => {
+    it("lists each job's start lag from the shard's scheduler.lag_ms series", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown =>
+                reference === ADMIN_FUNCTIONS.getMetricSeries
+                    ? {
+                          series: [
+                              {
+                                  attributes: { function: "jobs:sweep" },
+                                  count: 4,
+                                  firstTs: 0,
+                                  functionPath: "jobs:sweep",
+                                  kind: "histogram",
+                                  last: 30,
+                                  lastTs: 0,
+                                  max: 90,
+                                  min: 10,
+                                  name: "scheduler.lag_ms",
+                                  sum: 160,
+                              },
+                              {
+                                  count: 2,
+                                  firstTs: 0,
+                                  functionPath: "orders:place",
+                                  kind: "counter",
+                                  last: 1,
+                                  lastTs: 0,
+                                  max: 1,
+                                  min: 1,
+                                  name: "orders.placed",
+                                  sum: 2,
+                              },
+                          ],
+                      }
+                    : undefined,
+        });
+
+        render(withProvider(mock, <SchedulerPoolsPanel loadStatus={async () => STATUS} />));
+
+        const row = await screen.findByTestId("lag-row-jobs:sweep");
+
+        expect(row.textContent).toBe("jobs:sweep4409030");
+        expect(screen.getAllByTestId(/^lag-row-/u)).toHaveLength(1);
     });
 });

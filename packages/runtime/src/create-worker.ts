@@ -3420,6 +3420,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         mutationId?: string,
         forwardedIdentity?: { identity?: string; userId?: string },
         traceparent?: string,
+        scheduledFor?: number,
     ): Promise<Response> => {
         // The scheduler-dispatch endpoint takes `functionPath` off a request body and a
         // cron target is app-authored — neither can legitimately be the reserved
@@ -3438,7 +3439,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // This path is already admin/HMAC-gated and may call any `internal`
         // function, so it is strictly more privileged than the paywall it passes.
         // The shared builder carries the trust-boundary headers; see `shared/system-dispatch-headers`.
-        const headers = buildSystemDispatchHeaders({ forwardedIdentity, mutationId, traceparent });
+        const headers = buildSystemDispatchHeaders({ forwardedIdentity, mutationId, scheduledFor, traceparent });
 
         return forwardToShard(shardDO, shardKey, shardRpcRequest(functionPath, args, headers));
     };
@@ -3804,6 +3805,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             id?: unknown;
             instanceName?: unknown;
             pool?: unknown;
+            scheduledFor?: unknown;
             shardKey?: unknown;
             workflow?: unknown;
         };
@@ -3863,7 +3865,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // The caller (a trigger's `ctx.run`, the scheduler DO) already opened a
         // trace and named it on the request; forward it so the dispatched function
         // is a CHILD of the work that asked for it rather than its own trace.
-        const response = await dispatchToShard(candidate.functionPath, args, shardKey, recordId, identity, request.headers.get("traceparent") ?? undefined);
+        // The job's due time rides along so the shard can record how late it started;
+        // a sender predating the field simply leaves the metric unrecorded.
+        const scheduledFor = typeof candidate.scheduledFor === "number" ? candidate.scheduledFor : undefined;
+        const response = await dispatchToShard(
+            candidate.functionPath,
+            args,
+            shardKey,
+            recordId,
+            identity,
+            request.headers.get("traceparent") ?? undefined,
+            scheduledFor,
+        );
 
         // Workpool jobs hold a concurrency slot until the action settles; release
         // it. Best-effort only in that a failure can't fail this dispatch — a

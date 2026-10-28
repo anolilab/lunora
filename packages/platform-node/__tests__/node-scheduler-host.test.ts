@@ -307,6 +307,31 @@ describe("createNodeSchedulerHost", () => {
         }
     });
 
+    it("hands the handler the job's due time so the shard can measure its lag", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+        vi.setSystemTime(1_700_000_000_000);
+
+        const database = new Database(":memory:");
+        const due: number[] = [];
+        const host = createNodeSchedulerHost(database, {
+            onDispatch: (_functionPath, _args, job): void => {
+                due.push(job.scheduledFor);
+            },
+        });
+
+        try {
+            await host.scheduler.schedule("jobs:run", {}, { delayMs: 500 });
+            await vi.advanceTimersByTimeAsync(500);
+
+            expect(due).toStrictEqual([1_700_000_000_500]);
+        } finally {
+            host.dispose();
+            database.close();
+        }
+    });
+
     it("retries a claim that failed with the database busy instead of stranding the job", async () => {
         expect.assertions(2);
 

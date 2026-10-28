@@ -312,6 +312,7 @@ import { parseReplicaName } from "../../../shared/replica-name";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import { SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
+import { SCHEDULED_FOR_HEADER } from "../../../shared/system-dispatch-headers";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { adminSocketBinding, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import {
@@ -8734,6 +8735,8 @@ abstract class ShardDO {
         // values. Cleared on exit so the next request starts fresh.
         const { dispatchAttribution, dispatchBookmark, dispatchHeadroom, dispatchStartedAt, dispatchTrace } = this.beginDispatch(request, payload.functionPath);
 
+        this.recordSchedulerLag(request, payload.functionPath, dispatchStartedAt);
+
         // Outcome of the dispatch, for the synthetic root span recorded in the
         // `finally` below. A sentinel rather than a boolean so the `catch` can
         // hand the thrown value straight through to the span's error classifier.
@@ -15867,6 +15870,37 @@ abstract class ShardDO {
         }
 
         return undefined;
+    }
+
+    /**
+     * Record how late a scheduled job started: `scheduler.lag_ms` is the gap
+     * between its due time and this dispatch. A queue that cannot keep up shows
+     * as a climbing lag long before jobs fail, and nothing else measures it.
+     * Only a system dispatch may carry the due time; a client-sent header is
+     * ignored rather than trusted to write the operator's metrics.
+     */
+    private recordSchedulerLag(request: Request, functionPath: string, startedAt: number): void {
+        const header = request.headers.get(SCHEDULED_FOR_HEADER);
+        const scheduledFor = header === null ? Number.NaN : Number(header);
+
+        if (!this.currentRequestSystem || !Number.isFinite(scheduledFor)) {
+            return;
+        }
+
+        this.recordMetric(
+            {
+                // The series folds on (name, kind, attributes), so the job's path is
+                // an attribute: without it every job would share one series.
+                attributes: { function: functionPath },
+                functionPath,
+                kind: "histogram",
+                name: "scheduler.lag_ms",
+                shardKey: this.runner.shardKey,
+                ts: startedAt,
+                value: Math.max(0, startedAt - scheduledFor),
+            },
+            this.lastTelemetrySink,
+        );
     }
 
     /**
