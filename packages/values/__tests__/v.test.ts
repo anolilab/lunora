@@ -849,6 +849,46 @@ describe("v.union() edge cases", () => {
         expect(plain.error.received).toBe('string "Draft"');
     });
 
+    it("a nullable literal member still accepts null", () => {
+        expect.assertions(2);
+
+        const schema = v.union(v.literal("a"), v.literal("b").nullable());
+
+        expect(schema.parse(null)).toBeNull();
+        expect(schema.parse("b")).toBe("b");
+    });
+
+    it("a refined literal member still runs its refinement", () => {
+        expect.assertions(2);
+
+        const schema = v.union(
+            v.literal("a").check(() => false, "never"),
+            v.string(),
+        );
+
+        // The refined member is tried first and fails its check, so the string branch wins.
+        expect(schema.parse("a")).toBe("a");
+        expect(() =>
+            v
+                .union(
+                    v.literal("a").check(() => false, "never"),
+                    v.literal("b"),
+                )
+                .parse("a"),
+        ).toThrow(ValidationError);
+    });
+
+    it("an all-literal union miss keeps its full diagnostic", () => {
+        expect.hasAssertions();
+
+        const result = v.union(v.literal("admin"), v.literal("user"), v.literal("guest")).safeParse("root");
+
+        assertOk(!result.ok, "expected parse to fail");
+
+        expect(result.error.message).toBe('Expected union of 3 member(s) (closest: expected literal(admin) at <root>) at <root>, received string "root"');
+        expect(result.error.expected).toBe("union of 3 member(s) (closest: expected literal(admin) at <root>)");
+    });
+
     it("a single-member union accepts a valid value", () => {
         expect.assertions(1);
 

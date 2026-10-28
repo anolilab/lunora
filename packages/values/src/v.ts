@@ -1305,12 +1305,29 @@ const failUnion = (
     return fail(containerContext(context, sensitiveMembers), `union of ${String(memberInternals.length)} member(s)${detail}`, value, { redactValue });
 };
 
+/** Stands in for "this member has no cheap pre-check" in {@link literalShortcutOf}. */
+const NO_SHORTCUT: unique symbol = Symbol("lunora.noShortcut");
+
+/**
+ * The single value a `v.literal` union member can accept, so the trial pass can
+ * skip a certain miss with one comparison instead of a throw. `.check()` and
+ * `sensitive` keep the kind and only narrow what it accepts, so a mismatch still
+ * proves a miss; `.nullable()` widens it to `null` as well and gets no shortcut.
+ */
+const literalShortcutOf = (member: InternalValidator<unknown>): unknown => {
+    const meta = member._meta;
+
+    return member.kind === "literal" && (meta?.column as ColumnMeta | undefined)?.notNull !== false ? meta?.value : NO_SHORTCUT;
+};
+
 const union = <Vs extends ReadonlyArray<Validator>>(...members: Vs): ColumnValidator<Infer<Vs[number]>, Infer<Vs[number]>> => {
     if (members.length === 0) {
         throw new LunoraError("INTERNAL", "v.union requires at least one member");
     }
 
     const memberInternals = members.map((member) => toInternal(member));
+    const shortcuts = memberInternals.map((member) => literalShortcutOf(member));
+    const memberCount = memberInternals.length;
     const sensitiveMembers = members.some((member) => containsSensitive(member));
 
     return asColumn(
@@ -1330,9 +1347,17 @@ const union = <Vs extends ReadonlyArray<Validator>>(...members: Vs): ColumnValid
                 context.probe = true;
 
                 try {
-                    for (const member of memberInternals) {
+                    for (let index = 0; index < memberCount; index += 1) {
+                        const shortcut = shortcuts[index];
+
+                        // A literal member that cannot match would only throw PROBE_MISS;
+                        // `failUnion` still runs every member, so diagnostics are unchanged.
+                        if (shortcut !== NO_SHORTCUT && value !== shortcut) {
+                            continue;
+                        }
+
                         try {
-                            return member._parse(value, context) as Infer<Vs[number]>;
+                            return (memberInternals[index] as InternalValidator<unknown>)._parse(value, context) as Infer<Vs[number]>;
                         } catch (error: unknown) {
                             if (!(error instanceof ValidationError)) {
                                 throw error;
