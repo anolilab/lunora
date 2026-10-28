@@ -425,6 +425,7 @@ interface DeployRequest {
     entry?: string;
     environment?: string;
     outDir?: string;
+    secretsFile?: string;
     temporary?: boolean;
 }
 ```

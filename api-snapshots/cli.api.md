@@ -133,6 +133,7 @@ interface DeployCommandOptions {
     healthFetch?: HealthFetch;
     healthSleep?: (ms: number) => Promise<void>;
     interactive?: boolean;
+    isolatedPreview?: boolean;
     lazyFunctions?: boolean;
     logger: Logger;
     migrate?: boolean;
@@ -145,6 +146,7 @@ interface DeployCommandOptions {
     railpackAvailable?: DockerProbe;
     secretConfirm?: (message: string) => Promise<boolean>;
     secretLister?: (inputs: ListRemoteSecretsInputs) => Promise<ListRemoteSecretsResult>;
+    secretsFile?: string;
     skipCodegen?: boolean;
     skipServices?: boolean;
     smokeLauncher?: DevProcessSpawner;

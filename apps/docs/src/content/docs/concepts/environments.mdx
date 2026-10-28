@@ -1,6 +1,6 @@
 ---
 title: Environments & releases
-description: Running staging next to production, deploying an isolated environment, checking pull requests with a dry run, and rolling traffic back when something goes wrong.
+description: Running staging next to production, deploying an isolated environment, checking pull requests with a dry run, an isolated preview per pull request, and rolling traffic back when something goes wrong.
 related:
     - to: /docs/deployment
     - to: /docs/production-checklist
@@ -81,35 +81,60 @@ identifiers only, never secrets.
   migration only applies on `wrangler deploy`. Promoting a version shipped as a
   "preview" therefore ran its code over production data.
 
-An isolated copy is a separate **environment**. `--env <name>` deploys under its
-own Worker name, which gives it its own Durable Object namespace, so its shards
-start empty. Bindings are non-inheritable, so the environment must declare its
-own D1 database and R2 buckets (see the callout above), then `lunora seed`
-fills it:
+An isolated copy is its own Worker with its own data. `lunora preview` makes
+one per pull request and removes it again:
 
 ```bash
-lunora deploy --env pr-123
-lunora seed --prod --url https://my-app-pr-123.acme.workers.dev --yes
+lunora preview deploy 123          # its own Worker, Durable Objects, D1, KV and R2
+lunora preview deploy 123 --seed   # …filled with `lunora seed` data
+lunora preview list
+lunora preview delete 123          # the Worker and every resource recorded for it
 ```
 
-The scaffolded CI pipelines do not deploy pull requests. They run
-`lunora deploy --dry-run`, the whole pipeline with the bundle included, and
-publish nothing:
+The preview Worker is `<worker>-preview-<name>`, so its shards start empty in a
+Durable Object namespace of their own. Every D1 database, KV namespace and R2
+bucket the app binds gets a preview-owned copy. The deploy runs the normal
+pipeline under a transient `env.preview-<name>` block that clears production's
+routes and custom domains, then runs the data migrations against the preview
+and prints its `workers.dev` URL. It never writes to the project link or the
+schema baseline. A preview gets freshly minted values for the secrets Lunora
+can generate. A provider key is copied only when you pass `--secret KEY`, with
+the value taken from the environment. Production's secret values are never
+read.
+
+What a preview owns is recorded in the account (a `lunora-preview-registry` KV
+namespace), so the job that deletes it does not need the runner that deployed
+it. `delete` acts only on that record, and refuses a record that names anything
+production's config uses. An app binding something a preview cannot isolate
+yet (Hyperdrive, service bindings, queues, workflows, Vectorize, …) is refused
+with the list. See [`lunora preview`](/docs/packages/cli#lunora-preview) for
+the details and the API token permissions it needs.
+
+The scaffolded CI pipelines use it:
 
 ```bash
 lunora init my-app --ci github    # or --ci gitlab
 ```
 
-That scaffolds a production deploy on the default branch plus a
-`lunora deploy --dry-run` check on every pull or merge request. Set
-`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets.
-After the first deploy, also set `LUNORA_DEPLOY_URL` (the production worker's
-URL) and `LUNORA_ADMIN_TOKEN`: the production job passes them to the drift gate,
-which then [checks the stored rows](/docs/concepts/migrations#when-the-stored-rows-already-fit)
+That scaffolds a production deploy on the default branch and a
+`lunora preview deploy <number>` on every pull or merge request. On GitHub, a
+`preview-delete` job runs `lunora preview delete <number>` when the pull request
+closes. A fork's pull request gets no secrets, so it runs
+`lunora deploy --dry-run` instead. On GitLab, the preview is a review
+environment whose stop job deletes it when the merge request is merged or
+closed, or after two weeks. Set `CLOUDFLARE_API_TOKEN` (with D1, KV and R2 edit
+rights, since previews make their own) and `CLOUDFLARE_ACCOUNT_ID` as the
+provider's secrets. After the first deploy, also set `LUNORA_DEPLOY_URL` (the
+production worker's URL) and `LUNORA_ADMIN_TOKEN`: the production job passes
+them to the drift gate, which then
+[checks the stored rows](/docs/concepts/migrations#when-the-stored-rows-already-fit)
 before blocking a schema change.
 
-celld has no Wrangler environments: deploy a separate config (and fleet bucket)
-per copy. The Node target has no `lunora deploy`.
+| Target     | Preview deployments                                                                             |
+| ---------- | ----------------------------------------------------------------------------------------------- |
+| Cloudflare | `lunora preview`: its own Worker, Durable Object namespace, D1, KV and R2                       |
+| celld      | Refused: no Wrangler environments. Deploy a separate config with its own `CELLD_BUCKET` instead |
+| Node       | Refused: the Node target has no `lunora deploy`                                                 |
 
 ### Validating without publishing
 

@@ -1123,7 +1123,7 @@ describe("lunora deploy", () => {
 
             const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, preview: true, spawner });
 
-            expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/--preview is not supported.*--env <name>/u) });
+            expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/--preview is not supported.*lunora preview deploy <name>/u) });
             expect(calls).toHaveLength(0);
             expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
         });

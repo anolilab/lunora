@@ -285,7 +285,9 @@ const completeDeploy = async ({
     // recorded target — nor its architecture the next diff's baseline. Recorded
     // now because the new code is live, whatever the health check and
     // migrations below decide.
-    if (options.temporary !== true) {
+    // A preview is not the checkout's deployment either: its URL and architecture
+    // belong to a throwaway copy.
+    if (options.temporary !== true && options.isolatedPreview !== true) {
         recordArchitecture?.();
         autoLinkFromDeployOutput({ cwd, env: options.env, logger: options.logger, url: deployment.url });
     }
@@ -298,7 +300,10 @@ const completeDeploy = async ({
         return { code: EXIT_CODE.UNAVAILABLE, deployment, descriptor, healthCheck, mintedSecretsFile, validation };
     }
 
-    const finalized = await finalizeSuccessfulDeploy(options, cwd, descriptor, validation, reblessSchemaBaseline, mintedSecretsFile);
+    // The committed baseline describes what production runs; a preview shipping a
+    // branch's schema must not advance it.
+    const rebless = options.isolatedPreview === true ? undefined : reblessSchemaBaseline;
+    const finalized = await finalizeSuccessfulDeploy(options, cwd, descriptor, validation, rebless, mintedSecretsFile);
 
     return { ...finalized, deployment, healthCheck };
 };

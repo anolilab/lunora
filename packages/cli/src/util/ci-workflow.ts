@@ -97,7 +97,7 @@ const execLine = (manager: PackageManager, args: ReadonlyArray<string>): string 
 };
 
 /**
- * The GitHub Actions steps shared by the `deploy` and `check` jobs: checkout,
+ * The GitHub Actions steps shared by every job: checkout,
  * provision the manager, provision Node, install with a frozen lockfile.
  */
 const githubSetupSteps = (pm: PmCiProfile): string =>
@@ -125,6 +125,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
 
 # Prerequisite: commit your ${pm.lockfile}. \`${pm.installCmd}\`
@@ -132,7 +133,9 @@ ${requirement}
 # commit the lockfile before pushing, or the first CI run fails.
 #
 # Set these repository secrets (Settings → Secrets and variables → Actions):
-#   CLOUDFLARE_API_TOKEN   — a Workers-scoped API token
+#   CLOUDFLARE_API_TOKEN   — an API token with Workers Scripts, D1, Workers KV
+#                            Storage and Workers R2 Storage: Edit (previews make
+#                            their own D1, KV and R2)
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
 #   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
 #   LUNORA_ADMIN_TOKEN     — the production worker's admin token
@@ -151,19 +154,40 @@ jobs:
 ${githubSetupSteps(pm)}
       # When a schema change tightens a table, the drift gate reads that table's
       # stored rows from this worker and lets the change ship if every row fits.
-      # Unset (a first deploy), the gate blocks as before. A *.workers.dev URL is
-      # only trusted when the project is linked and .lunora/ is not committed, so
-      # CI has no link: there the gate stays blocked, and a tightening needs a
-      # migration or --allow-schema-drift. A custom domain on a declared route works.
+      # Unset (a first deploy), the gate blocks as before.
       - run: ${execLine(manager, ["deploy", "--migrate-url", `"\${{ secrets.LUNORA_DEPLOY_URL }}"`])}
         env:
           LUNORA_ADMIN_TOKEN: \${{ secrets.LUNORA_ADMIN_TOKEN }}
 
-  # Every pull request runs the full deploy pipeline, bundle included, and
-  # publishes nothing. A Worker version would share production's Durable
-  # Objects and D1, so a PR never uploads one.
+  # Every pull request from this repository gets an isolated preview: its own
+  # Worker, Durable Objects, D1, KV and R2, never production's. One run per
+  # pull request at a time, so a teardown never races a deploy.
+  preview:
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    concurrency: lunora-preview-\${{ github.event.pull_request.number }}
+    permissions:
+      contents: read
+    steps:
+${githubSetupSteps(pm)}
+      - run: ${execLine(manager, ["preview", "deploy", `\${{ github.event.pull_request.number }}`])}
+
+  # Closing or merging the pull request deletes the preview Worker and every
+  # resource recorded for it.
+  preview-delete:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    concurrency: lunora-preview-\${{ github.event.pull_request.number }}
+    permissions:
+      contents: read
+    steps:
+${githubSetupSteps(pm)}
+      - run: ${execLine(manager, ["preview", "delete", `\${{ github.event.pull_request.number }}`])}
+
+  # A fork's pull request gets no secrets, so it runs the deploy pipeline,
+  # bundle included, and publishes nothing.
   check:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -174,7 +198,11 @@ ${githubSetupSteps(pm)}
     /* eslint-enable no-secrets/no-secrets */
 };
 
-// GitLab injects Masked, Protected, production-scoped CI/CD variables into the job environment, so wrangler
+// One preview job at a time per merge request, so a teardown never races a deploy.
+// eslint-disable-next-line no-secrets/no-secrets -- a GitLab predefined-variable reference, not a credential
+const GITLAB_PREVIEW_GROUP = "lunora-preview-$CI_MERGE_REQUEST_IID";
+
+// GitLab injects masked CI/CD variables into the job environment, so wrangler
 // picks up CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID automatically — no
 // per-step reference needed. ($CI_* are GitLab predefined vars, not JS.)
 const buildGitlabContent = (manager: PackageManager): string => {
@@ -188,17 +216,13 @@ const buildGitlabContent = (manager: PackageManager): string => {
 # (below) requires it — run \`${manager} install\` locally and commit the lockfile
 # before pushing, or the first pipeline fails.
 #
-# Set these as CI/CD variables (Settings → CI/CD → Variables), each Masked AND
-# Protected, with Environment scope "production":
-#   CLOUDFLARE_API_TOKEN   — a Workers-scoped API token
+# Set these as masked CI/CD variables (Settings → CI/CD → Variables):
+#   CLOUDFLARE_API_TOKEN   — an API token with Workers Scripts, D1, Workers KV
+#                            Storage and Workers R2 Storage: Edit (previews make
+#                            their own D1, KV and R2)
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
 #   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
 #   LUNORA_ADMIN_TOKEN     — the production worker's admin token
-# Protected variables reach only pipelines on protected branches and tags, so a
-# merge-request pipeline from a feature branch, which runs the project's own
-# code, gets none of them. Keep your default branch protected (it is by default).
-# The "production" scope reaches only jobs that declare environment: production,
-# which is the deploy job alone; the check job below uses none of these.
 .lunora_base:
   image: ${pm.gitlabImage}
   stage: deploy
@@ -208,28 +232,42 @@ ${beforeScript}
 # Production deploy on the default branch.
 deploy:
   extends: .lunora_base
-  environment:
-    name: production
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   script:
     # When a schema change tightens a table, the drift gate reads that table's
     # stored rows from this worker and lets the change ship if every row fits.
-    # Unset (a first deploy), the gate blocks as before. A *.workers.dev URL is
-    # only trusted when the project is linked and .lunora/ is not committed, so
-    # CI has no link: there the gate stays blocked, and a tightening needs a
-    # migration or --allow-schema-drift. A custom domain on a declared route works.
+    # Unset (a first deploy), the gate blocks as before.
     - ${execLine(manager, ["deploy", "--migrate-url", '"$LUNORA_DEPLOY_URL"'])}
 
-# Every merge request runs the full deploy pipeline, bundle included, and
-# publishes nothing. A Worker version would share production's Durable Objects
-# and D1, so an MR never uploads one.
-check:
+# Every merge request gets an isolated preview: its own Worker, Durable Objects,
+# D1, KV and R2, never production's. GitLab runs the stop job below when the
+# merge request is merged or closed, or the environment auto-stops.
+preview:
   extends: .lunora_base
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  resource_group: ${GITLAB_PREVIEW_GROUP}
+  environment:
+    name: preview/$CI_MERGE_REQUEST_IID
+    on_stop: preview_delete
+    auto_stop_in: 2 weeks
   script:
-    - ${execLine(manager, ["deploy", "--dry-run"])}
+    - ${execLine(manager, ["preview", "deploy", '"$CI_MERGE_REQUEST_IID"'])}
+
+# Deletes the preview Worker and every resource recorded for it.
+preview_delete:
+  extends: .lunora_base
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+  allow_failure: true
+  resource_group: ${GITLAB_PREVIEW_GROUP}
+  environment:
+    name: preview/$CI_MERGE_REQUEST_IID
+    action: stop
+  script:
+    - ${execLine(manager, ["preview", "delete", '"$CI_MERGE_REQUEST_IID"'])}
 `;
 };
 
@@ -247,7 +285,7 @@ const WORKFLOWS: Record<CiProvider, CiWorkflowSpec> = {
     },
     gitlab: {
         file: ".gitlab-ci.yml",
-        secretsHint: "CI/CD variables, Masked and Protected, scoped to the production environment (Settings → CI/CD → Variables)",
+        secretsHint: "masked CI/CD variables (Settings → CI/CD → Variables)",
     },
 };
 

@@ -327,13 +327,13 @@ const runCodegenStep = async (
 /**
  * Why `--preview` is refused. Cloudflare generates no version preview URL for a
  * Worker that implements a Durable Object, which every Lunora app does, and an
- * uploaded version runs against production's Durable Objects, D1 and R2 — so a
- * per-PR "preview" was unreachable, and promoting one shared production data.
+ * uploaded version runs against production's Durable Objects, D1 and R2. An
+ * isolated copy is a separate Worker with its own resources: `lunora preview`.
  */
 const PREVIEW_REFUSAL =
     "--preview is not supported: Cloudflare gives a Worker that implements a Durable Object no version preview URL, and a version shares " +
-    "production's Durable Objects, D1 and R2. Deploy an isolated copy with `--env <name>` (its own Worker name, so its own Durable Object " +
-    "namespace, plus the env's own D1/R2 bindings), or validate without publishing with `--dry-run`.";
+    "production's Durable Objects, D1 and R2. Deploy an isolated copy with `lunora preview deploy <name>` (its own Worker, Durable Object " +
+    "namespace, D1, R2 and KV; `lunora preview delete <name>` removes it), or validate without publishing with `--dry-run`.";
 
 /**
  * The neutral deploy request these options describe. The projection's
@@ -348,6 +348,7 @@ const deployRequestFor = (cwd: string, options: DeployCommandOptions): DeployReq
         entry: resolveComposedWorkerEntry(cwd),
         environment: options.env,
         outDir: options.outDir,
+        secretsFile: options.secretsFile,
         temporary: options.temporary,
     };
 };
@@ -1490,9 +1491,10 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     }
 
     // Vercel-style summary block after a successful real deploy. Skipped on
-    // failure and on dry runs (nothing went live), and never in json mode (the
-    // early return above) where it would corrupt the document on stdout.
-    if (result.code === 0 && options.dryRun !== true) {
+    // failure, on dry runs (nothing went live) and for a preview (`lunora preview`
+    // reports its own), and never in json mode (the early return above) where it
+    // would corrupt the document on stdout.
+    if (result.code === 0 && options.dryRun !== true && options.isolatedPreview !== true) {
         renderDeploySummary({
             cwd: options.cwd ?? process.cwd(),
             env: options.env,

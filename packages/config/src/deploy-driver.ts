@@ -68,6 +68,8 @@ export interface DeployRequest {
     environment?: string;
     /** Write the built bundle (and any build metadata) to this directory. */
     outDir?: string;
+    /** A file of secrets (JSON object of name to value) uploaded with the deployment, so a Worker's first version boots with them. */
+    secretsFile?: string;
     /** Deploy to a short-lived, unauthenticated account where the host offers one. */
     temporary?: boolean;
 }

@@ -62,6 +62,9 @@ lunora deploy [--env <name>]            # codegen, validate wrangler, then wrang
               [--prebuilt] [--dry-run]  #   --dry-run validates + bundles, never publishes
               [--temporary]             #   --temporary deploys with no account (~60min, then claim)
               [--health-check]          #   --health-check probes /_lunora/health/ready after deploying
+lunora preview deploy <name>            # isolated copy: own Worker, Durable Objects, D1, KV, R2
+               [--seed] [--secret <KEY>] [--dry-run]
+lunora preview list | delete <name>     # previews on record; delete removes everything recorded
 lunora link --url <url> [--env <name>]  # link this checkout to its deployed worker
 lunora verify [--api-spec <spec>]       # dry-run codegen + tsc --noEmit (no files written)
               [--no-typecheck] [--lazy-functions]
@@ -218,7 +221,7 @@ Additional flags:
 
 - `--add <list>`: add features non-interactively after scaffolding — a comma-separated list of the values in the [`lunora add` table](#lunora-add), each applied with its shipped defaults. Bypasses the interactive picker and its sub-prompts.
 - `--dry-run`: walk every step (prompts and output included) without writing files, installing, or running git.
-- `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch **and** a `lunora deploy --dry-run` check on every pull / merge request. Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables (on GitLab mark every one, `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN` included, Masked **and Protected** with Environment scope `production`: protected variables reach only protected branches and tags, so a merge-request pipeline, which runs your project's code, gets none of them, and only the `deploy` job declares `environment: production`), and after the first deploy `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN`, which let the production deploy's drift gate read the stored rows. That read only happens for a custom domain on a declared route: a `*.workers.dev` URL needs a project link, and `.lunora/` is not committed, so on `*.workers.dev` a tightening in CI still needs a migration or `--allow-schema-drift`.
+- `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch, a [`lunora preview deploy <number>`](#lunora-preview) on every pull / merge request, and a `lunora preview delete <number>` once it is closed or merged (on GitHub, a fork's pull request gets a `lunora deploy --dry-run` check instead, since it receives no secrets). Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables, and after the first deploy `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN`, which let the production deploy's drift gate read the stored rows.
 
 ### `lunora add`
 
@@ -674,8 +677,8 @@ link, since that account is gone in an hour.
 
 `--preview` is refused. Cloudflare gives a Worker that implements a Durable
 Object no version preview URL, and a version shares production's Durable
-Objects, D1 and R2. Deploy an isolated copy with `--env <name>` instead (see
-[Environments](/docs/concepts/environments#preview-deployments)).
+Objects, D1 and R2. Deploy an isolated copy with
+[`lunora preview deploy <name>`](#lunora-preview) instead.
 
 #### Cloudflare CLI (`cf`)
 
@@ -753,6 +756,60 @@ fi
 
 curl -fsS "$url/api/smoke"
 ```
+
+### `lunora preview`
+
+An isolated copy of the app per pull request, and the way to remove it.
+
+```bash
+lunora preview deploy 123                         # deploy, migrate, print the URL
+lunora preview deploy 123 --seed                  # …then fill it with `lunora seed` data
+lunora preview deploy 123 --secret RESEND_API_KEY # give it a secret from the environment
+lunora preview deploy 123 --dry-run               # show the Worker, resources and env block
+lunora preview list
+lunora preview delete 123
+```
+
+`deploy <name>` deploys a separate Worker, `<worker>-preview-<name>` (the name
+is lowercased to letters, digits and dashes, and shortened with a hash past 63
+characters), so it gets its own Durable Object namespace. Every D1 database,
+KV namespace and R2 bucket the app binds gets a preview-owned one, named
+`<preview-worker>-<binding>`. The deploy is the normal `lunora deploy`
+pipeline under a transient `env.preview-<name>` block that clears production's
+`routes` and custom domains and turns on `workers_dev`. The block is removed
+from `wrangler.jsonc` when the command ends. The pipeline's data migrations run
+against the preview, and `--seed` runs `lunora seed` against it afterwards. The
+preview never touches the project link, the schema baseline, or the
+architecture baseline.
+
+Secrets: the preview gets a freshly minted value for every secret Lunora can
+generate (its own `LUNORA_ADMIN_TOKEN`, `AUTH_SECRET`, …), uploaded with the
+deploy. A provider key is copied only when you name it with `--secret KEY`,
+and the value is read from the environment variable of the same name.
+Production's values are never read.
+
+What a preview owns is recorded in the account, in a KV namespace called
+`lunora-preview-registry`, one record per preview, written as soon as each
+resource exists. That way a fresh CI runner can delete it. `delete <name>`
+deletes the preview Worker (with its Durable Objects) and then each recorded
+resource. It refuses a preview with no record, a record whose Worker is not the
+derived preview name, and a record that names any id or name production's
+config (any environment) uses. A deploy never adopts an existing resource that
+has a preview name but no record. An R2 bucket that still holds objects cannot
+be deleted through the API, so it stays on record for the next `delete`.
+
+An app that binds anything a preview cannot isolate yet is refused with the
+list: Hyperdrive, service bindings, queues, workflows, Vectorize, Analytics
+Engine, containers, Artifacts, a Durable Object on another Worker's
+`script_name`, a singular `route`, an R2 bucket with a jurisdiction, or any
+binding kind the CLI does not know. Copying any of these would point the preview
+at production's resource.
+
+It needs `CLOUDFLARE_API_TOKEN` with Workers Scripts, D1, Workers KV Storage
+and Workers R2 Storage edit permissions, plus `CLOUDFLARE_ACCOUNT_ID` (or
+`account_id`), and a registered workers.dev subdomain. It works on Cloudflare
+only. celld has no Wrangler environments, so deploy a separate config with its
+own `CELLD_BUCKET` instead. The Node target has no deploy.
 
 ### `lunora build`
 
@@ -1370,19 +1427,6 @@ lunora import ./backup.ndjson --mode upsert  # overwrite rows whose _id already 
 lunora import ./backup.ndjson --mode replace --dry-run   # what a full replace would add, overwrite, delete
 ```
 
-An export file is one `{ table, doc }` row per line, then a last line, the end
-marker `{"end":true,"rows":N}`, whose `N` is the number of rows before it. A
-file or response cut on a row boundary is still valid NDJSON that reads as a
-smaller export, so the marker is what proves it is whole: `lunora export` fails
-(and keeps no file) when the response has no marker or a different count, and
-`lunora import` of an NDJSON file refuses one with no marker, a count that does
-not match the rows it read, or anything after the marker, before it writes a
-row. Files written before the marker existed, and hand-written NDJSON, must end
-with a marker line to import. The `/_lunora/admin/import` endpoint itself takes
-bare rows, and applies the same check when a body does carry a marker. The
-marker is not a row and is never imported. Backup snapshots, `lunora seed`
-output and Studio's shard export end with it too.
-
 `--mode` says what happens to rows the target already holds:
 
 | Mode                                       | A row whose `_id` is stored                                                 | A stored row the file lacks |
@@ -1420,12 +1464,8 @@ was written, never fewer rows than before. Re-running the same command
 converges: the write overwrites what already landed, and the deletes run once
 it is clean. A reader between the two passes sees both old and new rows. The
 plan is a read taken before the write, so `require-empty` and `replace` assume
-nothing else writes those tables meanwhile: **stop all writes to the target for
-the duration of a `replace` import.** The delete step removes the stored row
-that currently holds each planned `_id`, not the version the plan read, so a row
-a client updates between the plan and the delete is deleted with its newer
-contents, and nothing detects it. Stop the app's writers (or take it offline)
-before you run a `replace`, and start them again once it reports clean. The
+nothing else writes those tables meanwhile: stop writes to the target for the
+duration of a restore. The
 worker has to support each mode; an older one is detected before any row is
 sent.
 

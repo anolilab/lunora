@@ -28,6 +28,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
 
 # Prerequisite: commit your pnpm-lock.yaml. \`pnpm install --frozen-lockfile\`
@@ -35,7 +36,9 @@ on:
 # commit the lockfile before pushing, or the first CI run fails.
 #
 # Set these repository secrets (Settings → Secrets and variables → Actions):
-#   CLOUDFLARE_API_TOKEN   — a Workers-scoped API token
+#   CLOUDFLARE_API_TOKEN   — an API token with Workers Scripts, D1, Workers KV
+#                            Storage and Workers R2 Storage: Edit (previews make
+#                            their own D1, KV and R2)
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
 #   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
 #   LUNORA_ADMIN_TOKEN     — the production worker's admin token
@@ -62,19 +65,56 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # When a schema change tightens a table, the drift gate reads that table's
       # stored rows from this worker and lets the change ship if every row fits.
-      # Unset (a first deploy), the gate blocks as before. A *.workers.dev URL is
-      # only trusted when the project is linked and .lunora/ is not committed, so
-      # CI has no link: there the gate stays blocked, and a tightening needs a
-      # migration or --allow-schema-drift. A custom domain on a declared route works.
+      # Unset (a first deploy), the gate blocks as before.
       - run: pnpm exec lunora deploy --migrate-url "\${{ secrets.LUNORA_DEPLOY_URL }}"
         env:
           LUNORA_ADMIN_TOKEN: \${{ secrets.LUNORA_ADMIN_TOKEN }}
 
-  # Every pull request runs the full deploy pipeline, bundle included, and
-  # publishes nothing. A Worker version would share production's Durable
-  # Objects and D1, so a PR never uploads one.
+  # Every pull request from this repository gets an isolated preview: its own
+  # Worker, Durable Objects, D1, KV and R2, never production's. One run per
+  # pull request at a time, so a teardown never races a deploy.
+  preview:
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    concurrency: lunora-preview-\${{ github.event.pull_request.number }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec lunora preview deploy \${{ github.event.pull_request.number }}
+
+  # Closing or merging the pull request deletes the preview Worker and every
+  # resource recorded for it.
+  preview-delete:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    concurrency: lunora-preview-\${{ github.event.pull_request.number }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec lunora preview delete \${{ github.event.pull_request.number }}
+
+  # A fork's pull request gets no secrets, so it runs the deploy pipeline,
+  # bundle included, and publishes nothing.
   check:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -98,17 +138,13 @@ const ORIGINAL_PNPM_GITLAB = `stages:
 # (below) requires it — run \`pnpm install\` locally and commit the lockfile
 # before pushing, or the first pipeline fails.
 #
-# Set these as CI/CD variables (Settings → CI/CD → Variables), each Masked AND
-# Protected, with Environment scope "production":
-#   CLOUDFLARE_API_TOKEN   — a Workers-scoped API token
+# Set these as masked CI/CD variables (Settings → CI/CD → Variables):
+#   CLOUDFLARE_API_TOKEN   — an API token with Workers Scripts, D1, Workers KV
+#                            Storage and Workers R2 Storage: Edit (previews make
+#                            their own D1, KV and R2)
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
 #   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
 #   LUNORA_ADMIN_TOKEN     — the production worker's admin token
-# Protected variables reach only pipelines on protected branches and tags, so a
-# merge-request pipeline from a feature branch, which runs the project's own
-# code, gets none of them. Keep your default branch protected (it is by default).
-# The "production" scope reaches only jobs that declare environment: production,
-# which is the deploy job alone; the check job below uses none of these.
 .lunora_base:
   image: node:22
   stage: deploy
@@ -119,28 +155,42 @@ const ORIGINAL_PNPM_GITLAB = `stages:
 # Production deploy on the default branch.
 deploy:
   extends: .lunora_base
-  environment:
-    name: production
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   script:
     # When a schema change tightens a table, the drift gate reads that table's
     # stored rows from this worker and lets the change ship if every row fits.
-    # Unset (a first deploy), the gate blocks as before. A *.workers.dev URL is
-    # only trusted when the project is linked and .lunora/ is not committed, so
-    # CI has no link: there the gate stays blocked, and a tightening needs a
-    # migration or --allow-schema-drift. A custom domain on a declared route works.
+    # Unset (a first deploy), the gate blocks as before.
     - pnpm exec lunora deploy --migrate-url "$LUNORA_DEPLOY_URL"
 
-# Every merge request runs the full deploy pipeline, bundle included, and
-# publishes nothing. A Worker version would share production's Durable Objects
-# and D1, so an MR never uploads one.
-check:
+# Every merge request gets an isolated preview: its own Worker, Durable Objects,
+# D1, KV and R2, never production's. GitLab runs the stop job below when the
+# merge request is merged or closed, or the environment auto-stops.
+preview:
   extends: .lunora_base
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  resource_group: lunora-preview-$CI_MERGE_REQUEST_IID
+  environment:
+    name: preview/$CI_MERGE_REQUEST_IID
+    on_stop: preview_delete
+    auto_stop_in: 2 weeks
   script:
-    - pnpm exec lunora deploy --dry-run
+    - pnpm exec lunora preview deploy "$CI_MERGE_REQUEST_IID"
+
+# Deletes the preview Worker and every resource recorded for it.
+preview_delete:
+  extends: .lunora_base
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+  allow_failure: true
+  resource_group: lunora-preview-$CI_MERGE_REQUEST_IID
+  environment:
+    name: preview/$CI_MERGE_REQUEST_IID
+    action: stop
+  script:
+    - pnpm exec lunora preview delete "$CI_MERGE_REQUEST_IID"
 `;
 
 const MANAGERS: ReadonlyArray<PackageManager> = ["npm", "pnpm", "yarn", "bun"];
@@ -181,8 +231,8 @@ describe("ci-workflow", () => {
         const github = buildContent("github", "pnpm");
 
         expect(github).toContain("      - uses: pnpm/action-setup@v4\n        with:\n          version: latest\n");
-        // Both jobs (deploy + check) get it, not just the first.
-        expect(github.match(/pnpm\/action-setup@v4\n {8}with:\n {10}version: latest\n/gu) ?? []).toHaveLength(2);
+        // Every job (deploy, preview, preview-delete, check) gets it, not just the first.
+        expect(github.match(/pnpm\/action-setup@v4\n {8}with:\n {10}version: latest\n/gu) ?? []).toHaveLength(4);
     });
 
     it("github writes .github/workflows/deploy.yml with the secret references", () => {
@@ -224,29 +274,8 @@ describe("ci-workflow", () => {
         expect(gitlab).toContain("commit your pnpm-lock.yaml");
     });
 
-    it("gitlab keeps production secrets out of merge-request pipelines: protected, production-scoped, deploy job only", () => {
+    it("both providers deploy an isolated preview per pull/merge request and delete it when it closes, never a version upload", () => {
         expect.assertions(9);
-
-        writeCiWorkflow(workdir, "gitlab", "pnpm");
-
-        const yaml = readFileSync(join(workdir, ".gitlab-ci.yml"), "utf8");
-        const deploy = yaml.slice(yaml.indexOf("\ndeploy:"), yaml.indexOf("\ncheck:"));
-        const check = yaml.slice(yaml.indexOf("\ncheck:"));
-
-        expect(yaml).toContain("Masked AND");
-        expect(yaml).toContain("Protected");
-        expect(yaml).toContain('Environment scope "production"');
-        expect(deploy).toContain("environment:\n    name: production");
-        expect(deploy).toContain("$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH");
-        expect(check).not.toContain("environment:");
-
-        for (const name of ["LUNORA_ADMIN_TOKEN", "LUNORA_DEPLOY_URL", "CLOUDFLARE_API_TOKEN"]) {
-            expect(check).not.toContain(name);
-        }
-    });
-
-    it("both providers check every pull/merge request with `lunora deploy --dry-run`, never a version upload", () => {
-        expect.assertions(6);
 
         writeCiWorkflow(workdir, "github", "pnpm");
         writeCiWorkflow(workdir, "gitlab", "pnpm");
@@ -254,11 +283,18 @@ describe("ci-workflow", () => {
         const github = readFileSync(join(workdir, WORKFLOWS.github.file), "utf8");
         const gitlab = readFileSync(join(workdir, ".gitlab-ci.yml"), "utf8");
 
-        expect(github).toContain("pull_request");
-        expect(github).toContain("lunora deploy --dry-run");
+        expect(github).toContain("types: [opened, synchronize, reopened, closed]");
+        expect(github).toContain("lunora preview deploy ${{ github.event.pull_request.number }}");
+
+        // The teardown runs only once the pull request closed.
+        const teardown = github.slice(github.indexOf("  preview-delete:"), github.indexOf("  check:"));
+
+        expect(teardown).toContain("github.event.action == 'closed'");
+        expect(teardown).toContain("lunora preview delete ${{ github.event.pull_request.number }}");
         expect(github).not.toContain("--preview");
-        expect(gitlab).toContain('$CI_PIPELINE_SOURCE == "merge_request_event"');
-        expect(gitlab).toContain("lunora deploy --dry-run");
+        expect(gitlab).toContain('lunora preview deploy "$CI_MERGE_REQUEST_IID"');
+        expect(gitlab).toContain("on_stop: preview_delete");
+        expect(gitlab).toMatch(/action: stop\n {2}script:\n {4}- pnpm exec lunora preview delete "\$CI_MERGE_REQUEST_IID"/u);
         expect(gitlab).not.toContain("--preview");
     });
 
@@ -319,7 +355,7 @@ describe("ci-workflow", () => {
 
             expect(yaml).toContain(PM_CI_PROFILES[manager].installCmd);
             expect(yaml).toContain('lunora deploy --migrate-url "$LUNORA_DEPLOY_URL"');
-            expect(yaml).toContain("lunora deploy --dry-run");
+            expect(yaml).toContain('lunora preview delete "$CI_MERGE_REQUEST_IID"');
         });
 
         it("round-trips through writeCiWorkflow onto disk", () => {
