@@ -96,7 +96,7 @@ const usePaginatedCore = <F extends FunctionReference>(
     /**
      * Each page's key, derived once per `Page` object. Every frame on any page
      * rebuilds `pageResults` for the whole feed, so re-serialising each page's
-     * args per frame made a frame cost one full `stableWireKey` pass per loaded
+     * args per frame would cost one full `stableWireKey` pass per loaded
      * page. `narrowedArgs` is fixed for this core's lifetime.
      */
     const pageKeys = new WeakMap<Page, string>();

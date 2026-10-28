@@ -77,7 +77,7 @@ const usePaginatedCore = <T>(
     /**
      * Each page's key, derived once per `Page` object. Every frame on any page
      * rebuilds `pageResults` for the whole feed, so re-serialising each page's
-     * args per frame made a frame cost one full `stableWireKey` pass per loaded
+     * args per frame would cost one full `stableWireKey` pass per loaded
      * page. Base args are fixed by content within an args generation, and
      * `teardownAll` starts a fresh map for the next one.
      */
