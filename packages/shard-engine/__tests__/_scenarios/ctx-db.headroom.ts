@@ -253,6 +253,44 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
             expect(probes).toBe(1);
         });
 
+        it("charges stored documents consumed by iterating the cursor", async () => {
+            expect.assertions(2);
+
+            await build({}).insert("notes", { body: "x".repeat(300), bucket: "a" });
+
+            const tracker = new TransactionHeadroomTracker();
+            const rows = [...meterReadBytes(sql, tracker, () => false).exec("SELECT id, __doc__ FROM notes")];
+
+            expect(rows).toHaveLength(1);
+            expect(tracker.headroom().readBytes).toBeGreaterThan(300);
+        });
+
+        it("does not charge an aggregate companion rebuild to the writing transaction", async () => {
+            expect.assertions(1);
+
+            const seed = build({ maxWrittenRows: 100 });
+
+            for (let index = 0; index < 10; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+                await seed.insert("notes", { body: "x".repeat(200), bucket: "a" });
+            }
+
+            const withAggregate: SchemaLike = {
+                tables: { notes: { ...schema.tables["notes"]!, aggregateIndexes: [{ by: ["bucket"], name: "count_by_bucket", on: "notes", op: "count" }] } },
+            };
+
+            runShardMigrations(sql, withAggregate);
+
+            const writer = createShardContextDatabase({
+                clock: () => 1_700_000_000_000,
+                headroom: new TransactionHeadroomTracker({ maxReadBytes: 100 }),
+                schema: withAggregate,
+                sql,
+            });
+
+            await expect(codeOf(async () => writer.insert("notes", { body: "b", bucket: "a" }))).resolves.toBeUndefined();
+        });
+
         it("warns once when a read crosses 80% of a ceiling", async () => {
             expect.assertions(2);
 

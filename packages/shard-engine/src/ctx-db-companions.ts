@@ -38,7 +38,19 @@ import { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggr
 import type { SchemaLike, SqlExec } from "./ctx-db";
 import { aggregateSignature, rankSignature, readCompanionSignature, writeCompanionSignature } from "./ctx-db-companion-state";
 import { runAll, runDrizzle } from "./do-exec";
-import { AGG_COUNT, AGG_KEY, AGG_VALUE, aggUpsertSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, rowToDocument, serializeSqlValue } from "./do-sql";
+import {
+    AGG_COUNT,
+    AGG_KEY,
+    AGG_VALUE,
+    aggUpsertSql,
+    DOC_COLUMN,
+    geoTableName,
+    isFtsAvailable,
+    jsonPathSql,
+    rowToDocument,
+    serializeSqlValue,
+    unwrapSql,
+} from "./do-sql";
 import { param, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import { ftsPurgeDocument, ftsWriteDocument } from "./fts-companion";
 import { encodeGeohash, GEO_DEFAULT_PRECISION } from "./geo";
@@ -98,6 +110,10 @@ const SOURCE_PAGE_ROWS = 1000;
  * rebuild holds one page in memory rather than the whole table, and no cursor
  * is open while the caller writes between pages (better-sqlite3 refuses a
  * write on a connection mid-iteration).
+ *
+ * Reads past the writer's read-byte meter: the rebuild is a one-page-at-a-time
+ * self-heal, not the transaction's own read, and charging a whole table to it
+ * would fail every write to that table until the companion could be rebuilt.
  */
 const companionSourceRows = function* companionSourceRows(
     sql: SqlExec,
@@ -111,7 +127,7 @@ const companionSourceRows = function* companionSourceRows(
         const afterSql = after === undefined ? dsql`` : dsql` WHERE id > ${param(after)}`;
         const page = [
             ...runDrizzle(
-                sql,
+                unwrapSql(sql),
                 dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}${afterSql} ORDER BY id LIMIT ${param(SOURCE_PAGE_ROWS)}`,
             ),
         ];

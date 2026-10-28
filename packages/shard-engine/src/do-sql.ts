@@ -438,8 +438,11 @@ const ftsAvailabilityCache = new WeakMap<SqlExec, boolean>();
  */
 const WRAPPED_SQL = Symbol("lunora.wrappedSql");
 
+/** The handle under a wrapping handle, or `sql` itself when it wraps nothing. */
+const unwrapSql = (sql: SqlExec): SqlExec => (sql as { [WRAPPED_SQL]?: SqlExec })[WRAPPED_SQL] ?? sql;
+
 const isFtsAvailable = (wrapper: SqlExec): boolean => {
-    const sql = (wrapper as { [WRAPPED_SQL]?: SqlExec })[WRAPPED_SQL] ?? wrapper;
+    const sql = unwrapSql(wrapper);
     const cached = ftsAvailabilityCache.get(sql);
 
     if (cached !== undefined) {
@@ -498,6 +501,7 @@ export {
     rowToDocument,
     tableColumns,
     tryRowToDocument,
+    unwrapSql,
     WRAPPED_SQL,
 };
 

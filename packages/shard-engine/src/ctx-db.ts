@@ -85,6 +85,7 @@ import {
     serializeSqlValue,
     tableColumns,
     tryRowToDocument,
+    unwrapSql,
     WRAPPED_SQL,
 } from "./do-sql";
 import { renderSql, unionAll, WORKERD_SQLITE_LIMITS } from "./drizzle";
@@ -1276,8 +1277,9 @@ const buildReader = (
         // isolate, so a warm DO would otherwise index one page and then stop —
         // a large table stays permanently half-indexed, serving partial results
         // with no error and no signal. The page is bounded and a completed
-        // index costs one indexed state lookup, so reads pay almost nothing.
-        backfillSearchIndexesForTable(sql, tableName, tableDefinition);
+        // index costs one indexed state lookup, so reads pay almost nothing —
+        // and it is not the caller's read, so it bypasses the read-byte meter.
+        backfillSearchIndexesForTable(unwrapSql(sql), tableName, tableDefinition);
 
         // Relevance order means the engine read is always bounded: the caller's
         // limit when there is one, `MAX_SEARCH_SCAN` otherwise — including when an
@@ -2024,8 +2026,9 @@ const documentBytes = (rows: ReadonlyArray<unknown>): number => {
  * reaches the isolate through a dozen paths — by-id probes, keyset pages,
  * search and geo candidates, rank pages, relation loads — and a byte cap that
  * one of them skips is no cap. The stored JSON is already a string in hand, so
- * its length costs nothing; nothing is re-serialized. The engine consumes
- * cursors through `toArray()` / `one()` only, so those are the two charged.
+ * its length costs nothing; nothing is re-serialized. `toArray()`, `one()` and
+ * iteration are each charged; workerd's native `toArray` does not re-enter the
+ * JS iterator, so no row is charged twice.
  */
 const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | undefined, exempt: () => boolean): SqlExec => {
     if (headroom === undefined) {
@@ -2036,6 +2039,7 @@ const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | und
         const cursor = sql.exec<Row>(query, ...params);
         const toArray = cursor.toArray.bind(cursor);
         const one = cursor.one.bind(cursor);
+        const iterate = cursor[Symbol.iterator].bind(cursor);
         const charge = (rows: ReadonlyArray<unknown>): void => {
             if (!exempt()) {
                 const bytes = documentBytes(rows);
@@ -2059,6 +2063,12 @@ const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | und
             charge([row]);
 
             return row;
+        };
+        cursor[Symbol.iterator] = function* chargedRows() {
+            for (const row of { [Symbol.iterator]: iterate }) {
+                charge([row]);
+                yield row;
+            }
         };
 
         return cursor;
