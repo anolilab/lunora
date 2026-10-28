@@ -308,6 +308,7 @@ import { BATCH_END_FRAME, BATCH_START_FRAME, REFRESH_BATCH_CAPABILITY } from "..
 import { parseRelayName } from "../../../shared/relay-name";
 import { parseReplicaName } from "../../../shared/replica-name";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
+import { SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { adminSocketBinding, verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -1707,6 +1708,16 @@ const countLiveConnections = (
     }
 
     return { callerConnections, ipConnections };
+};
+
+/** Claims a refreshed credential re-issues on every refresh; they say when it was minted and until when, not who it names. */
+const VOLATILE_CLAIMS = new Set(["exp", "expiresAtMs", "iat", "jti", "nbf"]);
+
+/** The claims a re-auth must leave unchanged, as one comparable key (`""` for none). */
+const credentialClaimsKey = (identity: Record<string, unknown> | undefined): string => {
+    const stable = Object.fromEntries(Object.entries(identity ?? {}).filter(([claim]) => !VOLATILE_CLAIMS.has(claim)));
+
+    return Object.keys(stable).length === 0 ? "" : stableWireKey(stable);
 };
 
 const socketIdentity = (attachment: SocketAttachment): SubscriptionIdentity => {
@@ -16640,7 +16651,94 @@ abstract class ShardDO {
             return this.handleLivePublish(request);
         }
 
+        if (url.pathname === SOCKET_REAUTH_PATH && request.method === "POST") {
+            return this.handleSocketReauth(request);
+        }
+
         return undefined;
+    }
+
+    /**
+     * A refreshed credential for one of this shard's sockets, verified by the worker
+     * (the shard cannot run the app's identity resolver, so it never sees the token).
+     * Rides the live-control path so a socket held by a relay is reached through the
+     * owner the same way a live grant is.
+     */
+    private async handleSocketReauth(request: Request): Promise<Response> {
+        let body: { connectionId?: unknown };
+
+        try {
+            body = await request.json();
+        } catch {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
+        }
+
+        if (typeof body.connectionId !== "string" || body.connectionId.length === 0 || body.connectionId.length > MAX_LIVE_CONTROL_KEY_LENGTH) {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "connectionId is required" } }, 400);
+        }
+
+        const identity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
+        const identityExpiry = decodeIdentityExpiryHeader(request.headers.get("x-lunora-identity-exp"));
+
+        return this.handleLiveSocketControl({
+            action: "reauth",
+            callerId: decodeUserIdHeader(request.headers.get("x-lunora-userid")) ?? "",
+            connectionId: body.connectionId,
+            ...(identity === undefined ? {} : { identity }),
+            ...(identityExpiry === undefined ? {} : { identityExpiry }),
+            key: "",
+            subscriptionId: "",
+        });
+    }
+
+    /**
+     * Move a socket's credential expiry to the refreshed one, keeping its
+     * subscriptions and memos. Refused — and the socket left to lapse at its old
+     * expiry with 4001 — when the credential is anonymous, already expired, older
+     * than the one the socket holds (a replay), or carries different claims; the
+     * client then reconnects, and a changed identity re-seeds there as on any upgrade.
+     */
+    private reauthenticateSocket(ws: ShardSocketLike, call: LiveSocketControlCall): Response {
+        const attachment = this.readAttachment(ws);
+        const { identity, identityExpiry } = call;
+
+        if (call.callerId === "") {
+            return jsonResponse({ error: { code: "UNAUTHENTICATED", message: "an anonymous socket has no credential to refresh" } }, 401);
+        }
+
+        if (isIdentityExpired(identityExpiry)) {
+            return jsonResponse({ error: { code: "TOKEN_EXPIRED", message: "authentication token expired" } }, 401);
+        }
+
+        if (attachment.expiresAt !== undefined && identityExpiry !== undefined && identityExpiry < attachment.expiresAt) {
+            return jsonResponse({ error: { code: "STALE_CREDENTIAL", message: "the socket already holds a later credential" } }, 409);
+        }
+
+        if (credentialClaimsKey(attachment.identity) !== credentialClaimsKey(identity)) {
+            return jsonResponse({ error: { code: "IDENTITY_CHANGED", message: "the credential's claims differ from the socket's; reconnect" } }, 409);
+        }
+
+        const next: SocketAttachment = { ...attachment };
+
+        if (identityExpiry === undefined) {
+            delete next.expiresAt;
+        } else {
+            next.expiresAt = identityExpiry;
+        }
+
+        if (identity === undefined) {
+            delete next.identity;
+        } else {
+            next.identity = identity;
+        }
+
+        try {
+            this.writeAttachment(ws, next);
+        } catch {
+            return jsonResponse({ error: { code: "SUBSCRIPTION_PERSIST_FAILED", message: "the socket attachment could not be updated; reconnect" } }, 409);
+        }
+
+        return jsonResponse({ ok: true });
     }
 
     private async routeNonRpc(url: URL, request: Request): Promise<Response | undefined> {
@@ -18250,6 +18348,11 @@ abstract class ShardDO {
         }
 
         const { action, connectionId, key, subscriptionId } = parsed;
+
+        // `reauth` reaches the socket path only from the worker's re-auth route, which forwards the verified claims.
+        if (action === "reauth") {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "action must be subscribe or unsubscribe" } }, 400);
+        }
         // Connection ids are random per DO instance, and the grant lands only in the map or socket
         // list of the DO that receives the call. The server routes connect and control to the same
         // shard (`shard` query param and `shardKey` body field both feed `fetchShard`). If a control
@@ -18329,6 +18432,10 @@ abstract class ShardDO {
         // Same owner rule as an SSE connection: another caller's socket is refused as absent.
         if (ws === undefined || (this.readAttachment(ws).userId ?? "") !== callerId) {
             return jsonResponse({ error: { code: "LIVE_CONNECTION_NOT_FOUND", message: "no such live connection" } }, 404);
+        }
+
+        if (action === "reauth") {
+            return this.reauthenticateSocket(ws, call);
         }
 
         const attachment = this.readAttachment(ws);

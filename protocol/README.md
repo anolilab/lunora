@@ -865,7 +865,8 @@ the session credential alone is refused (`403`).
 
 The channels above admit the **socket**. The **user** a socket acts as comes from
 the worker's `resolveIdentity` on the upgrade request, once, and holds for the
-socket's life (a past `exp` closes it with `4001`). A browser sends its session
+socket's life (a past `exp` closes it with `4001`) unless a same-user refresh
+moves the expiry (below). A browser sends its session
 cookie automatically. A client whose session is a bearer (an external IdP's JWT,
 or a cross-origin API) presents it in one of two ways:
 
@@ -880,6 +881,28 @@ or a cross-origin API) presents it in one of two ways:
 
 This bearer is a user credential only. It never satisfies the `LUNORA_WS_BEARER`
 or admin checks above, which read the forwarded upgrade and the `connect` frame.
+
+**Refreshing the credential on an open socket.** A socket's frames reach only
+its shard, which cannot run `resolveIdentity`, so a refreshed bearer does not go
+on the socket. The client posts it to the worker instead:
+
+```
+POST /_lunora/ws/reauth?shard=<key>
+Authorization: Bearer <refreshed token>
+{ "connectionId": "<from the socket's identity frame>" }
+```
+
+The worker resolves the credential as it would an upgrade — a lapsed one is
+`401 TOKEN_EXPIRED`, none at all `401 UNAUTHENTICATED` — and forwards only the
+server-minted identity to the shard. The shard moves the socket's expiry when the
+socket belongs to the same user and every claim except `exp`, `expiresAtMs`,
+`iat`, `nbf` and `jti` is unchanged, and answers `200 { ok: true }`; nothing is
+re-sent on the socket. It refuses an unknown or another user's socket (`404`), a
+credential older than the one the socket holds (`409 STALE_CREDENTIAL`), and
+changed claims (`409 IDENTITY_CHANGED`). On any refusal the socket is left as it
+was: it still closes with `4001` at its old expiry, and a client SHOULD reconnect
+it under the new credential, which re-seeds as any upgrade does. A server
+without the route answers `404`, so the same fallback covers it.
 
 A client SHOULD accept an **async token provider** (`() -> token`) for both
 credentials, resolved fresh on every (re)connect. The TS contract is

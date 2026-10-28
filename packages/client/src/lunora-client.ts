@@ -7,6 +7,7 @@ import { encodeExpectedSubjectHeader, EXPECT_SUBJECT_HEADER } from "../../../sha
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { REFRESH_BATCH_CAPABILITY } from "../../../shared/refresh-batch";
 import { onSessionChanged } from "../../../shared/session-change";
+import { SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
 import { encodeBearerProtocol, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
 import type { AdminHost } from "./admin/host";
 import { decodeRecordArgs } from "./admin/scheduler";
@@ -31,7 +32,7 @@ import {
     RESUBSCRIBE_CONCURRENCY,
     SOCKET_STABLE_MS,
 } from "./client-tuning";
-import { deriveWsUrl, joinUrl, parseSocketUrl, serializeSocketUrl } from "./client-urls";
+import { deriveWsUrl, joinUrl, parseSocketUrl, serializeSocketUrl, withQuery } from "./client-urls";
 import type { ConnectionStatus, ManagedSocketState, ShardConnection, WSState } from "./connection-state";
 import { connectionKey, decodeServerFrame, flushPendingStreams, isLiveStatus, sendOn } from "./connection-state";
 import { TabCoordinator } from "./cross-tab";
@@ -3760,8 +3761,8 @@ class LunoraClient {
      *
      * A sign-in from signed-out is `"cold"`: the sockets upgraded anonymously,
      * and no view may resume from an anonymous cursor. A refreshed bearer under
-     * an unchanged identity is `"warm"`: the subscriptions resume from their
-     * cursors.
+     * an unchanged identity is `"warm"`: it is handed to the open sockets in
+     * place, and a socket that refuses it reconnects and resumes from its cursors.
      *
      * A sign-out or an account switch leaves a previous identity behind and is
      * evicted by `setAuthToken` before this is asked.
@@ -3793,7 +3794,53 @@ class LunoraClient {
             this.resetRoomSends();
             this.reconnectCold();
         } else if (reconnect === "warm") {
-            this.bounceShardSockets();
+            this.reauthenticateShardSockets();
+        }
+    }
+
+    /**
+     * Hand a refreshed bearer to every open shard socket in place, so a token
+     * lifetime no longer costs a reconnect and a full re-seed. A socket the server
+     * will not re-authenticate — not yet named by its `identity` frame, held under
+     * different claims, or behind a server without the route — is bounced as before.
+     * Route and scheduled sockets carry their bearer on the upgrade too, and are
+     * bounced as before.
+     */
+    private reauthenticateShardSockets(): void {
+        const { authToken: token, fetchImpl } = this;
+
+        for (const conn of this.connections.values()) {
+            const { connectionId } = conn;
+
+            if (token === null || fetchImpl === undefined || conn.socket === undefined || connectionId === undefined || conn.retired === true) {
+                this.bounceShardSocket(conn);
+
+                continue;
+            }
+
+            const url = joinUrl(this.url, withQuery(SOCKET_REAUTH_PATH, { shard: conn.shardKey }));
+
+            fetchImpl(url, {
+                body: JSON.stringify({ connectionId }),
+                credentials: "include",
+                headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+                method: "POST",
+            })
+                .then((response) => response.ok)
+                .catch(() => false)
+                .then((reauthenticated) => {
+                    // A newer token, or a socket that has since been replaced, is already handled by whatever replaced it.
+                    if (!reauthenticated && !this.closed && this.authToken === token && conn.connectionId === connectionId) {
+                        this.bounceShardSocket(conn);
+                    }
+
+                    return undefined;
+                })
+                .catch(() => undefined);
+        }
+
+        for (const bounce of this.supplementaryBounces) {
+            bounce();
         }
     }
 
@@ -8617,35 +8664,42 @@ class LunoraClient {
      *
      * Non-terminal, unlike {@link close}: the `ShardConnection` records and the
      * subscriptions riding them survive, and the registered `close` handler
-     * (`handleDisconnect`) schedules the retry and replays the subscribes. This
-     * is the only way to move a WS credential — it lives in the upgrade URL.
+     * (`handleDisconnect`) schedules the retry and replays the subscribes. A
+     * credential rides the upgrade, so this is how a socket moves to a new
+     * identity; a same-user refresh can instead go in place
+     * ({@link reauthenticateShardSockets}).
      */
     private bounceShardSockets(): void {
         for (const conn of this.connections.values()) {
-            if (conn.socket) {
-                // Retired as of now, not as of the `close` event — the gap
-                // between the two is where an already-queued frame lands with
-                // `conn.socket` still pointing here. See `ShardConnection.retired`.
-                conn.retired = true;
-
-                try {
-                    conn.socket.close();
-                } catch {
-                    /* ignore */
-                }
-            } else if (conn.providerAttempt !== undefined) {
-                // A mint still pending under the old credential would never open the shard. Restarting claims the
-                // attempt, so the superseded mint's late result returns early and only the restarted one opens.
-                this.startShardSocket(conn, conn.shardKey).catch(() => {
-                    this.handleDisconnect(conn);
-                });
-            }
+            this.bounceShardSocket(conn);
         }
 
         // Route and scheduled sockets carry the same identity, so they reconnect too:
         // otherwise a signed-out user keeps receiving on them.
         for (const bounce of this.supplementaryBounces) {
             bounce();
+        }
+    }
+
+    private bounceShardSocket(conn: ShardConnection): void {
+        if (conn.socket) {
+            // Retired as of now, not as of the `close` event — the gap
+            // between the two is where an already-queued frame lands with
+            // `conn.socket` still pointing here. See `ShardConnection.retired`.
+            // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+            conn.retired = true;
+
+            try {
+                conn.socket.close();
+            } catch {
+                /* ignore */
+            }
+        } else if (conn.providerAttempt !== undefined) {
+            // A mint still pending under the old credential would never open the shard. Restarting claims the
+            // attempt, so the superseded mint's late result returns early and only the restarted one opens.
+            this.startShardSocket(conn, conn.shardKey).catch(() => {
+                this.handleDisconnect(conn);
+            });
         }
     }
 
