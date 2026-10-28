@@ -244,8 +244,12 @@ const DISPATCH_LEASE_MS = 900_000; // fifteen minutes
 const TERMINAL_RETENTION_MS = 604_800_000; // seven days
 // Rows one sweep reclaims: each costs a `done:` and a `dt:` key in the same
 // delete, and a Durable Object delete takes at most MAX_STORAGE_BATCH keys.
-// ponytail: one bounded batch per alarm pass, so a backlog of expired rows drains over several passes.
 const TERMINAL_SWEEP_BATCH = 64;
+
+// Batches per sweep: 4 × 64 outruns the 100 outcomes one alarm pass can write.
+// ponytail: an idle scheduler sweeps nothing until its next alarm, cancel or purge; reads hide expired rows meanwhile.
+const TERMINAL_SWEEP_PASSES = 4;
+
 // Largest accepted `scheduledFor`, in epoch milliseconds: the biggest value
 // that still fits in TIME_PAD digits (999_999_999_999_999 = 1e15 - 1). Capping
 // here — rather than at the 8.64e15 ECMAScript `Date` max — guarantees EVERY
@@ -828,11 +832,11 @@ class SchedulerDO {
             }
         }
 
-        if (due.length > 0) {
-            // Reclaiming history is housekeeping; expiry is enforced on read, so a
-            // failed sweep only delays freeing the rows.
-            await this.sweepTerminal().catch(() => undefined);
+        // Reclaiming history is housekeeping; expiry is enforced on read, so a
+        // failed sweep only delays freeing the rows.
+        await this.sweepTerminal().catch(() => undefined);
 
+        if (due.length > 0) {
             // Jobs fired (and were removed or moved to retry), so push the new list
             // to live subscribers — this is the moment a studio wants to see.
             await this.broadcastChange();
@@ -1962,6 +1966,7 @@ class SchedulerDO {
 
         await this.removeRecord(record);
         await this.writeTerminal(record, "canceled");
+        await this.sweepTerminal().catch(() => undefined);
         // NOTE: cancel never releases a pool slot. A queued job holds none; a
         // job whose dispatch is in flight (its header survives until the kick
         // returns) keeps its slot until drainRecord() releases it on a failed
@@ -2068,6 +2073,7 @@ class SchedulerDO {
         // existed": it failed, and `/get` keeps saying so for the retention window.
         await this.writeTerminal(dead, "failed");
         await this.state.storage.delete(`${DEAD_PREFIX}${body.id}`);
+        await this.sweepTerminal().catch(() => undefined);
 
         return SchedulerDO.json({ removed: true });
     }
@@ -2185,19 +2191,34 @@ class SchedulerDO {
     }
 
     /**
-     * Reclaim one batch of terminal rows past {@link TERMINAL_RETENTION_MS}. The
-     * index is newest-first, so every expired entry sorts after the horizon key.
-     * A `done:` row is deleted only when THIS entry is its index — an id reused
-     * since owns a newer row with its own entry.
+     * Reclaim terminal rows past {@link TERMINAL_RETENTION_MS}, in up to
+     * {@link TERMINAL_SWEEP_PASSES} batches — enough to outpace one full drain's
+     * worth of new outcomes, so a steady load cannot outgrow the sweep. Runs on
+     * every alarm and after a cancel or purge, the paths that write outcomes.
      */
     private async sweepTerminal(): Promise<void> {
+        for (let pass = 0; pass < TERMINAL_SWEEP_PASSES; pass += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each pass lists what the previous one left
+            if ((await this.sweepTerminalBatch()) < TERMINAL_SWEEP_BATCH) {
+                return;
+            }
+        }
+    }
+
+    /**
+     * Reclaim one batch and answer how many index entries it held. The index is
+     * newest-first, so every expired entry sorts after the horizon key. A `done:`
+     * row is deleted only when THIS entry is its index — an id reused since owns
+     * a newer row with its own entry.
+     */
+    private async sweepTerminalBatch(): Promise<number> {
         // `+ 1` makes the bound inclusive of a row exactly at the horizon, which
         // `readTerminal` already treats as expired.
         const horizon = SchedulerDO.terminalIndexKey(Date.now() - TERMINAL_RETENTION_MS + 1, "~");
         const expired = await this.state.storage.list<string>({ limit: TERMINAL_SWEEP_BATCH, prefix: DONE_INDEX_PREFIX, startAfter: horizon });
 
         if (expired.size === 0) {
-            return;
+            return 0;
         }
 
         const owned = await Promise.all(
@@ -2209,6 +2230,8 @@ class SchedulerDO {
         );
 
         await this.state.storage.delete(owned.flat());
+
+        return expired.size;
     }
 
     private async pauseState(): Promise<DeploymentPauseState> {

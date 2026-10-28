@@ -240,6 +240,28 @@ describe("schedulerDO job lifecycle", () => {
         expect(state.storageMap.has("done:next")).toBe(true);
     });
 
+    it("reclaims more than one batch of expired rows in a pass, from a cancel alone", async () => {
+        expect.hasAssertions();
+
+        const at = 1_700_000_000_000;
+        const setNow = pinClock(at);
+        const state = createFakeState();
+        const scheduler = new BlockingScheduler(state, env);
+
+        for (let index = 0; index < 100; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- outcomes written one after another
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.run", id: `old-${String(index)}`, scheduledFor: at + 60_000 }));
+            // eslint-disable-next-line no-await-in-loop -- same
+            await scheduler.fetch(post("/cancel", { id: `old-${String(index)}` }));
+        }
+
+        setNow(at + TERMINAL_RETENTION_MS);
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.run", id: "fresh", scheduledFor: Date.now() + 60_000 }));
+        await scheduler.fetch(post("/cancel", { id: "fresh" }));
+
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("done:") || key.startsWith("dt:"))).toHaveLength(2);
+    });
+
     it("answers pending, not the old outcome, for a caller id reused after its job finished", async () => {
         expect.hasAssertions();
 
