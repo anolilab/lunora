@@ -617,6 +617,37 @@ const sendImport = async (
     }
 };
 
+/** The summed outcome of an import: row counts, then each refused row with its line. */
+const ImportResultSummary = ({ result }: { readonly result: ImportShardResult }): ReactElement => {
+    const t = useT();
+
+    return (
+        <div className="flex flex-col gap-2" data-testid="ei-import-result">
+            <p className="text-sm text-muted-foreground">
+                {t("Inserted {inserted}, replaced {replaced}, {conflicts} conflicts, {errors} errors.", {
+                    conflicts: result.conflicts,
+                    errors: result.errors.length,
+                    inserted: insertedRowCount(result.inserted),
+                    replaced: result.replaced ?? 0,
+                })}
+            </p>
+            {result.errors.length > 0 && (
+                <ul className="flex flex-col gap-1" data-testid="ei-import-errors">
+                    {result.errors.map((rowError) => (
+                        <li className="text-xs text-destructive" key={`${rowError.table}-${rowError.line.toString()}`}>
+                            {t("line {line} ({table}): {message}", {
+                                line: rowError.line,
+                                message: rowError.message,
+                                table: rowError.table,
+                            })}
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    );
+};
+
 /**
  * Snapshot and restore a single shard's data as NDJSON.
  *
@@ -746,8 +777,6 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         invalidateAdmin(ADMIN_FUNCTIONS.listTables);
     };
 
-    const insertedTotal = importResult === null ? 0 : insertedRowCount(importResult.inserted);
-
     // The busy flag clears on every settle, rejection included, so a failed run never leaves the panel stuck.
     const runExport = (): void => {
         fireAndForget(
@@ -865,31 +894,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                         </p>
                     )}
 
-                    {importResult !== null && (
-                        <div className="flex flex-col gap-2" data-testid="ei-import-result">
-                            <p className="text-sm text-muted-foreground">
-                                {t("Inserted {inserted}, replaced {replaced}, {conflicts} conflicts, {errors} errors.", {
-                                    conflicts: importResult.conflicts,
-                                    errors: importResult.errors.length,
-                                    inserted: insertedTotal,
-                                    replaced: importResult.replaced ?? 0,
-                                })}
-                            </p>
-                            {importResult.errors.length > 0 && (
-                                <ul className="flex flex-col gap-1" data-testid="ei-import-errors">
-                                    {importResult.errors.map((rowError) => (
-                                        <li className="text-xs text-destructive" key={`${rowError.table}-${rowError.line.toString()}`}>
-                                            {t("line {line} ({table}): {message}", {
-                                                line: rowError.line,
-                                                message: rowError.message,
-                                                table: rowError.table,
-                                            })}
-                                        </li>
-                                    ))}
-                                </ul>
-                            )}
-                        </div>
-                    )}
+                    {importResult !== null && <ImportResultSummary result={importResult} />}
                 </CardContent>
             </Card>
 
