@@ -9,6 +9,7 @@
         "#lunora/*": "./lunora/*"
     },
     "scripts": {
+        "bench:chunked": "node scripts/chunked.mjs",
         "bench:cold-start": "node scripts/cold-start.mjs",
         "bench:startup": "node scripts/startup.mjs",
         "build": "vite build",
