@@ -53,7 +53,7 @@ import {
 } from "@lunora/sql-store";
 
 import { mysqlDialect, postgresDialect } from "./global-dialect";
-import type { Mysql2Execute, RowClient } from "./global-exec";
+import type { Mysql2Client, RowClient } from "./global-exec";
 import { buildMysqlExec, buildPgExec } from "./global-exec";
 
 const dialectFor = (engine: HyperdriveEngine): SqlDialect => (engine === "postgres" ? postgresDialect : mysqlDialect);
@@ -138,7 +138,7 @@ export const createPostgresGlobalCtxDb = (client: RowClient, options: Omit<Creat
     createHyperdriveGlobalCtxDb({ ...options, engine: "postgres", exec: buildPgExec(client) });
 
 /** Convenience: a **MySQL** `.global()` writer from a `mysql2/promise` connection/pool (created with `flags: ["FOUND_ROWS"]`). */
-export const createMysqlGlobalCtxDb = (connection: Mysql2Execute, options: Omit<CreateHyperdriveGlobalCtxDbOptions, "engine" | "exec">): DatabaseWriterLike =>
+export const createMysqlGlobalCtxDb = (connection: Mysql2Client, options: Omit<CreateHyperdriveGlobalCtxDbOptions, "engine" | "exec">): DatabaseWriterLike =>
     createHyperdriveGlobalCtxDb({ ...options, engine: "mysql", exec: buildMysqlExec(connection) });
 
 /** The studio's global data browser over a Hyperdrive database — every table in the connection's schema, internal ones hidden. */
@@ -204,7 +204,7 @@ export const applyHyperdriveGlobalCdc = async (options: {
 };
 
 export { mysqlDialect, postgresDialect } from "./global-dialect";
-export type { Mysql2Execute, RowClient } from "./global-exec";
+export type { Mysql2Client, RowClient } from "./global-exec";
 export { buildMysqlExec, buildPgExec } from "./global-exec";
 export type { PgVectorIndexOptions } from "./pg-vector";
 export { createPgVectorIndex } from "./pg-vector";

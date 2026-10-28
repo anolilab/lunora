@@ -59,7 +59,9 @@ interface NodePgLike {
 
 ```ts
 interface PostgresJsLike {
-    unsafe(this: void, text: string, params?: ReadonlyArray<unknown>, options?: { prepare?: boolean }): Promise<unknown>;
+    unsafe(this: void, text: string, params?: ReadonlyArray<unknown>, options?: {
+        prepare?: boolean;
+    }): Promise<unknown>;
 }
 ```
 
@@ -182,10 +184,10 @@ interface ImportHyperdriveGlobalRowsOptions {
 }
 ```
 
-### `Mysql2Execute` (type)
+### `Mysql2Client` (type)
 
 ```ts
-type Mysql2Execute = Mysql2Like & {
+type Mysql2Client = Mysql2Like & {
     config?: unknown;
     pool?: unknown;
 };
@@ -223,7 +225,7 @@ const applyHyperdriveGlobalCdc: (options: {
 ### `buildMysqlExec` (const)
 
 ```ts
-const buildMysqlExec: (connection: Mysql2Execute) => SqlExec;
+const buildMysqlExec: (connection: Mysql2Client) => SqlExec;
 ```
 
 ### `buildPgExec` (const)
@@ -247,7 +249,7 @@ const createHyperdriveGlobalIntrospector: (engine: HyperdriveEngine, exec: SqlEx
 ### `createMysqlGlobalCtxDb` (const)
 
 ```ts
-const createMysqlGlobalCtxDb: (connection: Mysql2Execute, options: Omit<CreateHyperdriveGlobalCtxDbOptions, "engine" | "exec">) => DatabaseWriterLike;
+const createMysqlGlobalCtxDb: (connection: Mysql2Client, options: Omit<CreateHyperdriveGlobalCtxDbOptions, "engine" | "exec">) => DatabaseWriterLike;
 ```
 
 ### `createPgVectorIndex` (const)

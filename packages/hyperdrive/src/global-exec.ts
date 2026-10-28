@@ -37,9 +37,9 @@ type FlagProbeShape = Mysql2Like & {
 };
 
 /**
- * Read the merged client-flags bitmask off a real `mysql2/promise` connection or pool (see {@link Mysql2Execute}), trying the single-connection shape first and falling back to the pool's nested shape. Returns `undefined` when neither is present — the driver (or test double) doesn't expose flag introspection.
+ * Read the merged client-flags bitmask off a real `mysql2/promise` connection or pool (see {@link Mysql2Client}), trying the single-connection shape first and falling back to the pool's nested shape. Returns `undefined` when neither is present — the driver (or test double) doesn't expose flag introspection.
  */
-const readMysqlClientFlags = (connection: Mysql2Execute): number | undefined => {
+const readMysqlClientFlags = (connection: Mysql2Client): number | undefined => {
     const probe = connection as FlagProbeShape;
     const direct = probe.config?.clientFlags;
 
@@ -66,7 +66,7 @@ const readMysqlClientFlags = (connection: Mysql2Execute): number | undefined => 
  * bitmask at either shape) warns once PER CONNECTION and returns — throwing on
  * "unknown" would break every driver that doesn't expose flag introspection.
  */
-const assertFoundRows = (connection: Mysql2Execute): void => {
+const assertFoundRows = (connection: Mysql2Client): void => {
     const clientFlags = readMysqlClientFlags(connection);
 
     if (clientFlags === undefined) {
@@ -134,7 +134,7 @@ export type RowClient = SqlClient;
  * them through the internal `FlagProbeShape` instead, and a minimal test double
  * (only `query`) resolves to "undeterminable" rather than a `TypeError`.
  */
-export type Mysql2Execute = Mysql2Like & { config?: unknown; pool?: unknown };
+export type Mysql2Client = Mysql2Like & { config?: unknown; pool?: unknown };
 
 /**
  * Wrap a Postgres row-client (from `@lunora/hyperdrive`'s `fromPostgresJs` /
@@ -193,7 +193,7 @@ export const buildPgExec = (client: RowClient): SqlExec => {
  * at-least-once, and unordered between elements, safe only for statements
  * with no cross-effect (what every current caller batches).
  */
-export const buildMysqlExec = (connection: Mysql2Execute): SqlExec => {
+export const buildMysqlExec = (connection: Mysql2Client): SqlExec => {
     assertFoundRows(connection);
 
     return {
