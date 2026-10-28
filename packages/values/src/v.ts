@@ -1035,6 +1035,20 @@ type OptionalizeShape<M> = {
 type ObjectShape = Record<string, Validator>;
 type ObjectShapeType<S extends ObjectShape> = OptionalizeShape<{ [K in keyof S]: Infer<S[K]> }>;
 
+/** The keys of `input` absent from `declared`, in input order — allocated on the first miss only, so a clean result just scans. */
+const undeclaredKeysOf = (input: Record<string, unknown>, declared: ReadonlySet<string>): string[] | undefined => {
+    let undeclared: string[] | undefined;
+
+    for (const key of Object.keys(input)) {
+        if (!declared.has(key)) {
+            undeclared ??= [];
+            undeclared.push(key);
+        }
+    }
+
+    return undeclared;
+};
+
 const objectValidator = <S extends ObjectShape>(shape: S, stripUnknown?: boolean): ObjectColumnValidator<ObjectShapeType<S>> => {
     // Precompute the key list, per-key internal validator, and the optional flag
     // once at construction time — the shape is fixed, so the per-parse hot path
@@ -1063,6 +1077,10 @@ const objectValidator = <S extends ObjectShape>(shape: S, stripUnknown?: boolean
     // marked child has parsed, so `context.redact` cannot tell it that a secret sits
     // in this shape.
     const sensitiveShape = Object.values(shape).some((child) => containsSensitive(child));
+    // `.output()` runs the undeclared-key check on every result, so the lookup set
+    // and the error's `expected` text are built once here rather than per parse.
+    const declaredKeys = new Set(entries.map(({ key }) => key));
+    const declaredExpected = `only the declared keys (${entries.map(({ key }) => key).join(", ")})`;
 
     const validator = asColumn(
         createValidator<ObjectShapeType<S>>(
@@ -1081,10 +1099,9 @@ const objectValidator = <S extends ObjectShape>(shape: S, stripUnknown?: boolean
                 // missing from every response. `.strip()` is the opt-out for a
                 // shape that is narrowing on purpose.
                 if (context.rejectUnknownKeys === true && stripUnknown !== true) {
-                    const declared = new Set(entries.map(({ key }) => key));
-                    const undeclared = Object.keys(input).filter((key) => !declared.has(key));
+                    const undeclared = undeclaredKeysOf(input, declaredKeys);
 
-                    if (undeclared.length > 0) {
+                    if (undeclared !== undefined) {
                         // Under `sensitive`, or beside a sensitive field, the undeclared key names
                         // are withheld too: they are caller-chosen text that can carry the secret.
                         const listed = context.redact === true || sensitiveShape ? "[redacted]" : undeclared.join(", ");
@@ -1093,7 +1110,7 @@ const objectValidator = <S extends ObjectShape>(shape: S, stripUnknown?: boolean
                             `object has ${String(undeclared.length)} undeclared key(s): ${listed}. ` +
                                 `Add them to the validator, or call .strip() on it to drop them on purpose.`,
                             {
-                                expected: `only the declared keys (${entries.map(({ key }) => key).join(", ")})`,
+                                expected: declaredExpected,
                                 path: [...path],
                                 received: listed,
                             },

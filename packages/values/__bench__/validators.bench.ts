@@ -1,6 +1,7 @@
 import { bench, describe } from "vitest";
 
 import { v } from "../src/v";
+import { parseValidatorMap } from "../src/validator-map";
 
 /**
  * Validators sit on the per-RPC critical path: every incoming `args` record
@@ -142,5 +143,31 @@ describe("safeParse path", () => {
 
     bench("safeParse — failure (wrong type at nested field)", () => {
         userObject.safeParse({ ...sampleUser, age: "thirty" });
+    });
+});
+
+/*
+ * The server's two per-call entry points: `parseValidatorMap` for every RPC's
+ * args, and `.output()` parsing under `rejectUnknownKeys` for every result.
+ */
+const argsMap = {
+    active: v.boolean(),
+    age: v.number(),
+    email: v.string(),
+    id: v.id("users"),
+    name: v.optional(v.string()),
+};
+
+describe("server entry points", () => {
+    bench("parseValidatorMap — 5 args", () => {
+        parseValidatorMap(argsMap, sampleUser, "args");
+    });
+
+    bench("output parse (rejectUnknownKeys) — 5 fields", () => {
+        userObject.parse(sampleUser, { rejectUnknownKeys: true });
+    });
+
+    bench("output parse (rejectUnknownKeys) — nested", () => {
+        nestedObject.parse(sampleNested, { rejectUnknownKeys: true });
     });
 });

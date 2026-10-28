@@ -1035,3 +1035,27 @@ describe("isStringValidator", () => {
         expect(isStringValidator(v.union(v.string(), v.number()))).toBe(false);
     });
 });
+
+describe("rejectUnknownKeys diagnostics", () => {
+    it("names every undeclared key in input order, at the object's path", () => {
+        expect.hasAssertions();
+
+        const schema = v.object({ inner: v.object({ a: v.string(), b: v.number() }) });
+        const result = schema.safeParse({ inner: { a: "x", b: 1, zeta: 1, alpha: 2 } }, { rejectUnknownKeys: true });
+
+        assertOk(!result.ok, "expected parse to fail");
+
+        expect(result.error.message).toBe(
+            "object has 2 undeclared key(s): zeta, alpha. Add them to the validator, or call .strip() on it to drop them on purpose.",
+        );
+        expect(result.error.expected).toBe("only the declared keys (a, b)");
+        expect(result.error.received).toBe("zeta, alpha");
+        expect(result.error.path).toStrictEqual(["inner"]);
+    });
+
+    it("accepts an input carrying only declared keys", () => {
+        expect.assertions(1);
+
+        expect(v.object({ a: v.string(), b: v.optional(v.number()) }).parse({ a: "x" }, { rejectUnknownKeys: true })).toStrictEqual({ a: "x" });
+    });
+});
