@@ -2,7 +2,8 @@
 
 The kit's screens, copied into your project and yours to edit: the dashboard stat
 row, the project list with its create form and search/sort toolbar, the activity
-feed grouped by day, and the platform admin's organization table.
+feed grouped by day, and the platform admin's organization, user and
+subscription tables.
 
 ```bash
 lunora registry add saas-ui-svelte
@@ -50,6 +51,25 @@ every tenant call carries `{ shardKey: organizationId }`, the organization id
 
 Every query is live, so a project created in one tab appears in the others
 without a reload.
+
+## The admin screens
+
+`AdminOrganizations` and `AdminSubscriptions` take rows like everything else.
+`AdminUsers` is the one exception to "nothing here subscribes": users live in
+better-auth's tables, not in a Lunora query, so it loads them itself through the
+client you pass — better-auth's `authClient.admin`, from
+`createAuthClient({ plugins: [adminClient()] })` — and re-reads after every
+suspend or unsuspend.
+
+Suspending is a better-auth ban, which better-auth enforces: the user's sessions
+are revoked and their next sign-in is refused. Unsuspending lifts it.
+
+Impersonating hands the admin the user's session, and the admin queries refuse
+that user — so the admin screen is exactly where the way back cannot live. Mount
+`ImpersonationBanner` on every page instead; it renders nothing until the session
+says `impersonatedBy`, then names the user and offers "Stop impersonating". Both
+components call `onSessionChange` once the session has swapped: navigate there,
+because the whole app now belongs to someone else.
 
 ## Two conventions worth keeping
 

@@ -78,7 +78,7 @@ Three pieces make it real:
   their active organization's shard and the root shard, nothing else, so the
   shard key a client sends cannot be someone else's.
 
-The one cross-tenant read — the admin's organization list — goes through
+The cross-tenant read the admin's organization list needs goes through
 `saas_organizations`, a `.global()` projection served from D1, because a query
 runs inside one shard and fanning out over every tenant per page view is a bill,
 not a design. better-auth's organization hooks in `lunora/auth/index.ts` keep it
@@ -90,6 +90,27 @@ organization in `referenceId`. The plan catalog is `lunora/plans.ts`, read by
 both the pricing page and the server's entitlements. Each plan's `apiCalls` is
 its `api_calls` allowance per billing period; the free plan has none, so an
 organisation needs a paid subscription before `track` and `check` grant anything.
+
+## The admin view
+
+`/admin` lists users, organizations and subscriptions for whoever holds the
+platform `admin` role — better-auth's `user.role`, carried into Lunora as the
+`appRole` claim. Nobody has it after sign-up; promote yourself in D1:
+
+```bash
+wrangler d1 execute {{name}}-db --local --command "UPDATE user SET role = 'admin' WHERE email = 'you@example.com'"
+```
+
+Users are better-auth's, so the table talks to better-auth through
+`src/auth-client.ts` rather than to a Lunora function. **Suspend** is a
+better-auth ban — the user's sessions are revoked and sign-in is refused — and
+**Unsuspend** lifts it. **Impersonate** signs you in as the user, with their
+tenant's own authorization applied; the banner on every page says whose session
+you are in and takes you back. It has to be on every page: the admin queries
+refuse the user you are impersonating, so `/admin` is the one place you cannot
+stop from.
+
+Subscriptions are read from the root shard by `payment.adminSubscriptions`.
 
 ## Before you deploy
 
@@ -130,6 +151,7 @@ Users, organizations, members and invitations live in better-auth's own tables;
 | `lunora/saas-ui/core/`  | The view model — framework-agnostic, imports no framework            |
 | `lunora/saas-ui/react/` | The React components                                                 |
 | `src/routes/`           | Your app. The routes own the subscriptions; the cards own the pixels |
+| `src/auth-client.ts`    | better-auth's browser client — the admin's user table and the banner |
 
 Every file under `lunora/` is yours to edit; `lunora registry add` three-way
 merges on upgrade rather than overwriting.

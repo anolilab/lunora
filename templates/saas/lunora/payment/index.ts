@@ -5,8 +5,9 @@
  * you own and edit it. Re-export the functions you want from your `lunora/`
  * entry so codegen picks them up — they surface in the generated `api` as
  * `payment/checkout`, `payment/check`, `payment/portal` and
- * `payment/mySubscriptions`, and `payment/track` in `internal`, for server code
- * only.
+ * `payment/mySubscriptions` — plus `payment/adminSubscriptions`, which this kit
+ * adds for its platform admin — and `payment/track` in `internal`, for server
+ * code only.
  *
  * The functions are provider-agnostic: they call `ctx.payments.*` which is
  * wired in `createShardDO({ payment: (env) => ({ adapter: ..., ... }) })`.
@@ -397,6 +398,27 @@ interface SubscriptionRow {
     state: SubscriptionState;
 }
 
+/** Project one stored subscription row onto {@link SubscriptionRow}. */
+const toSubscriptionRow = (document: object): SubscriptionRow => {
+    // A spread, not the document itself: in a codegen'd app the row is the
+    // typed `Doc<"payment_subscriptions">` interface, which has no index signature,
+    // while its object-literal copy satisfies the readers' record type.
+    const row: Record<string, unknown> = { ...document };
+
+    return {
+        cancelAtPeriodEnd: row["cancelAtPeriodEnd"] === true,
+        currentPeriodEnd: readOptionalNumber(row, "currentPeriodEnd"),
+        currentPeriodStart: readOptionalNumber(row, "currentPeriodStart"),
+        priceId: readString(row, "priceId"),
+        priceIds: readOptionalStringArray(row, "priceIds"),
+        provider: readString(row, "provider"),
+        providerSubscriptionId: readString(row, "providerSubscriptionId"),
+        quantity: typeof row["quantity"] === "number" ? row["quantity"] : 0,
+        referenceId: readString(row, "referenceId"),
+        state: readString(row, "state") as SubscriptionState,
+    };
+};
+
 /**
  * Reactive read of the webhook-synced subscriptions for the caller's organisation.
  *
@@ -418,25 +440,45 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
         .withIndex("by_reference", (q) => q.eq("referenceId", referenceId))
         .collect();
 
-    return rows.map((document) => {
-        // A spread, not the document itself: in a codegen'd app the row is the
-        // typed `Doc<"payment_subscriptions">` interface, which has no index signature,
-        // while its object-literal copy satisfies the readers' record type.
-        const row: Record<string, unknown> = { ...document };
+    return rows.map((document) => toSubscriptionRow(document));
+});
 
-        return {
-            cancelAtPeriodEnd: row["cancelAtPeriodEnd"] === true,
-            currentPeriodEnd: readOptionalNumber(row, "currentPeriodEnd"),
-            currentPeriodStart: readOptionalNumber(row, "currentPeriodStart"),
-            priceId: readString(row, "priceId"),
-            priceIds: readOptionalStringArray(row, "priceIds"),
-            provider: readString(row, "provider"),
-            providerSubscriptionId: readString(row, "providerSubscriptionId"),
-            quantity: typeof row["quantity"] === "number" ? row["quantity"] : 0,
-            referenceId: readString(row, "referenceId"),
-            state: readString(row, "state") as SubscriptionState,
-        };
-    });
+/** The platform-wide roles that may read every tenant's billing — `PLATFORM_ADMIN_ROLES` in `lunora/saas`. */
+const PLATFORM_ADMIN_ROLES: ReadonlySet<string> = new Set(["admin"]);
+
+/** Refuse anyone but a platform admin — the `appRole` claim `lunora/server.ts` resolves from better-auth's `user.role`. */
+const requirePlatformAdmin = async (ctx: { auth: { getIdentity: () => Promise<{ appRole?: string } | null> } }): Promise<void> => {
+    const identity = await ctx.auth.getIdentity();
+
+    if (!identity) {
+        throw new LunoraError("UNAUTHORIZED", "not signed in");
+    }
+
+    // Comma-joined like every better-auth role (`"admin,user"`).
+    if (!(identity.appRole?.split(",").some((role) => PLATFORM_ADMIN_ROLES.has(role.trim())) ?? false)) {
+        throw new LunoraError("FORBIDDEN", "requires the platform admin role");
+    }
+};
+
+/**
+ * Every tenant's subscriptions, for the platform admin's subscription table.
+ *
+ * One root-shard read, not a fan-out: the billing tables are root-scoped (see
+ * `lunora/schema.ts`), so every subscription the webhooks have written is here.
+ * It lives beside the payment functions rather than in `lunora/saas` because a
+ * kit without billing is a supported shape, and there `payment_subscriptions`
+ * does not exist. The admin screen joins the rows to organisation names itself,
+ * from `saas.listOrganizations`.
+ *
+ * Unpaged, like `listOrganizations`: thread a cursor through once the customer
+ * count outgrows one response.
+ */
+export const adminSubscriptions = query.query(async ({ ctx }): Promise<SubscriptionRow[]> => {
+    await requirePlatformAdmin(ctx);
+
+    const rows = await ctx.db.query("payment_subscriptions").collect();
+
+    return rows.map((document) => toSubscriptionRow(document));
 });
 
 /**

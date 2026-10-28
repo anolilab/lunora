@@ -4,7 +4,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api";
-import { AdminOrganizations } from "../../lunora/saas-ui/react";
+import { PLANS } from "../../lunora/plans";
+import { AdminOrganizations, AdminSubscriptions, AdminUsers } from "../../lunora/saas-ui/react";
+import { authClient } from "../auth-client";
 
 import "../../lunora/saas-ui/styles.css";
 
@@ -13,19 +15,27 @@ export const Route = createFileRoute("/admin")({
 });
 
 /**
- * The platform admin view. It reads the `.global()` `saas_organizations`
- * projection — the one cross-tenant read the shard model allows — and the query
- * itself refuses anyone without the platform admin role, so this route needs no
- * gate of its own beyond not linking to it from the app nav.
+ * The platform admin view: users, organisations and subscriptions.
  *
- * Rows arrive as organisations are created: better-auth's organization hooks
- * project each one (`lunora/auth/index.ts`).
+ * Organisations come from the `.global()` `saas_organizations` projection and
+ * subscriptions from the root shard's billing tables — the two cross-tenant
+ * reads the shard model allows, each one read, no fan-out. Users come from
+ * better-auth, which also enforces what this screen does to them: a suspension
+ * is a ban, and impersonation is better-auth's own.
+ *
+ * Every read refuses anyone without the platform admin role (better-auth's
+ * `user.role`), so this route needs no gate of its own beyond not linking to it
+ * from the app nav. Make yourself an admin by setting your `user.role` to
+ * `admin` in D1 — see the README.
  */
 function AdminPage() {
-    // A query the server refuses never resolves, so `rows` would stay `undefined`
-    // and the list would load forever. The refusal arrives here instead.
+    // A query the server refuses never resolves, so the tables would load
+    // forever. The refusal arrives here instead.
     const [failure, setFailure] = useState<SubscriptionError>();
-    const rows = useQuery(api.saas.listOrganizations, {}, { onError: setFailure });
+    const organizations = useQuery(api.saas.listOrganizations, {}, { onError: setFailure });
+    // No `shardKey`: the billing tables live on the root shard.
+    const subscriptions = useQuery(api.payment.adminSubscriptions, {}, { onError: setFailure });
+    const { data: session } = authClient.useSession();
     const [now] = useState(() => Date.now());
     // Calendar days are the viewer's, not the Worker's (always UTC). The table
     // only renders once its live query resolves in the browser, so this is the
@@ -38,7 +48,7 @@ function AdminPage() {
                 <p role="alert">
                     {failure.code === "FORBIDDEN" || failure.code === "UNAUTHORIZED"
                         ? "This page is for platform admins."
-                        : "Could not load organizations — try again."}
+                        : "Could not load the admin view — try again."}
                 </p>
             </main>
         );
@@ -46,7 +56,19 @@ function AdminPage() {
 
     return (
         <main style={{ margin: "2rem auto", maxWidth: "56rem", padding: "0 1rem" }}>
-            <AdminOrganizations now={now} rows={rows} timeZone={timeZone} />
+            {session ? (
+                <AdminUsers
+                    client={authClient.admin}
+                    now={now}
+                    onSessionChange={() => {
+                        // A full load: the session now belongs to the impersonated user.
+                        globalThis.location.assign("/dashboard");
+                    }}
+                    viewerId={session.user.id}
+                />
+            ) : undefined}
+            <AdminOrganizations now={now} rows={organizations} timeZone={timeZone} />
+            <AdminSubscriptions organizations={organizations} plans={PLANS} rows={subscriptions} />
         </main>
     );
 }
