@@ -120,9 +120,29 @@ const createPaginatedCore = <T>(
      */
     const pendingPageKeys = new Set<string>();
 
+    /**
+     * Each page's key, derived once per `Page` object. Every frame on any page
+     * rebuilds `pageResults` for the whole feed, so re-serialising each page's
+     * args per frame made a frame cost one full `stableWireKey` pass per loaded
+     * page. Base args are fixed by content within an args generation, and
+     * `teardownAll` starts a fresh map for the next one.
+     */
+    let pageKeys = new WeakMap<Page, string>();
+
+    const pageKeyOf = (page: Page, baseArgs: Record<string, unknown>): string => {
+        let key = pageKeys.get(page);
+
+        if (key === undefined) {
+            key = buildPageKey(function_["__lunoraRef"], buildPageArgs(page, baseArgs));
+            pageKeys.set(page, key);
+        }
+
+        return key;
+    };
+
     const rebuildPageResults = (currentPages: Page[], baseArgs: Record<string, unknown>): void => {
         const updated = currentPages.map((page) => {
-            const key = buildPageKey(function_["__lunoraRef"], buildPageArgs(page, baseArgs));
+            const key = pageKeyOf(page, baseArgs);
 
             return resultsByKey.get(key);
         });
@@ -139,7 +159,7 @@ const createPaginatedCore = <T>(
      * subscription once attached. Mirrors Vue's `migrateResultsForRebalance`.
      */
     const migrateResultsForRebalance = (oldPages: Page[], newPages: Page[], baseArgs: Record<string, unknown>): void => {
-        const keyOf = (page: Page): string => buildPageKey(function_["__lunoraRef"], buildPageArgs(page, baseArgs));
+        const keyOf = (page: Page): string => pageKeyOf(page, baseArgs);
 
         for (const newPage of newPages) {
             const newKey = keyOf(newPage);
@@ -164,7 +184,7 @@ const createPaginatedCore = <T>(
         const wantedKeys = new Set<string>();
 
         for (const page of currentPages) {
-            wantedKeys.add(buildPageKey(function_["__lunoraRef"], buildPageArgs(page, baseArgs)));
+            wantedKeys.add(pageKeyOf(page, baseArgs));
         }
 
         // Close stale subscriptions and reclaim their stored results. Any key not
@@ -185,7 +205,7 @@ const createPaginatedCore = <T>(
         // Open new subscriptions.
         for (const page of currentPages) {
             const pageArgs = buildPageArgs(page, baseArgs);
-            const key = buildPageKey(function_["__lunoraRef"], pageArgs);
+            const key = pageKeyOf(page, baseArgs);
 
             if (activeSubs.has(key)) {
                 continue;
@@ -242,12 +262,7 @@ const createPaginatedCore = <T>(
                         const current = pages();
                         const tail = current.at(-1);
 
-                        if (
-                            current.length > 1 &&
-                            tail &&
-                            !resultsByKey.has(key) &&
-                            buildPageKey(function_["__lunoraRef"], buildPageArgs(tail, baseArgs)) === key
-                        ) {
+                        if (current.length > 1 && tail && !resultsByKey.has(key) && pageKeyOf(tail, baseArgs) === key) {
                             setPages(current.slice(0, -1));
                         }
 
@@ -318,6 +333,7 @@ const createPaginatedCore = <T>(
         activeSubs.clear();
         resultsByKey.clear();
         pendingPageKeys.clear();
+        pageKeys = new WeakMap();
     };
 
     // Re-subscribe whenever the base args (or skip) change. Keyed on the args'
@@ -385,8 +401,8 @@ const createPaginatedCore = <T>(
         const newPinnedPage = next.at(-2); // `applyLoadMore` inserts the new tail last
 
         if (oldTail && newPinnedPage) {
-            const oldKey = buildPageKey(function_["__lunoraRef"], buildPageArgs(oldTail, current));
-            const newKey = buildPageKey(function_["__lunoraRef"], buildPageArgs(newPinnedPage, current));
+            const oldKey = pageKeyOf(oldTail, current);
+            const newKey = pageKeyOf(newPinnedPage, current);
 
             if (oldKey !== newKey) {
                 const carried = resultsByKey.get(oldKey);
