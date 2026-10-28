@@ -11,6 +11,7 @@
  */
 
 import type { ConnectionStatus } from "./connection-state";
+import { withDeferredNotifications } from "./optimistic-layers";
 import type { SubscriptionError } from "./subscription";
 
 // ---------------------------------------------------------------------------
@@ -113,8 +114,24 @@ interface TabCoordinatorOptions {
 type WsFollowerMessage =
     { tabId: string; ts: number; type: "heartbeat" } | { tabId: string; ts: number; type: "claim-leadership" } | { tabId: string; type: "yield-leadership" };
 
+/**
+ * `more` marks every snapshot of one flush but the last, so a follower applies the whole
+ * flush as one update, as the leader did. A follower that predates it applies each frame
+ * as it lands, as before.
+ */
+type SubscriptionDataMessage = {
+    cursor?: number;
+    data: unknown;
+    epoch?: string;
+    identity?: string | null;
+    key: string;
+    more?: true;
+    tabId: string;
+    type: "subscription-data";
+};
+
 type WsLeaderMessage =
-    | { cursor?: number; data: unknown; epoch?: string; identity?: string | null; key: string; tabId: string; type: "subscription-data" }
+    | SubscriptionDataMessage
     | { error: SubscriptionError; identity?: string | null; key: string; tabId: string; type: "subscription-error" }
     | {
           clientId?: string;
@@ -172,6 +189,9 @@ class TabCoordinator {
      * whole value for every tab on the channel.
      */
     private readonly pendingData = new Map<string, WsLeaderMessage>();
+
+    /** Snapshots received under `more`, applied with the frame that closes their flush. */
+    private heldData: SubscriptionDataMessage[] = [];
 
     private heartbeatTimer: ReturnType<typeof setInterval> | undefined = undefined;
     private leaderCheckTimer: ReturnType<typeof setInterval> | undefined = undefined;
@@ -477,9 +497,27 @@ class TabCoordinator {
             return;
         }
 
-        for (const frame of frames) {
-            this.bc?.postMessage(frame);
+        for (const [index, frame] of frames.entries()) {
+            this.bc?.postMessage(index < frames.length - 1 ? { ...frame, more: true } : frame);
         }
+    }
+
+    /** Hold a snapshot marked `more`; on the one that closes its flush, apply them all and notify once. */
+    private applySubscriptionData(message: SubscriptionDataMessage): void {
+        this.heldData.push(message);
+
+        if (message.more === true) {
+            return;
+        }
+
+        const held = this.heldData;
+
+        this.heldData = [];
+        withDeferredNotifications(() => {
+            for (const frame of held) {
+                this.onSubscriptionData?.(frame.key, frame.data, frame.cursor, frame.epoch, frame.identity);
+            }
+        });
     }
 
     private handleMessage(message: TabCoordinatorMessage): void {
@@ -511,7 +549,7 @@ class TabCoordinator {
                     break; // ignore our own broadcasts
                 }
 
-                this.onSubscriptionData?.(message.key, message.data, message.cursor, message.epoch, message.identity);
+                this.applySubscriptionData(message);
 
                 break;
             }
