@@ -826,11 +826,13 @@ type GlobalImportFunction = (request: {
     rows: ReadonlyArray<{
         doc: Record<string, unknown>;
         line: number;
+        op?: "delete";
         table: string;
     }>;
     startLine?: number;
 }) => Promise<{
     conflicts: number;
+    deleted?: number;
     errors: ReadonlyArray<{
         code: string;
         line: number;
@@ -1046,6 +1048,7 @@ interface ImportFanOutRequest {
     batches: ReadonlyArray<{
         rows: ReadonlyArray<{
             doc: Record<string, unknown>;
+            op?: "delete";
             table: string;
         }>;
         shardKey: string;
@@ -1062,6 +1065,7 @@ interface ImportFanOutRequest {
 ```ts
 interface ImportFanOutResult {
     conflicts: number;
+    deleted: number;
     errors: ReadonlyArray<{
         code: string;
         line: number;
@@ -1998,6 +2002,7 @@ interface ShardImportOutcome {
     };
     result?: {
         conflicts: number;
+        deleted: number;
         errors: ReadonlyArray<{
             code: string;
             line: number;
@@ -2358,6 +2363,7 @@ interface WorkerOptions {
     importGlobals?: GlobalImportFunction;
     importGlobalsSupportsDryRun?: boolean;
     importGlobalsSupportsReplace?: boolean;
+    importGlobalsSupportsDelete?: boolean;
     jurisdiction?: DurableObjectJurisdiction;
     kvIntrospector?: KvIntrospector;
     listSchemaTables?: () => ReadonlyArray<string>;

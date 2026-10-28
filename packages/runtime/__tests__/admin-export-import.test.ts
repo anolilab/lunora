@@ -1031,6 +1031,90 @@ describe("createWorker — admin import endpoint", () => {
             expect(status).toBe(400);
         });
     });
+
+    describe('op: "delete" rows', () => {
+        const deleteImport = async (
+            lines: ReadonlyArray<Record<string, unknown>>,
+            workerOptions: { importGlobalsSupportsDelete?: boolean },
+        ): Promise<{ body: Record<string, unknown>; importGlobals: ReturnType<typeof vi.fn>; status: number }> => {
+            const importGlobals = vi.fn<(request: { rows: ReadonlyArray<{ op?: string }> }) => Promise<unknown>>(async (request) => {
+                return { conflicts: 0, deleted: request.rows.filter((row) => row.op === "delete").length, errors: [], inserted: {} };
+            });
+            const worker = createWorker({
+                adminToken: ADMIN_TOKEN,
+                importGlobals: importGlobals as never,
+                queryCoordinator: {
+                    fanOut: vi.fn<() => never>(),
+                    orchestrateApplyCdc: vi.fn<() => never>(),
+                    orchestrateCdcSync: vi.fn<() => never>(),
+                    orchestrateExport: vi.fn<() => never>(),
+                    orchestrateImport: orchestrateImport as never,
+                    orchestrateMigration: vi.fn<() => never>(),
+                    orchestrateRank: vi.fn<() => never>(),
+                    orchestrateRankPage: vi.fn<() => never>(),
+                    orchestrateShardTraffic: vi.fn<() => never>(),
+                    registry: {} as never,
+                },
+                resolveTableSharding: (table: string): ShardingInfo | undefined =>
+                    table === "settings" ? { mode: { kind: "global" } } : { mode: { field: "orgId", kind: "shardBy" } },
+                shardDO: noopNamespace,
+                ...workerOptions,
+            });
+            const response = await worker.fetch(
+                new Request("https://app.example/_lunora/admin/import", {
+                    body: lines.map((line) => JSON.stringify(line)).join("\n"),
+                    headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            return { body: await response.json(), importGlobals, status: response.status };
+        };
+
+        it("routes a delete to the shard its doc names and carries the op to both planes", async () => {
+            expect.assertions(3);
+
+            const { body, importGlobals } = await deleteImport(
+                [
+                    { doc: { _id: "u1", orgId: "acme" }, op: "delete", table: "users" },
+                    { doc: { _id: "g1" }, op: "delete", table: "settings" },
+                ],
+                { importGlobalsSupportsDelete: true },
+            );
+
+            expect(captured?.batches).toStrictEqual([
+                { rows: [{ doc: { _id: "u1", orgId: "acme" }, op: "delete", table: "users" }], shardKey: "acme", startLine: 1 },
+            ]);
+            expect(importGlobals).toHaveBeenCalledWith(expect.objectContaining({ rows: [{ doc: { _id: "g1" }, line: 2, op: "delete", table: "settings" }] }));
+            expect(body).toMatchObject({ deleted: 1, errors: [] });
+        });
+
+        it("refuses the whole import (400) when global deletes meet an importer that cannot delete, before any shard is pruned", async () => {
+            expect.assertions(3);
+
+            const { importGlobals, status } = await deleteImport(
+                [
+                    { doc: { _id: "u1", orgId: "acme" }, op: "delete", table: "users" },
+                    { doc: { _id: "g1" }, op: "delete", table: "settings" },
+                ],
+                {},
+            );
+
+            expect(status).toBe(400);
+            expect(importGlobals).not.toHaveBeenCalled();
+            expect(orchestrateImport).not.toHaveBeenCalled();
+        });
+
+        it("rejects an unknown op as a bad row", async () => {
+            expect.assertions(1);
+
+            const { body } = await deleteImport([{ doc: { _id: "u1", orgId: "acme" }, op: "merge", table: "users" }], {});
+
+            expect(body["errors"]).toStrictEqual([{ code: "BAD_ROW", line: 1, message: 'row `op` must be "delete" when set, got "merge"', table: "users" }]);
+        });
+    });
 });
 
 /**

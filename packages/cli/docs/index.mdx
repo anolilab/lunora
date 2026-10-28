@@ -87,7 +87,7 @@ lunora migrate <generate|create|up|down|status> [name|id] [--format json]
 lunora env <list|get|set|unset|push|diff|doctor> [--format json]
 lunora export [--out <file>] [--tables <t1,t2>] [--url <u>] [--token <tok>]
               [--format json]           #   json needs --out <file>
-lunora import <file> [--table <name>] [--batch-size n] [--replace] [--format json]
+lunora import <file> [--table <name>] [--batch-size n] [--mode <m>] [--dry-run] [--format json]
 lunora backup <create|list|restore|pitr> [--dir <d>] [--bucket <b>] [--at <iso>]
             [--format json]
 lunora seed [--table <t>] [--count n]   # deterministic fake data from schema.ts
@@ -1367,14 +1367,42 @@ lunora export --tables messages,channels --url https://my-worker.workers.dev --t
 
 lunora import ./backup.ndjson
 lunora import ./users.ndjson --table users   # wrap bare docs as {table,doc} envelopes
-lunora import ./backup.ndjson --replace      # overwrite rows whose _id already exists
+lunora import ./backup.ndjson --mode upsert  # overwrite rows whose _id already exists
+lunora import ./backup.ndjson --mode replace --dry-run   # what a full replace would add, overwrite, delete
 ```
 
-`import` inserts. A row whose `_id` is already in the target is a conflict: it
-is counted and left as it is. `--replace` overwrites it instead, on `.global()`
-and sharded tables alike, and the summary counts it under `replaced`. An `_id`
-held by a different table is still refused. The worker has to support the mode;
-an older one is detected before any row is sent.
+`--mode` says what happens to rows the target already holds:
+
+| Mode                                       | A row whose `_id` is stored                                                 | A stored row the file lacks |
+| ------------------------------------------ | --------------------------------------------------------------------------- | --------------------------- |
+| `append` (`import` default)                | conflict, left as it is                                                     | kept                        |
+| `upsert`                                   | overwritten, keeping its `_id`                                              | kept                        |
+| `replace`                                  | overwritten, keeping its `_id`                                              | deleted                     |
+| `require-empty` (`backup restore` default) | refused before anything is written, if any of the file's tables holds a row |                             |
+
+Only the tables the file names are compared, so `replace` never touches a table
+the file has no rows for (including an empty table in a backup). An `_id` held
+by a different table is still refused. Every mode but `append` first reads the
+target's rows for those tables and prints a plan, one line per table:
+
+```text
+import plan (--mode replace):
+  users: 2 in file, 2 stored — 1 to add, 1 replaced, 1 to delete
+```
+
+`--dry-run` stops there and writes nothing (it also prints the plan for
+`append`). A plan that overwrites or deletes a stored row asks before it writes;
+without a TTY or under `--format json` it needs `--yes`, as does any target that
+is not local.
+
+`replace` is two passes and is not atomic. It writes every file row first
+(overwriting existing ones), and deletes the rows the file lacks only after that
+write came back clean. A run that fails part-way leaves the old rows plus what
+was written, never fewer rows than before. Re-running the same command
+converges: the write overwrites what already landed, and the deletes run once
+it is clean. A reader between the two passes sees both old and new rows. The
+worker has to support each mode; an older one is detected before any row is
+sent.
 
 ### `lunora backup`
 
@@ -1383,8 +1411,9 @@ Managed snapshot backups and native point-in-time recovery (PITR):
 ```bash
 lunora backup create                   # snapshot the running shard
 lunora backup list                     # list available snapshots
-lunora backup restore <id>             # restore a snapshot
-lunora backup restore <id> --replace   # …overwriting rows whose _id already exists
+lunora backup restore <id>             # restore a snapshot into empty tables (refused otherwise)
+lunora backup restore <id> --mode replace --dry-run   # what restoring over live rows would do
+lunora backup restore <id> --mode replace             # make each snapshot table hold exactly its rows
 lunora backup retention                # what a prune would delete
 lunora backup prune                    # delete it — the only command that removes a backup
 lunora backup pitr --at 2024-06-01T12:00:00Z   # read PITR bookmark

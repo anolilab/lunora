@@ -63,6 +63,38 @@ describe("shard admin import — `_id` conflict probe", () => {
         expect(result.inserted).toStrictEqual({});
     });
 
+    it('removes the row an `op: "delete"` row names, hard, and removes nothing on a re-run', async () => {
+        expect.assertions(4);
+
+        const writer = writerFor(harness);
+
+        await writer.insert("notes", { _id: "n1", title: "stale" }, { allowExplicitId: true });
+        await writer.insert("notes", { _id: "n2", title: "kept" }, { allowExplicitId: true });
+
+        const prune = async (): Promise<Awaited<ReturnType<typeof importShardRows>>> =>
+            importShardRows(writer, schema, { rows: [{ doc: { _id: "n1", title: "stale" }, op: "delete", table: "notes" }] });
+
+        await expect(prune()).resolves.toStrictEqual({ conflicts: 0, deleted: 1, errors: [], inserted: {}, replaced: 0 });
+        await expect(writer.get("notes", "n1")).resolves.toBeNull();
+        await expect(writer.get("notes", "n2")).resolves.toMatchObject({ title: "kept" });
+        await expect(prune()).resolves.toStrictEqual({ conflicts: 0, deleted: 0, errors: [], inserted: {}, replaced: 0 });
+    });
+
+    it("refuses a delete row whose `_id` belongs to another table, and keeps that row", async () => {
+        expect.assertions(2);
+
+        const writer = writerFor(harness);
+
+        await writer.insert("notes", { _id: "shared-1", title: "not a task" }, { allowExplicitId: true });
+
+        const result = await importShardRows(writer, schema, { rows: [{ doc: { _id: "shared-1" }, op: "delete", table: "tasks" }] });
+
+        expect(result.errors).toStrictEqual([
+            { code: "ID_COLLISION", line: 1, message: '_id "shared-1" belongs to table "notes", not "tasks"', table: "tasks" },
+        ]);
+        await expect(writer.get("notes", "shared-1")).resolves.toMatchObject({ title: "not a task" });
+    });
+
     it('overwrites a same-table `_id` under onConflict: "replace", keeping the row\'s `_creationTime`', async () => {
         expect.assertions(2);
 
@@ -75,7 +107,7 @@ describe("shard admin import — `_id` conflict probe", () => {
             rows: [{ doc: { _creationTime: 42, _id: "n1", title: "incoming" }, table: "notes" }],
         });
 
-        expect(result).toStrictEqual({ conflicts: 0, errors: [], inserted: {}, replaced: 1 });
+        expect(result).toStrictEqual({ conflicts: 0, deleted: 0, errors: [], inserted: {}, replaced: 1 });
         await expect(writer.get("notes", "n1")).resolves.toMatchObject({ _creationTime: 42, title: "incoming" });
     });
 

@@ -270,7 +270,7 @@ interface RunShardFindRelatedArgs {
 interface RunShardImportArgs {
     dryRun?: boolean;
     onConflict?: ImportConflictMode;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 ```

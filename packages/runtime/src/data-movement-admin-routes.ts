@@ -112,6 +112,8 @@ interface DataMovementAdminRouteDeps {
         onConflict: "replace" | "skip",
     ) => Promise<{
         conflicts: number;
+        /** Stored rows removed by `op: "delete"` rows. */
+        deleted: number;
         errors: ReadonlyArray<ImportRowError>;
         /** Shards the fan-out could not write to at all — a non-empty array means the import was PARTIAL. */
         failed: ReadonlyArray<ImportShardFailure>;

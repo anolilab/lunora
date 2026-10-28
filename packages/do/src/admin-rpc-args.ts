@@ -19,10 +19,10 @@ import type { IndexHit, IssueSeverity, IssueStatus, LogEntry, TraceAnchor } from
 import { ISSUE_SEVERITIES, ISSUE_STATUSES } from "@lunora/observability";
 import type {
     CdcChange,
-    ExportRow,
     FilterClause,
     FilterOperator,
     ImportConflictMode,
+    ImportRow,
     MigrationDirection,
     OrderByClause,
     QueueMessageOutcome,
@@ -95,7 +95,7 @@ interface RunShardImportArgs {
     dryRun?: boolean;
     /** What a row whose `_id` already exists does. See `ImportConflictMode` in `@lunora/shard-engine`. */
     onConflict?: ImportConflictMode;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 

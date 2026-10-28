@@ -177,11 +177,28 @@ the file, row count, byte size, the SHA-256 of the snapshot, and the table
 allowlist if one was used. `restore` accepts either an id from the manifest or a
 direct path to an NDJSON file.
 
-`restore` never overwrites a row whose `_id` already exists in the target: it
-reports it as a conflict and leaves it as it is, so restoring into a live
-deployment brings back deleted rows but not earlier versions of changed ones.
-`restore --replace` overwrites those rows with the snapshot's copy instead,
-keeping each `_id`. The Studio import page has the same choice as a checkbox.
+By default `restore` refuses to write into a table that already holds rows
+(`--mode require-empty`): restoring over live data is a decision, not a side
+effect. `--mode` chooses what happens instead:
+
+- `append` inserts and leaves a row whose `_id` is stored as it is, so it brings
+  back deleted rows but not earlier versions of changed ones.
+- `upsert` also overwrites those rows with the snapshot's copy, keeping each `_id`.
+- `replace` does what `upsert` does, then deletes the rows of the snapshot's tables
+  that the snapshot lacks, so each table ends up holding exactly the snapshot's
+  rows. Tables the snapshot has no rows for are not touched.
+
+Every mode except `append` reads the target's rows for the snapshot's tables
+first and prints how many rows it would add, overwrite and delete per table
+(`append` does this only under `--dry-run`). `--dry-run` stops there.
+Overwriting or deleting asks first, or needs `--yes` without a TTY or with
+`--format json`.
+`replace` is not atomic: it writes the snapshot's rows, and deletes only after
+that write is clean. A failed run leaves the old rows plus what was written,
+and re-running the same command finishes the job. See
+[`lunora import`](/docs/packages/cli#lunora-export--lunora-import) for the
+exact semantics. The Studio import page offers append or overwrite (`upsert`);
+`replace` and `require-empty` are CLI-only.
 
 There is no managed backup schedule in the CLI. `create` is a plain command, so
 schedule it wherever you already run periodic jobs (a CI cron, or a

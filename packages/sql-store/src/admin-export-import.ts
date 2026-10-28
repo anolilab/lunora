@@ -35,6 +35,13 @@ interface ExportRow {
      * in tests), which keeps the positional fallback.
      */
     line?: number;
+
+    /**
+     * Import only: `"delete"` removes the stored row whose `_id` the doc carries
+     * instead of writing the doc — how a replace-mode restore prunes the rows its
+     * source no longer has.
+     */
+    op?: "delete";
     table: string;
 }
 
@@ -48,6 +55,8 @@ interface ImportError {
 interface ImportResult {
     /** Skipped rows whose `_id` already exists (the default `onConflict: "skip"`). */
     conflicts: number;
+    /** Stored rows removed by `op: "delete"` rows. A delete whose `_id` is already gone removes nothing and is not counted. */
+    deleted: number;
     errors: ImportError[];
     inserted: Record<string, number>;
     /** Existing rows overwritten under `onConflict: "replace"`. */
@@ -436,10 +445,57 @@ const hasGlobalTriggers = (schema: SchemaLike): boolean =>
 type RowOutcome =
     | { committed: boolean; error: ImportError; kind: "error" }
     | { inserted: string; kind: "inserted" }
+    | { kind: "absent" }
     | { kind: "checked" }
     | { kind: "conflict" }
+    | { kind: "deleted" }
     | { kind: "replaced" }
     | { kind: "skip" };
+
+/**
+ * Remove the stored row a delete row names. Hard, matching the shard plane: a
+ * restore that left `.softDelete()` tombstones would still hold the rows it was
+ * asked to remove. An `_id` already gone is `absent`, so a re-run converges.
+ */
+const deleteOneRow = async (
+    writer: DatabaseWriterLike,
+    schema: SchemaLike,
+    dialect: SqlDialect,
+    args: ImportGlobalArgs,
+    row: ExportRow,
+    line: number,
+): Promise<RowOutcome> => {
+    const { doc, table } = row;
+    const id = doc["_id"];
+
+    if (typeof id !== "string") {
+        return { error: { code: "BAD_ROW", line, message: "a delete row needs the `_id` to delete", table }, kind: "error" };
+    }
+
+    if (args.dryRun === true) {
+        return { kind: "checked" };
+    }
+
+    const ownership = await ownIdOrError(writer, schema, dialect, args.exec, table, id, line);
+
+    if ("error" in ownership) {
+        return { error: ownership.error, kind: "error" };
+    }
+
+    if (ownership.existingId === undefined) {
+        return { kind: "absent" };
+    }
+
+    try {
+        await writer.delete(table, id, { hard: true });
+
+        return { kind: "deleted" };
+    } catch (error: unknown) {
+        const { body } = toErrorBody(error, { fallbackCode: "DELETE_FAILED" });
+
+        return { error: { code: body.code, line, message: body.message, table }, kind: "error" };
+    }
+};
 
 /**
  * Insert `document`, or — when `existingId` names the row it collides with —
@@ -534,6 +590,11 @@ const prepareRow = (schema: SchemaLike, dryRun: boolean, row: ExportRow, line: n
             kind: "settled",
             outcome: { committed: false, error: { code: "BAD_ROW", line, message: "row is missing or malformed `doc`", table }, kind: "error" },
         };
+    }
+
+    // A delete carries no new data, so it skips the decode and the shape check.
+    if (row.op === "delete") {
+        return deleteOneRow(writer, schema, dialect, args, row, line);
     }
 
     // Mirror `encodeExportDocument` on the way back in: a snapshot line carries a
@@ -724,6 +785,7 @@ const importSqlGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLik
     const errors: ImportError[] = [];
     const inserted: Record<string, number> = {};
     let conflicts = 0;
+    let deleted = 0;
     let replaced = 0;
     let line = (args.startLine ?? 1) - 1;
     const prepared = args.rows.map((row): PreparedRow => {
@@ -753,6 +815,11 @@ const importSqlGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLik
                 break;
             }
 
+            case "deleted": {
+                deleted += 1;
+                break;
+            }
+
             case "error": {
                 errors.push(outcome.error);
                 break;
@@ -774,7 +841,7 @@ const importSqlGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLik
         }
     }
 
-    return { conflicts, errors, inserted, replaced };
+    return { conflicts, deleted, errors, inserted, replaced };
 };
 
 export { exportSqlGlobalRows, importSqlGlobalRows, selectGlobalTables };

@@ -15,14 +15,14 @@ import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
 interface AdminBatch {
-    rows: { doc: Record<string, unknown>; table: string }[];
+    rows: { doc: Record<string, unknown>; op?: "delete"; table: string }[];
     shardKey: string;
     startLine: number;
 }
 
 type ImportRowError = { code: string; line: number; message: string; table: string };
 
-type ParsedImportRow = { error: ImportRowError; ok: false } | { doc: Record<string, unknown>; ok: true; table: string };
+type ParsedImportRow = { error: ImportRowError; ok: false } | { doc: Record<string, unknown>; ok: true; op?: "delete"; table: string };
 
 /**
  * Validate one NDJSON import line into a `{ table, doc }` row, or an
@@ -43,7 +43,7 @@ const parseImportRow = (trimmed: string, lineNumber: number): ParsedImportRow =>
         return { error: { code: "BAD_ROW", line: lineNumber, message: "row must be a JSON object", table: "" }, ok: false };
     }
 
-    const candidate = parsed as { doc?: unknown; table?: unknown };
+    const candidate = parsed as { doc?: unknown; op?: unknown; table?: unknown };
 
     if (typeof candidate.table !== "string" || candidate.table.length === 0) {
         return { error: { code: "BAD_ROW", line: lineNumber, message: "row is missing `table`", table: "" }, ok: false };
@@ -53,7 +53,20 @@ const parseImportRow = (trimmed: string, lineNumber: number): ParsedImportRow =>
         return { error: { code: "BAD_ROW", line: lineNumber, message: "row is missing or malformed `doc`", table: candidate.table }, ok: false };
     }
 
-    return { doc: candidate.doc as Record<string, unknown>, ok: true, table: candidate.table };
+    if (candidate.op !== undefined && candidate.op !== "delete") {
+        return {
+            error: {
+                code: "BAD_ROW",
+                line: lineNumber,
+                message: `row \`op\` must be "delete" when set, got ${JSON.stringify(candidate.op)}`,
+                table: candidate.table,
+            },
+            ok: false,
+        };
+    }
+
+    // A delete still carries a doc: the stored row's fields route it to the same shard an insert of that row would reach.
+    return { doc: candidate.doc as Record<string, unknown>, ok: true, ...(candidate.op === "delete" ? { op: "delete" as const } : {}), table: candidate.table };
 };
 
 type ResolvedImportShardKey = { error: ImportRowError; ok: false } | { ok: true; shardKey: string };
@@ -88,7 +101,7 @@ const resolveImportShardKey = (
 
 interface BucketedImport {
     errors: ImportRowError[];
-    globalRows: { doc: Record<string, unknown>; line: number; table: string }[];
+    globalRows: { doc: Record<string, unknown>; line: number; op?: "delete"; table: string }[];
     perShard: Map<string, AdminBatch>;
 
     /**
@@ -118,7 +131,7 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
     // Each global row carries its true physical source line so error attribution
     // survives interspersed shard rows / blank lines — a single `startLine` can
     // only describe rows physically contiguous from the first one.
-    const globalRows: { doc: Record<string, unknown>; line: number; table: string }[] = [];
+    const globalRows: { doc: Record<string, unknown>; line: number; op?: "delete"; table: string }[] = [];
     const perShard = new Map<string, AdminBatch>();
     let received = 0;
     // Physical 1-based source line index. Incremented for EVERY line handled,
@@ -157,10 +170,11 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         }
 
         const { doc: documentRow, table } = row;
+        const op = row.op === undefined ? {} : { op: row.op };
         const info = options.resolveTableSharding?.(table);
 
         if (info?.mode.kind === "global") {
-            globalRows.push({ doc: documentRow, line: physicalLine, table });
+            globalRows.push({ doc: documentRow, line: physicalLine, ...op, table });
 
             return;
         }
@@ -178,9 +192,9 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         const existing = perShard.get(resolved.shardKey);
 
         if (existing) {
-            existing.rows.push({ doc: documentRow, table });
+            existing.rows.push({ doc: documentRow, ...op, table });
         } else {
-            perShard.set(resolved.shardKey, { rows: [{ doc: documentRow, table }], shardKey: resolved.shardKey, startLine: physicalLine });
+            perShard.set(resolved.shardKey, { rows: [{ doc: documentRow, ...op, table }], shardKey: resolved.shardKey, startLine: physicalLine });
         }
     };
 
@@ -239,6 +253,7 @@ interface ImportShardFailure {
 
 interface ImportTotals {
     conflicts: number;
+    deleted: number;
     errors: ImportRowError[];
     failed: ImportShardFailure[];
     inserted: Record<string, number>;
@@ -264,7 +279,7 @@ const shardFailures = (shards: ReadonlyArray<{ error?: { message: string; timedO
  */
 const mergeImportResult = (
     totals: ImportTotals,
-    result: { conflicts: number; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number>; replaced?: number },
+    result: { conflicts: number; deleted?: number; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number>; replaced?: number },
 ): void => {
     for (const [table, count] of Object.entries(result.inserted)) {
         // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
@@ -277,6 +292,8 @@ const mergeImportResult = (
 
     // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
     totals.conflicts += result.conflicts;
+    // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
+    totals.deleted += result.deleted ?? 0;
     // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
     totals.replaced += result.replaced ?? 0;
 };
@@ -304,6 +321,7 @@ const streamingImport = async (
     onConflict: "replace" | "skip",
 ): Promise<{
     conflicts: number;
+    deleted: number;
     errors: ImportRowError[];
     failed: ImportShardFailure[];
     inserted: Record<string, number>;
@@ -328,7 +346,16 @@ const streamingImport = async (
         );
     }
 
-    const totals: ImportTotals = { conflicts: 0, errors, failed: [], inserted: {}, replaced: 0 };
+    // Same reason as the replace refusal above: an importer that ignores `op` reads a delete as an insert of a row it already
+    // holds, reports a conflict and keeps the row, and the shard plane would already have pruned its half.
+    if (globalRows.some((row) => row.op === "delete") && options.importGlobalsSupportsDelete !== true) {
+        throw new LunoraError("delete rows target global tables but no `importGlobals` that can delete rows is configured, so nothing was imported", {
+            code: "BAD_REQUEST",
+            status: 400,
+        });
+    }
+
+    const totals: ImportTotals = { conflicts: 0, deleted: 0, errors, failed: [], inserted: {}, replaced: 0 };
     const warnings: string[] = [];
 
     // A worker with no `resolveTableSharding` cannot tell a `.global()` table
@@ -398,6 +425,7 @@ const streamingImport = async (
     // rather than a result. The endpoint answers 207 in that case.
     return {
         conflicts: totals.conflicts,
+        deleted: totals.deleted,
         errors: totals.errors,
         failed: totals.failed,
         inserted: totals.inserted,

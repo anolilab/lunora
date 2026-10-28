@@ -337,6 +337,7 @@ describe("backup tiers write the same thing", () => {
             cwd: workDir,
             fetchImpl: worker.fetchImpl,
             logger,
+            mode: "append",
             subcommand: "restore",
             target: "2026-06-02T03:00:00.000Z",
             token: "t",

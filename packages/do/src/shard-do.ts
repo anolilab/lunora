@@ -5106,7 +5106,7 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardImport(_args: RunShardImportArgs): Promise<ImportShardResult> {
-        return Promise.resolve({ conflicts: 0, errors: [], inserted: {}, replaced: 0 });
+        return Promise.resolve({ conflicts: 0, deleted: 0, errors: [], inserted: {}, replaced: 0 });
     }
 
     /**
@@ -10959,7 +10959,13 @@ abstract class ShardDO {
         await this.flushChangedTables();
 
         this.recordAudit("importShard", {
-            detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted, replaced: result.replaced },
+            detail: {
+                conflicts: result.conflicts,
+                deleted: result.deleted,
+                errors: result.errors.length,
+                inserted: result.inserted,
+                replaced: result.replaced,
+            },
         });
 
         return adminResponse(result);

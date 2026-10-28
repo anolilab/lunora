@@ -1241,13 +1241,21 @@ interface ImportError {
 }
 ```
 
+### `ImportRow` (interface)
+
+```ts
+interface ImportRow extends ExportRow {
+    op?: "delete";
+}
+```
+
 ### `ImportShardAdminArgs` (interface)
 
 ```ts
 interface ImportShardAdminArgs {
     dryRun: boolean;
     onConflict: ImportConflictMode;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 ```
@@ -1258,7 +1266,7 @@ interface ImportShardAdminArgs {
 interface ImportShardArgs {
     dryRun?: boolean;
     onConflict?: ImportConflictMode;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 ```
@@ -1268,6 +1276,7 @@ interface ImportShardArgs {
 ```ts
 interface ImportShardResult {
     conflicts: number;
+    deleted: number;
     errors: ImportError[];
     inserted: Record<string, number>;
     replaced: number;

@@ -39,6 +39,8 @@ import type { CommandResult, OutputFormat } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import { runExportCommand } from "../data-transfer/export";
 import { runImportCommand } from "../data-transfer/import";
+import type { ImportMode } from "../data-transfer/import-plan";
+import { IMPORT_MODES, parseImportMode } from "../data-transfer/import-plan";
 import type { StreamingFetchLike } from "../data-transfer/shared";
 import type { FetchLike } from "../run/handler";
 import { readAndLogBody } from "../run/handler";
@@ -83,17 +85,19 @@ interface BackupCommandOptions {
     cwd?: string;
     /** Backup directory (relative to cwd). Defaults to `.lunora-backups`. */
     dir?: string;
+    /** `restore`: print the plan against the target's rows and write nothing. */
+    dryRun?: boolean;
     fetchImpl?: StreamingFetchLike;
     /** Output format: `pretty` (default) or `json`. */
     format?: OutputFormat;
     logger: Logger;
+    /** `restore`: how the rows the target already holds are treated. Defaults to `require-empty`, so a restore never lands on live rows unasked. */
+    mode?: ImportMode;
     /** Injectable clock for deterministic backup ids in tests. */
     now?: () => Date;
     /** Key prefix bucket-backed backups live under. Defaults to `backups/`. */
     prefix?: string;
     prod?: boolean;
-    /** `restore`: overwrite rows whose `_id` already exists instead of reporting them as conflicts. */
-    replace?: boolean;
     /** `pitr restore`: also restart the shard now (`ctx.abort()`) so recovery applies immediately. */
     restart?: boolean;
     /** `pitr`: perform a restore (`pitrRestore`) instead of just reading the current/for-a-time bookmark. */
@@ -294,8 +298,9 @@ const runBackupRestore = async (options: BackupCommandOptions, destination: Back
             fetchImpl: options.fetchImpl,
             file: snapshot.path,
             logger: options.logger,
+            dryRun: options.dryRun,
+            mode: options.mode ?? "require-empty",
             prod: options.prod,
-            replace: options.replace,
             token: options.token,
             url: options.url,
             yes: options.yes,
@@ -807,6 +812,16 @@ const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions, Back
         return { code: EXIT_CODE.USAGE, error: message };
     }
 
+    const mode = parseImportMode(options.mode, "require-empty");
+
+    if (mode === undefined) {
+        const message = `--mode ${String(options.mode)} is not a known mode. Expected one of: ${IMPORT_MODES.join(", ")}.`;
+
+        logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, error: message };
+    }
+
     const result = await runBackupCommand({
         at: options.at,
         bookmark: options.bookmark,
@@ -816,8 +831,9 @@ const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions, Back
         format,
         logger,
         prefix: options.prefix,
+        dryRun: options.dryRun === true,
+        mode,
         prod: options.prod === true,
-        replace: options.replace === true,
         restart: options.restart === true,
         restore: options.restore === true,
         shard: options.shard,
