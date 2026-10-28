@@ -35,13 +35,18 @@ class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends
     /** The `lunora/workflows.ts` export name, for log correlation. */
     readonly #lunoraName: string;
 
-    /** The `defineWorkflow` result this entrypoint runs. */
-    readonly #definition: WorkflowDefinition<Params, Output>;
+    /**
+     * The `defineWorkflow` result this entrypoint runs, or a loader for it. A lazy build
+     * (`--lazy-functions`) passes the loader so the definition's module graph is evaluated
+     * on the first `run`, not at isolate startup: nothing on a `WorkflowEntrypoint` reads
+     * the definition before `run`, and `run` is async and replays from the top.
+     */
+    #definition: WorkflowDefinition<Params, Output> | (() => Promise<WorkflowDefinition<Params, Output>>);
 
     public constructor(
         context: ConstructorParameters<typeof WorkflowEntrypoint>[0],
         env: Record<string, unknown>,
-        definition: WorkflowDefinition<Params, Output>,
+        definition: WorkflowDefinition<Params, Output> | (() => Promise<WorkflowDefinition<Params, Output>>),
         exportName?: string,
     ) {
         super(context, env);
@@ -51,6 +56,11 @@ class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends
     }
 
     public override async run(event: Readonly<WorkflowEvent<Params>>, step: WorkflowStep): Promise<Output> {
+        if (typeof this.#definition === "function") {
+            this.#definition = await this.#definition();
+        }
+
+        const definition = this.#definition;
         const nativeStep = step as unknown as WorkflowStepLike;
 
         // When this instance was spawned as a `ctx.parallel` branch, the parent
@@ -71,7 +81,7 @@ class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends
         let output: Output;
 
         try {
-            output = await this.#definition.handler(context);
+            output = await definition.handler(context);
         } catch (error: unknown) {
             // A branch child: tell the parent it failed (best-effort durable send)
             // before the instance itself errors, so the parent fails fast instead

@@ -25,7 +25,7 @@ import { createWorkflowContext } from "../../src/create-workflow-context";
 import createWorkflows from "../../src/create-workflows";
 import type { WorkflowBindingLike } from "../../src/types";
 import type { SmokeParams } from "./test-worker";
-import { declineLog, rollbackLog } from "./test-worker";
+import { declineLog, lazyLog, rollbackLog } from "./test-worker";
 
 const workflows = createWorkflows({ bindings: { smokeWorkflow: env.WORKFLOW_SMOKE as unknown as WorkflowBindingLike } });
 
@@ -49,6 +49,24 @@ describe("@lunora/workflow (workerd)", () => {
             await expect(instance.waitForStepResult({ name: "load" })).resolves.toBe("order:42");
             await expect(instance.waitForStepResult({ name: "charge" })).resolves.toBe("order:42:charged");
             await expect(instance.getOutput()).resolves.toEqual({ charged: "order:42:charged", loaded: "order:42" });
+        } finally {
+            await instance.dispose();
+        }
+    });
+
+    it("runs an entrypoint whose definition is a loader, loading it when the run starts", async () => {
+        expect.hasAssertions();
+
+        const id = "lazy-run-1";
+        const instance = await introspectWorkflowInstance(env.WORKFLOW_LAZY, id);
+        const loadsBefore = lazyLog.loads;
+
+        try {
+            await env.WORKFLOW_LAZY.create({ id, params: { orderId: "7" } });
+            await instance.waitForStatus("complete");
+
+            await expect(instance.getOutput()).resolves.toBe("lazy:7");
+            expect(lazyLog.loads).toBeGreaterThan(loadsBefore);
         } finally {
             await instance.dispose();
         }

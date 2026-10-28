@@ -13,6 +13,7 @@
         { "name": "smoke-workflow", "binding": "WORKFLOW_SMOKE", "class_name": "SmokeWorkflow" },
         { "name": "decline-workflow", "binding": "WORKFLOW_DECLINE", "class_name": "DeclineWorkflow" },
         { "name": "timed-decline-workflow", "binding": "WORKFLOW_TIMED_DECLINE", "class_name": "TimedDeclineWorkflow" },
+        { "name": "lazy-workflow", "binding": "WORKFLOW_LAZY", "class_name": "LazyWorkflow" },
         { "name": "rollback-config-workflow", "binding": "WORKFLOW_ROLLBACK_CONFIG", "class_name": "RollbackConfigWorkflow" },
     ],
     // `SmokeWorkflow` is ALSO declared as an export under the binding's `name`, so

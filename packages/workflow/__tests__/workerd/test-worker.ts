@@ -25,6 +25,7 @@ interface SmokeOutput {
 
 interface Env {
     WORKFLOW_DECLINE: Workflow<DeclineParams>;
+    WORKFLOW_LAZY: Workflow<{ orderId: string }>;
     WORKFLOW_ROLLBACK_CONFIG: Workflow<Record<string, never>>;
     WORKFLOW_SMOKE: Workflow<SmokeParams>;
     WORKFLOW_TIMED_DECLINE: Workflow<DeclineParams>;
@@ -164,6 +165,27 @@ class SmokeWorkflow extends LunoraWorkflow<SmokeParams, SmokeOutput> {
     }
 }
 
+/** How many times {@link LazyWorkflow} invoked its loader. */
+const lazyLog = { loads: 0 };
+
+/** The `--lazy-functions` entrypoint shape: the definition is a loader the base awaits in `run`. */
+class LazyWorkflow extends LunoraWorkflow<{ orderId: string }, string> {
+    public constructor(context: ConstructorParameters<typeof WorkflowEntrypoint>[0], env: Record<string, unknown>) {
+        super(
+            context,
+            env,
+            async () => {
+                lazyLog.loads += 1;
+
+                const { default: lazyWorkflow } = await import("./lazy-workflow");
+
+                return lazyWorkflow;
+            },
+            "lazyWorkflow",
+        );
+    }
+}
+
 const testWorker = {
     fetch(_request: Request, _env: Env): Response {
         return new Response("workflow-test-worker", { status: 200 });
@@ -200,5 +222,5 @@ class RollbackConfigWorkflow extends LunoraWorkflow<Record<string, never>> {
 }
 
 export default testWorker;
-export { declineLog, DeclineWorkflow, RollbackConfigWorkflow, rollbackLog, SmokeWorkflow, smokeWorkflow, TimedDeclineWorkflow };
+export { declineLog, DeclineWorkflow, lazyLog, LazyWorkflow, RollbackConfigWorkflow, rollbackLog, SmokeWorkflow, smokeWorkflow, TimedDeclineWorkflow };
 export type { DeclineParams, Env, SmokeOutput, SmokeParams };
