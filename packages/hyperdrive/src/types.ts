@@ -130,7 +130,7 @@ export interface NodePgLike {
  * direction, which is all bivariance asks for.
  */
 export interface PostgresJsLike {
-    unsafe(this: void, text: string, params?: ReadonlyArray<unknown>): Promise<unknown>;
+    unsafe(this: void, text: string, params?: ReadonlyArray<unknown>, options?: { prepare?: boolean }): Promise<unknown>;
 }
 
 /**

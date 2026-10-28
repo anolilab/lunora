@@ -128,7 +128,7 @@ import { defineApp } from "../../lunora/_generated/app";
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
     // Called once per shard construction, not per request.
-    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString)))
+    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 })))
     .build();
 
 export const ShardDO = app.ShardDO;
@@ -138,7 +138,7 @@ Hand-composing the worker instead? The same thunk is `createShardDO({ sql })`:
 
 ```ts
 export const ShardDO = createShardDO({
-    sql: (env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString)),
+    sql: (env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 })),
 });
 ```
 
@@ -171,6 +171,21 @@ determinism/realtime caveat.
 | `mysql2/promise`         | `fromMysql2`     | `?`          |
 
 The package never rewrites SQL; use your driver's native positional syntax.
+
+Build postgres.js with `{ fetch_types: false, max: 5 }`, Cloudflare's recommended
+Hyperdrive setup: `max` stays under the Workers limit on concurrent connections, and
+`fetch_types: false` saves a round trip on connect. `fromPostgresJs` runs every statement
+as a named prepared statement (`unsafe`'s own default is unnamed, which Hyperdrive's
+transaction pooling does not reliably support). Prepared reads are cacheable, so a
+`ctx.sql` read through postgres.js can be served from Hyperdrive's query cache like one
+through `pg`.
+
+`fetch_types: false` leaves postgres.js without array types, so a JS array bound to
+`= ANY($1)` goes over as a malformed literal. Bind a list as JSON text instead
+(`IN (SELECT jsonb_array_elements_text($1::text::jsonb))` with `JSON.stringify(list)`), or
+drop the option if you rely on array params. Cast a JSON parameter `$1::text::jsonb`, not
+bare `$1::jsonb`: postgres.js types the parameter from the server and would JSON-encode
+your already-serialised string a second time.
 
 `fromMysql2` (and `buildMysqlExec`) call mysql2's `query`, not `execute`: Hyperdrive does
 not support MySQL protocol-level prepared statements, so the `?` values are escaped
@@ -320,7 +335,7 @@ records `no sourceClient resolved for binding "…"` and the table stays empty.
 // worker.ts
 export default defineApp<Env>()
     .shard((env) => env.SHARD)
-    .sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)))
+    .sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString, { fetch_types: false, max: 5 })))
     .build();
 ```
 
@@ -407,12 +422,13 @@ the driver on the DO instance and rebuild it lazily after hibernation.
 <Tabs items={["Postgres","MySQL"]}>
 
 ```ts tab="Postgres"
+import { fromPostgresJs } from "@lunora/hyperdrive";
 import { createPostgresGlobalCtxDb } from "@lunora/hyperdrive/global";
 import postgres from "postgres";
 
-const sql = postgres(env.HYPERDRIVE.connectionString);
+const sql = postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 });
 
-const globalDb = createPostgresGlobalCtxDb({ query: (text, params) => sql.unsafe(text, params) }, { schema });
+const globalDb = createPostgresGlobalCtxDb(fromPostgresJs(sql), { schema });
 ```
 
 ```ts tab="MySQL"
@@ -544,7 +560,7 @@ let index: ReturnType<typeof createPgVectorIndex> | undefined;
 createShardDO({
     vectors: (env) => {
         index ??= createPgVectorIndex({
-            client: fromPostgresJs(postgres(createHyperdrive((env as Env).HYPERDRIVE).connectionString)),
+            client: fromPostgresJs(postgres(createHyperdrive((env as Env).HYPERDRIVE).connectionString, { fetch_types: false, max: 5 })),
             dimensions: 768,
             metric: "cosine",
             name: "posts_search",

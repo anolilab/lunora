@@ -59,7 +59,7 @@ interface NodePgLike {
 
 ```ts
 interface PostgresJsLike {
-    unsafe(this: void, text: string, params?: ReadonlyArray<unknown>): Promise<unknown>;
+    unsafe(this: void, text: string, params?: ReadonlyArray<unknown>, options?: { prepare?: boolean }): Promise<unknown>;
 }
 ```
 

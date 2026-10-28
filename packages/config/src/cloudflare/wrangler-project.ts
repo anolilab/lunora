@@ -171,7 +171,7 @@ const collectUnchainedCapabilityErrors = (schema: SchemaInfo | undefined, projec
                 `schema declares .global({ backend: "hyperdrive" }) table(s) but nothing chains .hyperdriveGlobal(...) onto defineApp() (composed in: ${site}) — ` +
                 `the shard then has no global writer, so every read or write of those tables throws INTERNAL. ` +
                 `Add \`.hyperdriveGlobal({ engine: "postgres", exec: (env) => buildPgExec(fromPostgresJs(postgres(` +
-                `env.HYPERDRIVE.connectionString))) })\` to the chain ` +
+                `env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 }))) })\` to the chain ` +
                 `(\`buildPgExec\` from \`@lunora/hyperdrive/global\`, \`fromPostgresJs\` from \`@lunora/hyperdrive\`).`,
             method: "hyperdriveGlobal",
         });

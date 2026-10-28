@@ -103,7 +103,7 @@ const app = defineApp<Env>()
     .shard((env) => env.SHARD)
     .hyperdriveGlobal({
         engine: "postgres",
-        exec: (env) => buildPgExec(fromPostgresJs(postgres(env.HYPERDRIVE.connectionString))),
+        exec: (env) => buildPgExec(fromPostgresJs(postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 }))),
     })
     .build();
 

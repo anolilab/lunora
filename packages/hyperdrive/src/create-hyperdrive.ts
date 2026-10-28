@@ -20,7 +20,11 @@ import type { HyperdriveConnection, HyperdriveLike, Mysql2Like, NodePgLike, Post
  * // not per request. `ctx.sql` is emitted `readonly`; it is never assigned.
  * const app = defineApp<Env>()
  *     .shard((env) => env.SHARD)
- *     .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE).connectionString)))
+ *     .hyperdrive((env) => {
+ *         const { connectionString } = createHyperdrive(env.HYPERDRIVE);
+ *
+ *         return fromPostgresJs(postgres(connectionString, { fetch_types: false, max: 5 }));
+ *     })
  *     .build();
  *
  * // Then, inside an action (never a query/mutation):
@@ -55,12 +59,19 @@ export const createHyperdrive = (binding: HyperdriveLike): { config: HyperdriveC
  * Uses the driver's `.unsafe(text, params)` escape hatch so the caller supplies
  * a plain SQL string with `$1, $2, …` placeholders and a positional params
  * array. postgres.js's `.unsafe` resolves to a row array.
+ *
+ * `prepare: true` because `.unsafe` defaults to `prepare: false`, which
+ * Cloudflare warns against: under Hyperdrive's transaction pooling unnamed
+ * statements can hang or fail intermittently, and each one costs a Describe
+ * round trip before it executes. A client built with `prepare: false` still
+ * wins. Prepared reads are cacheable by Hyperdrive, so a `.global()` store's
+ * config must have caching disabled (see `@lunora/hyperdrive/global`).
  */
 export const fromPostgresJs = (client: PostgresJsLike): SqlClient => {
     return {
         dbSystem: "postgresql",
         query: async <Row = Record<string, unknown>>(text: string, params: ReadonlyArray<unknown> = []): Promise<Row[]> => {
-            const rows = await client.unsafe(text, params);
+            const rows = await client.unsafe(text, params, { prepare: true });
 
             return rows as Row[];
         },

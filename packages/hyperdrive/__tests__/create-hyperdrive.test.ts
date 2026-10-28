@@ -84,7 +84,7 @@ describe("fromPostgresJs", () => {
         const result = await sql.query("select id from t");
 
         expect(result).toBe(rows);
-        expect(unsafe).toHaveBeenCalledWith("select id from t", []);
+        expect(unsafe).toHaveBeenCalledWith("select id from t", [], { prepare: true });
     });
 
     it("forwards explicit params positionally", async () => {
@@ -94,7 +94,9 @@ describe("fromPostgresJs", () => {
 
         await fromPostgresJs({ unsafe }).query("select id from t where org = $1", ["acme"]);
 
-        expect(unsafe).toHaveBeenCalledWith("select id from t where org = $1", ["acme"]);
+        // `prepare: true`: `.unsafe` defaults to unnamed statements, which Hyperdrive's
+        // transaction pooling does not reliably support.
+        expect(unsafe).toHaveBeenCalledWith("select id from t where org = $1", ["acme"], { prepare: true });
     });
 });
 
