@@ -156,20 +156,29 @@ const accessVerifier = (options: RequestVerifyOptions): JwtVerifierOf<AccessClai
     });
 
 /**
- * Read the Access JWT off a request and verify it. Returns the verified claims,
+ * Build a function that reads the Access JWT off a request and verifies it. It
+ * resolves the verified claims,
  * or `undefined` when no token is present **or** verification fails — the
  * fail-closed "no Access identity on this request" signal, matching what
  * `readPlatformIdentity` returns for the other authentication path so callers
  * treat the two uniformly.
  *
+ * Built per factory rather than per request because the options are static: the
+ * issuer, audience and key-source checks parse URLs, and on a request carrying no
+ * token that parsing is most of the work.
+ *
  * With `acceptExpired`, a token that failed ONLY on its `exp` still yields its
  * claims (their past `exp` included), so the caller can answer `TOKEN_EXPIRED`
  * instead of running the request anonymous.
  */
-const verifyRequest = async (request: Request, options: RequestVerifyOptions, acceptExpired = false): Promise<AccessClaims | undefined> => {
-    const verified = await accessVerifier(options)(request);
+const requestVerifier = (options: RequestVerifyOptions, acceptExpired = false): ((request: Request) => Promise<AccessClaims | undefined>) => {
+    const verify = accessVerifier(options);
 
-    return verified === undefined || (verified.expired && !acceptExpired) ? undefined : verified.payload;
+    return async (request) => {
+        const verified = await verify(request);
+
+        return verified === undefined || (verified.expired && !acceptExpired) ? undefined : verified.payload;
+    };
 };
 
-export { accessIssuer, assertJwtFallbackOptions, verifyAccessJwt, verifyRequest };
+export { accessIssuer, assertJwtFallbackOptions, requestVerifier, verifyAccessJwt };
