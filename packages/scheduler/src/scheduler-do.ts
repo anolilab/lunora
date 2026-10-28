@@ -2286,16 +2286,7 @@ class SchedulerDO {
         const pause = await this.pauseState();
 
         if (pause.paused) {
-            await this.recordCronRun({
-                durationMs: 0,
-                endedAt: now,
-                name,
-                reason: "paused",
-                runId: resolveScheduleId(undefined),
-                skipped: 0,
-                startedAt: now,
-                status: "skipped",
-            });
+            await this.recordCronSkip(name, "paused", now);
 
             return SchedulerDO.json({ acquired: false, reason: "paused" });
         }
@@ -2304,31 +2295,13 @@ class SchedulerDO {
 
         if (lease !== undefined && lease.startedAt > now - DISPATCH_LEASE_MS) {
             await this.state.storage.put(leaseKey, { ...lease, skipped: lease.skipped + 1 });
-            await this.recordCronRun({
-                durationMs: 0,
-                endedAt: now,
-                name,
-                reason: "in-flight",
-                runId: resolveScheduleId(undefined),
-                skipped: 0,
-                startedAt: now,
-                status: "skipped",
-            });
+            await this.recordCronSkip(name, "in-flight", now);
 
             return SchedulerDO.json({ acquired: false, reason: "in-flight", runningSince: lease.startedAt });
         }
 
         if (lease !== undefined) {
-            await this.recordCronRun({
-                durationMs: now - lease.startedAt,
-                endedAt: now,
-                error: "the run never reported completion; its lease expired",
-                name,
-                runId: lease.runId,
-                skipped: lease.skipped,
-                startedAt: lease.startedAt,
-                status: "failed",
-            });
+            await this.recordLostCronRun(lease, now);
         }
 
         const runId = resolveScheduleId(undefined);
@@ -2378,16 +2351,31 @@ class SchedulerDO {
 
     /**
      * `GET /cron/runs` — every cron job's in-flight lease and recorded runs,
-     * newest first per job. Bounded by {@link CRON_HISTORY_LIMIT} rows per job
+     * newest end first per job. Bounded by {@link CRON_HISTORY_LIMIT} rows per job
      * and by the app's own `cronJobs()` declarations.
      */
     private async handleCronRuns(): Promise<Response> {
         const inFlight: CronRunInFlight[] = [];
+        const lost: [string, CronRunInFlight][] = [];
         const runs: CronRunRecord[] = [];
+        const now = Date.now();
 
-        await this.forEachPage<CronRunInFlight>(CRON_LEASE_PREFIX, (lease) => {
-            inFlight.push(lease);
+        await this.forEachPage<CronRunInFlight>(CRON_LEASE_PREFIX, (lease, key) => {
+            if (lease.startedAt > now - DISPATCH_LEASE_MS) {
+                inFlight.push(lease);
+            } else {
+                lost.push([key, lease]);
+            }
         });
+
+        // A run that died with no later tick to notice is reconciled here, so it
+        // reads as failed rather than running forever.
+        for (const [key, lease] of lost) {
+            // eslint-disable-next-line no-await-in-loop -- a handful of lost leases at most; each delete-then-record pair stays ordered
+            await this.state.storage.delete(key);
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await this.recordLostCronRun(lease, now);
+        }
         await this.forEachPage<CronRunRecord>(CRON_RUN_PREFIX, (run) => {
             runs.push(run);
         });
@@ -2395,11 +2383,60 @@ class SchedulerDO {
         return SchedulerDO.json({ inFlight, runs });
     }
 
-    /** Write one run row and drop that job's rows past {@link CRON_HISTORY_LIMIT}. */
+    /** Record a run whose lease lapsed without a `/cron/end`. */
+    private async recordLostCronRun(lease: CronRunInFlight, now: number): Promise<void> {
+        await this.recordCronRun({
+            durationMs: now - lease.startedAt,
+            endedAt: now,
+            error: "the run never reported completion; its lease expired",
+            name: lease.name,
+            runId: lease.runId,
+            skipped: lease.skipped,
+            startedAt: lease.startedAt,
+            status: "failed",
+        });
+    }
+
+    /**
+     * Record a skipped tick, folded into the newest row when that row is a skip
+     * for the same reason. Otherwise a long run or a long pause would write one
+     * row per tick and push every real run out of the {@link CRON_HISTORY_LIMIT}.
+     */
+    private async recordCronSkip(name: string, reason: "in-flight" | "paused", now: number): Promise<void> {
+        const prefix = `${CRON_RUN_PREFIX}${encodePoolName(name)}:`;
+        const newest = await this.state.storage.list<CronRunRecord>({ limit: 1, prefix });
+        const [entry] = newest.entries();
+
+        if (entry?.[1].status === "skipped" && entry[1].reason === reason) {
+            const [key, streak] = entry;
+
+            await this.state.storage.delete(key);
+            await this.recordCronRun({ ...streak, endedAt: now, skipped: streak.skipped + 1 });
+
+            return;
+        }
+
+        await this.recordCronRun({
+            durationMs: 0,
+            endedAt: now,
+            name,
+            reason,
+            runId: resolveScheduleId(undefined),
+            skipped: 1,
+            startedAt: now,
+            status: "skipped",
+        });
+    }
+
+    /**
+     * Write one run row and drop that job's rows past {@link CRON_HISTORY_LIMIT}.
+     * Keyed newest END first, so a run is the newest row the moment it is
+     * recorded, however many ticks were skipped while it held the lease.
+     */
     private async recordCronRun(run: CronRunRecord): Promise<void> {
         const prefix = `${CRON_RUN_PREFIX}${encodePoolName(run.name)}:`;
 
-        await this.state.storage.put(`${prefix}${padTime(MAX_SCHEDULED_FOR_MS - run.startedAt)}:${run.runId}`, run);
+        await this.state.storage.put(`${prefix}${padTime(MAX_SCHEDULED_FOR_MS - run.endedAt)}:${run.runId}`, run);
 
         // Each write adds one row, so the overflow past the limit is a handful
         // at most and one bounded page reaches all of it.

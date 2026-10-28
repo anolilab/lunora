@@ -241,8 +241,9 @@ export interface CronRunRecord {
     /** Why a tick was `skipped`: the previous run still held the lease, or the deployment was paused. */
     reason?: "in-flight" | "paused";
     runId: string;
-    /** Ticks of the same cron skipped while this run held the lease. */
+    /** Ticks of the same cron skipped while this run held the lease; on a `skipped` row, the consecutive ticks it stands for. */
     skipped: number;
+    /** When the run began, or the first tick of a `skipped` row's streak (epoch ms). */
     startedAt: number;
     status: CronRunStatus;
 }

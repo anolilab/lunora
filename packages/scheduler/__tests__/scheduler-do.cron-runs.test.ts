@@ -73,10 +73,10 @@ describe("schedulerDO cron runs", () => {
         const { inFlight, runs: recorded } = await runs(scheduler);
 
         expect(inFlight.map((lease) => lease.name)).toStrictEqual(["digest:eu"]);
-        // Newest start first: the skipped tick came after the run began.
+        // Newest end first: the run finished after the tick it caused to be skipped.
         expect(recorded.filter((run) => run.name === "digest")).toStrictEqual([
-            expect.objectContaining({ durationMs: 0, reason: "in-flight", startedAt: 1_700_000_060_000, status: "skipped" }),
             { durationMs: 90_000, endedAt: 1_700_000_090_000, name: "digest", runId, skipped: 1, startedAt: 1_700_000_000_000, status: "succeeded" },
+            expect.objectContaining({ durationMs: 0, reason: "in-flight", skipped: 1, startedAt: 1_700_000_060_000, status: "skipped" }),
         ]);
 
         // The lease is free again.
@@ -139,6 +139,74 @@ describe("schedulerDO cron runs", () => {
         expect(recorded).toHaveLength(50);
         expect(recorded[0]?.startedAt).toBe(1_700_000_054_000);
         expect(recorded.at(-1)?.startedAt).toBe(1_700_000_005_000);
+    });
+
+    it("keeps a long run's record and earlier runs when many ticks are skipped", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const scheduler = new SchedulerDO(createFakeState(), env);
+        const earlier = await acquire(scheduler, "digest");
+
+        await end(scheduler, { name: "digest", runId: earlier, status: "succeeded" });
+
+        const long = await acquire(scheduler, "digest");
+
+        for (let tick = 1; tick <= 60; tick += 1) {
+            setNow(1_700_000_000_000 + tick * 1000);
+            // eslint-disable-next-line no-await-in-loop -- each tick lands at its own instant
+            await begin(scheduler, "digest");
+        }
+
+        await end(scheduler, { name: "digest", runId: long, status: "succeeded" });
+
+        const { runs: recorded } = await runs(scheduler);
+
+        expect(recorded.map((run) => `${run.status}:${String(run.skipped)}`)).toStrictEqual(["succeeded:60", "skipped:60", "succeeded:0"]);
+        expect(recorded[0]?.runId).toBe(long);
+        expect(recorded[1]).toMatchObject({ endedAt: 1_700_000_060_000, startedAt: 1_700_000_001_000 });
+    });
+
+    it("keeps earlier runs through a long run of paused ticks", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const scheduler = new SchedulerDO(createFakeState(), env);
+        const before = await acquire(scheduler, "digest");
+
+        await end(scheduler, { name: "digest", runId: before, status: "failed" });
+        await scheduler.fetch(post("/pause", { paused: true }));
+
+        for (let tick = 1; tick <= 60; tick += 1) {
+            setNow(1_700_000_000_000 + tick * 1000);
+            // eslint-disable-next-line no-await-in-loop -- each tick lands at its own instant
+            await begin(scheduler, "digest");
+        }
+
+        const { runs: recorded } = await runs(scheduler);
+
+        expect(recorded).toMatchObject([
+            { reason: "paused", skipped: 60, status: "skipped" },
+            { runId: before, status: "failed" },
+        ]);
+    });
+
+    it("reports a lease that lapsed with no later tick as a failed run, not in flight", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const scheduler = new SchedulerDO(createFakeState(), env);
+        const lost = await acquire(scheduler, "digest");
+
+        setNow(1_700_000_000_000 + DISPATCH_LEASE_MS);
+
+        const state = await runs(scheduler);
+
+        expect(state.inFlight).toStrictEqual([]);
+        expect(state.runs).toMatchObject([{ runId: lost, status: "failed" }]);
+
+        // A late report is still ignored.
+        await expect(end(scheduler, { name: "digest", runId: lost, status: "succeeded" })).resolves.toStrictEqual({ recorded: false });
     });
 
     it("refuses a begin without a name and an end without a valid status", async () => {
