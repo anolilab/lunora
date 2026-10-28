@@ -104,7 +104,10 @@ wrangler d1 execute {{name}}-db --local --command "UPDATE user SET role = 'admin
 Users are better-auth's, so the table talks to better-auth through
 `src/auth-client.ts` rather than to a Lunora function. **Suspend** is a
 better-auth ban — the user's sessions are revoked and sign-in is refused — and
-**Unsuspend** lifts it. **Impersonate** signs you in as the user, with their
+**Unsuspend** lifts it. Two delays apply. `@lunora/auth` caches the session in a signed cookie for 60 s,
+so the user's next requests can still resolve for up to a minute. A live
+connection the user already has open keeps streaming until it reconnects or its
+session would have expired, because nothing re-checks identity on an open socket. **Impersonate** signs you in as the user, with their
 tenant's own authorization applied; the banner on every page says whose session
 you are in and takes you back. It has to be on every page: the admin queries
 refuse the user you are impersonating, so `/admin` is the one place you cannot

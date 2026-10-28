@@ -62,7 +62,10 @@ client you pass — better-auth's `authClient.admin`, from
 suspend or unsuspend.
 
 Suspending is a better-auth ban, which better-auth enforces: the user's sessions
-are revoked and their next sign-in is refused. Unsuspending lifts it.
+are revoked and their next sign-in is refused. Unsuspending lifts it. Two delays apply. `@lunora/auth` caches the session in a signed cookie for 60 s,
+so the user's next requests can still resolve for up to a minute. A live
+connection the user already has open keeps streaming until it reconnects or its
+session would have expired, because nothing re-checks identity on an open socket.
 
 Impersonating hands the admin the user's session, and the admin queries refuse
 that user — so the admin screen is exactly where the way back cannot live. Mount
