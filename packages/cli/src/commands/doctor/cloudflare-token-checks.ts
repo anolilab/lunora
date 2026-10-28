@@ -106,8 +106,15 @@ const judgeToken = async (token: string, accountIds: ReadonlyArray<string>, fetc
     let inconclusive: TokenVerdict | undefined;
 
     for (const accountId of accountIds) {
+        // A probe that fails on the network is one inconclusive account, not the verdict: a later account may still
+        // report the token active.
         // eslint-disable-next-line no-await-in-loop -- stops at the first account that reports the token active
-        const verdict = await judgeAccount(accountId, token, fetchImpl);
+        const verdict = await judgeAccount(accountId, token, fetchImpl).catch((error: unknown): TokenVerdict => {
+            return {
+                reason: error instanceof Error ? error.message : String(error),
+                verdict: "unchecked",
+            };
+        });
 
         if (verdict.verdict === "active") {
             return verdict;
