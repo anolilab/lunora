@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { extname, join, relative, resolve, sep } from "node:path";
+import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import type { DevProcess, DevProcessOptions, DevProcessSpawner, DriverToolchain } from "@lunora/config";
@@ -9,6 +9,7 @@ import { acceptsConnection, resolveSchemaDirectory, startDevProcess } from "@lun
 import { detectPackageManager, toolchainExecArgs } from "@lunora/config/cli";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { bindingsNeedingDatabase, findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
+import { ts } from "ts-morph";
 
 import { sanitizeNamespace } from "../../../../shared/dispatch-namespace";
 import { findAvailablePort } from "./free-port";
@@ -39,6 +40,16 @@ const MODULE_EXTENSIONS = new Set([".js", ".mjs", ".mts", ".ts", ".tsx"]);
  */
 const UNDEFINED_IMPORT_SYMPTOM = /\(void 0\)|is not a function|before initialization|of undefined/u;
 
+/**
+ * Generated files whose `import()` calls the Worker runs only once an event arrives, in eager builds too: the auth module,
+ * the spec documents, the auth migrator and live-stream mounts in `app.ts`, workflow events in `shard.ts`. `functions.ts`
+ * is left out: its lazy loaders are covered by `loadAllFunctions`, which reports per function.
+ */
+const DEFERRING_FILES = ["app.ts", "shard.ts"] as const;
+
+/** Extensions a relative `import()` target written as `./x.js` can have on disk. */
+const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".js", ".mjs"] as const;
+
 interface SmokeLoadOptions {
     /** `src/worker.ts` when the project composes its own entry; otherwise wrangler's `main` is used. */
     composedEntry?: string;
@@ -52,16 +63,94 @@ interface SmokeLoadOptions {
     toolchain: DriverToolchain;
 }
 
-interface ModuleFailure {
+interface FunctionFailure {
     functionPath: string;
     message: string;
 }
 
-const isModuleFailure = (value: unknown): value is ModuleFailure =>
+/** A deferred module that failed to evaluate, named by its project-relative file or its package specifier. */
+interface DeferredFailure {
+    message: string;
+    module: string;
+}
+
+interface ProbeResult {
+    checked: number;
+    failures: FunctionFailure[];
+    modules: { checked: number; failures: DeferredFailure[] };
+}
+
+const isFunctionFailure = (value: unknown): value is FunctionFailure =>
     typeof value === "object" &&
     value !== null &&
-    typeof (value as ModuleFailure).functionPath === "string" &&
-    typeof (value as ModuleFailure).message === "string";
+    typeof (value as FunctionFailure).functionPath === "string" &&
+    typeof (value as FunctionFailure).message === "string";
+
+const isDeferredFailure = (value: unknown): value is DeferredFailure =>
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as DeferredFailure).module === "string" &&
+    typeof (value as DeferredFailure).message === "string";
+
+const isDeferredResult = (value: unknown): value is ProbeResult["modules"] =>
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as ProbeResult["modules"]).checked === "number" &&
+    Array.isArray((value as ProbeResult["modules"]).failures) &&
+    (value as ProbeResult["modules"]).failures.every((item) => isDeferredFailure(item));
+
+/** A module the generated Worker loads with `import()`: `label` names it in an error, `specifier` is what the smoke entry imports. */
+interface DeferredModule {
+    label: string;
+    specifier: string;
+}
+
+/** A relative target is resolved against `_generated/` to the file on disk; a package specifier stays as it is. */
+const resolveDeferredModule = (cwd: string, generatedDirectory: string, specifier: string): DeferredModule => {
+    if (!specifier.startsWith(".")) {
+        return { label: specifier, specifier };
+    }
+
+    const target = resolve(generatedDirectory, specifier);
+    const stem = target.slice(0, target.length - extname(target).length);
+    const file = [target, ...SOURCE_EXTENSIONS.map((extension) => `${stem}${extension}`)].find((candidate) => existsSync(candidate)) ?? target;
+
+    return { label: relative(cwd, file).split(sep).join("/"), specifier: file };
+};
+
+/**
+ * Every `import()` call with a literal target in the generated Worker files. Parsed rather than matched, because the same
+ * files carry `import("…").Type` qualifiers in type positions, which load nothing.
+ */
+const findDeferredModules = (cwd: string, generatedDirectory: string): DeferredModule[] => {
+    const found = new Map<string, DeferredModule>();
+
+    for (const name of DEFERRING_FILES) {
+        const file = join(generatedDirectory, name);
+
+        if (!existsSync(file)) {
+            continue;
+        }
+
+        const visit = (node: ts.Node): void => {
+            if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+                const [argument] = node.arguments;
+
+                if (argument !== undefined && ts.isStringLiteralLike(argument)) {
+                    const module = resolveDeferredModule(cwd, generatedDirectory, argument.text);
+
+                    found.set(module.specifier, module);
+                }
+            }
+
+            ts.forEachChild(node, visit);
+        };
+
+        visit(ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, false, ts.ScriptKind.TS));
+    }
+
+    return [...found.values()];
+};
 
 /**
  * Function paths carry the dispatch namespace, not the file: `billing/invoices.ts` is `billing_invoices` and
@@ -90,8 +179,13 @@ const functionFilesByNamespace = (cwd: string): Map<string, string> => {
     return files;
 };
 
+const circularImportHint = (message: string): string =>
+    UNDEFINED_IMPORT_SYMPTOM.test(message)
+        ? "\n      hint: if this module is part of a circular import, an import it reads is still undefined while it evaluates"
+        : "";
+
 /** `lunora/posts.ts (list, add): message`, one block per failing module, so a module with ten functions is one entry. */
-const formatFailures = (cwd: string, failures: ReadonlyArray<ModuleFailure>): string[] => {
+const formatFailures = (cwd: string, failures: ReadonlyArray<FunctionFailure>): string[] => {
     const files = functionFilesByNamespace(cwd);
     const modules = new Map<string, { exports: string[]; message: string; namespace: string }>();
 
@@ -105,13 +199,9 @@ const formatFailures = (cwd: string, failures: ReadonlyArray<ModuleFailure>): st
         modules.set(key, entry);
     }
 
-    return [...modules.values()].map(({ exports, message, namespace }) => {
-        const hint = UNDEFINED_IMPORT_SYMPTOM.test(message)
-            ? "\n      hint: if this module is part of a circular import, an import it reads is still undefined while it evaluates"
-            : "";
-
-        return `  ${files.get(namespace) ?? namespace} (${exports.join(", ")}): ${message}${hint}`;
-    });
+    return [...modules.values()].map(
+        ({ exports, message, namespace }) => `  ${files.get(namespace) ?? namespace} (${exports.join(", ")}): ${message}${circularImportHint(message)}`,
+    );
 };
 
 /**
@@ -127,18 +217,29 @@ class SmokeLoadError extends Error {
     }
 }
 
-/** `main` and `containers` of the config `deploy` runs against, with `--env` applied the way deploy validation applies it. */
-const readWorkerConfig = (cwd: string, environment: string | undefined): { hasContainers: boolean; main: string | undefined } => {
+/**
+ * `main`, `containers` and the absolute `assets.directory` of the config `deploy` runs against, with `--env` applied the
+ * way deploy validation applies it.
+ */
+const readWorkerConfig = (
+    cwd: string,
+    environment: string | undefined,
+): { assetsDirectory: string | undefined; hasContainers: boolean; main: string | undefined } => {
     const wranglerFile = findWranglerFile(cwd);
     const parsed = wranglerFile === undefined ? undefined : readWranglerJsonc<WranglerConfig>(wranglerFile).parsed;
 
-    if (parsed === undefined) {
-        return { hasContainers: false, main: undefined };
+    if (wranglerFile === undefined || parsed === undefined) {
+        return { assetsDirectory: undefined, hasContainers: false, main: undefined };
     }
 
     const { merged } = mergeWranglerEnvironment(parsed, environment);
+    const directory = merged.assets?.directory;
 
-    return { hasContainers: (merged.containers ?? []).length > 0, main: merged.main };
+    return {
+        assetsDirectory: directory === undefined ? undefined : resolve(dirname(wranglerFile), directory),
+        hasContainers: (merged.containers ?? []).length > 0,
+        main: merged.main,
+    };
 };
 
 /** The entry the smoke Worker re-exports, or why there is none. */
@@ -147,11 +248,16 @@ const locateSmokeEntry = ({ composedEntry, configPath, cwd, environment, toolcha
         return { skip: "this deploy target does not run on workerd" };
     }
 
-    const { hasContainers, main: configuredMain } = readWorkerConfig(cwd, environment);
+    const { assetsDirectory, hasContainers, main: configuredMain } = readWorkerConfig(cwd, environment);
     const main = composedEntry ?? configuredMain;
 
     if (typeof main !== "string" || main.startsWith("virtual:") || !existsSync(resolve(cwd, main))) {
         return { skip: "the Worker entry is not a file on disk" };
+    }
+
+    // `wrangler dev` refuses a missing assets directory, and `deploy` runs the client build that writes it after this check.
+    if (assetsDirectory !== undefined && !existsSync(assetsDirectory)) {
+        return { skip: `the assets directory ${relative(cwd, assetsDirectory)} does not exist yet (the client build runs after this check)` };
     }
 
     // `wrangler dev` builds and starts every declared container and has no switch to turn that off.
@@ -166,17 +272,17 @@ const locateSmokeEntry = ({ composedEntry, configPath, cwd, environment, toolcha
 };
 
 /**
- * Ask the booted smoke Worker to evaluate every lazy module. A module failure, a Worker that errors
+ * Ask the booted smoke Worker to evaluate every deferred module. A module failure, a Worker that errors
  * with a 5xx after booting, one that never answers, or one that answers with something that is not the
  * probe's result is the project's fault and blocks. Only a result from another run's Worker is passed over (`undefined`).
  */
-const probeLazyModules = async (port: number, runId: string, deadline: number): Promise<{ checked: number; failures: ModuleFailure[] } | undefined> => {
+const probeModules = async (port: number, runId: string, deadline: number): Promise<ProbeResult | undefined> => {
     const response = await fetch(`http://127.0.0.1:${String(port)}/_lunora/__smoke_load`, {
         signal: AbortSignal.timeout(Math.max(0, deadline - Date.now())),
     }).catch((error: unknown) => {
         if (error instanceof Error && error.name === "TimeoutError") {
             throw new SmokeLoadError(
-                `the smoke Worker booted but did not finish evaluating the lazy modules within ${String(SMOKE_TIMEOUT_MS / 1000)}s — a module may be awaiting something that never settles. Pass --no-smoke-load to ship anyway.`,
+                `the smoke Worker booted but did not finish evaluating the deferred modules within ${String(SMOKE_TIMEOUT_MS / 1000)}s — a module may be awaiting something that never settles. Pass --no-smoke-load to ship anyway.`,
             );
         }
 
@@ -184,24 +290,24 @@ const probeLazyModules = async (port: number, runId: string, deadline: number): 
     });
     if (response.status >= 500) {
         throw new SmokeLoadError(
-            `the smoke Worker booted but failed while evaluating the lazy modules (HTTP ${String(response.status)}). Pass --no-smoke-load to ship anyway.`,
+            `the smoke Worker booted but failed while evaluating the deferred modules (HTTP ${String(response.status)}). Pass --no-smoke-load to ship anyway.`,
         );
     }
 
     const text = await response.text().catch(() => "");
-    let body: Partial<{ checked: number; failures: unknown[]; run: unknown }> | undefined;
+    let body: Partial<{ checked: number; failures: unknown[]; modules: unknown; run: unknown }> | undefined;
 
     try {
-        body = JSON.parse(text) as Partial<{ checked: number; failures: unknown[]; run: unknown }>;
+        body = JSON.parse(text) as Partial<{ checked: number; failures: unknown[]; modules: unknown; run: unknown }>;
     } catch {
         body = undefined;
     }
 
-    const { checked, failures, run } = body ?? {};
+    const { checked, failures, modules, run } = body ?? {};
 
-    if (typeof checked === "number" && Array.isArray(failures) && failures.every((item) => isModuleFailure(item))) {
+    if (typeof checked === "number" && Array.isArray(failures) && failures.every((item) => isFunctionFailure(item)) && isDeferredResult(modules)) {
         // Another run's Worker bound this port first: `startDevProcess` saw a listener, not our child. Not this project's answer, so `undefined`.
-        return run === runId ? { checked, failures } : undefined;
+        return run === runId ? { checked, failures, modules } : undefined;
     }
 
     // Not ours and not another run's: the project's routes answered in front of the Worker, so the project cannot ship as it is.
@@ -309,19 +415,28 @@ const startSmokeServer = (options: DevProcessOptions): Promise<DevProcess | unde
     });
 
 /** Logs a clean probe, or throws the list of modules the project has to fix. */
-const reportProbe = (cwd: string, { checked, failures }: { checked: number; failures: ModuleFailure[] }, logger: Logger): void => {
-    if (failures.length === 0) {
-        logger.success(`${String(checked)} lazy function(s) evaluate cleanly`);
+const reportProbe = (cwd: string, { checked, failures, modules }: ProbeResult, logger: Logger): void => {
+    if (failures.length === 0 && modules.failures.length === 0) {
+        const covered = [
+            ...(checked > 0 ? [`${String(checked)} lazy function(s)`] : []),
+            ...(modules.checked > 0 ? [`${String(modules.checked)} deferred module(s)`] : []),
+        ];
+
+        logger.success(`${covered.join(" and ")} evaluate cleanly`);
 
         return;
     }
 
-    const lines = formatFailures(cwd, failures);
+    const lines = [...formatFailures(cwd, failures), ...modules.failures.map(({ message, module }) => `  ${module}: ${message}${circularImportHint(message)}`)];
     const more = lines.length > MAX_LISTED_MODULES ? [`  …and ${String(lines.length - MAX_LISTED_MODULES)} more module(s)`] : [];
+    const failed = [
+        ...(failures.length > 0 ? [`${String(failures.length)} of ${String(checked)} lazy function(s)`] : []),
+        ...(modules.failures.length > 0 ? [`${String(modules.failures.length)} of ${String(modules.checked)} deferred module(s)`] : []),
+    ];
 
     throw new SmokeLoadError(
         [
-            `${String(failures.length)} of ${String(checked)} lazy function(s) fail to load:`,
+            `${failed.join(" and ")} fail to load:`,
             ...lines.slice(0, MAX_LISTED_MODULES),
             ...more,
             "Fix the module, or pass --no-smoke-load to ship anyway.",
@@ -333,7 +448,7 @@ const reportProbe = (cwd: string, { checked, failures }: { checked: number; fail
  * What a failed smoke check means. A failure of the project's modules or entry blocks, with the cause. A
  * check that could not say anything (skipped) warns. Anything else means the Worker did not start, which
  * blocks: a broken entry throws at load time, and that must not ship just because local wrangler could not confirm it.
- * Wrangler can also fail for reasons outside the project (a remote-only binding, a missing assets directory), so the
+ * Wrangler can also fail for reasons outside the project (a remote-only binding), so the
  * message names both causes.
  */
 const reportSmokeError = (error: unknown, output: string[], logger: Logger): string | undefined => {
@@ -352,7 +467,7 @@ const reportSmokeError = (error: unknown, output: string[], logger: Logger): str
     const tail = output.slice(-5).join("\n");
     const message =
         `the smoke Worker did not start (${error instanceof Error ? error.message : String(error)})${tail === "" ? "" : `\n${tail}`}. ` +
-        "Either the entry fails when it loads, or local wrangler cannot run the project (a remote-only binding or a missing assets directory). " +
+        "Either the entry fails when it loads, or local wrangler cannot run the project (a remote-only binding). " +
         "Fix whichever it is, or pass --no-smoke-load to ship anyway.";
 
     logger.error(message);
@@ -378,15 +493,18 @@ const createRunDirectory = (cwd: string): string => {
 const prepareSmokeProcess = async (input: {
     configPath: string | undefined;
     cwd: string;
+    /** The modules the generated Worker loads with `import()`, each evaluated by its own `import()` in the probe. */
+    deferred: ReadonlyArray<DeferredModule>;
     directory: string;
     environment: string | undefined;
-    functionsFile: string;
+    /** `_generated/functions.ts` when it exports `loadAllFunctions`; an eager registry has no such export to import. */
+    lazyFunctionsFile: string | undefined;
     main: string;
     /** The first port to try; a retry starts above the port another run's Worker held. */
     preferred: number;
     toolchain: DriverToolchain;
 }): Promise<{ args: string[]; command: string; port: number; runId: string }> => {
-    const { configPath, cwd, directory, environment, functionsFile, main, preferred, toolchain } = input;
+    const { configPath, cwd, deferred, directory, environment, lazyFunctionsFile, main, preferred, toolchain } = input;
 
     try {
         const entry = join(directory, "entry.ts");
@@ -394,16 +512,41 @@ const prepareSmokeProcess = async (input: {
         const runId = randomUUID();
 
         // The project's own entry is re-exported so Durable Object classes and bindings resolve exactly as in production.
+        // Deferred modules load through `import()` inside `fetch`, as the app's first event loads them: a static import would
+        // evaluate them at startup, turning a per-module report into a Worker that does not start.
         writeFileSync(
             entry,
             `export * from ${JSON.stringify(resolve(cwd, main))};
-import { loadAllFunctions } from ${JSON.stringify(functionsFile)};
-
+${lazyFunctionsFile === undefined ? "" : `import { loadAllFunctions } from ${JSON.stringify(lazyFunctionsFile)};\n`}
 const runId = ${JSON.stringify(runId)};
+
+const deferredModules: ReadonlyArray<readonly [string, () => Promise<unknown>]> = [
+${deferred.map(({ label, specifier }) => `    [${JSON.stringify(label)}, () => import(${JSON.stringify(specifier)})],`).join("\n")}
+];
+
+const loadDeferredModules = async () => {
+    const failures = (
+        await Promise.all(
+            deferredModules.map(async ([module, load]) => {
+                try {
+                    await load();
+
+                    return undefined;
+                } catch (error) {
+                    return { message: error instanceof Error ? error.message : String(error), module };
+                }
+            }),
+        )
+    ).filter((failure) => failure !== undefined);
+
+    return { checked: deferredModules.length, failures };
+};
 
 export default {
     async fetch() {
-        return Response.json({ ...(await loadAllFunctions()), run: runId });
+        const [functions, modules] = await Promise.all([${lazyFunctionsFile === undefined ? "{ checked: 0, failures: [] }" : "loadAllFunctions()"}, loadDeferredModules()]);
+
+        return Response.json({ ...functions, modules, run: runId });
     },
 };
 `,
@@ -441,9 +584,10 @@ export default {
 };
 
 /**
- * A lazy registry defers a module's evaluation errors to its first call. This runs the project's
- * real Worker entry plus `loadAllFunctions()` in workerd (`wrangler dev --local`) and returns an
- * error naming every module that fails to evaluate, so `build` and `deploy` can refuse to ship it.
+ * A module the Worker loads on demand defers its evaluation errors to the first event that loads it: every lazy
+ * function module, and in eager builds too whatever the generated app loads with `import()` (the auth module, the
+ * spec documents). This runs the project's real Worker entry in workerd (`wrangler dev --local`), evaluates all of
+ * them, and returns an error naming every module that fails, so `build`, `deploy` and `prepare` can refuse to ship it.
  *
  * A failure of the project's modules blocks. So does a Worker that does not start (a broken entry, or a local
  * `wrangler dev` that cannot run the project) or that starts and then fails. A check that cannot run at all
@@ -451,20 +595,25 @@ export default {
  * or a run directory or command that cannot be prepared) warns and returns `undefined`, because it says nothing
  * about the project. See {@link reportSmokeError}.
  */
-const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | undefined> => {
+const runSmokeLoad = async (options: SmokeLoadOptions): Promise<string | undefined> => {
     const { configPath, cwd, environment, launcher, logger, toolchain } = options;
-    const functionsFile = join(cwd, resolveSchemaDirectory(cwd), "_generated", "functions.ts");
+    const generatedDirectory = join(cwd, resolveSchemaDirectory(cwd), "_generated");
+    const functionsFile = join(generatedDirectory, "functions.ts");
 
     // The generated output decides, not the flag: `deploy --prebuilt` ships whatever an earlier
-    // `build`/`prepare` wrote, and an eager registry has no lazy modules to check.
-    if (!existsSync(functionsFile) || !readFileSync(functionsFile, "utf8").includes("export const loadAllFunctions")) {
+    // `build`/`prepare` wrote. An app with neither a lazy registry nor an `import()` has nothing to check.
+    const lazyFunctionsFile =
+        existsSync(functionsFile) && readFileSync(functionsFile, "utf8").includes("export const loadAllFunctions") ? functionsFile : undefined;
+    const deferred = findDeferredModules(cwd, generatedDirectory);
+
+    if (lazyFunctionsFile === undefined && deferred.length === 0) {
         return undefined;
     }
 
     const target = locateSmokeEntry(options);
 
     if ("skip" in target) {
-        logger.warn(`smoke-load skipped: ${target.skip}, so lazy modules are not evaluated before deploy`);
+        logger.warn(`smoke-load skipped: ${target.skip}, so deferred modules are not evaluated before deploy`);
 
         return undefined;
     }
@@ -492,7 +641,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     try {
         directory = createRunDirectory(cwd);
 
-        logger.info("smoke-loading lazy function modules in workerd");
+        logger.info("smoke-loading deferred modules in workerd");
 
         // The free-port check and `wrangler dev`'s bind are not atomic, so another run can take the port in between.
         // Its Worker then answers the probe; that attempt is dropped and retried on the next port.
@@ -503,9 +652,10 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
             const { args, command, port, runId } = await prepareSmokeProcess({
                 configPath,
                 cwd,
+                deferred,
                 directory,
                 environment,
-                functionsFile,
+                lazyFunctionsFile,
                 main,
                 preferred,
                 toolchain,
@@ -539,7 +689,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
 
             try {
                 // eslint-disable-next-line no-await-in-loop -- the probe decides whether this attempt stands
-                const probed = await probeLazyModules(port, runId, deadline);
+                const probed = await probeModules(port, runId, deadline);
 
                 if (probed !== undefined) {
                     reportProbe(cwd, probed, logger);
@@ -572,4 +722,4 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     }
 };
 
-export default runLazySmokeLoad;
+export default runSmokeLoad;

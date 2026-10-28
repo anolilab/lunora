@@ -5,7 +5,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { DevProcess, DevProcessOptions, DevProcessSpawner, DriverToolchain } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import runLazySmokeLoad from "../../src/util/lazy-smoke-load";
+import runSmokeLoad from "../../src/util/smoke-load";
 
 const startDevProcess = vi.hoisted(() => vi.fn<(options: DevProcessOptions) => Promise<DevProcess>>());
 
@@ -42,10 +42,13 @@ const scaffoldProject = (dir: string): void => {
     writeFileSync(join(dir, "wrangler.jsonc"), JSON.stringify({ main: "src/index.ts", name: "app" }));
 };
 
+/** The probe's report for a project whose generated app loads nothing with `import()`. */
+const NO_DEFERRED_MODULES = { checked: 0, failures: [] };
+
 /** The run id the smoke entry was written with; the probe must echo it back. */
 const runIdOf = (entryPath: string): string => /const runId = "([^"]+)"/u.exec(readFileSync(entryPath, "utf8"))?.[1] ?? "";
 
-describe(runLazySmokeLoad, () => {
+describe(runSmokeLoad, () => {
     let cwd: string;
     const stop = vi.fn<() => Promise<void>>(async () => {});
 
@@ -56,11 +59,11 @@ describe(runLazySmokeLoad, () => {
             vi.fn<() => Promise<Response>>(async () => {
                 const entry = resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? "");
 
-                return Response.json({ ...body, run: runIdOf(entry) });
+                return Response.json({ modules: NO_DEFERRED_MODULES, ...body, run: runIdOf(entry) });
             }),
         );
     };
-    const run = (overrides: Partial<Parameters<typeof runLazySmokeLoad>[0]> = {}) => runLazySmokeLoad({ cwd, logger, toolchain, ...overrides });
+    const run = (overrides: Partial<Parameters<typeof runSmokeLoad>[0]> = {}) => runSmokeLoad({ cwd, logger, toolchain, ...overrides });
 
     beforeEach(() => {
         cwd = mkdtempSync(join(tmpdir(), "lunora-smoke-load-"));
@@ -87,8 +90,8 @@ describe(runLazySmokeLoad, () => {
             scaffoldProject(other);
 
             const owners = new Map<number, { body: { checked: number; failures: unknown[] }; runId: string }>();
-            const clean = { checked: 1, failures: [] };
-            const broken = { checked: 1, failures: [{ functionPath: "posts:list", message: "boom" }] };
+            const clean = { checked: 1, failures: [], modules: NO_DEFERRED_MODULES };
+            const broken = { checked: 1, failures: [{ functionPath: "posts:list", message: "boom" }], modules: NO_DEFERRED_MODULES };
 
             startDevProcess.mockImplementation(async (options) => {
                 if (!owners.has(options.port)) {
@@ -232,14 +235,80 @@ describe(runLazySmokeLoad, () => {
         expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("smoke-load skipped"));
     });
 
-    it("stays quiet for an eager registry, which has no lazy modules", async () => {
+    it("stays quiet for an eager registry whose app loads nothing with import()", async () => {
         expect.assertions(3);
 
         writeFileSync(join(cwd, "lunora", "_generated", "functions.ts"), "export const LUNORA_FUNCTIONS = {};\n");
+        // A type-position `import()` loads nothing, so it is no reason to boot a Worker.
+        writeFileSync(join(cwd, "lunora", "_generated", "app.ts"), 'export type Doc = import("./dataModel.js").Doc;\n');
 
         await expect(run()).resolves.toBeUndefined();
         expect(startDevProcess).not.toHaveBeenCalled();
         expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    describe("an eager build whose generated app defers modules", () => {
+        const generated = (name: string, source: string): void => {
+            writeFileSync(join(cwd, "lunora", "_generated", name), source);
+        };
+
+        beforeEach(() => {
+            generated("functions.ts", "export const LUNORA_FUNCTIONS = {};\n");
+            // The shape `_generated/app.ts` loads the auth module and spec documents in, next to a type-position qualifier.
+            generated(
+                "app.ts",
+                [
+                    'export type Doc = import("./dataModel.js").Doc;',
+                    "export const loadDeferredModules = async () => ({",
+                    '    auth: await import("./authModule.js"),',
+                    '    openApiSpec: (await import("./openapi.js")).openApiSpec,',
+                    "});",
+                    "",
+                ].join("\n"),
+            );
+            generated("authModule.ts", "export const createAuth = () => undefined;\n");
+            generated("openapi.ts", 'export const openApiSpec = JSON.parse("{}");\n');
+
+            // The probe is answered by the entry this run wrote, evaluated for real, so the test sees what its loader catches.
+            startDevProcess.mockImplementation(async (options) => {
+                const entry = resolve(options.cwd, options.args.find((argument) => argument.endsWith("entry.ts")) ?? "");
+                const worker = (await import(entry)) as { default: { fetch: () => Promise<Response> } };
+
+                vi.stubGlobal(
+                    "fetch",
+                    vi.fn<() => Promise<Response>>(async () => worker.default.fetch()),
+                );
+
+                return { crashed: new Promise(() => {}), stop };
+            });
+        });
+
+        it("blocks when the deferred auth module throws while it evaluates", async () => {
+            expect.assertions(3);
+
+            generated("authModule.ts", 'throw new Error("auth boom at module scope");\nexport const createAuth = () => undefined;\n');
+
+            const error = await run();
+
+            expect(error).toContain("1 of 2 deferred module(s) fail to load:\n  lunora/_generated/authModule.ts: auth boom at module scope\n");
+            expect(error).toContain("--no-smoke-load");
+            expect(stop).toHaveBeenCalledTimes(1);
+        });
+
+        it("blocks when a deferred spec document fails to evaluate", async () => {
+            expect.assertions(1);
+
+            generated("openapi.ts", 'export const openApiSpec = JSON.parse("{");\n');
+
+            await expect(run()).resolves.toMatch(/1 of 2 deferred module\(s\) fail to load:\n {2}lunora\/_generated\/openapi\.ts: .*JSON/u);
+        });
+
+        it("reports the deferred modules it covered when they evaluate cleanly", async () => {
+            expect.assertions(2);
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(logger.success).toHaveBeenCalledWith("2 deferred module(s) evaluate cleanly");
+        });
     });
 
     describe("what the smoke Worker runs", () => {
@@ -310,6 +379,29 @@ describe(runLazySmokeLoad, () => {
             await expect(run()).resolves.toBeUndefined();
             expect(startDevProcess).not.toHaveBeenCalled();
         });
+
+        // `deploy` runs the client build that writes the directory after the check, so a clean checkout has none yet.
+        it("skips a project whose assets directory does not exist yet, which wrangler dev refuses to start without", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(cwd, "wrangler.jsonc"), JSON.stringify({ assets: { directory: "./dist" }, main: "src/index.ts", name: "app" }));
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(startDevProcess).not.toHaveBeenCalled();
+            expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("the assets directory dist does not exist yet"));
+        });
+
+        it("runs once the assets directory exists", async () => {
+            expect.assertions(1);
+
+            mkdirSync(join(cwd, "dist"));
+            writeFileSync(join(cwd, "wrangler.jsonc"), JSON.stringify({ assets: { directory: "./dist" }, main: "src/index.ts", name: "app" }));
+            respondWith({ checked: 1, failures: [] });
+
+            await run();
+
+            expect(startDevProcess).toHaveBeenCalledTimes(1);
+        });
     });
 
     describe("a Worker that boots but does not answer", () => {
@@ -323,7 +415,7 @@ describe(runLazySmokeLoad, () => {
 
             const error = await run();
 
-            expect(error).toContain("failed while evaluating the lazy modules (HTTP 500)");
+            expect(error).toContain("failed while evaluating the deferred modules (HTTP 500)");
             expect(stop).toHaveBeenCalledTimes(1);
         });
 
@@ -337,7 +429,7 @@ describe(runLazySmokeLoad, () => {
                 }),
             );
 
-            await expect(run()).resolves.toContain("did not finish evaluating the lazy modules");
+            await expect(run()).resolves.toContain("did not finish evaluating the deferred modules");
         });
 
         it("blocks when something other than the smoke Worker answers, and names the route to check", async () => {
@@ -386,7 +478,7 @@ describe(runLazySmokeLoad, () => {
             vi.fn<() => Promise<Response>>(async () => Response.json({ checked: 3, failures: [] }, { status: 500 })),
         );
 
-        await expect(run()).resolves.toContain("failed while evaluating the lazy modules (HTTP 500)");
+        await expect(run()).resolves.toContain("failed while evaluating the deferred modules (HTTP 500)");
     });
 
     it("keeps the check's storage in its own run directory, not the project's .wrangler/state", async () => {

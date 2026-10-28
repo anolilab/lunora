@@ -1377,7 +1377,8 @@ export const agentComputer = defineContainer({ schedulingPolicy: "durable_object
             const { calls, spawner } = createRecordingSpawner();
             const { infos, logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
+            // The generated app defers its OpenAPI document, so the smoke check would boot a real `wrangler dev` on this stub entry.
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, smokeLoad: false, spawner });
 
             expect(result.code).toBe(0);
 
