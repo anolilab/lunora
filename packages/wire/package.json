@@ -53,8 +53,8 @@
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage",
-        "test:bench": "vitest bench --run --config vitest.bench.config.ts"
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
+        "test:coverage": "vitest run --coverage"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",

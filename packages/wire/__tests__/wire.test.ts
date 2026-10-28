@@ -57,6 +57,25 @@ describe("stableStringify arrays", () => {
         expect(stableStringify([1, 2, 3])).toBe(stableStringify(indexed));
     });
 
+    it("visits only the indices that existed when serialisation began", () => {
+        expect.assertions(2);
+
+        const growing: unknown[] = [1];
+        let reads = 0;
+
+        Object.defineProperty(growing, 0, {
+            get() {
+                reads += 1;
+                growing.push(reads);
+
+                return 1;
+            },
+        });
+
+        expect(stableStringify(growing)).toBe("[1]");
+        expect(reads).toBe(1);
+    });
+
     it("visits sparse holes as null and keeps a sparse array distinct from an empty one", () => {
         expect.assertions(3);
 

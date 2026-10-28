@@ -199,9 +199,11 @@ const stableStringify = (value: unknown): string => {
         // through the array's own iterator or `map`: a custom `Symbol.iterator` must not change the
         // key, and `map` would skip holes and make `[, 1]` collide with other shapes. A plain loop,
         // not `Array.from` + `join`: the intermediate array measured 3-5x slower.
+        // The length is read once: an indexed getter that appends must not keep the loop running.
+        const { length } = value;
         let out = "[";
 
-        for (let index = 0; index < value.length; index += 1) {
+        for (let index = 0; index < length; index += 1) {
             if (index > 0) {
                 out += ",";
             }
