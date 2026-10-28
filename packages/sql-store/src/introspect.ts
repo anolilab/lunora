@@ -32,7 +32,7 @@ import { sql } from "drizzle-orm";
 import { runSqlGlobalTableMigrations } from "./ctx-db-global-provisioning";
 import type { SqlDialect } from "./dialect";
 import type { SqlCtxExec as SqlContextExec } from "./sql-exec";
-import { decodeGlobalRow, queryAll } from "./sql-exec";
+import { decodeGlobalRow, MAX_BOUND_PARAMETERS, queryAll } from "./sql-exec";
 import { effectiveColumnKind, sqliteDecode, sqliteEncode } from "./value-codec";
 
 /** A table plus its current row count. */
@@ -309,13 +309,6 @@ const globalColumnKind = (schema: SchemaLike, table: string, column: string): st
 
 /** An integer literal a `v.bigint()` filter accepts as typed text. */
 const INTEGER_TEXT = /^-?\d+$/u;
-
-/**
- * workerd's ceiling on bound parameters per statement — the same limit the shard
- * engine enforces. Duplicated rather than imported because `@lunora/shard-engine`
- * keeps its builders internal.
- */
-const MAX_BOUND_PARAMETERS = 100;
 
 /**
  * Refuse a D1 statement that would bind more parameters than workerd accepts.
