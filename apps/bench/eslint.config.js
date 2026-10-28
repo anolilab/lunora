@@ -42,9 +42,9 @@ export default createConfig(
             "**/README.md",
             "**/prettier.config.js",
             "**/eslint.config.js",
-            // Registry copies (`lunora registry add` / templates/saas), kept byte-for-byte so
-            // `.lunora-registry.json` can tell an upstream change from a local edit; they are the
-            // registry's code, not the bench's (see FINDINGS.md on how they fare under this preset).
+            // Registry / templates/saas copies, owned upstream (`lunora registry add`); the bench's own
+            // edits to them are kept small and commented. See FINDINGS.md on how they fare under
+            // this preset.
             "lunora/ai/**",
             "lunora/auth/**",
             "lunora/flags.ts",

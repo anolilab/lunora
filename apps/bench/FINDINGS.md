@@ -4,8 +4,10 @@ Framework defects and surprises found while building and measuring `apps/bench`.
 Each entry has a repro. Nothing here is fixed on this branch except where the
 bench works around it in its own code, which the entry says.
 
-Measured on `feat/bench-app` (base `saas-kit` @ `d7133735c`), wrangler 4.149,
-macOS on a quiet machine (load average ~2), packages built with `build:prod`.
+Measured at `cf2cc3f75` on `feat/bench-app` (base `saas-kit` @ `d7133735c`),
+wrangler 4.149, macOS on a quiet machine (load average ~2), packages built with
+`build:prod`. The later security fix (`ae4a383ae`) adds one internal action and
+no imports, so it leaves the eager graph effectively unchanged.
 
 ## Startup: what the bench measures
 
