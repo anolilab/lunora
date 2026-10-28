@@ -1,3 +1,15 @@
+## @lunora/payment [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.246...@lunora/payment@1.0.0-alpha.247) (2026-10-28)
+
+### Performance Improvements
+
+* cache hmac keys per secret on per-message paths ([#1383](https://github.com/anolilab/lunora/issues/1383)) ([4b259f8](https://github.com/anolilab/lunora/commit/4b259f8583960cf26066423f64ee10e5e0de7c85))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.246
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.167
+
 ## @lunora/payment [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.245...@lunora/payment@1.0.0-alpha.246) (2026-10-27)
 
 
