@@ -189,6 +189,20 @@ describe("reactiveCache", () => {
         expect(fresh).toBe(2);
     });
 
+    it("keeps a range on a declared index named like the implicit id index", async () => {
+        expect.assertions(1);
+
+        const cache = new ReactiveCache();
+        const spy = spyCounter();
+        const declared = { hi: "b", index: "!id", lo: "a", table: "users" };
+
+        await cache.run("users:range", new Set<string>(), spy.run, () => [declared]);
+        cache.invalidate("users", "u9", [{ index: "!id", key: "a1" }]);
+        await cache.run("users:range", new Set<string>(), spy.run, () => [declared]);
+
+        expect(spy.calls).toBe(2);
+    });
+
     it("scan invalidation: any write to a table blows *scan entries on it", async () => {
         expect.assertions(2);
 

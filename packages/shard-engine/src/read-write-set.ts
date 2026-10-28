@@ -312,9 +312,24 @@ const idIndexKey = (id: string): IndexKeyEntry => {
  * The slice holding exactly the row `id`. Half-open over raw strings: `id + "\0"`
  * is the immediate successor of `id`, so nothing else falls inside.
  */
+
+/**
+ * Every slice {@link idRange} minted. Tracked by identity rather than by index
+ * name, because nothing stops a schema declaring an index called `!id`, and its
+ * ranges must never be mistaken for point reads.
+ */
+const pointRanges = new WeakSet<KeyRange>();
+
 const idRange = (table: string, id: string): KeyRange => {
-    return { hi: `${id}\u0000`, index: ID_INDEX, lo: id, table };
+    const range: KeyRange = { hi: `${id}\u0000`, index: ID_INDEX, lo: id, table };
+
+    pointRanges.add(range);
+
+    return range;
 };
+
+/** Was `range` minted by {@link idRange} for a point read? */
+const isPointRange = (range: KeyRange): boolean => pointRanges.has(range);
 
 /** `ranges` sorted by `lo` with overlapping or adjacent slices merged, so a key needs one binary search. */
 const mergeSorted = (ranges: ReadonlyArray<KeyRange>): KeyRange[] => {
@@ -432,5 +447,5 @@ const keysTouchRanges = (ranges: ReadonlyArray<KeyRange> | undefined, keys: Read
     return false;
 };
 
-export { buildIndexRange, ID_INDEX, idIndexKey, idRange, indexKeysForRow, keysTouchRanges, rangeContains };
+export { buildIndexRange, idIndexKey, idRange, indexKeysForRow, isPointRange, keysTouchRanges, rangeContains };
 export type { IndexKeyEntry, KeyRange, StagedCondition };

@@ -51,7 +51,7 @@ import { stableWireKey } from "@lunora/wire";
 import { depKey, SCAN_DEP } from "./dependency-tracker";
 import { estimateBytes } from "./estimate-bytes";
 import type { IndexKeyEntry, KeyRange } from "./read-write-set";
-import { ID_INDEX, keysTouchRanges } from "./read-write-set";
+import { isPointRange, keysTouchRanges } from "./read-write-set";
 
 /** Get `key`'s value from `map`, creating and filing it via `create` on first sight. */
 const getOrCreate = <K, V>(map: Map<K, V>, key: K, create: () => V): V => {
@@ -236,7 +236,7 @@ class ReactiveCache {
         // A point read's slice on the id index duplicates the `table:id` dep the
         // same read records, which `invalidate` finds by key; indexed as a range
         // it would make every write walk one range per cached `get`.
-        const readRanges = ranges().filter((range) => range.index !== ID_INDEX);
+        const readRanges = ranges().filter((range) => !isPointRange(range));
 
         const entry: CacheEntry = {
             bytes,
