@@ -1,5 +1,5 @@
 import { stableWireKey } from "@lunora/wire";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { effectScope, nextTick } from "vue";
 
 import { usePaginatedQuery } from "../src/use-paginated-query";
@@ -54,10 +54,12 @@ describe("usePaginatedQuery frame cost (Vue)", () => {
             return options.cursor === null && options.endCursor === "cur-1";
         });
 
+        assert(firstPage, "first page subscription not found");
+
         vi.mocked(stableWireKey).mockClear();
 
         for (let frame = 0; frame < 10; frame += 1) {
-            firstPage?.callback({ continueCursor: "cur-1", isDone: false, page: rows(0) });
+            firstPage.callback({ continueCursor: "cur-1", isDone: false, page: rows(0) });
         }
 
         // A frame rebuilds `pageResults` for every loaded page; the page keys it

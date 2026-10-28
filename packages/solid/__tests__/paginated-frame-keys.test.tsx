@@ -1,7 +1,7 @@
 import type { FunctionReference } from "@lunora/client";
 import { stableWireKey } from "@lunora/wire";
 import { render } from "@solidjs/testing-library";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 
 import { createPaginatedQuery } from "../src/create-paginated-query";
 import { LunoraProvider } from "../src/lunora-provider";
@@ -62,10 +62,12 @@ describe("createPaginatedQuery frame cost (Solid)", () => {
             return !sub.unsubscribed && options.cursor === null && options.endCursor === "cur-1";
         });
 
+        assert(firstPage, "first page subscription not found");
+
         vi.mocked(stableWireKey).mockClear();
 
         for (let frame = 0; frame < 10; frame += 1) {
-            firstPage?.push({ continueCursor: "cur-1", isDone: false, page: rows(0) });
+            firstPage.push({ continueCursor: "cur-1", isDone: false, page: rows(0) });
         }
 
         // A frame rebuilds `pageResults` for every loaded page; the page keys it

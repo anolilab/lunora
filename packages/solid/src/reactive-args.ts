@@ -23,9 +23,12 @@ import { trackedEffect } from "./solid-compat";
  * The dedupe also cannot live inside `apply`: by then the previous generation's
  * disposer has already run.
  *
- * `apply` runs in the (untracked) apply phase, so re-reading `resolveArgs()`
- * there registers no dependency; it returns the teardown for what it opened,
- * exactly as {@link trackedEffect} expects. This is Solid's counterpart to
+ * `apply` receives the exact value the key was built from, not a second read of
+ * `resolveArgs()`: an accessor that is not a pure function of its signals
+ * (`Date.now()`, a mutable ref) would otherwise open the subscription with args
+ * the key never described, and a later tick back to the keyed value would not
+ * restart it. It returns the teardown for what it opened, exactly as
+ * {@link trackedEffect} expects. This is Solid's counterpart to
  * `@lunora/svelte`'s `subscribeReactiveArgs` and `@lunora/angular`'s
  * `attachReactiveArgs`.
  */
@@ -40,7 +43,13 @@ export const trackedArgsEffect = <T>(resolveArgs: Accessor<T>, apply: (value: T)
         return;
     }
 
-    const argsKey = createMemo(() => stableWireKey(resolveArgs()));
+    let resolved: T;
+    const argsKey = createMemo(() => {
+        resolved = resolveArgs();
 
-    trackedEffect(argsKey, () => apply(resolveArgs()));
+        return stableWireKey(resolved);
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- the memo runs before its effect, so `resolved` is always assigned by then.
+    trackedEffect(argsKey, () => apply(resolved!));
 };

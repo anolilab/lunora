@@ -27,4 +27,32 @@ describe(trackedArgsEffect, () => {
         expect(resolveArgs).not.toHaveBeenCalled();
         expect(apply).not.toHaveBeenCalled();
     });
+
+    it("applies the args its key was built from, not a second read of the accessor", async () => {
+        vi.stubGlobal("window", {});
+
+        let reads = 0;
+        let disposeRoot = (): void => {};
+        const applied = new Promise<{ read: number }>((resolve) => {
+            createRoot((dispose) => {
+                disposeRoot = dispose;
+
+                // Not a pure function of its signals: every read returns new content.
+                trackedArgsEffect(
+                    () => {
+                        reads += 1;
+
+                        return { read: reads };
+                    },
+                    (value) => {
+                        resolve(value);
+                    },
+                );
+            });
+        });
+
+        await expect(applied).resolves.toStrictEqual({ read: 1 });
+
+        disposeRoot();
+    });
 });
