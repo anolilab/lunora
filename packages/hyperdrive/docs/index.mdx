@@ -194,8 +194,8 @@ JSON text (mysql2 alone would expand it into SQL), and an `undefined` value thro
 Strings are quoted with a doubled `''` for a quote and `\\` for a backslash, so the server
 **must not** run with `NO_BACKSLASH_ESCAPES` in its `sql_mode` (MySQL's default doesn't
 include it): under that mode a backslash would be stored twice. A quote can't end the literal
-under either mode. Create
-the mysql2 connection with `disableEval: true`, which Workers require.
+under either mode. A `?` inside a quoted string or a comment is left alone, but `??` is an
+identifier placeholder (the value is quoted with backticks). Create the mysql2 connection with `disableEval: true`, which Workers require.
 
 ### Telemetry
 

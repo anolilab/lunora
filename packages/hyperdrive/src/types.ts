@@ -144,7 +144,8 @@ export interface PostgresJsLike {
  * plain text. Strings are quoted with `''` for a quote and `\\` for a
  * backslash, so a server whose `sql_mode` includes `NO_BACKSLASH_ESCAPES` is
  * unsupported: there a backslash is stored twice. No value can end its literal
- * under either mode.
+ * under either mode. mysql2 skips a `?` inside a quoted string or comment, but
+ * reads `??` as an identifier placeholder.
  *
  * Method syntax, not an arrow property — see {@link PostgresJsLike} — but here
  * that is necessary and NOT sufficient, which is why `params` is `unknown`.

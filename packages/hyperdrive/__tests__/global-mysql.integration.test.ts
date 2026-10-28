@@ -457,6 +457,16 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
             TEST_TIMEOUT,
         );
 
+        it(
+            "leaves a ? inside a string literal alone when binding",
+            async () => {
+                expect.assertions(1);
+
+                await expect(harness.exec.all("SELECT 'why?' AS a, ? AS b", ["x"])).resolves.toStrictEqual([{ a: "why?", b: "x" }]);
+            },
+            TEST_TIMEOUT,
+        );
+
         it("rejects an undefined bind value instead of binding NULL", async () => {
             expect.assertions(1);
 
