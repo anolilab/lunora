@@ -10,13 +10,14 @@ import type { ReactElement } from "react";
  * instead of running on cold start. Bundlers may still include the code.
  */
 const renderEmail = async (element: ReactElement): Promise<{ html: string; text: string }> => {
-    const { render } = await import("@react-email/render");
+    const { render, toPlainText } = await import("@react-email/render");
 
-    // The two passes share no state and neither depends on the other, so run
-    // them together — any async/IO work inside @react-email/render can overlap.
-    const [html, text] = await Promise.all([render(element, { pretty: false }), render(element, { plainText: true })]);
+    // One React pass: `render(el, { plainText: true })` is `toPlainText` over the
+    // same markup, so a second pass would only re-render the tree (and could
+    // disagree with the HTML for a component that is not deterministic).
+    const html = await render(element, { pretty: false });
 
-    return { html, text };
+    return { html, text: toPlainText(html) };
 };
 
 export default renderEmail;

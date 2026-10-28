@@ -786,6 +786,36 @@ describe("broadcast batches status writes per page", () => {
         return { batches, prepared, push, store };
     };
 
+    it("groups every failure sharing an error text into one update", async () => {
+        expect.hasAssertions();
+
+        const { batches, push, store } = setupD1();
+
+        await Promise.all(["a", "b", "c"].map(async (suffix) => push.register({ subscription: sub(suffix) })));
+
+        const registered = await store.list();
+        const [first, second, third] = registered.map((row) => row.id);
+
+        await store.applyOutcomes?.({
+            failed: [
+                { error: "503", id: first as string },
+                { error: "410", id: second as string },
+                { error: "503", id: third as string },
+            ],
+            gone: [],
+            ok: [],
+        });
+
+        const rows = await store.list();
+
+        expect(batches.at(-1)).toHaveLength(2);
+        expect(rows.map((row) => [row.id, row.lastStatus, row.lastError])).toStrictEqual([
+            [first, "failed", "503"],
+            [second, "failed", "410"],
+            [third, "failed", "503"],
+        ]);
+    });
+
     it("writes a 250-subscription page in at most 3 batched statements, never per row", async () => {
         expect.hasAssertions();
 

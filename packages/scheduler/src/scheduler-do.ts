@@ -1,5 +1,5 @@
-import { toBase64Url } from "../../../shared/base64";
 import { DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
+import { signCanonical } from "../../../shared/hmac-url";
 import { jsonResponse } from "../../../shared/json-response";
 import resolveScheduleId from "./resolve-schedule-id";
 import type { RetryPolicy, ScheduleRecord } from "./types";
@@ -1401,11 +1401,9 @@ class SchedulerDO {
             return undefined;
         }
 
-        const encoder = new TextEncoder();
-        const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
-        const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
-
-        return toBase64Url(new Uint8Array(signature));
+        // The shared signer memoizes the imported key per secret: importing it
+        // costs as much as the signature itself, and this runs on every dispatch.
+        return signCanonical(secret, body);
     }
 
     /**

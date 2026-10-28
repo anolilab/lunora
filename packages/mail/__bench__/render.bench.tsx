@@ -1,53 +1,51 @@
-import { render } from "@react-email/render";
+import { render, toPlainText } from "@react-email/render";
 import { bench, describe } from "vitest";
 
 /**
- * `renderEmail` runs two passes over the same React element on every send()/
- * queue() that uses a `react` template — one HTML pass and one plain-text pass.
- * The two passes share no state, so we run them concurrently with Promise.all.
+ * `renderEmail` needs an HTML body and a plain-text body for every send()/
+ * queue() that uses a `react` template.
  *
- * React rendering is primarily synchronous CPU work on a single thread, so the
- * concurrent variant does NOT halve wall-clock time; the win is bounded by the
- * async/IO portion of `@react-email/render`. This bench contrasts the old
- * sequential `await`s against the new `Promise.all` so the (modest) delta is
- * observable rather than asserted.
+ * two passes — `render(el)` and `render(el, { plainText: true })`: React renders
+ * the element twice; the second pass then runs html-to-text over its own HTML.
+ * one pass — `render(el)` once, then `toPlainText(html)` over that same HTML,
+ * which is exactly what `render`'s plainText branch does internally.
  */
 
-// Inline JSX fixture — no named component needed since the element is never
-// reused across renders and the bench only cares about render throughput.
+const rows = Array.from({ length: 30 }, (_, index) => `Line item ${String(index)} — a product with a reasonably long description`);
+
 const element = (
     <html lang="en">
+        <head>
+            <title>Your order</title>
+        </head>
         <body>
             <h1>Welcome, Alice!</h1>
             <p>Thanks for joining Lunora. We are glad to have you on board.</p>
-            <ul>
-                <li>Set up your profile</li>
-                <li>Invite your team</li>
-                <li>Read the docs</li>
-            </ul>
+            <img alt="logo" src="https://example.com/logo.png" />
+            <table>
+                <tbody>
+                    {rows.map((row) => (
+                        <tr key={row}>
+                            <td>{row}</td>
+                            <td>
+                                <a href="https://example.com/item">View</a>
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
         </body>
     </html>
 );
 
-const renderSequential = async (): Promise<{ html: string; text: string }> => {
-    const html = await render(element, { pretty: false });
-    const text = await render(element, { plainText: true });
-
-    return { html, text };
-};
-
-const renderConcurrent = async (): Promise<{ html: string; text: string }> => {
-    const [html, text] = await Promise.all([render(element, { pretty: false }), render(element, { plainText: true })]);
-
-    return { html, text };
-};
-
-describe("renderEmail: HTML + plain-text passes", () => {
-    bench("sequential awaits (old)", async () => {
-        await renderSequential();
+describe("renderEmail: HTML + plain text", () => {
+    bench("two render passes (old)", async () => {
+        await Promise.all([render(element, { pretty: false }), render(element, { plainText: true })]);
     });
 
-    bench("Promise.all (new)", async () => {
-        await renderConcurrent();
+    bench("one render pass + toPlainText (new)", async () => {
+        const html = await render(element, { pretty: false });
+
+        toPlainText(html);
     });
 });
