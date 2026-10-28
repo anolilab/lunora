@@ -146,3 +146,45 @@ export const summarize = (samples) => {
 
     return { max: sorted.at(-1), median: sorted[Math.floor(sorted.length / 2)], min: sorted[0], runs: sorted.length };
 };
+
+/** Owning package of a metafile input path: `@scope/name` / `name` under node_modules, `packages/<dir>` in the workspace, else the path's first segment. */
+const ownerOf = (path) => {
+    const nodeModules = path.lastIndexOf("node_modules/");
+
+    if (nodeModules !== -1) {
+        const [first, second] = path.slice(nodeModules + "node_modules/".length).split("/");
+
+        return first.startsWith("@") ? `${first}/${second}` : first;
+    }
+
+    const workspacePackage = /(?:^|\/)packages\/([^/]+)\//u.exec(path);
+
+    if (workspacePackage) {
+        return `@lunora/${workspacePackage[1]}`;
+    }
+
+    const app = /(?:^|\/)(lunora|src|shared)\//u.exec(path);
+
+    return app ? `<app>/${app[1]}` : path.split("/")[0];
+};
+
+/** The eager graph's source bytes per owning package, largest first. */
+export const eagerPackages = (outDirectory, limit = 25) => {
+    const inputs = readMetafile(outDirectory);
+    const { seen } = reach(inputs, () => false);
+    const totals = new Map();
+
+    for (const path of seen) {
+        const owner = ownerOf(path);
+        const entry = totals.get(owner) ?? { bytes: 0, modules: 0 };
+
+        entry.bytes += inputs[path].bytes;
+        entry.modules += 1;
+        totals.set(owner, entry);
+    }
+
+    return [...totals.entries()]
+        .map(([name, entry]) => ({ name, ...entry }))
+        .sort((a, b) => b.bytes - a.bytes)
+        .slice(0, limit);
+};
