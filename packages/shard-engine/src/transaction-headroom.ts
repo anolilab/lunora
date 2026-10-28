@@ -188,12 +188,11 @@ class TransactionHeadroomTracker {
 
         if (used >= limit * NEAR_LIMIT_RATIO && !this.warned.has(kind)) {
             this.warned.add(kind);
-            // A warning sink is telemetry: it must never turn a transaction that
-            // fits into a failed one.
             try {
                 this.onNearLimit?.({ kind, limit, used });
             } catch {
-                // Swallowed for the reason above.
+                // A warning sink is telemetry: it must never turn a transaction that
+                // fits into a failed one.
             }
         }
     }
