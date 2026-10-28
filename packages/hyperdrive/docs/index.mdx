@@ -190,7 +190,10 @@ your already-serialised string a second time.
 `fromMysql2` (and `buildMysqlExec`) call mysql2's `query`, not `execute`: Hyperdrive does
 not support MySQL protocol-level prepared statements, so the `?` values are escaped
 client-side and the statement goes over as text. An array or object value binds as its
-JSON text (mysql2 alone would expand it into SQL), and an `undefined` value throws. Create
+JSON text (mysql2 alone would expand it into SQL), and an `undefined` value throws.
+mysql2 escapes a quote inside a string as `\'`, so the server **must not** run with
+`NO_BACKSLASH_ESCAPES` in its `sql_mode` (MySQL's default doesn't include it): under that
+mode a stored string could end its own literal. Create
 the mysql2 connection with `disableEval: true`, which Workers require.
 
 ### Telemetry
@@ -438,6 +441,7 @@ import mysql from "mysql2/promise";
 // CLIENT_FOUND_ROWS is REQUIRED — the affected-rows OCC guard must see matched
 // (not changed) rows, or an idempotent patch reports 0 and raises a false conflict.
 // `disableEval` is required for mysql2 on Workers.
+// The server's sql_mode must not include NO_BACKSLASH_ESCAPES (see "Drivers & placeholders").
 const pool = mysql.createPool({ uri: env.HYPERDRIVE.connectionString, disableEval: true, flags: ["FOUND_ROWS"] });
 
 const globalDb = createMysqlGlobalCtxDb(pool, { schema });

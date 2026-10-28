@@ -177,6 +177,9 @@ export const buildPgExec = (client: RowClient): SqlExec => {
  * forward verbatim. MySQL has no `RETURNING`, so `run` surfaces `affectedRows`
  * for the store's affected-rows OCC guard.
  *
+ * Statements go over as text with mysql2's client-side escaping, so the server
+ * must not run with `NO_BACKSLASH_ESCAPES` (see {@link Mysql2Like}).
+ *
  * **The connection MUST be created with the `CLIENT_FOUND_ROWS` flag**
  * (mysql2: `createPool({ flags: ["FOUND_ROWS"] })`). Without it, `affectedRows`
  * counts *changed* rows, so an idempotent `patch`/`replace` that re-writes the

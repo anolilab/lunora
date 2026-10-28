@@ -195,5 +195,8 @@ cutover is still in D1 afterwards, so remove those by hand.
 5. **Query caching left on.** Spurious OCC conflicts and live queries stuck up to
    75 s behind writes. Disable caching on the config (`--caching-disabled`). Local dev
    has no cache, so this shows up only once deployed.
-6. **Writing to the database directly.** Live queries won't see those writes. Route writes
+6. **MySQL with `NO_BACKSLASH_ESCAPES` in `sql_mode`.** Unsupported: statements are
+   sent as text with values escaped by mysql2, which writes a quote as `\'`. Under that
+   mode a stored string could end its literal. MySQL's default `sql_mode` doesn't include it.
+7. **Writing to the database directly.** Live queries won't see those writes. Route writes
    through `ctx.db`.
