@@ -504,7 +504,18 @@ const preflight = (
 
 /** Warn when the config `id` (bound as `binding`) still caches queries, or when that can't be read. */
 const warnIfCaching = async (request: Request, binding: string, id: string, logger: Logger): Promise<void> => {
-    const outcome = await request(`/hyperdrive/configs/${encodeURIComponent(id)}`);
+    let outcome: Awaited<ReturnType<Request>>;
+
+    try {
+        outcome = await request(`/hyperdrive/configs/${encodeURIComponent(id)}`);
+    } catch (error) {
+        // The check is advisory: a network failure or timeout must not stop the deploy.
+        logger.warn(
+            `could not check whether the "${binding}" Hyperdrive config has query caching off (${error instanceof Error ? error.message : String(error)}).`,
+        );
+
+        return;
+    }
 
     if (!outcome.ok) {
         logger.warn(`could not check whether the "${binding}" Hyperdrive config has query caching off (${describeFailure(outcome)}).`);
@@ -705,11 +716,17 @@ const provisionDeployHyperdrive = async (
     // Only a client build this run gave the --env name as CLOUDFLARE_ENV has written a generated config for that environment. A build
     // that did not run leaves whatever an earlier build wrote, so `built` must not claim the deployed environment for it.
     const environment = options.clientBuildEnvironment === undefined ? undefined : { ...process.env, CLOUDFLARE_ENV: options.clientBuildEnvironment };
+    const schema = discoverSchemaInfo(cwd, resolveSchemaDirectory(cwd), options.discoveryCache);
+
+    // A schema that can't be read may still declare `.global({ backend: "hyperdrive" })` tables; caching off is the side that can't serve stale rows.
+    if (schema.error !== undefined) {
+        options.logger.warn(`could not read the schema (${schema.error}), so Hyperdrive configs are set up with query caching off.`);
+    }
 
     return provisionHyperdrive({
         checkOnly: phase === "check",
         cwd,
-        disableCaching: discoverSchemaInfo(cwd, resolveSchemaDirectory(cwd), options.discoveryCache).info?.hasHyperdriveGlobalTable === true,
+        disableCaching: schema.error !== undefined || schema.info?.hasHyperdriveGlobalTable === true,
         dryRun: options.dryRun,
         environment,
         logger: options.logger,

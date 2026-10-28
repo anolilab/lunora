@@ -270,6 +270,58 @@ describe("hyperdrive on deploy", () => {
                 expect(messages.filter((message) => message.includes("wrangler hyperdrive update real-id --caching-disabled"))).toHaveLength(warnings);
             });
 
+            it("turns caching off, and says so, when the schema cannot be read", async () => {
+                expect.assertions(2);
+
+                writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" });
+                vi.stubEnv(URL_VARIABLE, "postgres://u:p@h/db");
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const api = hyperdriveApi([]);
+                const { logger, messages } = recordingLogger();
+
+                vi.stubGlobal("fetch", api);
+
+                await provisionDeployHyperdrive(
+                    root,
+                    {
+                        clientBuildEnvironment: undefined,
+                        discoveryCache: {
+                            memo: () => {
+                                return { error: "Unexpected token", info: undefined };
+                            },
+                        } as never,
+                        logger,
+                    },
+                    "deploy",
+                    "cloudflare",
+                );
+
+                vi.unstubAllGlobals();
+                vi.unstubAllEnvs();
+
+                expect(bodyOf(api, "POST").caching).toStrictEqual({ disabled: true });
+                expect(messages).toContainEqual(expect.stringContaining("could not read the schema (Unexpected token)"));
+            });
+
+            it("warns and carries on when the caching check cannot reach Cloudflare", async () => {
+                expect.assertions(2);
+
+                writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: "real-id" }], name: "app" });
+
+                const api = vi.fn<typeof globalThis.fetch>(async () => {
+                    throw new TypeError("fetch failed");
+                });
+                const { logger, messages } = recordingLogger();
+                const result = await provisionHyperdrive({ cwd: root, disableCaching: true, environment: CREDENTIALS, fetch: api, logger });
+
+                expect(result).toBeUndefined();
+                expect(messages).toStrictEqual([
+                    expect.stringContaining('could not check whether the "HYPERDRIVE" Hyperdrive config has query caching off (fetch failed)'),
+                ]);
+            });
+
             it("skips the caching check without API credentials", async () => {
                 expect.assertions(1);
 
