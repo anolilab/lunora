@@ -25,9 +25,9 @@ interface Controller<TState> {
  * Bind a core controller for the life of the component — `useForm`'s seam, for a
  * controller that is not a form. Created once, so a re-render keeps what it holds.
  */
-const useController = <TController extends Controller<unknown>>(factory: () => TController): [ReturnType<TController["getState"]>, TController] => {
+const useController = <TState, TController extends Controller<TState>>(factory: () => Controller<TState> & TController): [TState, TController] => {
     const [controller] = useState(factory);
-    const state = useSyncExternalStore(controller.subscribe, controller.getState, controller.getState) as ReturnType<TController["getState"]>;
+    const state = useSyncExternalStore(controller.subscribe, controller.getState, controller.getState);
 
     useEffect(() => controller.destroy, [controller]);
 
