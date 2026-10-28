@@ -349,9 +349,17 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Cron jobs not configured";
     };
+    readonly CRON_JOB_IN_FLIGHT: {
+        readonly status: 409;
+        readonly title: "Cron job is already running";
+    };
     readonly CRON_JOB_NOT_FOUND: {
         readonly status: 404;
         readonly title: "Cron job not found";
+    };
+    readonly DEPLOYMENT_PAUSED: {
+        readonly status: 503;
+        readonly title: "Deployment is paused";
     };
     readonly EXPORT_SHARD_FAILED: {
         readonly status: 502;
@@ -380,6 +388,10 @@ const ERROR_CATALOG: {
     readonly MIGRATION_ID_REQUIRED: {
         readonly status: 400;
         readonly title: "Migration id required";
+    };
+    readonly PAUSE_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Deployment pause not configured";
     };
     readonly PITR_UNAVAILABLE: {
         readonly status: 409;
