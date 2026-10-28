@@ -63,13 +63,6 @@ const probeAccountToken = async (accountId: string, token: string, fetchImpl: ty
     return outcome.ok ? { reported: reportedStatus(outcome.body), status: 200 } : { reported: undefined, status: outcome.status };
 };
 
-/**
- * Decide what the two endpoints say. A status the token reports is the verdict:
- * `active` passes, anything else (disabled, expired) is rejected. Without a
- * reported status, only a refusal from both endpoints (401 or 403) is a
- * rejection, since a user-owned token answers at the user endpoint and an
- * account-owned one only at its account's. An inconclusive answer is unchecked.
- */
 /** One account endpoint's answer: a reported status or a 401/403 decides; anything else is inconclusive. */
 const judgeAccount = async (accountId: string, token: string, fetchImpl: typeof globalThis.fetch): Promise<TokenVerdict> => {
     const account = await probeAccountToken(accountId, token, fetchImpl);
@@ -85,6 +78,13 @@ const judgeAccount = async (accountId: string, token: string, fetchImpl: typeof 
     return { reason: `HTTP ${String(account.status)}`, verdict: "unchecked" };
 };
 
+/**
+ * Decide what the two endpoints say. A status the token reports is the verdict:
+ * `active` passes, anything else (disabled, expired) is rejected. Without a
+ * reported status, only a refusal from both endpoints (401 or 403) is a
+ * rejection, since a user-owned token answers at the user endpoint and an
+ * account-owned one only at its account's. An inconclusive answer is unchecked.
+ */
 const judgeToken = async (token: string, accountIds: ReadonlyArray<string>, fetchImpl: typeof globalThis.fetch): Promise<TokenVerdict> => {
     const user = await probeUserToken(token, fetchImpl);
 

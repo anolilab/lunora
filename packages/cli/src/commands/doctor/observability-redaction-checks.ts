@@ -3,10 +3,13 @@
  * URL in Workers Logs as received, so an auth link's `?token=` is stored with it
  * unless the block sets `redact_query_string` to true.
  */
-import type { WranglerConfig, WranglerObservability } from "@lunora/config/cloudflare";
+import type { ObservabilitySignalSampling, WranglerConfig, WranglerObservability } from "@lunora/config/cloudflare";
 import { resolveObservabilitySampling } from "@lunora/config/cloudflare";
 
 import type { Finding } from "./handler";
+
+/** A signal stores requests only when it is on and samples some of them: a rate of 0 keeps none. */
+const persistsRequests = (signal: ObservabilitySignalSampling): boolean => signal.enabled && signal.headSamplingRate > 0;
 
 /**
  * Whether an explicit `observability` block persists request URLs with their
@@ -20,14 +23,14 @@ const keepsQueryStrings = (observability: WranglerObservability | undefined): bo
 
     const { logs, traces } = resolveObservabilitySampling(observability);
 
-    return logs.enabled || traces.enabled;
+    return persistsRequests(logs) || persistsRequests(traces);
 };
 
 /** Which enabled signals persist the request URL, named so a trace-only block is not told its logs leak. */
 const leakingSignals = (observability: WranglerObservability | undefined): string => {
     const { logs, traces } = resolveObservabilitySampling(observability);
 
-    return [logs.enabled && "request logs", traces.enabled && "traces"].filter(Boolean).join(" and ");
+    return [persistsRequests(logs) && "request logs", persistsRequests(traces) && "traces"].filter(Boolean).join(" and ");
 };
 
 /**

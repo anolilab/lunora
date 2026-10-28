@@ -37,7 +37,9 @@ const buildDefaultTransport = (options: LunoraMailOptions): MailTransport => {
                     new MailSendError({
                         message:
                             "@lunora/mail: no transport configured — this mailer can only queue(); pass `transport`, `cloudflareSend` (a SEND_EMAIL binding) or `apiKey` (Resend) to send()",
-                        retryable: false,
+                        // A missing binding is a deploy fault, not this message's: a consumer that acked would drop
+                        // every queued mail until the fix, so it retries and dead-letters instead.
+                        retryable: true,
                     }),
                 ),
         };

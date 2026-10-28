@@ -1250,6 +1250,25 @@ describe("runDoctor", () => {
             expect(redactionFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))?.level).toBe("warn");
         });
 
+        it("is quiet when the enabled signal samples no requests", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ observability: { enabled: true, head_sampling_rate: 0 } }));
+
+            expect(redactionFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
+        });
+
+        it("names only the signal that samples requests", async () => {
+            expect.assertions(2);
+
+            seed(workdir, wranglerWith({ observability: { enabled: true, head_sampling_rate: 0, traces: { enabled: true } } }));
+
+            const finding = redactionFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }));
+
+            expect(finding?.message).toContain("traces keep query strings");
+            expect(finding?.message).not.toContain("request logs");
+        });
+
         it("is quiet when logging is disabled", async () => {
             expect.assertions(1);
 
