@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SchedulerDO } from "../src/scheduler-do";
 import type { ScheduleRecord } from "../src/types";
-import { post } from "./blocking-scheduler";
+import { BlockingScheduler, indexKeysFor, post, scheduleDue, settle } from "./blocking-scheduler";
 import { createFakeState } from "./fake-state";
 
 const env = { LUNORA_ORIGIN_URL: "https://app.test" };
@@ -55,6 +55,31 @@ describe("schedulerDO deployment pause", () => {
         await scheduler.alarm();
 
         expect(scheduler.dispatched).toStrictEqual(["held"]);
+    });
+
+    it("stops a running drain from starting more jobs once paused, and keeps their claims for resume", async () => {
+        expect.hasAssertions();
+
+        const state = createFakeState();
+        const scheduler = new BlockingScheduler(state, env);
+        // More than the six drain lanes, so two records wait behind in-flight dispatches.
+        const ids = await scheduleDue(scheduler, 8);
+        const drain = scheduler.alarm();
+
+        await settle();
+
+        expect(scheduler.started).toHaveLength(6);
+
+        await scheduler.fetch(post("/pause", { paused: true }));
+        scheduler.releaseAll();
+        await drain;
+
+        expect(scheduler.started).toHaveLength(6);
+        expect(state.alarm).toBeNull();
+
+        for (const id of ids.slice(6)) {
+            expect(indexKeysFor(state.storageMap, id)).toHaveLength(1);
+        }
     });
 
     it("keeps the original pausedAt when paused again", async () => {

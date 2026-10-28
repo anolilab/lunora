@@ -1140,6 +1140,12 @@ class SchedulerDO {
                 return;
             }
 
+            // A pause can land while this record waits behind other lanes'
+            // dispatches. Leave its due-time claim untouched so resume fires it.
+            if (await this.isPaused()) {
+                return;
+            }
+
             // Delete-then-put, in that order. The inverse would leave BOTH keys
             // if the delete failed, and a record indexed twice is dispatched
             // twice — the exact defect this lease exists to close. This order's
@@ -2168,6 +2174,12 @@ class SchedulerDO {
         return (await this.state.storage.get<DeploymentPauseState>(PAUSE_KEY)) ?? { paused: false };
     }
 
+    private async isPaused(): Promise<boolean> {
+        const state = await this.pauseState();
+
+        return state.paused;
+    }
+
     /**
      * `POST /pause { paused, reason? }` — pause or resume the deployment.
      * Pausing stops the alarm (see `alarm()`); resuming re-derives it from the
@@ -2575,6 +2587,14 @@ class SchedulerDO {
     }
 
     private async rescheduleAlarm(): Promise<void> {
+        // Paused, every held `t:` row is in the past: arming for it would spin.
+        // Resume re-runs this with the flag gone.
+        if (await this.isPaused()) {
+            await this.state.storage.deleteAlarm();
+
+            return;
+        }
+
         const earliest = await this.earliestPendingTime();
 
         if (earliest === undefined) {
