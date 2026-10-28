@@ -898,8 +898,9 @@ server-minted identity to the shard. The shard moves the socket's expiry when th
 socket belongs to the same user and every claim except `exp`, `expiresAtMs`,
 `iat`, `nbf` and `jti` is unchanged, and answers `200 { ok: true }`; nothing is
 re-sent on the socket. It refuses an unknown or another user's socket (`404`), a
-credential older than the one the socket holds (`409 STALE_CREDENTIAL`), and
-changed claims (`409 IDENTITY_CHANGED`). On any refusal the socket is left as it
+credential older than the one the socket holds or, for a socket that has an
+expiry, one without any (`409 STALE_CREDENTIAL`), and changed claims
+(`409 IDENTITY_CHANGED`). A client counts only the `{ ok: true }` body as success. On any refusal the socket is left as it
 was: it still closes with `4001` at its old expiry, and a client SHOULD reconnect
 it under the new credential, which re-seeds as any upgrade does. A server
 without the route answers `404`, so the same fallback covers it.

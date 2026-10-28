@@ -16665,7 +16665,7 @@ abstract class ShardDO {
      * owner the same way a live grant is.
      */
     private async handleSocketReauth(request: Request): Promise<Response> {
-        let body: { connectionId?: unknown };
+        let body: { connectionId?: unknown } | null;
 
         try {
             body = await request.json();
@@ -16673,7 +16673,7 @@ abstract class ShardDO {
             return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
         }
 
-        if (typeof body.connectionId !== "string" || body.connectionId.length === 0 || body.connectionId.length > MAX_LIVE_CONTROL_KEY_LENGTH) {
+        if (typeof body?.connectionId !== "string" || body.connectionId.length === 0 || body.connectionId.length > MAX_LIVE_CONTROL_KEY_LENGTH) {
             return jsonResponse({ error: { code: "BAD_REQUEST", message: "connectionId is required" } }, 400);
         }
 
@@ -16710,7 +16710,9 @@ abstract class ShardDO {
             return jsonResponse({ error: { code: "TOKEN_EXPIRED", message: "authentication token expired" } }, 401);
         }
 
-        if (attachment.expiresAt !== undefined && identityExpiry !== undefined && identityExpiry < attachment.expiresAt) {
+        // A credential without an expiry (a cookie session, say) cannot lift the one the socket holds: the socket
+        // would outlive both its bearer and the session.
+        if (attachment.expiresAt !== undefined && (identityExpiry === undefined || identityExpiry < attachment.expiresAt)) {
             return jsonResponse({ error: { code: "STALE_CREDENTIAL", message: "the socket already holds a later credential" } }, 409);
         }
 

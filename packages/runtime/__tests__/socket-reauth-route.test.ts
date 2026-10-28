@@ -99,4 +99,22 @@ describe("socket re-auth route", () => {
         expect(response.status).toBe(401);
         expect(seen).toHaveLength(0);
     });
+
+    it("answers a null body with 400 and forwards nothing", async () => {
+        expect.assertions(2);
+
+        const { namespace, seen, worker } = workerResolving({ exp: FUTURE_SECONDS, userId: "user_42" });
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/ws/reauth", {
+                body: "null",
+                headers: { authorization: "Bearer fresh", "content-type": "application/json" },
+                method: "POST",
+            }),
+            { SHARD: namespace },
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
+        expect(seen).toHaveLength(0);
+    });
 });

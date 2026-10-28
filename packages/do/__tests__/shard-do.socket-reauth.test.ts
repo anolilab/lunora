@@ -160,6 +160,7 @@ describe("socket re-authentication", () => {
         ["an expired credential", { claims: { role: "member" }, expiresAt: NOW - 1, userId: "user-1" }, 401, "TOKEN_EXPIRED"],
         ["a replayed older credential", { claims: { role: "member" }, expiresAt: NOW + HOUR - 1, userId: "user-1" }, 409, "STALE_CREDENTIAL"],
         ["changed claims", { claims: { role: "admin" }, expiresAt: NOW + 2 * HOUR, userId: "user-1" }, 409, "IDENTITY_CHANGED"],
+        ["a credential without an expiry", { claims: { role: "member" }, userId: "user-1" }, 409, "STALE_CREDENTIAL"],
         ["another user's credential", { claims: { role: "member" }, expiresAt: NOW + 2 * HOUR, userId: "user-2" }, 404, "LIVE_CONNECTION_NOT_FOUND"],
         ["no verified identity", { expiresAt: NOW + 2 * HOUR }, 404, "LIVE_CONNECTION_NOT_FOUND"],
         [
@@ -182,6 +183,17 @@ describe("socket re-authentication", () => {
 
         expect(body.error.code).toBe(code);
         expect(ws.attachment?.expiresAt).toBe(NOW + HOUR);
+    });
+
+    it("answers a null body with 400", async () => {
+        expect.assertions(1);
+
+        const { shard } = open();
+        const response = await shard.fetch(
+            new Request("https://shard.internal/_lunora/ws/reauth", { body: "null", headers: { "content-type": "application/json" }, method: "POST" }),
+        );
+
+        expect(response.status).toBe(400);
     });
 
     it("refuses an anonymous socket, which has no credential to refresh", async () => {

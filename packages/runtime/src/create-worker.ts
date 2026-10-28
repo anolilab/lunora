@@ -4562,15 +4562,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const handleSocketReauth = async (request: Request, env: unknown, context: ExecutionContextLike | undefined, url: URL): Promise<Response> => {
         assertMethod(request, "POST", "ws reauth");
 
-        let body: { connectionId?: unknown };
+        const body = await readJsonBodyWithLimit(request);
 
-        try {
-            body = await request.json();
-        } catch {
-            throw new LunoraError("invalid JSON body", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        if (typeof body.connectionId !== "string" || body.connectionId.length === 0) {
+        if (typeof body["connectionId"] !== "string" || body["connectionId"].length === 0) {
             throw new LunoraError("connectionId is required", { code: "BAD_REQUEST", status: 400 });
         }
 
@@ -4601,7 +4595,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         return forwardToShard(
             shardDO,
             shardKey,
-            new Request(new URL(SOCKET_REAUTH_PATH, url.origin), { body: JSON.stringify({ connectionId: body.connectionId }), headers, method: "POST" }),
+            new Request(new URL(SOCKET_REAUTH_PATH, url.origin), { body: JSON.stringify({ connectionId: body["connectionId"] }), headers, method: "POST" }),
         );
     };
 
