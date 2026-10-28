@@ -59,4 +59,50 @@ describe("deployment pause", () => {
 
         expect(screen.queryByTestId("deployment-pause-toggle")).toBeNull();
     });
+
+    it("keeps showing the banner when a later status read fails", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient({ pause: { paused: true, pausedAt: 1, supported: true } });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <DeploymentPauseBanner />
+            </LunoraProvider>,
+        );
+
+        await screen.findByTestId("deployment-paused-banner");
+
+        mock.getDeploymentPause.mockRejectedValue(new Error("network down"));
+        // Resume answers but the read after it fails: the last known state stands.
+        mock.setDeploymentPause.mockResolvedValue({ paused: false, supported: true });
+        fireEvent.click(screen.getByTestId("deployment-resume"));
+        fireEvent.click(screen.getByTestId("deployment-resume-confirm"));
+
+        await waitFor(() => {
+            expect(mock.getDeploymentPause).toHaveBeenCalledTimes(2);
+        });
+
+        expect(screen.getByTestId("deployment-paused-banner")).toBeDefined();
+    });
+
+    it("reads an older worker's 404 as unable to pause", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        mock.getDeploymentPause.mockRejectedValue(new Error("LunoraClient: response was not JSON (status 404 Not Found)"));
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <DeploymentPauseToggle />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.getDeploymentPause).toHaveBeenCalledWith();
+        });
+
+        expect(screen.queryByTestId("deployment-pause-toggle")).toBeNull();
+    });
 });

@@ -15,10 +15,16 @@ const PAUSE_QUERY_KEY = ["lunora-deployment-pause"] as const;
 
 const usePauseState = (): { refetch: () => void; state: DeploymentPauseStatus | undefined } => {
     const client = useStudioClient();
-    // A worker older than the pause route answers 404: read that as "cannot pause", not an error banner.
+    // A worker older than the pause route answers a plain-text 404, which the client reports by its
+    // status: read that as "cannot pause". Anything else rethrows, so the query keeps the last state
+    // it saw — one failed poll during a pause must not hide the banner.
     const query = useClientQuery(PAUSE_QUERY_KEY, async () =>
-        client.getDeploymentPause().catch((): DeploymentPauseStatus => {
-            return { paused: false, supported: false };
+        client.getDeploymentPause().catch((error: unknown): DeploymentPauseStatus => {
+            if (errorMessage(error).includes("(status 404")) {
+                return { paused: false, supported: false };
+            }
+
+            throw error;
         }),
     );
 
