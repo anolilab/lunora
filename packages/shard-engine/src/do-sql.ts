@@ -142,7 +142,8 @@ const encodeDocJson = (document: Record<string, unknown>): string => {
 };
 
 /**
- * Inverse of {@link encodeDocJson}. `decodeWire` runs first and turns every
+ * Inverse of {@link encodeDocJson}. `decodeWire` runs first (only when the text
+ * can hold a tag; a plain row is returned as parsed) and turns every
  * tagged leaf — including the ones parked under {@link DOC_ORIGINALS_KEY} —
  * back into real `bigint`/`ArrayBuffer`/`Date` values, so restoring the
  * projected fields is a plain overwrite.
@@ -155,9 +156,10 @@ const encodeDocJson = (document: Record<string, unknown>): string => {
 // eslint-disable-next-line unicorn/prevent-abbreviations -- see encodeDocJson above.
 const decodeDocJson = (raw: string): Record<string, unknown> => {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    // A tagged leaf always carries the tag verbatim in the text (`JSON.stringify` never escapes it), so a row without
-    // it decodes to a copy of what `JSON.parse` returned. Skipping that copy is the common case on every row read.
-    const decoded = raw.includes(WIRE_TAG) ? (decodeWire(parsed) as Record<string, unknown>) : parsed;
+    // `encodeWire` output carries the tag verbatim, so a row without it decodes to a copy of what `JSON.parse` returned;
+    // skipping that copy is the common case. A `\u` escape could spell the tag in a blob written by raw SQL, so it
+    // takes the slow path too.
+    const decoded = raw.includes(WIRE_TAG) || raw.includes(String.raw`\u`) ? (decodeWire(parsed) as Record<string, unknown>) : parsed;
     const originals = decoded[DOC_ORIGINALS_KEY];
 
     // Claim the key only when it looks like ours. `encodeDocJson` always writes

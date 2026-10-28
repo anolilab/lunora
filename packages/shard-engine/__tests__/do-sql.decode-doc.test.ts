@@ -27,4 +27,12 @@ describe("decodeDocJson", () => {
 
         expect(decodeDocJson(encodeDocJson(document))).toStrictEqual(document);
     });
+
+    it("revives a frame whose tag is written with JSON unicode escapes", () => {
+        expect.assertions(1);
+
+        const raw = String.raw`{"n":["\u0024lunora.wire$","bigint","1"]}`;
+
+        expect(decodeDocJson(raw)).toStrictEqual({ n: 1n });
+    });
 });

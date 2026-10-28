@@ -172,7 +172,7 @@ const d1Exec = (database: D1Database): D1Exec => {
  * `ctx.db` forwards a global table's reads and writes to.
  */
 const d1Database = (database: D1Database): RateLimitDb =>
-    createD1CtxDb({ exec: d1Exec(database), idGenerator: () => crypto.randomUUID(), schema: D1_SCHEMA }) as unknown as RateLimitDb;
+    createD1CtxDb({ exec: d1Exec(database), idGenerator: () => crypto.randomUUID(), schema: D1_SCHEMA });
 
 class RateLimitDO extends DurableObject<Env> {
     readonly #stores = new Map<StoreKind, RateLimitStore>();
@@ -257,7 +257,7 @@ class RateLimitDO extends DurableObject<Env> {
         return row?.n ?? 0;
     }
 
-    /** The planner's detail lines for the sweep's DELETE, as the store runs it. */
+    /** The planner's detail lines for the sweep's candidate SELECT, as the store runs it. */
     public sqlSweepPlan(): string[] {
         return this.ctx.storage.sql
             .exec<{ detail: string }>(`EXPLAIN QUERY PLAN SELECT k FROM "_lunora_rate_limits" WHERE ts <= ? AND value >= 0 ORDER BY ts LIMIT ?`, 0, 1)
