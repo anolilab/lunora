@@ -309,17 +309,16 @@ const idIndexKey = (id: string): IndexKeyEntry => {
 };
 
 /**
- * The slice holding exactly the row `id`. Half-open over raw strings: `id + "\0"`
- * is the immediate successor of `id`, so nothing else falls inside.
- */
-
-/**
  * Every slice {@link idRange} minted. Tracked by identity rather than by index
  * name, because nothing stops a schema declaring an index called `!id`, and its
  * ranges must never be mistaken for point reads.
  */
 const pointRanges = new WeakSet<KeyRange>();
 
+/**
+ * The slice holding exactly the row `id`. Half-open over raw strings: `id + "\0"`
+ * is the immediate successor of `id`, so nothing else falls inside.
+ */
 const idRange = (table: string, id: string): KeyRange => {
     const range: KeyRange = { hi: `${id}\u0000`, index: ID_INDEX, lo: id, table };
 
