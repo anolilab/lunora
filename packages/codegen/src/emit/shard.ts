@@ -20,6 +20,7 @@ import type {
     ShapeIR,
     StorageRulesMetadataIR,
     TopicIR,
+    WorkflowEventIR,
     WorkflowIR,
 } from "../ir";
 import { isShardByTable, plainQueues } from "../ir";
@@ -49,6 +50,7 @@ import {
     emitQueuesMetadataFragments,
     emitServiceFragments,
     emitTopicFragments,
+    emitWorkflowEventFragments,
     emitWorkflowFragments,
     emitWorkflowsMetadataFragments,
 } from "./shard-runtime";
@@ -143,6 +145,8 @@ interface EmitShardOptions {
     topics?: ReadonlyArray<TopicIR>;
     /** The project depends on the `lunora` umbrella — import base packages via its subpaths. */
     useUmbrella?: boolean;
+    /** Exported `defineWorkflowEvent`s — the registry the admin `sendWorkflowEvent` RPC parses payloads against. */
+    workflowEvents?: ReadonlyArray<WorkflowEventIR>;
     workflows?: ReadonlyArray<WorkflowIR>;
 }
 
@@ -177,6 +181,7 @@ const emitShard = ({
     services = [],
     topics = [],
     useUmbrella = false,
+    workflowEvents = [],
     workflows = [],
 }: EmitShardOptions): string => {
     const base = baseSpecifiers(useUmbrella);
@@ -291,7 +296,8 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // Read-only declared-workflow metadata fragments for the studio's workflows
     // view (the `LUNORA_WORKFLOWS_INFO` constant + the `workflowsMetadata()`
     // override), both empty unless the project declares workflows.
-    const { constant: workflowsMetadataConst, override: workflowsMetadataOverride } = emitWorkflowsMetadataFragments(workflows);
+    const { constant: workflowsMetadataConst, override: workflowsMetadataOverride } = emitWorkflowsMetadataFragments(workflows, workflowEvents);
+    const { constant: workflowEventsConst, override: workflowEventOverride } = emitWorkflowEventFragments(workflows, workflowEvents);
     const { constant: queuesMetadataConst, override: queuesMetadataOverride } = emitQueuesMetadataFragments(queues);
     // The platform gate's verdict AND the app's declaration — the same pairing
     // `emitServer` makes, and it has to be made here too: this emitter used to
@@ -1028,7 +1034,7 @@ const LUNORA_STUDIO_FEATURES = ${renderLazyJsonData(studioFeaturesData, "StudioF
 
 /** How long a shard with a UNIQUE index blocked by duplicate rows serves the cached diagnostic before re-attempting the build. */
 const BLOCKED_MIGRATION_RETRY_MS = 5000;
-${schemaSnapshotConst}${shardRegistryFragments.constant}${flagsOverrides.constant}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${topicSpecs}${servicesFragments.specs}${agentSpecs}
+${schemaSnapshotConst}${shardRegistryFragments.constant}${flagsOverrides.constant}${workflowsMetadataConst}${workflowEventsConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${topicSpecs}${servicesFragments.specs}${agentSpecs}
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
@@ -1164,7 +1170,7 @@ ${lazyFunctions ? '            const requestScope = this.captureRequestScope();\
         protected override studioFeatures(): StudioFeaturesResult {
             return LUNORA_STUDIO_FEATURES();
         }
-${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workflowsMetadataOverride}${queuesMetadataOverride}
+${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workflowsMetadataOverride}${workflowEventOverride}${queuesMetadataOverride}
         protected override advisories(): AdvisoryFinding[] {
             return LUNORA_ADVISORIES();
         }

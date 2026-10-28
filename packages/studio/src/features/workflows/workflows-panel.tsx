@@ -17,6 +17,7 @@ import { WorkflowInstanceHistory } from "./workflow-instances";
 
 const CREATE_WORKFLOW_INSTANCE = adminRef(ADMIN_FUNCTIONS.createWorkflowInstance);
 const GET_WORKFLOW_INSTANCE_STATUS = adminRef(ADMIN_FUNCTIONS.getWorkflowInstanceStatus);
+const SEND_WORKFLOW_EVENT = adminRef(ADMIN_FUNCTIONS.sendWorkflowEvent);
 
 /** One workflow instance the panel is observing — created here or refreshed by id. */
 interface ObservedInstance {
@@ -44,6 +45,21 @@ const formatPayload = (instance: ObservedInstance): string => {
     }
 };
 
+/** Parse an optional JSON textarea: `undefined` when blank, `null` (the sentinel) when invalid. */
+const parseOptionalJson = (text: string): { value: unknown } | null => {
+    const trimmed = text.trim();
+
+    if (trimmed === "") {
+        return { value: undefined };
+    }
+
+    try {
+        return { value: JSON.parse(trimmed) as unknown };
+    } catch {
+        return null;
+    }
+};
+
 /** The effective selection: the operator's pick while it still exists, else the first declared workflow. Derived rather than synced in an effect, so a codegen that drops the selected workflow re-defaults on the next render. */
 const effectiveExportName = (workflows: ReadonlyArray<WorkflowMetadata>, selectedExport: string): string => {
     if (workflows.some((workflow) => workflow.exportName === selectedExport)) {
@@ -51,6 +67,128 @@ const effectiveExportName = (workflows: ReadonlyArray<WorkflowMetadata>, selecte
     }
 
     return workflows[0]?.exportName ?? "";
+};
+
+interface SendEventFormProps {
+    /** The app's declared `defineWorkflowEvent` types — the only ones the server accepts — offered as suggestions. */
+    readonly eventTypes: ReadonlyArray<string>;
+    /** The selected workflow export the event is addressed to. */
+    readonly exportName: string;
+    /** Called after a successful send, so the panel can refresh that instance's row; a rejection is shown in this form. */
+    readonly onSent: (exportName: string, id: string) => Promise<void>;
+}
+
+/** Deliver `{ type, payload }` to a waiting instance of the selected workflow over the `sendWorkflowEvent` admin RPC. */
+const SendEventForm = ({ eventTypes, exportName, onSent }: SendEventFormProps): ReactElement => {
+    const client = useStudioClient();
+    const t = useT();
+
+    const [idInput, setIdInput] = useState("");
+    const [typeInput, setTypeInput] = useState("");
+    const [payloadText, setPayloadText] = useState("");
+    const [sending, setSending] = useState(false);
+    const [error, setError] = useState<null | string>(null);
+
+    const deliver = async (id: string, payload: unknown): Promise<void> => {
+        try {
+            await client.query(SEND_WORKFLOW_EVENT, { exportName, id, payload, type: typeInput }, callOptions(""));
+        } catch (error_: unknown) {
+            setError(errorMessage(error_));
+
+            return;
+        }
+
+        // The event is delivered by now; a failed refresh must not read as a failed send, or a retry would send it twice.
+        try {
+            await onSent(exportName, id);
+        } catch (error_: unknown) {
+            setError(`${t("Event sent, but refreshing the instance failed")}: ${errorMessage(error_)}`);
+        }
+    };
+
+    const send = async (): Promise<void> => {
+        const id = idInput.trim();
+        const payload = parseOptionalJson(payloadText);
+
+        if (payload === null) {
+            setError(t("Payload must be valid JSON"));
+
+            return;
+        }
+
+        setSending(true);
+        setError(null);
+
+        // `.finally` rather than a `try … finally`: React Compiler cannot lower a `try` without a `catch`.
+        await deliver(id, payload.value).finally(() => {
+            setSending(false);
+        });
+    };
+
+    return (
+        <div className="flex flex-col gap-3" data-testid="workflows-event">
+            <h3 className="text-sm font-medium">{t("Send event")}</h3>
+
+            {error !== null && (
+                <p className="text-sm text-destructive" data-testid="workflows-event-error" role="alert">
+                    {error}
+                </p>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2">
+                <Input
+                    aria-label={t("Instance id")}
+                    className="max-w-48"
+                    data-testid="workflows-event-id"
+                    onChange={(event) => {
+                        setIdInput(event.target.value);
+                    }}
+                    placeholder={t("Instance id")}
+                    value={idInput}
+                />
+
+                <Input
+                    aria-label={t("Event type")}
+                    className="max-w-48"
+                    data-testid="workflows-event-type"
+                    list="workflows-event-types"
+                    onChange={(event) => {
+                        setTypeInput(event.target.value);
+                    }}
+                    placeholder={t("Event type")}
+                    value={typeInput}
+                />
+                <datalist data-testid="workflows-event-types" id="workflows-event-types">
+                    {eventTypes.map((type) => (
+                        <option key={type} value={type}>
+                            {type}
+                        </option>
+                    ))}
+                </datalist>
+
+                <Button
+                    data-testid="workflows-event-button"
+                    disabled={sending || exportName === "" || idInput.trim() === "" || typeInput.trim() === ""}
+                    onClick={() => {
+                        fireAndForget(send());
+                    }}
+                >
+                    {sending ? t("Sending…") : t("Send event")}
+                </Button>
+            </div>
+
+            <Textarea
+                aria-label={t("Payload (JSON)")}
+                className="font-mono"
+                data-testid="workflows-event-payload"
+                onChange={(event) => {
+                    setPayloadText(event.target.value);
+                }}
+                placeholder={t("Payload (JSON, optional)")}
+                value={payloadText}
+            />
+        </div>
+    );
 };
 
 /**
@@ -66,7 +204,8 @@ const effectiveExportName = (workflows: ReadonlyArray<WorkflowMetadata>, selecte
  * The "Start instance" form calls the create-instance admin RPC
  * (`binding.create({ id?, params })`); each created/refreshed instance is added
  * to the observed-instances table, whose "Refresh" re-reads the instance-status
- * admin RPC (`binding.get(id).status()`).
+ * admin RPC (`binding.get(id).status()`). "Send event" delivers `{ type, payload }`
+ * to a waiting instance (`binding.get(id).sendEvent(...)`) and then refreshes it.
  */
 const WorkflowsPanel = (): ReactElement => {
     const client = useStudioClient();
@@ -115,17 +254,12 @@ const WorkflowsPanel = (): ReactElement => {
             return;
         }
 
-        let parameters: unknown;
-        const trimmed = paramsText.trim();
+        const parameters = parseOptionalJson(paramsText);
 
-        if (trimmed !== "") {
-            try {
-                parameters = JSON.parse(trimmed);
-            } catch {
-                setStartError(t("Params must be valid JSON"));
+        if (parameters === null) {
+            setStartError(t("Params must be valid JSON"));
 
-                return;
-            }
+            return;
         }
 
         setStarting(true);
@@ -135,7 +269,7 @@ const WorkflowsPanel = (): ReactElement => {
             const id = instanceIdInput.trim();
             const result = (await client.query(
                 CREATE_WORKFLOW_INSTANCE,
-                { exportName, id: id === "" ? undefined : id, params: parameters },
+                { exportName, id: id === "" ? undefined : id, params: parameters.value },
                 callOptions(""),
             )) as CreateWorkflowInstanceResult;
 
@@ -152,7 +286,7 @@ const WorkflowsPanel = (): ReactElement => {
         fireAndForget(start());
     };
 
-    const refreshInstance = async (exportName: string, id: string): Promise<void> => {
+    const readInstance = async (exportName: string, id: string): Promise<void> => {
         setRefreshingId(id);
 
         try {
@@ -160,10 +294,20 @@ const WorkflowsPanel = (): ReactElement => {
 
             upsertInstance({ error: result.error, exportName, id: result.id, output: result.output, status: result.status });
         } catch (error_: unknown) {
-            setStartError(errorMessage(error_));
+            setRefreshingId(null);
+
+            throw error_;
         }
 
         setRefreshingId(null);
+    };
+
+    const refreshInstance = async (exportName: string, id: string): Promise<void> => {
+        try {
+            await readInstance(exportName, id);
+        } catch (error_: unknown) {
+            setStartError(errorMessage(error_));
+        }
     };
 
     const onSelectedExportChange = (event: ChangeEvent<HTMLSelectElement>): void => {
@@ -279,6 +423,11 @@ const WorkflowsPanel = (): ReactElement => {
                         value={paramsText}
                     />
                 </div>
+            )}
+
+            {/* Keyed by workflow: an instance id typed for one workflow must not carry over and address another's. */}
+            {workflows.length > 0 && (
+                <SendEventForm eventTypes={data?.eventTypes ?? []} exportName={selectedExportName} key={selectedExportName} onSent={readInstance} />
             )}
 
             {instances.length > 0 && (

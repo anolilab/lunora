@@ -263,12 +263,43 @@ class CompanionMemoShard extends AdminShard {
  * project's discovered workflow declarations — shared by every test that needs
  * a shard which "sees" the order-pipeline workflow.
  */
+
+/**
+ * Stands in for a `defineWorkflowEvent` validator. It trims while parsing, so a
+ * test can tell the parsed payload from the raw one on the wire.
+ */
+const approvalValidator = {
+    parse: (value: unknown): { approvedBy: string } => {
+        const approvedBy = (value as { approvedBy?: unknown } | undefined)?.approvedBy;
+
+        if (typeof approvedBy !== "string") {
+            throw new TypeError("approvedBy must be a string");
+        }
+
+        return { approvedBy: approvedBy.trim() };
+    },
+};
+
+const DECLARED_EVENTS = new Map([
+    [" approved ", { payload: { parse: (value: unknown) => value } }],
+    ["order-approved", { payload: approvalValidator }],
+]);
+
 class DeclaredWorkflowShard extends AdminShard {
     // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
-    protected override workflowsMetadata(): { workflows: { binding: string; className: string; exportName: string; name: string }[] } {
+    protected override workflowsMetadata(): {
+        eventTypes: string[];
+        workflows: { binding: string; className: string; exportName: string; name: string }[];
+    } {
         return {
+            eventTypes: [...DECLARED_EVENTS.keys()],
             workflows: [{ binding: "OrderPipelineWorkflow", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
         };
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+    protected override async workflowEvent(type: string): Promise<{ payload: { parse: (value: unknown) => unknown } } | undefined> {
+        return DECLARED_EVENTS.get(type);
     }
 }
 
@@ -929,6 +960,7 @@ describe("shardDO admin introspection", () => {
 
         await expect(response.json()).resolves.toEqual({
             result: {
+                eventTypes: [" approved ", "order-approved"],
                 workflows: [{ binding: "OrderPipelineWorkflow", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
             },
         });
@@ -1332,6 +1364,198 @@ describe("shardDO admin introspection", () => {
         );
 
         await expect(response.json()).resolves.toEqual({ result: { id: "wf-1", output: { total: 42 }, status: "complete" } });
+    });
+
+    it("sends the parsed payload of a declared event to a workflow's instance and audits it", async () => {
+        expect.assertions(3);
+
+        const sent: { id: string; payload?: unknown; type: string }[] = [];
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) =>
+                Promise.resolve({
+                    id,
+                    sendEvent: async (event: { payload?: unknown; type: string }) => {
+                        sent.push({ id, ...event });
+                    },
+                    status: () => Promise.resolve({ status: "waiting" }),
+                }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+        const response = await shard.fetch(
+            tokenAdminRequest(
+                ADMIN_FUNCTIONS.sendWorkflowEvent,
+                { exportName: "orderPipeline", id: "wf-1", payload: { approvedBy: "  ops  " }, type: "order-approved" },
+                ADMIN_TOKEN,
+            ),
+        );
+
+        await expect(response.json()).resolves.toEqual({ result: { sent: true } });
+        expect(sent).toStrictEqual([{ id: "wf-1", payload: { approvedBy: "ops" }, type: "order-approved" }]);
+
+        const audit = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.getAuditLog, {}, ADMIN_TOKEN));
+
+        const { result } = await audit.json<{ result: { entries: { op: string }[] } }>();
+
+        expect(result.entries.map((entry) => entry.op)).toContain("sendWorkflowEvent");
+    });
+
+    it("starts an instance under the trimmed explicit id, the one status and send-event look up", async () => {
+        expect.assertions(1);
+
+        const created: { id?: string }[] = [];
+        const binding = {
+            create: (options: { id?: string }) => {
+                created.push(options);
+
+                return Promise.resolve({ id: options.id ?? "wf-generated", status: () => Promise.resolve({ status: "queued" }) });
+            },
+            get: () => Promise.reject(new Error("get must not run for create")),
+        };
+
+        const shard = new DeclaredWorkflowShard({ ...state, exports: { OrderPipelineWorkflow: binding } }, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.createWorkflowInstance, { exportName: "orderPipeline", id: " wf-1 " }, ADMIN_TOKEN));
+
+        expect(created).toStrictEqual([{ id: "wf-1", params: undefined }]);
+    });
+
+    it("still answers sent when the audit write fails after the event was delivered", async () => {
+        expect.assertions(2);
+
+        const sent: string[] = [];
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) =>
+                Promise.resolve({
+                    id,
+                    sendEvent: async (event: { type: string }) => {
+                        sent.push(event.type);
+                    },
+                    status: () => Promise.resolve({ status: "waiting" }),
+                }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+
+        vi.spyOn(shard as unknown as { recordAudit: () => void }, "recordAudit").mockImplementation(() => {
+            throw new Error("sqlite is read-only");
+        });
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        try {
+            const response = await shard.fetch(
+                tokenAdminRequest(
+                    ADMIN_FUNCTIONS.sendWorkflowEvent,
+                    { exportName: "orderPipeline", id: "wf-1", payload: { approvedBy: "ops" }, type: "order-approved" },
+                    ADMIN_TOKEN,
+                ),
+            );
+
+            await expect(response.json()).resolves.toEqual({ result: { sent: true } });
+            expect(sent).toStrictEqual(["order-approved"]);
+        } finally {
+            consoleError.mockRestore();
+        }
+    });
+
+    it.each([
+        ["a missing type", { exportName: "orderPipeline", id: "wf-1" }],
+        ["a blank type", { exportName: "orderPipeline", id: "wf-1", type: "  " }],
+        ["a missing id", { exportName: "orderPipeline", type: "order-approved" }],
+        ["a missing exportName", { id: "wf-1", type: "order-approved" }],
+        ["a reserved lunora: type", { exportName: "orderPipeline", id: "wf-1", type: "lunora:branch:x" }],
+        ["an undeclared type", { exportName: "orderPipeline", id: "wf-1", payload: { approvedBy: "ops" }, type: "order-shipped" }],
+        ["a payload its declared validator rejects", { exportName: "orderPipeline", id: "wf-1", payload: { approvedBy: 7 }, type: "order-approved" }],
+    ])("rejects (400) sendWorkflowEvent with %s, and never sends", async (_label, args) => {
+        expect.assertions(2);
+
+        const sent: unknown[] = [];
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) =>
+                Promise.resolve({
+                    id,
+                    sendEvent: async (event: unknown) => {
+                        sent.push(event);
+                    },
+                    status: () => Promise.resolve({ status: "waiting" }),
+                }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+        const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.sendWorkflowEvent, args, ADMIN_TOKEN));
+
+        expect(response.status).toBe(400);
+        expect(sent).toHaveLength(0);
+    });
+
+    it("delivers the event type untrimmed, so it matches a type the workflow waits for byte for byte", async () => {
+        expect.assertions(1);
+
+        const sentTypes: string[] = [];
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) =>
+                Promise.resolve({
+                    id,
+                    sendEvent: async (event: { type: string }) => {
+                        sentTypes.push(event.type);
+                    },
+                    status: () => Promise.resolve({ status: "waiting" }),
+                }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+
+        await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.sendWorkflowEvent, { exportName: "orderPipeline", id: "wf-1", type: " approved " }, ADMIN_TOKEN));
+
+        expect(sentTypes).toStrictEqual([" approved "]);
+    });
+
+    it.each([
+        [
+            "an undeclared type",
+            { type: "order-shipped" },
+            'no `defineWorkflowEvent` export declares type "order-shipped" (known types: " approved ", "order-approved")',
+        ],
+        [
+            "an invalid payload",
+            { payload: { approvedBy: 7 }, type: "order-approved" },
+            'event "order-approved" payload validation failed: approvedBy must be a string',
+        ],
+    ])("explains why sendWorkflowEvent refused %s", async (_label, event, message) => {
+        expect.assertions(1);
+
+        const binding = { create: () => Promise.reject(new Error("unused")), get: () => Promise.reject(new Error("get must not run")) };
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+        const response = await shard.fetch(
+            tokenAdminRequest(ADMIN_FUNCTIONS.sendWorkflowEvent, { exportName: "orderPipeline", id: "wf-1", ...event }, ADMIN_TOKEN),
+        );
+
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST", message: expect.stringContaining(message) } });
+    });
+
+    it("rejects (400) sendWorkflowEvent when the instance handle has no sendEvent", async () => {
+        expect.assertions(1);
+
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) => Promise.resolve({ id, status: () => Promise.resolve({ status: "waiting" }) }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+        const response = await shard.fetch(
+            tokenAdminRequest(
+                ADMIN_FUNCTIONS.sendWorkflowEvent,
+                { exportName: "orderPipeline", id: "wf-1", payload: { approvedBy: "ops" }, type: "order-approved" },
+                ADMIN_TOKEN,
+            ),
+        );
+
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST", message: expect.stringContaining("do not accept events") } });
     });
 
     it("rejects starting an undeclared workflow with a 400", async () => {

@@ -135,6 +135,7 @@ const ADMIN_FUNCTIONS = {
     runSql: "__lunora_admin__:runSql",
     sendQueueMessage: "__lunora_admin__:sendQueueMessage",
     sendTestMail: "__lunora_admin__:sendTestMail",
+    sendWorkflowEvent: "__lunora_admin__:sendWorkflowEvent",
     setIssueSeverity: "__lunora_admin__:setIssueSeverity",
     storageOrphans: "__lunora_admin__:storageOrphans",
     storageReferences: "__lunora_admin__:storageReferences",
@@ -682,6 +683,8 @@ interface WorkflowMetadata {
 
 /** Payload of a `__lunora_admin__:listWorkflows` call: every declared workflow, sorted by export name. */
 interface WorkflowsResult {
+    /** The literal types of the app's exported `defineWorkflowEvent`s — the only ones `sendWorkflowEvent` accepts. Absent when none are declared. */
+    eventTypes?: string[];
     workflows: WorkflowMetadata[];
 }
 

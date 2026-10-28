@@ -592,6 +592,16 @@ export interface LiveStreamIR {
     topics: ReadonlyArray<LiveTopicIR>;
 }
 
+/** One exported `defineWorkflowEvent(type, payload)` — what the admin `sendWorkflowEvent` RPC validates a payload against. */
+export interface WorkflowEventIR {
+    /** The export name the generated shard imports. */
+    exportName: string;
+    /** The declaring file, lunora-relative without `.ts`. */
+    filePath: string;
+    /** The literal wire type, exactly as written (never trimmed). */
+    type: string;
+}
+
 /** One topic of a {@link LiveStreamIR}. */
 export interface LiveTopicIR {
     /** The key fields in DECLARED order: the generated encoder lays segments out in this order, never the caller's. Empty for a keyless topic. */

@@ -1474,7 +1474,7 @@ const emitServer: ({ agents, capabilities, containers, env, hasVectors, hasFlags
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, hasSecretValues, hasSensitiveArgs, hasSockets, lazyFunctions, hasVectors, liveStreamDeclarations, liveStreams, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, hasSecretValues, hasSensitiveArgs, hasSockets, lazyFunctions, hasVectors, liveStreamDeclarations, liveStreams, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflowEvents, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)
@@ -2607,6 +2607,7 @@ interface EmitShardOptions {
     studioFeatures?: StudioFeaturesResult;
     topics?: ReadonlyArray<TopicIR>;
     useUmbrella?: boolean;
+    workflowEvents?: ReadonlyArray<WorkflowEventIR>;
     workflows?: ReadonlyArray<WorkflowIR>;
 }
 ```
@@ -3258,6 +3259,16 @@ interface WorkflowCallIR {
     line: number;
     scope: CallSiteScope;
     workflow: string;
+}
+```
+
+### `WorkflowEventIR` (interface)
+
+```ts
+interface WorkflowEventIR {
+    exportName: string;
+    filePath: string;
+    type: string;
 }
 ```
 

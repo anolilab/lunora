@@ -275,6 +275,37 @@ export default defineSchema({
             expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/Duplicate deployed name "shared-name"/u);
         });
 
+        it("hands the shard a registry of the declared workflow events, and none without any", () => {
+            expect.assertions(4);
+
+            writeFileSync(
+                join(workdir, "lunora", "workflows.ts"),
+                `
+                import { defineWorkflow } from "@lunora/workflow";
+                export const orderPipeline = defineWorkflow({ handler: async () => undefined });
+            `,
+            );
+
+            const without = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated.shard;
+
+            expect(without).not.toContain("LUNORA_WORKFLOW_EVENTS");
+            expect(without).not.toContain("eventTypes");
+
+            writeFileSync(
+                join(workdir, "lunora", "events.ts"),
+                `
+                import { defineWorkflowEvent } from "@lunora/workflow";
+                import { v } from "@lunora/values";
+                export const orderApproved = defineWorkflowEvent("order-approved", v.object({ approvedBy: v.string() }));
+            `,
+            );
+
+            const withEvents = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated.shard;
+
+            expect(withEvents).toContain('["order-approved", () => import("../events.js").then((module) => module.orderApproved)],');
+            expect(emittedJsonData(withEvents, "LUNORA_WORKFLOWS_INFO")).toMatchObject({ eventTypes: ["order-approved"] });
+        });
+
         it("rejects a defineShape that replicates a table a mask() chain masks a column on (plan 208, fail closed)", () => {
             expect.assertions(1);
 
@@ -4032,6 +4063,40 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(emittedJsonData(output, "LUNORA_WORKFLOWS_INFO")).toStrictEqual({
                 workflows: [{ className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
             });
+        });
+
+        it("registers declared events for the admin send and lists their types", () => {
+            expect.assertions(4);
+
+            const output = emitShard({
+                schema: { tables: [], vectorIndexes: [] },
+                workflowEvents: [
+                    { exportName: "spaced", filePath: "events", type: " padded " },
+                    { exportName: "orderApproved", filePath: "orders/events", type: "order-approved" },
+                ],
+                workflows: [{ className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline", steps: [] }],
+            });
+
+            expect(emittedJsonData(output, "LUNORA_WORKFLOWS_INFO")).toStrictEqual({
+                eventTypes: [" padded ", "order-approved"],
+                workflows: [{ className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
+            });
+            expect(output).toContain('    [" padded ", () => import("../events.js").then((module) => module.spaced)],');
+            expect(output).toContain('    ["order-approved", () => import("../orders/events.js").then((module) => module.orderApproved)],');
+            expect(output).toContain("protected override async workflowEvent(type: string)");
+        });
+
+        it("emits no event registry when an app with workflows declares no events", () => {
+            expect.assertions(3);
+
+            const output = emitShard({
+                schema: { tables: [], vectorIndexes: [] },
+                workflows: [{ className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline", steps: [] }],
+            });
+
+            expect(output).not.toContain("LUNORA_WORKFLOW_EVENTS");
+            expect(output).not.toContain("workflowEvent(");
+            expect(emittedJsonData(output, "LUNORA_WORKFLOWS_INFO")).not.toHaveProperty("eventTypes");
         });
 
         it("omits the workflows metadata constant and override when none are declared", () => {

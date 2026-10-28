@@ -679,6 +679,14 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Duplicate workflow generated class name";
     };
+    readonly WORKFLOW_EVENT_DUPLICATE: {
+        readonly status: 500;
+        readonly title: "Duplicate workflow event type";
+    };
+    readonly WORKFLOW_EVENT_NOT_LITERAL: {
+        readonly status: 500;
+        readonly title: "Workflow event type is not a string literal";
+    };
     readonly MIGRATION_ID_NOT_STATIC: {
         readonly status: 500;
         readonly title: "Migration id is not statically analyzable";

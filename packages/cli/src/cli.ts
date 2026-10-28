@@ -38,6 +38,7 @@ import { seedCommand } from "./commands/seed";
 import { shardsCommand } from "./commands/shards";
 import { verifyCommand } from "./commands/verify";
 import viewCommand from "./commands/view";
+import { workflowCommand } from "./commands/workflow";
 import { resolveCliVersion } from "./util/cli-manifest";
 import { detectPackageManager } from "./util/detect-package-manager";
 import { EXIT_CODE, exitCodeForError } from "./util/exit-code";
@@ -80,6 +81,7 @@ const COMMANDS = [
     "registry",
     "rules",
     "mcp",
+    "workflow",
 ] as const;
 
 type CommandName = (typeof COMMANDS)[number];
@@ -122,6 +124,7 @@ const CLI_COMMANDS = [
     rulesCommand,
     mcpCommand,
     sdkCommand,
+    workflowCommand,
 ];
 
 /**

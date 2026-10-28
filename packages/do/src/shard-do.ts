@@ -373,6 +373,7 @@ import {
     parseSampleErrorsHeader,
     parseSampleRate,
     parseSendQueueMessageArgs,
+    parseSendWorkflowEventArgs,
     parseSeverityArgument,
     parseTablePageFilters,
     parseTablePageOrderBy,
@@ -4948,6 +4949,18 @@ abstract class ShardDO {
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the statically-discovered workflow metadata
     protected workflowsMetadata(): WorkflowsResult {
         return { workflows: [] };
+    }
+
+    /**
+     * The `defineWorkflowEvent` definition declared for `type`, which the admin
+     * `sendWorkflowEvent` RPC parses a payload with before sending — the
+     * receiving `ctx.waitForEvent` fails its instance for good on a payload that
+     * does not parse. The codegen subclass overrides this with the app's
+     * discovered events; the base declares none, so it refuses every type.
+     */
+    // eslint-disable-next-line class-methods-use-this, @typescript-eslint/require-await -- base-class override hook: the codegen subclass loads the discovered event definitions
+    protected async workflowEvent(_type: string): Promise<{ payload: { parse: (value: unknown) => unknown } } | undefined> {
+        return undefined;
     }
 
     /**
@@ -11384,6 +11397,59 @@ abstract class ShardDO {
 
         return adminResponse(result);
     }
+
+    /**
+     * Serve `__lunora_admin__:sendWorkflowEvent` — the studio's "Send event"
+     * form: deliver `{ type, payload }` to a waiting instance through the
+     * binding's `instance.sendEvent`, parsing the payload with the declared
+     * definition first, as `ctx.workflows.sendEvent` does: the receiver has
+     * already consumed the event when its parse fails, so an unparsed payload
+     * would fail the instance permanently. Audited, since it moves a running
+     * workflow forward. Admin-gated by `handleAdminRpc`'s caller.
+     */
+    private async handleSendWorkflowEvent(args: Record<string, unknown>): Promise<Response> {
+        const parsed = parseSendWorkflowEventArgs(args);
+        const binding = this.declaredWorkflowHandle(parsed.exportName);
+        const definition = await this.workflowEvent(parsed.type);
+
+        if (definition === undefined) {
+            const known = this.workflowsMetadata().eventTypes ?? [];
+            const suffix = known.length === 0 ? "no events are declared" : `known types: ${known.map((type) => JSON.stringify(type)).join(", ")}`;
+
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `sendWorkflowEvent: no \`defineWorkflowEvent\` export declares type ${JSON.stringify(parsed.type)} (${suffix})`,
+            );
+        }
+
+        let payload: unknown;
+
+        try {
+            payload = definition.payload.parse(parsed.payload);
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+
+            throw new LunoraError("BAD_REQUEST", `sendWorkflowEvent: event ${JSON.stringify(parsed.type)} payload validation failed: ${message}`);
+        }
+
+        const instance = await binding.get(parsed.id);
+
+        if (typeof instance.sendEvent !== "function") {
+            throw new LunoraError("BAD_REQUEST", `workflow "${parsed.exportName}" instances do not accept events on this deployment`);
+        }
+
+        await instance.sendEvent({ payload, type: parsed.type });
+
+        // The event is already delivered; a failed audit write must not read as a failed send, or a retry would deliver it twice.
+        try {
+            this.recordAudit("sendWorkflowEvent", { id: parsed.id, detail: { exportName: parsed.exportName, type: parsed.type } });
+        } catch (error: unknown) {
+            // eslint-disable-next-line no-console -- server-side diagnostic: the event was delivered, only its audit entry was lost
+            console.error("[@lunora/do] sendWorkflowEvent audit write failed; the event was delivered:", error);
+        }
+
+        return adminResponse({ sent: true });
+    }
     /* eslint-enable no-secrets/no-secrets */
 
     /**
@@ -11900,6 +11966,7 @@ abstract class ShardDO {
             [ADMIN_FUNCTIONS.replayQueueMessage]: (args) => this.handleReplayQueueMessage(args),
             [ADMIN_FUNCTIONS.sendQueueMessage]: (args) => this.handleSendQueueMessage(args),
             [ADMIN_FUNCTIONS.sendTestMail]: (args) => this.handleSendTestMail(args),
+            [ADMIN_FUNCTIONS.sendWorkflowEvent]: (args) => this.handleSendWorkflowEvent(args),
         };
     }
 
