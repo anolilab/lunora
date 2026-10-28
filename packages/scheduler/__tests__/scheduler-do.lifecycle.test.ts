@@ -121,6 +121,61 @@ describe("schedulerDO job lifecycle", () => {
         await expect(getJob(scheduler, "later")).resolves.toMatchObject({ completedAt: 1_700_000_000_000, state: "canceled" });
     });
 
+    it("records a job cancelled mid-dispatch as succeeded when the kick went through, and canceled when it failed", async () => {
+        expect.hasAssertions();
+
+        pinClock(1_700_000_000_000);
+
+        const scheduler = new BlockingScheduler(createFakeState(), env);
+
+        await scheduleDue(scheduler, 2);
+
+        const drain = scheduler.alarm();
+
+        await settle();
+        await scheduler.fetch(post("/cancel", { id: "job-0" }));
+        await scheduler.fetch(post("/cancel", { id: "job-1" }));
+        scheduler.release("job-0", true);
+        scheduler.release("job-1", false);
+        await drain;
+
+        await expect(getJob(scheduler, "job-0")).resolves.toMatchObject({ state: "succeeded" });
+        await expect(getJob(scheduler, "job-1")).resolves.toMatchObject({ state: "canceled" });
+
+        const page = await history(scheduler);
+
+        expect(page.records.map((record) => `${record.id}:${record.state}`).toSorted((left, right) => left.localeCompare(right))).toStrictEqual([
+            "job-0:succeeded",
+            "job-1:canceled",
+        ]);
+    });
+
+    it("does not turn a settled job into canceled when a header outlived its cleanup", async () => {
+        expect.hasAssertions();
+
+        pinClock(1_700_000_000_000);
+
+        const state = createFakeState();
+        const scheduler = new BlockingScheduler(state, env);
+
+        await scheduleDue(scheduler, 1);
+
+        const header = state.storageMap.get("id:job-0");
+        const drain = scheduler.alarm();
+
+        await settle();
+        scheduler.release("job-0", true);
+        await drain;
+        // What a swallowed post-dispatch delete leaves behind.
+        state.storageMap.set("id:job-0", header);
+
+        const response = await scheduler.fetch(post("/cancel", { id: "job-0" }));
+
+        await expect(response.json()).resolves.toStrictEqual({ cancelled: false });
+        await expect(getJob(scheduler, "job-0")).resolves.toMatchObject({ state: "succeeded" });
+        expect(state.storageMap.has("id:job-0")).toBe(false);
+    });
+
     it("forgets a terminal job after the retention window and sweeps its rows on a later alarm", async () => {
         expect.hasAssertions();
 

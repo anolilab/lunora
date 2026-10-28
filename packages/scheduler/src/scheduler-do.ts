@@ -1282,8 +1282,13 @@ class SchedulerDO {
 
         // Cancelled mid-attempt: `/cancel` already removed this job's rows, and
         // the id may since belong to a NEW job whose header the cleanup below
-        // would delete. Write nothing, whatever the outcome.
+        // would delete. Leave the rows alone — except that a kick which went
+        // through RAN the job, so its `canceled` outcome is corrected.
         if (this.cancelledLeases.has(record.id)) {
+            if (ok) {
+                await this.correctCanceledToSucceeded(record).catch(() => undefined);
+            }
+
             return ok;
         }
 
@@ -1945,6 +1950,16 @@ class SchedulerDO {
             return SchedulerDO.json({ cancelled: false });
         }
 
+        // A header beside an outcome row is the residue of a settled job whose
+        // cleanup failed (`/schedule` clears the outcome when it reuses an id):
+        // tidy it up, but the job already ended and keeps its real outcome.
+        if ((await this.state.storage.get(`${DONE_PREFIX}${body.id}`)) !== undefined) {
+            await this.removeRecord(record);
+            await this.rescheduleAlarm();
+
+            return SchedulerDO.json({ cancelled: false });
+        }
+
         await this.removeRecord(record);
         await this.writeTerminal(record, "canceled");
         // NOTE: cancel never releases a pool slot. A queued job holds none; a
@@ -2130,6 +2145,28 @@ class SchedulerDO {
         }
 
         return row;
+    }
+
+    /**
+     * Rewrite the `canceled` outcome `/cancel` wrote for `record` to `succeeded`,
+     * because the dispatch it raced went through. Only while that row is still
+     * this record's and no new job has reused the id; the reads and the write
+     * await no I/O in between, so the input gate keeps `/schedule` out.
+     */
+    private async correctCanceledToSucceeded(record: ScheduleRecord): Promise<void> {
+        const row = await this.state.storage.get<TerminalRecord>(`${DONE_PREFIX}${record.id}`);
+
+        if (row?.state !== "canceled" || (await this.state.storage.get(`${HEADER_PREFIX}${record.id}`)) !== undefined) {
+            return;
+        }
+
+        // Rebuilt the way `writeTerminal` builds it, so key order matches.
+        if (JSON.stringify(row) !== JSON.stringify({ ...record, completedAt: row.completedAt, state: row.state })) {
+            return;
+        }
+
+        await this.state.storage.delete(SchedulerDO.terminalIndexKey(row.completedAt, record.id));
+        await this.writeTerminal(record, "succeeded");
     }
 
     /** Record how `record` ended: its `done:` row and `dt:` index entry, in one put. */

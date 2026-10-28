@@ -393,10 +393,10 @@ describe("schedulerDO dispatch lease — cancelled mid-dispatch", () => {
 
         expect(rowsFor(state.storageMap, "job-0")).toStrictEqual([]);
 
-        // The cancel is the outcome on record, whatever the in-flight attempt settled to.
+        // A kick that went through ran the job, so that outcome outranks the cancel.
         const get = await scheduler.fetch(new Request("https://scheduler.internal/get?id=job-0"));
 
-        await expect(get.json()).resolves.toMatchObject({ record: { id: "job-0", state: "canceled" } });
+        await expect(get.json()).resolves.toMatchObject({ record: { id: "job-0", state: ok ? "succeeded" : "canceled" } });
 
         // Nothing re-fires on a later pass either.
         await scheduler.alarm();
