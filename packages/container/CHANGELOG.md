@@ -1,3 +1,14 @@
+## @lunora/container [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.94...@lunora/container@1.0.0-alpha.95) (2026-10-28)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.74
+
 ## @lunora/container [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.93...@lunora/container@1.0.0-alpha.94) (2026-10-27)
 
 
