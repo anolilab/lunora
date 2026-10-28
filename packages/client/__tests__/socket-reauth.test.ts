@@ -4,11 +4,11 @@ import { LunoraClient } from "../src/lunora-client";
 import { createSocketHarness, fnRef, jsonResponse, settle } from "./lib/harness";
 
 /** A React Native-style client (bearer on the upgrade) with one open, identified socket. */
-const openClient = async (reauthStatus: number) => {
+const openClient = async (reauthStatus: number, reauthBody?: unknown) => {
     const { sockets, WebSocket } = createSocketHarness();
     const fetchMock = vi.fn<typeof fetch>(async (input) =>
         (input as string).includes("/_lunora/ws/reauth")
-            ? jsonResponse({ ok: reauthStatus === 200 }, { status: reauthStatus })
+            ? jsonResponse(reauthBody ?? { ok: reauthStatus === 200 }, { status: reauthStatus })
             : jsonResponse({ result: { ok: true } }),
     );
     const client = new LunoraClient({
@@ -62,7 +62,7 @@ describe("socket re-authentication on a token refresh", () => {
     });
 
     it("reconnects the socket, as before, when the server refuses the refresh", async () => {
-        expect.assertions(2);
+        expect.assertions(4);
 
         const { client, reauthCalls, sockets } = await openClient(409);
 
@@ -70,6 +70,30 @@ describe("socket re-authentication on a token refresh", () => {
         await settle();
 
         expect(reauthCalls()).toHaveLength(1);
+        expect(sockets[0]?.readyState).toBe(3);
+
+        // The browser's `close` event, then the replacement socket replays the subscription.
+        sockets[0]?.triggerClose();
+        await vi.advanceTimersByTimeAsync(0);
+        await settle();
+        sockets[1]?.open();
+        await settle();
+
+        expect(sockets).toHaveLength(2);
+        expect((sockets[1]?.frames() ?? []).some((frame) => frame.type === "subscribe")).toBe(true);
+
+        client.close();
+    });
+
+    it("counts only the route's own ok body, not any 200, as a refreshed socket", async () => {
+        expect.assertions(1);
+
+        // A catch-all (an SPA fallback, a proxy) answering 200 with something else.
+        const { client, sockets } = await openClient(200, { html: true });
+
+        client.setAuthToken("token-2", "user-1");
+        await settle();
+
         expect(sockets[0]?.readyState).toBe(3);
 
         client.close();

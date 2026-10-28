@@ -6989,12 +6989,23 @@ class LunoraClient {
             const held = conn?.heldFrames;
 
             if (conn && held) {
+                const { socket } = conn;
+
                 conn.heldFrames = undefined;
-                withDeferredNotifications(() => {
-                    for (const frame of held) {
-                        this.dispatchServerMessage(frame, shardKey);
-                    }
-                });
+                withDeferredNotifications(
+                    () => {
+                        for (const frame of held) {
+                            // An `onError` that retired this socket (a sign-out, an account switch) ends the
+                            // batch: what is left belongs to the old session, and the reconnect re-seeds.
+                            if (conn.retired === true || conn.socket !== socket) {
+                                break;
+                            }
+
+                            this.dispatchServerMessage(frame, shardKey);
+                        }
+                    },
+                    () => !this.closed,
+                );
             }
         } else if (conn?.heldFrames && isHeldInBatch(message)) {
             conn.heldFrames.push(message);
@@ -8620,8 +8631,10 @@ class LunoraClient {
                     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
                     method: "POST",
                 })
+                    // Only the route's own `{ ok: true }` counts: a catch-all 200 (an SPA fallback, a proxy) did not refresh anything.
+                    .then((response) => response.json())
                     .then(
-                        (response) => response.ok,
+                        (body: unknown) => (body as { ok?: unknown } | null)?.ok === true,
                         () => false,
                     )
                     .then((reauthenticated) => {

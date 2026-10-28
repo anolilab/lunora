@@ -504,6 +504,11 @@ class TabCoordinator {
 
     /** Hold a snapshot marked `more`; on the one that closes its flush, apply them all and notify once. */
     private applySubscriptionData(message: SubscriptionDataMessage): void {
+        // A flush another tab left unfinished (it stopped leading mid-post) is never released by a different leader's frame.
+        if (this.heldData[0]?.tabId !== message.tabId) {
+            this.heldData = [];
+        }
+
         this.heldData.push(message);
 
         if (message.more === true) {
@@ -513,11 +518,14 @@ class TabCoordinator {
         const held = this.heldData;
 
         this.heldData = [];
-        withDeferredNotifications(() => {
-            for (const frame of held) {
-                this.onSubscriptionData?.(frame.key, frame.data, frame.cursor, frame.epoch, frame.identity);
-            }
-        });
+        withDeferredNotifications(
+            () => {
+                for (const frame of held) {
+                    this.onSubscriptionData?.(frame.key, frame.data, frame.cursor, frame.epoch, frame.identity);
+                }
+            },
+            () => this.running,
+        );
     }
 
     private handleMessage(message: TabCoordinatorMessage): void {

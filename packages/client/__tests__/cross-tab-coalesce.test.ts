@@ -168,4 +168,26 @@ describe("cross-tab fan-out coalescing", () => {
 
         follower.stop();
     });
+
+    it("never releases a flush another leader left unfinished", () => {
+        expect.assertions(1);
+
+        const { deliver } = stubBroadcastChannel();
+        const applied: string[] = [];
+        const follower = new TabCoordinator({
+            onSubscriptionData: (key) => {
+                applied.push(key);
+            },
+        });
+
+        follower.start();
+
+        // The old leader stopped after its first snapshot; the new leader's frame must not release it.
+        deliver({ data: "stale", key: "a", more: true, tabId: "old-leader", type: "subscription-data" });
+        deliver({ data: "fresh", key: "b", tabId: "new-leader", type: "subscription-data" });
+
+        expect(applied).toStrictEqual(["b"]);
+
+        follower.stop();
+    });
 });

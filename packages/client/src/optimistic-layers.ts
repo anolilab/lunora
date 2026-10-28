@@ -39,16 +39,28 @@ import type { OptimisticLayer, SubscriptionState } from "./subscription";
  */
 let acknowledgements = 0;
 
-/** Subscriptions whose value moved inside {@link withDeferredNotifications}, notified when it returns. */
-let deferredNotifications: Set<SubscriptionState> | undefined;
+/**
+ * What moved inside {@link withDeferredNotifications}, in order: a subscription whose value
+ * moved (once, however often it moved) or another held notification, such as a checkpoint.
+ */
+let deferredNotifications: Set<SubscriptionState | (() => void)> | undefined;
 
-const fanValue = (state: SubscriptionState): void => {
-    for (const callback of state.callbacks) {
+const fanValue = (state: SubscriptionState, callbacks: Iterable<(value: unknown) => void> = state.callbacks): void => {
+    for (const callback of callbacks) {
         try {
             callback(state.lastValue);
         } catch {
             /* user callback threw — ignore */
         }
+    }
+};
+
+/** Run `notify` now, or with the rest of the batch when inside {@link withDeferredNotifications}. */
+export const deferNotification = (notify: () => void): void => {
+    if (deferredNotifications === undefined) {
+        notify();
+    } else {
+        deferredNotifications.add(notify);
     }
 };
 
@@ -101,8 +113,8 @@ export const notifySubscription = (state: SubscriptionState, value: unknown): vo
  * moved — once, with its final value. Every value is committed before any callback
  * runs, so a listener reading a sibling query never sees it a frame behind.
  */
-export const withDeferredNotifications = (apply: () => void): void => {
-    const moved = new Set<SubscriptionState>();
+export const withDeferredNotifications = (apply: () => void, live: () => boolean = () => true): void => {
+    const moved = new Set<SubscriptionState | (() => void)>();
 
     deferredNotifications = moved;
 
@@ -111,8 +123,30 @@ export const withDeferredNotifications = (apply: () => void): void => {
     } finally {
         deferredNotifications = undefined;
 
-        for (const state of moved) {
-            fanValue(state);
+        // Callbacks are taken before any runs: one an earlier callback subscribes already has
+        // the value from the subscribe's replay, and one it unsubscribes must not hear it.
+        const pending = [...moved].map((item) => (typeof item === "function" ? item : ([item, [...item.callbacks]] as const)));
+
+        for (const item of pending) {
+            // A callback that closed the client ends the batch, as a closed socket ends a stream of frames.
+            if (!live()) {
+                break;
+            }
+
+            if (typeof item === "function") {
+                try {
+                    item();
+                } catch {
+                    /* user callback threw — ignore */
+                }
+            } else {
+                const [state, callbacks] = item;
+
+                fanValue(
+                    state,
+                    callbacks.filter((callback) => state.callbacks.has(callback)),
+                );
+            }
         }
     }
 };

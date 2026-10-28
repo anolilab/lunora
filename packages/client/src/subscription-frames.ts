@@ -1,4 +1,5 @@
 import type { ConnectionStatus } from "./connection-state";
+import { deferNotification } from "./optimistic-layers";
 import type { SubscriptionState } from "./subscription";
 
 /**
@@ -19,13 +20,16 @@ export const advanceWatermark = (state: SubscriptionState, mutationId: number): 
  * frame does not: its value did not change, so no rows follow.
  */
 export const fanCheckpoints = (state: SubscriptionState, rowsFollow = false): void => {
-    for (const onCheckpoint of state.checkpointCallbacks) {
-        onCheckpoint({
-            checkpoint: state.serverCursor,
-            mutationId: state.lastMutationId,
-            ...(rowsFollow && { rowsFollow: true }),
-        });
-    }
+    const checkpoint = state.serverCursor;
+    const mutationId = state.lastMutationId;
+
+    // Held with the value inside a refresh batch, so a checkpoint listener never reads a
+    // sibling query the batch has not committed yet. Captured now: the batch moves both on.
+    deferNotification(() => {
+        for (const onCheckpoint of state.checkpointCallbacks) {
+            onCheckpoint({ checkpoint, mutationId, ...(rowsFollow && { rowsFollow: true }) });
+        }
+    });
 };
 
 /**

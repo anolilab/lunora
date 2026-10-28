@@ -95,4 +95,103 @@ describe("refresh batch", () => {
 
         client.close();
     });
+
+    it("holds checkpoint listeners with the values, so one never reads a sibling the batch has not applied", async () => {
+        expect.assertions(1);
+
+        const { sockets, WebSocket } = createSocketHarness();
+        const client = new LunoraClient({ heartbeatIntervalMs: 0, url: "http://app.test", WebSocket });
+        const seen: unknown[] = [];
+
+        client.subscribe(fnRef("todos.count"), {}, () => undefined, {
+            onCheckpoint: () => seen.push(client.peekActiveQuerySnapshot("todos.list", {}).value),
+        });
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        await settle();
+
+        const [countId, listId] = (sockets[0]?.frames() ?? []).filter((frame) => frame.type === "subscribe").map((frame) => frame.id);
+
+        sockets[0]?.receive({ type: "batchStart" });
+        sockets[0]?.receive({ cursor: 1, data: 1, id: countId, lastMutationId: 1, type: "data" });
+        sockets[0]?.receive({ cursor: 1, data: "a", id: listId, type: "data" });
+        sockets[0]?.receive({ type: "batchEnd" });
+
+        expect(seen).toStrictEqual(["a"]);
+
+        client.close();
+    });
+
+    it("stops applying a batch once a listener retires its socket", async () => {
+        expect.assertions(1);
+
+        const { sockets, WebSocket } = createSocketHarness();
+        const client = new LunoraClient({ authTokenOnUpgrade: true, heartbeatIntervalMs: 0, url: "http://app.test", WebSocket });
+        const lists: unknown[] = [];
+
+        client.setAuthToken("token-1", "user-1");
+        // A refusal the app answers by switching account: the rest of the batch is the old account's.
+        client.subscribe(fnRef("todos.count"), {}, () => undefined, {
+            onError: () => {
+                client.setAuthToken("token-2", "user-2");
+            },
+        });
+        client.subscribe(fnRef("todos.list"), {}, (value) => lists.push(value));
+        await settle();
+        sockets[0]?.open();
+        await settle();
+
+        const [countId, listId] = (sockets[0]?.frames() ?? []).filter((frame) => frame.type === "subscribe").map((frame) => frame.id);
+
+        sockets[0]?.receive({ type: "batchStart" });
+        sockets[0]?.receive({ error: { code: "FORBIDDEN", message: "no" }, id: countId, type: "error" });
+        sockets[0]?.receive({ data: "old account's rows", id: listId, type: "data" });
+        sockets[0]?.receive({ type: "batchEnd" });
+
+        expect(lists).not.toContain("old account's rows");
+
+        client.close();
+    });
+
+    it("notifies no further subscription once a listener closes the client", async () => {
+        expect.assertions(1);
+
+        const { client, ids, observed, socket } = await twoSubscriptions();
+
+        client.subscribe(fnRef("todos.count"), {}, () => {
+            client.close();
+        });
+
+        socket?.receive({ type: "batchStart" });
+        socket?.receive({ data: 1, id: ids[0], type: "data" });
+        socket?.receive({ data: "a", id: ids[1], type: "data" });
+        socket?.receive({ type: "batchEnd" });
+
+        expect(observed.filter((entry) => entry.startsWith("list:"))).toStrictEqual([]);
+    });
+
+    it("gives a listener subscribed during the notifications the batch's value once", async () => {
+        expect.assertions(1);
+
+        const { client, ids, socket } = await twoSubscriptions();
+        const late: unknown[] = [];
+        let subscribed = false;
+
+        client.subscribe(fnRef("todos.count"), {}, () => {
+            if (!subscribed) {
+                subscribed = true;
+                client.subscribe(fnRef("todos.list"), {}, (value) => late.push(value));
+            }
+        });
+
+        socket?.receive({ type: "batchStart" });
+        socket?.receive({ data: 1, id: ids[0], type: "data" });
+        socket?.receive({ data: "a", id: ids[1], type: "data" });
+        socket?.receive({ type: "batchEnd" });
+
+        expect(late).toStrictEqual(["a"]);
+
+        client.close();
+    });
 });
