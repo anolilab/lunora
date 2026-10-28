@@ -309,6 +309,15 @@ describe(runSmokeLoad, () => {
             await expect(run()).resolves.toBeUndefined();
             expect(logger.success).toHaveBeenCalledWith("2 deferred module(s) evaluate cleanly");
         });
+
+        it("blocks when a workflow module reached only through the generated workflows loader throws", async () => {
+            expect.assertions(1);
+
+            generated("workflows.ts", 'export const loadWorkflows = () => import("../workflows.js");\n');
+            writeFileSync(join(cwd, "lunora", "workflows.ts"), 'throw new Error("workflow boom at module scope");\n');
+
+            await expect(run()).resolves.toContain("1 of 3 deferred module(s) fail to load:\n  lunora/workflows.ts: workflow boom at module scope\n");
+        });
     });
 
     describe("what the smoke Worker runs", () => {
@@ -325,6 +334,21 @@ describe(runSmokeLoad, () => {
 
             return { read: () => captured };
         };
+
+        // Left bare, the specifier resolves the way the generated app's does: up from the run directory to the project's node_modules.
+        it("imports a package target of the generated agents loader by its bare specifier", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(cwd, "lunora", "_generated", "agents.ts"), 'export const loadInbound = () => import("@lunora/agent/inbound");\n');
+            respondWith({ checked: 0, failures: [], modules: { checked: 1, failures: [] } });
+
+            const entry = captureEntry();
+
+            await run();
+
+            expect(entry.read().content).toContain('["@lunora/agent/inbound", () => import("@lunora/agent/inbound")]');
+            expect(entry.read().path.startsWith(join(cwd, ".lunora"))).toBe(true);
+        });
 
         it("re-exports the entry of the selected environment, not the top-level one", async () => {
             expect.assertions(2);

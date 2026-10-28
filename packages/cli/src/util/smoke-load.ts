@@ -42,10 +42,11 @@ const UNDEFINED_IMPORT_SYMPTOM = /\(void 0\)|is not a function|before initializa
 
 /**
  * Generated files whose `import()` calls the Worker runs only once an event arrives, in eager builds too: the auth module,
- * the spec documents, the auth migrator and live-stream mounts in `app.ts`, workflow events in `shard.ts`. `functions.ts`
- * is left out: its lazy loaders are covered by `loadAllFunctions`, which reports per function.
+ * the spec documents, the auth migrator and live-stream mounts in `app.ts`, workflow events in `shard.ts`, and the
+ * workflow and agent loaders in `workflows.ts` / `agents.ts`. A file that is absent, or has no `import()`, adds nothing.
+ * `functions.ts` is left out: its lazy loaders are covered by `loadAllFunctions`, which reports per function.
  */
-const DEFERRING_FILES = ["app.ts", "shard.ts"] as const;
+const DEFERRING_FILES = ["agents.ts", "app.ts", "shard.ts", "workflows.ts"] as const;
 
 /** Extensions a relative `import()` target written as `./x.js` can have on disk. */
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".js", ".mjs"] as const;
@@ -105,7 +106,10 @@ interface DeferredModule {
     specifier: string;
 }
 
-/** A relative target is resolved against `_generated/` to the file on disk; a package specifier stays as it is. */
+/**
+ * A relative target is resolved against `_generated/` to the file on disk. A package specifier stays bare: the smoke entry
+ * sits under the project's `.lunora/`, so it resolves up to the project's `node_modules` as the generated file's does.
+ */
 const resolveDeferredModule = (cwd: string, generatedDirectory: string, specifier: string): DeferredModule => {
     if (!specifier.startsWith(".")) {
         return { label: specifier, specifier };
