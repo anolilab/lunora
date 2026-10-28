@@ -71,6 +71,9 @@ host. Crossing one fails the call with `TRANSACTION_LIMIT_EXCEEDED`; reaching
 | Documents written | **50 000**  | Inserts, patches, replaces and deletes      |
 | Bytes written     | **32 MiB**  | Serialized size of every written document   |
 
+Reads of `.global()` tables are not counted: they come back from D1 or
+Hyperdrive through the global writer's own paged reads, not the shard's SQLite.
+
 Raise them by overriding `transactionLimits()` on the generated shard class.
 
 ## D1

@@ -2027,8 +2027,9 @@ const documentBytes = (rows: ReadonlyArray<unknown>): number => {
  * search and geo candidates, rank pages, relation loads — and a byte cap that
  * one of them skips is no cap. The stored JSON is already a string in hand, so
  * its length costs nothing; nothing is re-serialized. `toArray()`, `one()` and
- * iteration are each charged; workerd's native `toArray` does not re-enter the
- * JS iterator, so no row is charged twice.
+ * iteration are each charged. A host whose `toArray`/`one` is built on its own
+ * iterator would charge each row twice, so iteration inside those two is not
+ * charged.
  */
 const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | undefined, exempt: () => boolean): SqlExec => {
     if (headroom === undefined) {
@@ -2040,6 +2041,16 @@ const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | und
         const toArray = cursor.toArray.bind(cursor);
         const one = cursor.one.bind(cursor);
         const iterate = cursor[Symbol.iterator].bind(cursor);
+        let materializing = false;
+        const materialize = <T>(read: () => T): T => {
+            materializing = true;
+
+            try {
+                return read();
+            } finally {
+                materializing = false;
+            }
+        };
         const charge = (rows: ReadonlyArray<unknown>): void => {
             if (!exempt()) {
                 const bytes = documentBytes(rows);
@@ -2051,14 +2062,14 @@ const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | und
         };
 
         cursor.toArray = () => {
-            const rows = toArray();
+            const rows = materialize(toArray);
 
             charge(rows);
 
             return rows;
         };
         cursor.one = () => {
-            const row = one();
+            const row = materialize(one);
 
             charge([row]);
 
@@ -2066,7 +2077,10 @@ const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | und
         };
         cursor[Symbol.iterator] = function* chargedRows() {
             for (const row of { [Symbol.iterator]: iterate }) {
-                charge([row]);
+                if (!materializing) {
+                    charge([row]);
+                }
+
                 yield row;
             }
         };

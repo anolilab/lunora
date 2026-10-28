@@ -258,11 +258,37 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
 
             await build({}).insert("notes", { body: "x".repeat(300), bucket: "a" });
 
+            const [stored] = sql.exec<{ __doc__: string }>("SELECT __doc__ FROM notes").toArray();
             const tracker = new TransactionHeadroomTracker();
             const rows = [...meterReadBytes(sql, tracker, () => false).exec("SELECT id, __doc__ FROM notes")];
 
             expect(rows).toHaveLength(1);
-            expect(tracker.headroom().readBytes).toBeGreaterThan(300);
+            expect(tracker.headroom().readBytes).toBe(stored?.__doc__.length);
+        });
+
+        it("charges a materialized row once on a host whose toArray iterates the cursor", () => {
+            expect.assertions(1);
+
+            const doc = JSON.stringify({ body: "x".repeat(100) });
+            const selfIterating: SqlExec = {
+                exec: <Row>() => {
+                    const rows = [{ __doc__: doc }] as Row[];
+                    const cursor = {
+                        one: () => [...cursor][0] as Row,
+                        [Symbol.iterator]: () => rows[Symbol.iterator](),
+                        toArray: () => [...cursor],
+                    };
+
+                    return cursor;
+                },
+            };
+            const tracker = new TransactionHeadroomTracker();
+            const metered = meterReadBytes(selfIterating, tracker, () => false);
+
+            metered.exec("SELECT").toArray();
+            metered.exec("SELECT").one();
+
+            expect(tracker.headroom().readBytes).toBe(doc.length * 2);
         });
 
         it("does not charge an aggregate companion rebuild to the writing transaction", async () => {
