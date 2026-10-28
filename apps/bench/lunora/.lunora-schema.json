@@ -1,0 +1,688 @@
+{
+  "migrationIds": [],
+  "tables": {
+    "payment_customers": {
+      "commitOrdered": false,
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "email": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "provider": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "providerCustomerId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "referenceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_provider_customer": {
+          "fields": [
+            "provider",
+            "providerCustomerId"
+          ],
+          "unique": true
+        },
+        "by_reference": {
+          "fields": [
+            "referenceId"
+          ],
+          "unique": false
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "root"
+    },
+    "payment_events": {
+      "commitOrdered": false,
+      "fields": {
+        "processedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "provider": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "providerEventId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "type": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_provider_event": {
+          "fields": [
+            "provider",
+            "providerEventId"
+          ],
+          "unique": true
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "root"
+    },
+    "payment_sessions": {
+      "commitOrdered": false,
+      "fields": {
+        "amountMinor": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "capturedMinor": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "currency": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "provider": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "providerSessionId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "referenceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "refundedMinor": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "revision": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "state": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "subscriptionId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_provider_session": {
+          "fields": [
+            "provider",
+            "providerSessionId"
+          ],
+          "unique": true
+        },
+        "by_provider_subscription": {
+          "fields": [
+            "provider",
+            "subscriptionId"
+          ],
+          "unique": false
+        },
+        "by_reference": {
+          "fields": [
+            "referenceId"
+          ],
+          "unique": false
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "root"
+    },
+    "payment_subscriptions": {
+      "commitOrdered": false,
+      "fields": {
+        "cancelAtPeriodEnd": {
+          "kind": "boolean",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "currentPeriodEnd": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "currentPeriodStart": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "lastEventAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "priceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "priceIds": {
+          "kind": "array",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "of": {
+            "kind": "string",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          }
+        },
+        "provider": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "providerSubscriptionId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "quantity": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "referenceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "revision": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "state": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_provider_subscription": {
+          "fields": [
+            "provider",
+            "providerSubscriptionId"
+          ],
+          "unique": true
+        },
+        "by_reference": {
+          "fields": [
+            "referenceId"
+          ],
+          "unique": false
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "root"
+    },
+    "payment_usageEvents": {
+      "commitOrdered": false,
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "featureId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "idempotencyKey": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "mode": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "provider": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "quantity": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "referenceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "reportedToProvider": {
+          "kind": "boolean",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_idempotency": {
+          "fields": [
+            "provider",
+            "idempotencyKey"
+          ],
+          "unique": true
+        },
+        "by_reference_created": {
+          "fields": [
+            "referenceId",
+            "createdAt"
+          ],
+          "unique": false
+        },
+        "by_reference_feature_created": {
+          "fields": [
+            "referenceId",
+            "featureId",
+            "createdAt"
+          ],
+          "unique": false
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "root"
+    },
+    "presence_present": {
+      "commitOrdered": false,
+      "fields": {
+        "data": {
+          "kind": "record",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "key": {
+            "kind": "string",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          },
+          "of": {
+            "kind": "any",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          }
+        },
+        "lastSeen": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "roomId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "sessionId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "userId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byRoomSession": {
+          "fields": [
+            "roomId",
+            "sessionId"
+          ],
+          "unique": false
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "root"
+    },
+    "ratelimit_buckets": {
+      "commitOrdered": false,
+      "fields": {
+        "key": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "prev": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "ts": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "value": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_key": {
+          "fields": [
+            "key"
+          ],
+          "unique": false
+        },
+        "by_ts": {
+          "fields": [
+            "ts"
+          ],
+          "unique": false
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "root"
+    },
+    "saas_activity": {
+      "commitOrdered": false,
+      "fields": {
+        "action": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "actorId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "meta": {
+          "kind": "record",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "key": {
+            "kind": "string",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          },
+          "of": {
+            "kind": "any",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          }
+        },
+        "organizationId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "subjectId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "subjectType": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byOrgCreatedAt": {
+          "fields": [
+            "organizationId",
+            "createdAt"
+          ],
+          "unique": false
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "shardBy:organizationId"
+    },
+    "saas_organizations": {
+      "commitOrdered": false,
+      "fields": {
+        "name": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "plan": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "seats": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "slug": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "status": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byOrganization": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": true
+        },
+        "byPlan": {
+          "fields": [
+            "plan"
+          ],
+          "unique": false
+        },
+        "bySlug": {
+          "fields": [
+            "slug"
+          ],
+          "unique": true
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "global:d1"
+    },
+    "saas_projects": {
+      "commitOrdered": false,
+      "fields": {
+        "archivedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "createdBy": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "name": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "slug": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byOrgSlug": {
+          "fields": [
+            "organizationId",
+            "slug"
+          ],
+          "unique": true
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "shardBy:organizationId"
+    }
+  },
+  "version": 1
+}

@@ -1,0 +1,84 @@
+{
+    "name": "@lunora/bench",
+    "version": "0.0.0",
+    "private": true,
+    "license": "FSL-1.1-Apache-2.0",
+    "type": "module",
+    "sideEffects": false,
+    "imports": {
+        "#lunora/*": "./lunora/*"
+    },
+    "scripts": {
+        "bench:startup": "node scripts/startup.mjs",
+        "build": "vite build",
+        "codegen": "node node_modules/lunorash/dist/bin.mjs codegen --api-spec both",
+        "dev": "node node_modules/lunorash/dist/bin.mjs dev",
+        "generate": "node scripts/generate.mjs",
+        "lint:eslint": "eslint . --max-warnings=0",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:types": "node node_modules/lunorash/dist/bin.mjs codegen --api-spec both && tsc --noEmit"
+    },
+    "dependencies": {
+        "@cloudflare/playwright": "catalog:cloudflare",
+        "@lunora/agent": "workspace:*",
+        "@lunora/ai": "workspace:*",
+        "@lunora/auth": "workspace:*",
+        "@lunora/bindings": "workspace:*",
+        "@lunora/browser": "workspace:*",
+        "@lunora/d1": "workspace:*",
+        "@lunora/errors": "workspace:*",
+        "@lunora/flags": "workspace:*",
+        "@lunora/hyperdrive": "workspace:*",
+        "@lunora/mail": "workspace:*",
+        "@lunora/mcp": "workspace:*",
+        "@lunora/notify": "workspace:*",
+        "@lunora/payment": "workspace:*",
+        "@lunora/queue": "workspace:*",
+        "@lunora/react": "workspace:*",
+        "@lunora/scheduler": "workspace:*",
+        "@lunora/storage": "workspace:*",
+        "@lunora/workflow": "workspace:*",
+        "@lunora/x402": "workspace:*",
+        "@x402/evm": "catalog:web3",
+        "better-auth": "catalog:auth",
+        "lunorash": "workspace:*",
+        "postgres": "catalog:sql",
+        "react": "catalog:frontend",
+        "react-dom": "catalog:frontend",
+        "stripe": "catalog:payment",
+        "viem": "catalog:web3",
+        "zod": "catalog:web"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "catalog:cloudflare",
+        "@electric-sql/pglite": "catalog:sql",
+        "@electric-sql/pglite-socket": "catalog:sql",
+        "@lunora/studio": "workspace:*",
+        "@lunora/vite": "workspace:*",
+        "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "@types/react-dom": "catalog:frontend",
+        "typescript": "catalog:tsc",
+        "vite": "catalog:vite",
+        "wrangler": "catalog:cloudflare"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    },
+    "lunora": {
+        "queueTuning": {
+            "queues": {
+                "events": {
+                    "max_retries": 3
+                },
+                "mail": {
+                    "max_retries": 5
+                }
+            }
+        },
+        "crons": [
+            "0 */1 * * *",
+            "15 3 * * *"
+        ]
+    }
+}

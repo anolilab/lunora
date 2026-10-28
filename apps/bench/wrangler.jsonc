@@ -1,0 +1,102 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "lunora-bench",
+    "main": "lunora/server.ts",
+    "compatibility_date": "2026-10-01",
+    "compatibility_flags": ["nodejs_compat"],
+    // Production setting, and what the app behind #1166 shipped (an 11 MiB minified bundle).
+    "minify": true,
+    "durable_objects": {
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "SHARD_REGISTRY", "class_name": "ShardRegistryDO" },
+            { "name": "SCHEDULER", "class_name": "SchedulerDO" },
+        ],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "ShardRegistryDO", "SchedulerDO"] }],
+    "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+    },
+    "d1_databases": [
+        {
+            "binding": "DB",
+            "database_name": "replace-me-db",
+            "database_id": "00000000-0000-4000-8000-000000000000",
+        },
+    ],
+    "vars": {
+        "APP_BASE_URL": "",
+    },
+    "ai": {
+        "binding": "AI",
+    },
+    "send_email": [
+        {
+            "name": "SEND_EMAIL",
+            "destination_address": "REPLACE_ME@example.com",
+        },
+    ],
+    "r2_buckets": [
+        {
+            "binding": "UPLOADS",
+            "bucket_name": "replace-me-uploads",
+        },
+    ],
+    "kv_namespaces": [
+        {
+            "binding": "KV",
+        },
+    ],
+    "hyperdrive": [
+        {
+            "binding": "HYPERDRIVE",
+            "id": "<replace-with-hyperdrive-create-id>",
+        },
+    ],
+    "browser": {
+        "binding": "BROWSER",
+    },
+    "analytics_engine_datasets": [
+        {
+            "binding": "ANALYTICS",
+            "dataset": "ANALYTICS",
+        },
+    ],
+    "upload_source_maps": true,
+    "exports": {
+        "OnboardingWorkflow": {
+            "type": "workflow",
+            "name": "onboarding",
+        },
+        "SupportAgentWorkflow": {
+            "type": "workflow",
+            "name": "agent-support",
+        },
+    },
+    "queues": {
+        "consumers": [
+            {
+                "queue": "events",
+                "max_retries": 3,
+            },
+            {
+                "queue": "mail",
+                "max_retries": 5,
+            },
+        ],
+        "producers": [
+            {
+                "binding": "QUEUE_EVENTS",
+                "queue": "events",
+            },
+            {
+                "binding": "QUEUE_MAIL",
+                "queue": "mail",
+            },
+        ],
+    },
+    "triggers": {
+        "crons": ["0 */1 * * *", "15 3 * * *"],
+    },
+}
