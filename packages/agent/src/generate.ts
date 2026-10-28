@@ -120,7 +120,7 @@ const prepareAgentTurn = (ai: AiModule, agent: AgentDefinition, env: Record<stri
 
     // `asSchema` once here: the SDK wraps a raw zod/standard schema afresh on every
     // call and the wrapper is what caches its JSON Schema, so passing the schema
-    // through re-ran `toJSONSchema` for every tool on every turn.
+    // through would re-run `toJSONSchema` for every tool on every turn.
     for (const [name, definition] of Object.entries(agent.tools ?? {})) {
         tools[name] = ai.tool({ description: definition.description, inputSchema: ai.asSchema(definition.inputSchema) });
     }
