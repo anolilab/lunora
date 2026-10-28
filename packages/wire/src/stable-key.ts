@@ -212,8 +212,8 @@ const stableStringify = (value: unknown): string => {
     if (Array.isArray(value)) {
         // Every index is read, holes included (they encode as `null` like `undefined`), and never
         // through the array's own iterator or `map`: a custom `Symbol.iterator` must not change the
-        // key, and `map` would skip holes and make `[, 1]` collide with other shapes. A plain loop,
-        // not `Array.from` + `join`: the intermediate array measured 3-5x slower.
+        // key, and `map` would skip holes and make `[, 1]` collide with other shapes. A plain loop
+        // avoids the intermediate array that `Array.from` + `join` would allocate.
         // The length is read once: an indexed getter that appends must not keep the loop running.
         const length = arrayLength(value);
         let out = "[";
