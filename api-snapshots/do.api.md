@@ -628,6 +628,7 @@ abstract class ShardDO {
     protected resolveDispatchAnchor(identityScoped: boolean): TraceAnchor;
     protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): T;
     protected instrumentSql<T extends SqlClientLike>(client: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): T;
+    protected watchActionWork(functionPath: string, context: unknown): () => void;
     protected makeFetch(functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): ContextFetch;
     protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): SpanHandle;
     protected makeMetrics(functionPath: string, sink?: TelemetrySink, scope?: SensitiveScope): ContextMetrics;
