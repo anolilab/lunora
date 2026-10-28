@@ -163,7 +163,7 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
 
     // The auth lazy-init dance is woven through `build()` and `buildWorkerOptions`.
     const authState = hasAuth
-        ? `        let auth: LunoraAuth | null = null;\n        let authInit: Promise<void> | null = null;\n        // One memo per env for THIS assembled worker: a framework-hosted worker rebuilds its options per\n        // request and must reuse it, but a second \`assemble()\` has its own auth closure and must not share.\n        const identityMemos: IdentityMemoStore = new WeakMap();\n`
+        ? `        let auth: LunoraAuth | null = null;\n        let authInit: Promise<void> | null = null;\n        // One memo per env for THIS assembled worker: every worker it builds reuses it, but a second\n        // \`assemble()\` has its own auth closure and must not share.\n        const identityMemos: IdentityMemoStore = new WeakMap();\n`
         : "";
     const ensureAuthBlock = hasAuth
         ? `
@@ -222,7 +222,12 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
 `
         : "";
     const { asyncIfDeferred, deferredArgument, deferredParameter, loadDeferredLine } = deferredWiring(options);
-    const ensureAuthCall = hasAuth ? `\n                await ensureAuth(env);` : "";
+    // Every entry point that can build the worker awaits auth first: the worker is
+    // built once per isolate and reads \`getAuth()\` while building (\`authAdmin\`), so a
+    // cron or queue batch that built it first would leave auth unset for every later request.
+    const ensureAuthFor = (environment: string): string => (hasAuth ? `\n                await ensureAuth(${environment});` : "");
+    const ensureAuthCall = ensureAuthFor("env");
+    const ensureRawAuthCall = ensureAuthFor("rawEnv as Env");
     const getAuthArgument = `${hasAuth ? `() => auth, identityMemos` : `() => null`}${deferredArgument}`;
     const getAuthParameter = `${hasAuth ? `getAuth: () => LunoraAuth | null, identityMemos: IdentityMemoStore` : `_getAuth: () => null`}${deferredParameter}`;
     const buildWorkerParameters = `env: Env${deferredParameter}`;
@@ -328,12 +333,12 @@ ${buildWorkerLine}
 
                 return worker.fetch(request, rawEnv, context);
             },
-            scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {${loadDeferredLine}
+            scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {${loadDeferredLine}${ensureRawAuthCall}
                 worker ??= buildWorker(rawEnv as Env${deferredArgument});
 
                 return worker.scheduled(controller, rawEnv, context);
             },
-            serverQuery: ${asyncIfDeferred}(request, rawEnv, reference, args, options) => {${loadDeferredLine}
+            serverQuery: ${asyncIfDeferred}(request, rawEnv, reference, args, options) => {${loadDeferredLine}${ensureRawAuthCall}
                 worker ??= buildWorker(rawEnv as Env${deferredArgument});
 
                 return worker.serverQuery(request, rawEnv, reference, args, options);
@@ -346,7 +351,7 @@ ${buildWorkerLine}
                 // acked and destroyed.
                 options.hasQueue || options.hasFramework
                     ? `
-            queue: async (batch: unknown, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {${loadDeferredLine}
+            queue: async (batch: unknown, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {${loadDeferredLine}${ensureRawAuthCall}
                 worker ??= buildWorker(rawEnv as Env${deferredArgument});
 
                 return worker.queue?.(batch, rawEnv, context);
@@ -368,7 +373,7 @@ ${
         // of its own the host's is the only one there is — forward to it rather than
         // dropping the entry.
         if (!composed.email && host && typeof host === "object" && typeof host.email === "function") {
-            composed.email = ${asyncIfDeferred}(message, rawEnv, context) => {${loadDeferredLine}
+            composed.email = ${asyncIfDeferred}(message, rawEnv, context) => {${loadDeferredLine}${ensureRawAuthCall}
                 worker ??= buildWorker(rawEnv as Env${deferredArgument});
 
                 return worker.email?.(message, rawEnv, context) ?? Promise.resolve();

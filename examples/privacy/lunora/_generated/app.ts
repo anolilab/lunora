@@ -246,8 +246,8 @@ class AppBuilder<Env extends object> {
         let worker: LunoraWorker | null = null;
         let auth: LunoraAuth | null = null;
         let authInit: Promise<void> | null = null;
-        // One memo per env for THIS assembled worker: a framework-hosted worker rebuilds its options per
-        // request and must reuse it, but a second `assemble()` has its own auth closure and must not share.
+        // One memo per env for THIS assembled worker: every worker it builds reuses it, but a second
+        // `assemble()` has its own auth closure and must not share.
         const identityMemos: IdentityMemoStore = new WeakMap();
 
         const initAuth = async (env: Env): Promise<void> => {
@@ -317,12 +317,14 @@ class AppBuilder<Env extends object> {
             },
             scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {
                 const deferred = await loadDeferredModules();
+                await ensureAuth(rawEnv as Env);
                 worker ??= buildWorker(rawEnv as Env, deferred);
 
                 return worker.scheduled(controller, rawEnv, context);
             },
             serverQuery: async (request, rawEnv, reference, args, options) => {
                 const deferred = await loadDeferredModules();
+                await ensureAuth(rawEnv as Env);
                 worker ??= buildWorker(rawEnv as Env, deferred);
 
                 return worker.serverQuery(request, rawEnv, reference, args, options);
@@ -416,8 +418,8 @@ class AppBuilder<Env extends object> {
                 // The OAuth discovery documents (an `mcp()` resource's metadata, the
                 // issuer's) are derived here from the declared options, so the worker
                 // forwards only those exact paths and no other probe reaches the object.
-                // Memoised on the declaration: a framework-hosted worker rebuilds these
-                // options per request, and `options(env)` rebuilds every plugin.
+                // Memoised on the declaration: each worker built for a new `env` runs
+                // these options again, and `options(env)` rebuilds every plugin.
                 discoveryPaths,
                 internalSecret,
                 namespace,

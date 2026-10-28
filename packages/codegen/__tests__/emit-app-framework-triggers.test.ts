@@ -40,4 +40,19 @@ describe("emitApp — framework-host trigger passthrough", () => {
 
         expect(output).not.toContain("typeof host.email");
     });
+
+    it("awaits auth before every entry point that can build the worker", () => {
+        expect.assertions(5);
+
+        // The worker is built once per isolate and reads `getAuth()` while it builds,
+        // so whichever entry point runs first must find auth initialised.
+        const output = emitApp({ ...baseOptions, hasAuth: true, hasFramework: true, hasQueue: true });
+        const builds = output.split("worker ??= buildWorker(").slice(0, -1);
+
+        expect(builds).toHaveLength(5);
+
+        for (const preceding of builds.slice(1)) {
+            expect(preceding.trimEnd()).toMatch(/await ensureAuth\(rawEnv as Env\);$/u);
+        }
+    });
 });

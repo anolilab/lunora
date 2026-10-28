@@ -314,8 +314,8 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 // The OAuth discovery documents (an \`mcp()\` resource's metadata, the
                 // issuer's) are derived here from the declared options, so the worker
                 // forwards only those exact paths and no other probe reaches the object.
-                // Memoised on the declaration: a framework-hosted worker rebuilds these
-                // options per request, and \`options(env)\` rebuilds every plugin.
+                // Memoised on the declaration: each worker built for a new \`env\` runs
+                // these options again, and \`options(env)\` rebuilds every plugin.
                 discoveryPaths,
                 internalSecret,${doAuthJurisdictionLine(options)}
                 namespace,
