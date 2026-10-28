@@ -21,6 +21,7 @@
             { "name": "MERGED", "class_name": "TestMergedDO" },
             { "name": "LIVE_SHARD", "class_name": "TestLiveShardDO" },
             { "name": "ADMIN_REVOCATIONS", "class_name": "TestAdminRevocationDO" },
+            { "name": "LAZY_SHARD", "class_name": "TestLazyShardDO" },
         ],
     },
     "migrations": [
@@ -30,5 +31,6 @@
         { "tag": "v4", "new_sqlite_classes": ["DeliveryAuthorizationTestDO"] },
         { "tag": "v5", "new_sqlite_classes": ["TestLiveShardDO"] },
         { "tag": "v6", "new_sqlite_classes": ["TestAdminRevocationDO"] },
+        { "tag": "v7", "new_sqlite_classes": ["TestLazyShardDO"] },
     ],
 }
