@@ -2784,6 +2784,9 @@ abstract class ShardDO {
      */
     private writeGeneration = 0;
 
+    /** In-flight subscription seeds by run key, valid for one `stamp`; see {@link ShardDO.resolveSeedOutcome}. */
+    private seedRuns: { runs: Map<string, Promise<SubscriptionOutcome | null>>; stamp: string } | undefined;
+
     /**
      * Per-socket poke baseline for shape subscriptions: maps each shape's
      * subscription id to the `__cdc_log` cursor it has been poked through.
@@ -12902,11 +12905,7 @@ abstract class ShardDO {
         if (this.deliveryAuthorization) {
             return this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment));
         }
-        const key = this.isIdentityIndependent(functionPath)
-            ? // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null = the identity-independent bucket
-              reactiveCacheKey(functionPath, args, null)
-            : // The key reads the identity, never keeps it, so the stored one serves without a copy.
-              reactiveCacheKey(functionPath, args, subscriptionIdentityKey(attachment));
+        const key = this.reactiveRunKey(functionPath, args, attachment);
         const cached = cache.get(key);
 
         if (cached !== undefined) {
@@ -12918,6 +12917,72 @@ abstract class ShardDO {
         cache.set(key, pending);
 
         return pending;
+    }
+
+    /** The key two reactive runs share under: see {@link isIdentityIndependent} for which identity fields it carries. */
+    private reactiveRunKey(functionPath: string, args: Record<string, unknown>, attachment: SocketAttachment): string {
+        return this.isIdentityIndependent(functionPath)
+            ? // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null = the identity-independent bucket
+              reactiveCacheKey(functionPath, args, null)
+            : // The key reads the identity, never keeps it, so the stored one serves without a copy.
+              reactiveCacheKey(functionPath, args, subscriptionIdentityKey(attachment));
+    }
+
+    /**
+     * Single-flight for subscription seeds: identical seeds (same key as the
+     * refresh dedup) that start while one is in flight join it, so a reconnect
+     * storm runs each distinct query once instead of once per socket.
+     *
+     * `stamp` is the write generation AND the CDC cursor/epoch the seed read
+     * before running. A joiner stamps the shared result with its OWN cursor, so
+     * it may only join a run that started at the same one — otherwise a pre-write
+     * result could go out under a post-write cursor and a later reconnect would
+     * be told to `resume` on it. The generation alone is not enough: it is bumped
+     * in `flushChangedTables` after awaits, while the cursor has already moved.
+     *
+     * In flight only: an entry is dropped when its run settles. A finished result
+     * cannot be retained, because a query may read `.global()`, KV or vector data
+     * that changes without any local write to bump either stamp.
+     */
+    private resolveSeedOutcome(
+        functionPath: string,
+        args: Record<string, unknown>,
+        handedArgs: () => Record<string, unknown>,
+        isAdmin: boolean,
+        attachment: SocketAttachment,
+        stamp: string,
+    ): Promise<SubscriptionOutcome | null> {
+        if (this.deliveryAuthorization) {
+            return this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment));
+        }
+
+        if (this.seedRuns?.stamp !== stamp) {
+            this.seedRuns = { runs: new Map(), stamp };
+        }
+
+        const { runs } = this.seedRuns;
+        const key = this.reactiveRunKey(functionPath, args, attachment);
+        const inFlight = runs.get(key);
+
+        if (inFlight !== undefined) {
+            return inFlight;
+        }
+
+        // Every caller, leader included, awaits the `finally` chain, so a rejection reaches each of them and none dangles.
+        const shared: Promise<SubscriptionOutcome | null> = this.resolveReactiveOutcome(
+            functionPath,
+            handedArgs(),
+            isAdmin,
+            socketIdentity(attachment),
+        ).finally(() => {
+            if (runs.get(key) === shared) {
+                runs.delete(key);
+            }
+        });
+
+        runs.set(key, shared);
+
+        return shared;
     }
 
     /**
@@ -14011,7 +14076,8 @@ abstract class ShardDO {
      * {@link ShardDO.seedSubscriptionGuarded}, which owns that failure.
      */
     private async seedSubscription(ws: ShardSocketLike, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
-        const seedArgs = structuredClone(query.args ?? {});
+        const storedArgs = query.args ?? {};
+        const seedArgs = cloneArgsOnFirstUse(storedArgs);
         // Seed under the socket's OWN verified identity (stamped on the attachment
         // at upgrade, unforgeable by the client) — read here and passed BY VALUE,
         // so even though a subscribe envelope can interleave with an in-flight RPC
@@ -14031,11 +14097,20 @@ abstract class ShardDO {
         const readCursor = this.currentCdcCursor();
         const readEpoch = isAdmin ? undefined : this.currentCdcEpoch();
         const generation = this.writeGeneration;
-        const permit = this.deliveryAuthorization ? await this.authorizeSubscription(ws, subId, socketIdentity(attachment), functionPath, seedArgs) : undefined;
+        const permit = this.deliveryAuthorization
+            ? await this.authorizeSubscription(ws, subId, socketIdentity(attachment), functionPath, seedArgs())
+            : undefined;
         if (this.deliveryAuthorization && permit === undefined) {
             return;
         }
-        const outcome = await this.resolveReactiveOutcome(functionPath, seedArgs, isAdmin, socketIdentity(attachment));
+        const outcome = await this.resolveSeedOutcome(
+            functionPath,
+            storedArgs,
+            seedArgs,
+            isAdmin,
+            attachment,
+            `${String(generation)}|${String(readCursor)}|${String(readEpoch)}`,
+        );
 
         if (!outcome) {
             return;

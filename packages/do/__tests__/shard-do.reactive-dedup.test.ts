@@ -97,6 +97,15 @@ class DedupShard extends ShardDO {
     /** Bumped each time a result's `probe` property is read — once per wire-encode of that result. */
     public probeReads = 0;
 
+    /** While set, every run parks on it after being counted, so concurrent seeds overlap. */
+    private hold: Promise<void> | undefined;
+
+    /** The CDC cursor this shard reports; a seed reads it synchronously right before it runs or joins. */
+    private cdcCursor: number | undefined;
+
+    /** Called on every cursor read — the milestone a test waits on for "this seed reached its run". */
+    private onCursorRead: (() => void) | undefined;
+
     private counter = 0;
 
     public override handleRpc(): Promise<unknown> {
@@ -116,6 +125,46 @@ class DedupShard extends ShardDO {
         return this.webSocketMessage(ws as unknown as WebSocket, JSON.stringify(envelope));
     }
 
+    /** Park every run until the returned release is called. */
+    public holdRuns(): () => void {
+        let release: () => void = () => undefined;
+
+        this.hold = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        return () => {
+            this.hold = undefined;
+            release();
+        };
+    }
+
+    /** Move the CDC cursor without flushing a write, as a commit does before `flushChangedTables` bumps the generation. */
+    public advanceCursor(): void {
+        this.cdcCursor = (this.cdcCursor ?? 0) + 1;
+    }
+
+    /** Let later runs through while the already-parked ones stay parked. */
+    public unparkLaterRuns(): void {
+        this.hold = undefined;
+    }
+
+    /** Resolves once `count` seeds have read the cursor, i.e. each has started or joined its run. */
+    public seedsReached(count: number): Promise<void> {
+        return new Promise((resolve) => {
+            let reads = 0;
+
+            this.onCursorRead = () => {
+                reads += 1;
+
+                if (reads === count) {
+                    this.onCursorRead = undefined;
+                    resolve();
+                }
+            };
+        });
+    }
+
     public writeRpc(): Promise<Response> {
         return this.fetch(
             new Request("https://shard.internal/rpc", {
@@ -126,10 +175,19 @@ class DedupShard extends ShardDO {
         );
     }
 
-    protected override executeSubscription(functionPath: string, _args: Record<string, unknown>, identity?: IdentityArg): Promise<SubscriptionOutcome | null> {
+    protected override async executeSubscription(
+        functionPath: string,
+        _args: Record<string, unknown>,
+        identity?: IdentityArg,
+    ): Promise<SubscriptionOutcome | null> {
         const userId = identity?.userId ?? "anon";
 
         this.runs.push({ functionPath, userId });
+
+        if (this.hold) {
+            await this.hold;
+        }
+
         this.counter += 1;
 
         const result = { n: this.counter, owner: userId };
@@ -143,7 +201,13 @@ class DedupShard extends ShardDO {
             },
         });
 
-        return Promise.resolve({ result, tables: new Set(["messages"]) });
+        return { result, tables: new Set(["messages"]) };
+    }
+
+    protected override currentCdcCursor(): number | undefined {
+        this.onCursorRead?.();
+
+        return this.cdcCursor;
     }
 
     protected override isIdentityIndependent(functionPath: string): boolean {
@@ -183,7 +247,7 @@ describe("shardDO reactive dedup (identity-independent runs)", () => {
             sockets.push(ws);
         }
 
-        // Three seeds, one run each (seeding does not dedup).
+        // Three sequential seeds never overlap, so each runs (seeds share only while in flight).
         expect(shard.runs.filter((r) => r.functionPath === "shared:list")).toHaveLength(3);
 
         const runsAfterSeed = shard.runs.length;
@@ -386,6 +450,112 @@ describe("shardDO reactive dedup (identity-independent runs)", () => {
             await expect(refreshRunCount(shard)).resolves.toBe(1);
             // Three sockets, one shared outcome: the result is encoded once, not three times.
             expect(shard.probeReads - readsAfterSeed).toBe(1);
+        });
+    });
+
+    describe("seed single-flight (identical in-flight seeds share one run)", () => {
+        /** The `n` of the first `{type:"data"}` frame for `subId` — which run's result the seed delivered. */
+        const firstRun = (ws: FakeWebSocket, subId: string): number | undefined => {
+            const frame = ws.sent
+                .map((line) => JSON.parse(line) as { data?: { n?: number }; id: string; type: string })
+                .find((candidate) => candidate.type === "data" && candidate.id === subId);
+
+            return frame?.data?.n;
+        };
+
+        const connect = (shard: DedupShard, attachment: SocketAttachment): FakeWebSocket => {
+            const ws = createFakeWebSocket();
+
+            shard.registerSocket(ws, attachment);
+
+            return ws;
+        };
+
+        it("n concurrent identical seeds run the query once and every socket gets its result", async () => {
+            expect.assertions(2);
+
+            const shard = new DedupShard(createFakeState(), {});
+            const sockets = Array.from({ length: 5 }, () => connect(shard, attachmentFor("user-A")));
+            const release = shard.holdRuns();
+            const reached = shard.seedsReached(sockets.length);
+            const seeds = sockets.map(async (ws, index) => shard.driveSubscribe(ws, `sub-${String(index)}`, "messages:list"));
+
+            await reached;
+            release();
+            await Promise.all(seeds);
+
+            expect(shard.runs).toHaveLength(1);
+            expect(sockets.map((ws, index) => firstRun(ws, `sub-${String(index)}`))).toStrictEqual([1, 1, 1, 1, 1]);
+        });
+
+        it("concurrent seeds under different identities never share", async () => {
+            expect.assertions(3);
+
+            const shard = new DedupShard(createFakeState(), {});
+            const wsA = connect(shard, attachmentFor("user-A"));
+            const wsB = connect(shard, attachmentFor("user-B"));
+            const release = shard.holdRuns();
+            const reached = shard.seedsReached(2);
+            const seeds = [shard.driveSubscribe(wsA, "sub-A", "messages:list"), shard.driveSubscribe(wsB, "sub-B", "messages:list")];
+
+            await reached;
+            release();
+            await Promise.all(seeds);
+
+            expect(shard.runs).toHaveLength(2);
+            expect(lastOwner(wsA, "sub-A")).toBe("user-A");
+            expect(lastOwner(wsB, "sub-B")).toBe("user-B");
+        });
+
+        it.each([
+            [
+                "a write flushed",
+                async (shard: DedupShard): Promise<void> => {
+                    await shard.writeRpc();
+                },
+            ],
+            [
+                "the CDC cursor moved before the write generation did",
+                (shard: DedupShard): Promise<void> => {
+                    shard.advanceCursor();
+
+                    return Promise.resolve();
+                },
+            ],
+        ])("a seed that starts after %s does not join a run from before it", async (_label, advance) => {
+            expect.assertions(1);
+
+            const shard = new DedupShard(createFakeState(), {});
+
+            const wsA = connect(shard, attachmentFor("user-A"));
+            const wsB = connect(shard, attachmentFor("user-A"));
+            const release = shard.holdRuns();
+            const reachedA = shard.seedsReached(1);
+            const seedA = shard.driveSubscribe(wsA, "sub-A", "messages:list");
+
+            await reachedA;
+            // Only the first run stays parked; the write and the second seed run freely.
+            shard.unparkLaterRuns();
+            await advance(shard);
+            await shard.driveSubscribe(wsB, "sub-B", "messages:list");
+
+            // The second seed delivered while the first is still parked, so it ran
+            // on its own: a joiner could only deliver once the parked run settles.
+            expect(firstRun(wsB, "sub-B")).toBeDefined();
+
+            release();
+            await seedA;
+        });
+
+        it("sequential seeds each run: a finished seed is not retained", async () => {
+            expect.assertions(1);
+
+            const shard = new DedupShard(createFakeState(), {});
+
+            await shard.driveSubscribe(connect(shard, attachmentFor("user-A")), "sub-0", "messages:list");
+            await shard.driveSubscribe(connect(shard, attachmentFor("user-A")), "sub-1", "messages:list");
+
+            expect(shard.runs).toHaveLength(2);
         });
     });
 });
