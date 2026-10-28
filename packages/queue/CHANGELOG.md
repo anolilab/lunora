@@ -1,3 +1,14 @@
+## @lunora/queue [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.130...@lunora/queue@1.0.0-alpha.131) (2026-10-28)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.74
+
 ## @lunora/queue [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.129...@lunora/queue@1.0.0-alpha.130) (2026-10-27)
 
 
