@@ -1,3 +1,17 @@
+## @lunora/agent [1.0.0-alpha.256](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.255...@lunora/agent@1.0.0-alpha.256) (2026-10-28)
+
+### Performance Improvements
+
+* **agent,ai:** convert tool schemas once, cheaper rag scoring, lexical stack fix ([#1387](https://github.com/anolilab/lunora/issues/1387)) ([38a050d](https://github.com/anolilab/lunora/commit/38a050d1a82c9482c77e9ac884b30157cedca880))
+* cache hmac keys per secret on per-message paths ([#1383](https://github.com/anolilab/lunora/issues/1383)) ([4b259f8](https://github.com/anolilab/lunora/commit/4b259f8583960cf26066423f64ee10e5e0de7c85))
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.152
+* **@lunora/server:** upgraded to 1.0.0-alpha.246
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.167
+
 ## @lunora/agent [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.254...@lunora/agent@1.0.0-alpha.255) (2026-10-28)
 
 
