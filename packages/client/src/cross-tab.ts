@@ -190,8 +190,8 @@ class TabCoordinator {
      */
     private readonly pendingData = new Map<string, WsLeaderMessage>();
 
-    /** Snapshots received under `more`, applied with the frame that closes their flush. */
-    private heldData: SubscriptionDataMessage[] = [];
+    /** Snapshots received under `more`, per leader tab, applied with the frame that closes their flush. */
+    private readonly heldData = new Map<string, SubscriptionDataMessage[]>();
 
     private heartbeatTimer: ReturnType<typeof setInterval> | undefined = undefined;
     private leaderCheckTimer: ReturnType<typeof setInterval> | undefined = undefined;
@@ -497,27 +497,41 @@ class TabCoordinator {
             return;
         }
 
+        let posted: WsLeaderMessage | undefined;
+        let closed = true;
+
         for (const [index, frame] of frames.entries()) {
-            this.bc?.postMessage(index < frames.length - 1 ? { ...frame, more: true } : frame);
+            const more = index < frames.length - 1;
+
+            try {
+                this.bc?.postMessage(more ? { ...frame, more: true } : frame);
+                posted = frame;
+                closed = !more;
+            } catch {
+                // A value structured clone refuses (a `URL` in a result) skips that key; the rest still go out.
+            }
+        }
+
+        // The closing frame failed: re-post the last one that went out, unmarked, so followers release what they hold.
+        if (!closed && posted !== undefined) {
+            this.bc?.postMessage(posted);
         }
     }
 
     /** Hold a snapshot marked `more`; on the one that closes its flush, apply them all and notify once. */
     private applySubscriptionData(message: SubscriptionDataMessage): void {
-        // A flush another tab left unfinished (it stopped leading mid-post) is never released by a different leader's frame.
-        if (this.heldData[0]?.tabId !== message.tabId) {
-            this.heldData = [];
-        }
+        // Kept per tab: during a split brain two leaders post at once, and one's closing frame must not release the other's.
+        const held = this.heldData.get(message.tabId) ?? [];
 
-        this.heldData.push(message);
+        held.push(message);
 
         if (message.more === true) {
+            this.heldData.set(message.tabId, held);
+
             return;
         }
 
-        const held = this.heldData;
-
-        this.heldData = [];
+        this.heldData.delete(message.tabId);
         withDeferredNotifications(
             () => {
                 for (const frame of held) {
@@ -588,6 +602,9 @@ class TabCoordinator {
                 // waiting for the next health-check tick (up to
                 // `leaderTimeout`) before even starting the claim window would
                 // double the freeze every remaining tab experiences.
+                // A flush the departing leader never closed is never released.
+                this.heldData.delete(message.tabId);
+
                 if (this.knownLeader === message.tabId) {
                     this.knownLeader = undefined;
 

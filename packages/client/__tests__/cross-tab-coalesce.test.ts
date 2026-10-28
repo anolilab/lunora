@@ -28,6 +28,8 @@ const stubBroadcastChannel = (): { deliver: (message: unknown) => void; posted: 
 
         // eslint-disable-next-line class-methods-use-this -- test double
         public postMessage(message: Posted): void {
+            // A real channel structured-clones the message, and throws on what it cannot clone.
+            structuredClone(message);
             posted.push(message);
         }
     }
@@ -189,5 +191,71 @@ describe("cross-tab fan-out coalescing", () => {
         expect(applied).toStrictEqual(["b"]);
 
         follower.stop();
+    });
+
+    it("closes a flush whose last snapshot cannot be posted, so followers release the rest", async () => {
+        expect.assertions(1);
+
+        const { posted } = stubBroadcastChannel();
+        const leader = createLeader();
+        const before = dataFrames(posted).length;
+
+        leader.broadcastSubscriptionData("a", { n: 1 }, 1);
+        // Structured clone refuses a function, as it does a `URL`; the fake channel clones to match.
+        leader.broadcastSubscriptionData("b", { n: () => 2 }, 2);
+        await Promise.resolve();
+
+        expect(
+            dataFrames(posted)
+                .slice(before)
+                .map((frame) => [frame.key, frame.more]),
+        ).toStrictEqual([
+            ["a", true],
+            ["a", undefined],
+        ]);
+
+        leader.stop();
+    });
+
+    it("keeps two leaders' flushes apart during a split brain", () => {
+        expect.assertions(1);
+
+        const { deliver } = stubBroadcastChannel();
+        const applied: string[] = [];
+        const follower = new TabCoordinator({
+            onSubscriptionData: (key) => {
+                applied.push(key);
+            },
+        });
+
+        follower.start();
+
+        deliver({ data: 1, key: "a1", more: true, tabId: "leader-a", type: "subscription-data" });
+        deliver({ data: 1, key: "b1", tabId: "leader-b", type: "subscription-data" });
+        deliver({ data: 2, key: "a2", tabId: "leader-a", type: "subscription-data" });
+
+        expect(applied).toStrictEqual(["b1", "a1", "a2"]);
+
+        follower.stop();
+    });
+});
+
+describe("value notification", () => {
+    it("gives every listener the value that moved, even when an earlier one writes the same query", () => {
+        expect.assertions(1);
+
+        const state = { callbacks: new Set(), lastValue: undefined } as unknown as SubscriptionState;
+        const second: unknown[] = [];
+
+        state.callbacks.add((value) => {
+            if (value === "server") {
+                notifySubscription(state, "optimistic");
+            }
+        });
+        state.callbacks.add((value) => second.push(value));
+
+        notifySubscription(state, "server");
+
+        expect(second).toContain("server");
     });
 });

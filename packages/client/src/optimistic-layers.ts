@@ -45,10 +45,11 @@ let acknowledgements = 0;
  */
 let deferredNotifications: Set<SubscriptionState | (() => void)> | undefined;
 
-const fanValue = (state: SubscriptionState, callbacks: Iterable<(value: unknown) => void> = state.callbacks): void => {
+/** Every callback gets `value`, the one that moved: a listener that writes optimistically must not change what the next one hears. */
+const fanValue = (callbacks: Iterable<(value: unknown) => void>, value: unknown): void => {
     for (const callback of callbacks) {
         try {
-            callback(state.lastValue);
+            callback(value);
         } catch {
             /* user callback threw — ignore */
         }
@@ -102,7 +103,7 @@ export const notifySubscription = (state: SubscriptionState, value: unknown): vo
     state.lastValue = value;
 
     if (deferredNotifications === undefined) {
-        fanValue(state);
+        fanValue(state.callbacks, value);
     } else {
         deferredNotifications.add(state);
     }
@@ -125,7 +126,7 @@ export const withDeferredNotifications = (apply: () => void, live: () => boolean
 
         // Callbacks are taken before any runs: one an earlier callback subscribes already has
         // the value from the subscribe's replay, and one it unsubscribes must not hear it.
-        const pending = [...moved].map((item) => (typeof item === "function" ? item : ([item, [...item.callbacks]] as const)));
+        const pending = [...moved].map((item) => (typeof item === "function" ? item : ([item, [...item.callbacks], item.lastValue] as const)));
 
         for (const item of pending) {
             // A callback that closed the client ends the batch, as a closed socket ends a stream of frames.
@@ -140,11 +141,11 @@ export const withDeferredNotifications = (apply: () => void, live: () => boolean
                     /* user callback threw — ignore */
                 }
             } else {
-                const [state, callbacks] = item;
+                const [state, callbacks, value] = item;
 
                 fanValue(
-                    state,
                     callbacks.filter((callback) => state.callbacks.has(callback)),
+                    value,
                 );
             }
         }
