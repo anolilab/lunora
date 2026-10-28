@@ -442,9 +442,9 @@ export interface PlatformCapabilities {
          * host either populates or does not.
          */
         identityProxy?: Capability;
+
         /** Image transforms (resize/format/optimize) via an Images binding. */
         images?: Capability;
-
         /** Key-value storage (KV / Redis / DynamoDB). */
         keyValueStore?: Capability;
 

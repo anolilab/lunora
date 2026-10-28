@@ -3614,8 +3614,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         const stub = cronRunStub();
 
-        /* eslint-disable no-await-in-loop -- intentional: jobs on one expression run sequentially for deterministic order and to avoid a concurrent-RPC herd against a single shard */
         for (const job of cronJobs) {
+            // eslint-disable-next-line no-await-in-loop -- intentional: jobs on one expression run sequentially for deterministic order and to avoid a concurrent-RPC herd against a single shard
             const gate = await beginCronRun(stub, job.name);
 
             if (gate.skip) {
@@ -3623,14 +3623,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             }
 
             try {
+                // eslint-disable-next-line no-await-in-loop -- see above
                 await runOneCronJob(job, env, context, traceparent);
+                // eslint-disable-next-line no-await-in-loop -- see above
                 await endCronRun(stub, job.name, gate);
             } catch (error: unknown) {
                 errors.push(toError(error));
+                // eslint-disable-next-line no-await-in-loop -- see above
                 await endCronRun(stub, job.name, gate, error);
             }
         }
-        /* eslint-enable no-await-in-loop */
 
         return cronJobs.length;
     };
@@ -6327,12 +6329,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             }
         },
         async queue(batch, env, context) {
-            // Forward to the codegen-built push-consumer handler (which routes by
-            // `batch.queue` via `@lunora/queue`). A no-op when the app declares no
-            // push queues, so re-exporting `queue` unconditionally is harmless.
-            //
-            // Named after the queue so a collector groups consumer invocations per
-            // queue rather than lumping every batch under one span name.
             // Paused: hand the whole batch back for later rather than run it. See
             // `holdQueueBatch` for what a long pause costs the held messages.
             const pause = await deploymentPause.read();
@@ -6341,6 +6337,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 return;
             }
 
+            // Forward to the codegen-built push-consumer handler (which routes by
+            // `batch.queue` via `@lunora/queue`). A no-op when the app declares no
+            // push queues, so re-exporting `queue` unconditionally is harmless.
+            //
+            // Named after the queue so a collector groups consumer invocations per
+            // queue rather than lumping every batch under one span name.
             await instrumentTrigger(`queue:${queueNameOf(batch)}`, context, async (traceparent) => {
                 // The consumer's publish is `"trusted"`: no caller is checked against the `shardKey` it names. A `shardKey` taken from a
                 // client-supplied message body must be checked by the consumer before it is passed, or any message can publish into any shard.

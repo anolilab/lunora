@@ -73,9 +73,7 @@ export const JobHistory = ({ loadJobs }: JobHistoryProps = {}): ReactElement => 
                                                 {stateLabel[job.state]}
                                             </Badge>
                                         </TableCell>
-                                        <TableCell className="text-muted-foreground tabular-nums">
-                                            {job.completedAt === undefined ? "—" : formatTimestamp(job.completedAt, "—")}
-                                        </TableCell>
+                                        <TableCell className="text-muted-foreground tabular-nums">{formatTimestamp(job.completedAt, "—")}</TableCell>
                                         <TableCell className="text-xs text-destructive">{job.error ?? ""}</TableCell>
                                         <TableCell className="font-mono text-xs">{job.id}</TableCell>
                                     </TableRow>
