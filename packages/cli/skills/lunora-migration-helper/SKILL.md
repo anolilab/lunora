@@ -57,8 +57,9 @@ diffs the schema against the committed `lunora/.lunora-schema.json`.
   other storage; use export → import. A dropped index or relation needs call
   sites changed, then `--update-schema-baseline`.
 
-A migration covers a change only if it is new since the baseline and its
-`table` is a string literal naming the affected table. The baseline advances
+A migration covers a change only if it is new since the baseline, its `table`
+is a string literal naming the affected table, and its `up` does more than return
+the document (the `migrate create` placeholder covers nothing). The baseline advances
 only after a successful deploy.
 
 ## Online data migrations
@@ -211,9 +212,10 @@ reshaping still follows widen → migrate → narrow.
 3. **Not dual-writing during the window.** Rows inserted mid-migration keep the
    old shape. Write the new shape from the widen step on.
 4. **A non-literal `table`.** `table: TABLE_NAME` covers nothing in the gate.
-5. **Bypassing the gate.** `--allow-schema-drift` / `--update-schema-baseline`
-   ship the shape without touching data; use them only when existing rows are
-   already compatible.
+5. **Bypassing the gate.** `--allow-schema-drift` ships the shape for one run
+   without checking anything. `lunora deploy` (with or without
+   `--update-schema-baseline`) reads the stored rows of the affected tables and
+   lets a change through only when every row already fits.
 
 ## Checklist
 

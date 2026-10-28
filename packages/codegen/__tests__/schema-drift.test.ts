@@ -130,6 +130,7 @@ describe("schema-drift", () => {
 
             expect(safe.changes).toStrictEqual([
                 {
+                    field: "bio",
                     remediation: "none",
                     scope: "table",
                     severity: "safe",
@@ -170,6 +171,7 @@ describe("schema-drift", () => {
 
             expect(widened.changes).toStrictEqual([
                 {
+                    field: "name",
                     remediation: "none",
                     scope: "table",
                     severity: "safe",
@@ -289,6 +291,17 @@ describe("schema-drift", () => {
             expect(decision.blocked).toBe(false);
             expect(decision.newMigrationIds).toStrictEqual(["fix-name-type"]);
             expect(decision.reason).toContain("covered by");
+        });
+
+        it("blocks when the only covering migration is an identity, names it, and reports the change as uncovered", () => {
+            expect.assertions(3);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), ["placeholder"]);
+            const decision = evaluateSchemaDrift({ baseline, current, migrations: [{ id: "placeholder", identity: true, table: "users" }] });
+
+            expect(decision.blocked).toBe(true);
+            expect(decision.reason).toContain("Migration(s) placeholder return each document unchanged");
+            expect(decision.uncovered.map((change) => [change.type, change.table, change.field])).toStrictEqual([["changedFieldKind", "users", "name"]]);
         });
 
         it("blocks when the NEW migration targets a DIFFERENT table than the breaking change", () => {

@@ -212,6 +212,11 @@ interface DriftChange {
     severity: "breaking" | "safe";
     /** Human-readable, actionable description (used in the gate message). */
     summary: string;
+    /**
+     * The field this change belongs to, for a change to one field (its kind, shape,
+     * optionality, a constraint, or the field being added or removed).
+     */
+    field?: string;
     /** The table this change belongs to. Always set when `scope` is `"table"`. */
     table?: string;
     /** A machine-readable change discriminator. */
@@ -828,15 +833,16 @@ const diffFields = (tableName: string, baseline: TableSnapshot, current: TableSn
         const old = baseline.fields[name];
 
         if (old === undefined) {
-            changes.push(addedFieldChange(tableName, name, field));
+            changes.push({ ...addedFieldChange(tableName, name, field), field: name });
         } else {
-            changes.push(...diffExistingField(tableName, name, old, field));
+            changes.push(...diffExistingField(tableName, name, old, field).map((change) => ({ ...change, field: name })));
         }
     }
 
     for (const name of Object.keys(baseline.fields)) {
         if (current.fields[name] === undefined) {
             changes.push({
+                field: name,
                 remediation: "backfill",
                 severity: "breaking",
                 summary: `removed field ${tableName}.${name} — add a data migration if stored data must be cleaned up`,

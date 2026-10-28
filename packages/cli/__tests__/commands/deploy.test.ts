@@ -11,9 +11,9 @@ import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { StreamingFetchLike } from "../../src/commands/data-transfer/shared";
 import { runDeployCommand, runPreDeployPipeline } from "../../src/commands/deploy/handler";
 import type { DeployCommandResult } from "../../src/commands/deploy/types";
-import type { FetchLike } from "../../src/commands/run/handler";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { HealthFetch } from "../../src/util/health-probe";
 import type { Logger } from "../../src/util/logger";
@@ -2109,7 +2109,7 @@ export const backfillNames = defineMigration({
 
             // Provide a fetch stub so runMigrateDataCommand succeeds without a
             // real worker. The RPC endpoint returns a 200 JSON body.
-            const fetchStub: FetchLike = () =>
+            const fetchStub: StreamingFetchLike = () =>
                 Promise.resolve({
                     ok: true,
                     text: () => Promise.resolve(JSON.stringify({ status: "ok" })),
@@ -2146,7 +2146,8 @@ export const backfillNames = defineMigration({
 
             const { spawner } = createRecordingSpawner();
             const { infos, logger, warns } = silentLogger();
-            const fetchStub: FetchLike = () => Promise.resolve({ ok: true, text: () => Promise.resolve(JSON.stringify({ status: "ok" })) } as Response);
+            const fetchStub: StreamingFetchLike = () =>
+                Promise.resolve({ ok: true, text: () => Promise.resolve(JSON.stringify({ status: "ok" })) } as Response);
 
             const result = await runDeployCommand({
                 cwd: workdir,

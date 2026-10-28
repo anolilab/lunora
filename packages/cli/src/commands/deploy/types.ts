@@ -8,7 +8,7 @@ import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import type { ListRemoteSecretsInputs, ListRemoteSecretsResult } from "../../util/wrangler-secrets";
-import type { FetchLike } from "../run/handler";
+import type { StreamingFetchLike } from "../data-transfer/shared";
 import type { PreDeployCommand } from "./checks";
 
 interface DeployCommandOptions {
@@ -74,8 +74,8 @@ interface DeployCommandOptions {
     emitBindings?: string;
     env?: string;
 
-    /** Fetch implementation injected in tests for `--migrate` RPC calls. */
-    fetchImpl?: FetchLike;
+    /** Fetch implementation injected in tests for `--migrate` RPC calls and the drift gate's stored-row read. */
+    fetchImpl?: StreamingFetchLike;
 
     /** Output format: `pretty` (default) or `json`. */
     format?: OutputFormat;

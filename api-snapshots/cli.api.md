@@ -126,7 +126,7 @@ interface DeployCommandOptions {
     dryRun?: boolean;
     emitBindings?: string;
     env?: string;
-    fetchImpl?: FetchLike;
+    fetchImpl?: StreamingFetchLike;
     format?: OutputFormat;
     frameworkBuild?: boolean;
     healthCheck?: boolean;

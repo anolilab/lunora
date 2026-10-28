@@ -305,6 +305,13 @@ interface SchemaDriftDecision {
      * there is no drift at all. Mirrors the D1-placeholder guard's message style.
      */
     reason: string;
+
+    /**
+     * The breaking changes no new migration accounts for. Non-empty exactly when
+     * the run blocks or an override waved it through; a caller that can read the
+     * stored rows checks these.
+     */
+    uncovered: ReadonlyArray<DriftChange>;
 }
 
 /** The commands that can print the blocked-drift remediation, and which override flags each accepts. */
@@ -337,7 +344,8 @@ const DRIFT_FLAG_SUPPORT: Record<string, { allowDrift: boolean; updateBaseline: 
  * better an over-broad hint than none.
  */
 const ALLOW_DRIFT_LINE = "  • For backward-compatible changes (e.g. adding an optional field): pass `--allow-schema-drift` to skip the block.";
-const UPDATE_BASELINE_LINE = "  • To accept the new shape without a migration (you know data is compatible): pass `--update-schema-baseline`.";
+const UPDATE_BASELINE_LINE =
+    "  • To accept the new shape without a migration: pass `--update-schema-baseline`. `lunora deploy` first reads the stored rows a changed field affects and refuses if any does not fit.";
 
 const remediationFlagLines = (command: string | undefined): string => {
     const support = command === undefined ? undefined : DRIFT_FLAG_SUPPORT[command];
@@ -391,7 +399,12 @@ const scaffoldLine = (table: string): string => `      lunora migrate create bac
  * jurisdiction-only block said "no in-place migration" and "add a migration" two
  * lines apart.
  */
-const blockedReason = (uncovered: ReadonlyArray<DriftChange>, unresolvedMigrationIds: ReadonlyArray<string>, command: string | undefined): string => {
+const blockedReason = (
+    uncovered: ReadonlyArray<DriftChange>,
+    migrationNotes: { identity: ReadonlyArray<string>; unresolved: ReadonlyArray<string> },
+    command: string | undefined,
+): string => {
+    const { identity: identityMigrationIds, unresolved: unresolvedMigrationIds } = migrationNotes;
     const owedTables = [...new Set(uncovered.filter((change) => isBackfillable(change)).map((change) => change.table))];
     const fixLines: string[] = [];
 
@@ -419,6 +432,22 @@ const blockedReason = (uncovered: ReadonlyArray<DriftChange>, unresolvedMigratio
     if (unresolvedMigrationIds.length > 0) {
         fixLines.push(
             `  • Migration(s) ${unresolvedMigrationIds.join(", ")} declare a non-literal \`table\`, so codegen cannot tell which table they visit and they cover nothing. Use a string literal.\n`,
+        );
+    }
+
+    // The scaffold's placeholder used to clear the gate the moment it existed, so a
+    // forgotten `up` shipped the change with no backfill behind it.
+    if (identityMigrationIds.length > 0) {
+        fixLines.push(
+            `  • Migration(s) ${identityMigrationIds.join(", ")} return each document unchanged, so they rewrite no row and cover nothing. Fill in \`up\`.\n`,
+        );
+    }
+
+    // Named from every command: only deploy reads a deployment, but the one running offline (prepare in CI) is
+    // where the operator learns that the deploy step can settle this without a migration.
+    if (owedTables.length > 0) {
+        fixLines.push(
+            "  • If the stored rows already fit the new schema, `lunora deploy` goes ahead on its own: it reads the rows of each affected table from the deployed worker (`--migrate-url` or the project link, plus `LUNORA_ADMIN_TOKEN`) and names any row that does not fit.\n",
         );
     }
 
@@ -468,15 +497,15 @@ const evaluateSchemaDrift = (options: {
     command?: string;
     current: SchemaSnapshot;
     /** This run's declared migrations, so a new one is matched to the table it iterates. */
-    migrations: ReadonlyArray<Pick<MigrationIR, "id" | "table">>;
+    migrations: ReadonlyArray<Pick<MigrationIR, "id" | "identity" | "table">>;
 }): SchemaDriftDecision => {
     const { allowDrift = false, baseline, command, current, migrations } = options;
     const drift = diffSchemaSnapshots(baseline, current);
     const breaking = drift.changes.filter((change) => change.severity === "breaking");
     const newMigrationIds = current.migrationIds.filter((id) => !(baseline?.migrationIds ?? []).includes(id));
     const newMigrations = migrations.filter((migration) => newMigrationIds.includes(migration.id));
-    const decide = (blocked: boolean, reason: string): SchemaDriftDecision => {
-        return { blocked, changes: drift.changes, newMigrationIds, reason };
+    const decide = (blocked: boolean, reason: string, uncovered: ReadonlyArray<DriftChange> = []): SchemaDriftDecision => {
+        return { blocked, changes: drift.changes, newMigrationIds, reason, uncovered };
     };
 
     // Tables a NEW migration iterates. A migration whose `table` is `""` — not a
@@ -484,8 +513,13 @@ const evaluateSchemaDrift = (options: {
     // than everything: failing closed keeps an unresolvable declaration from
     // becoming a blanket override. `blockedReason` names those ids, so failing
     // closed does not also fail silently.
-    const coveredTables = new Set(newMigrations.filter((migration) => migration.table !== "").map((migration) => migration.table));
+    // An identity `up` covers nothing either: it rewrites no row, so whether its table's rows fit is a question
+    // only the stored rows can answer.
+    const coveredTables = new Set(
+        newMigrations.filter((migration) => migration.table !== "" && migration.identity !== true).map((migration) => migration.table),
+    );
     const unresolvedMigrationIds = newMigrations.filter((migration) => migration.table === "").map((migration) => migration.id);
+    const identityMigrationIds = newMigrations.filter((migration) => migration.table !== "" && migration.identity === true).map((migration) => migration.id);
 
     // No drift at all, or a first-ever capture (no baseline to compare against) —
     // never block.
@@ -511,7 +545,9 @@ const evaluateSchemaDrift = (options: {
         // counting ids indiscriminately is the habit this gate exists to break. A
         // migration on a table with no breaking drift covered nothing.
         const driftedTables = new Set(breaking.map((change) => change.table));
-        const covering = newMigrations.filter((migration) => driftedTables.has(migration.table)).map((migration) => migration.id);
+        const covering = newMigrations
+            .filter((migration) => migration.identity !== true && driftedTables.has(migration.table))
+            .map((migration) => migration.id);
 
         return decide(
             false,
@@ -519,13 +555,13 @@ const evaluateSchemaDrift = (options: {
         );
     }
 
-    const reason = blockedReason(uncovered, unresolvedMigrationIds, command);
+    const reason = blockedReason(uncovered, { identity: identityMigrationIds, unresolved: unresolvedMigrationIds }, command);
 
     if (allowDrift) {
-        return decide(false, `${reason}\n\n(overridden by --allow-schema-drift)`);
+        return decide(false, `${reason}\n\n(overridden by --allow-schema-drift)`, uncovered);
     }
 
-    return decide(true, reason);
+    return decide(true, reason, uncovered);
 };
 
 export type { SchemaDriftDecision };

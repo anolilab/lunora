@@ -31,6 +31,8 @@ import {
 } from "@lunora/config/cloudflare";
 import { Spinner } from "@visulima/spinner";
 
+import { resolveAdminBearer } from "../../util/admin-token";
+import { adminFetch, resolveAdminBaseUrl } from "../../util/admin-url";
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -52,9 +54,11 @@ import { runPostCodegenHook } from "../../util/post-codegen-hook";
 import projectRootFor from "../../util/project-root";
 import { buildRailpackImages } from "../../util/railpack";
 import { resolveWorkerUrl } from "../../util/resolve-target";
+import type { StoredRowChecker } from "../../util/schema-drift-gate";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
+import { checkStoredRows } from "../../util/stored-row-check";
 import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 import { validateWrangler } from "../../util/wrangler-validator";
 import { clientBuildRefusal, clientBuildRuns, pluginBuildRuns, runClientBuild } from "../build/framework-build";
@@ -736,6 +740,22 @@ const celldToolchainError = async (options: DeployCommandOptions, target: string
 };
 
 /**
+ * The drift gate's stored-row read for `lunora deploy`: the deployed worker the
+ * env-guarded `--migrate-url` (or the project link) names, under the admin
+ * bearer. No URL means no target — never the localhost default, which would
+ * judge a production schema change by an empty dev database.
+ */
+const storedRowChecker =
+    (cwd: string, options: DeployCommandOptions, codegen: CodegenResult): StoredRowChecker =>
+    async (changes) => {
+        const baseUrl = options.migrateUrl === undefined ? undefined : resolveAdminBaseUrl(options.migrateUrl, options.logger, cwd);
+        const token = baseUrl === undefined ? undefined : resolveAdminBearer({ cwd, token: options.migrateToken, url: baseUrl }).token;
+        const target = baseUrl === undefined || !token ? undefined : { baseUrl, fetchImpl: options.fetchImpl ?? adminFetch, token };
+
+        return checkStoredRows({ changes, tables: codegen.schemaTables, target });
+    };
+
+/**
  * Everything both `lunora prepare` and `lunora deploy` must do before anything
  * ships: resolve the target, run codegen (with its post-hook, platform
  * diagnostics and ERROR-advisory gate), gate on schema drift, provision the
@@ -813,8 +833,9 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     let reblessSchemaBaseline: (() => void) | undefined;
 
     if (codegen !== undefined) {
-        const gate = runSchemaDriftGate({
+        const gate = await runSchemaDriftGate({
             allowDrift: options.allowSchemaDrift === true,
+            checkStoredRows: command === "deploy" ? storedRowChecker(cwd, options, codegen) : undefined,
             codegen,
             command,
             logger: options.logger,

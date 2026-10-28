@@ -51,6 +51,36 @@ describe("discover/migrations", () => {
             expect(result).toEqual([{ exportName: "backfill", filePath: "migrations", id: "backfill-read-by", table: "messages" }]);
         });
 
+        it("marks an `up` that returns its document unchanged as an identity, in each spelling", () => {
+            expect.assertions(1);
+
+            writeSource(
+                "migrations.ts",
+                `
+            import { defineMigration } from "@lunora/server";
+            export const a = defineMigration({ id: "arrow", table: "t", up: (document) => document });
+            export const b = defineMigration({ id: "parenthesized", table: "t", up: async (doc) => (doc) });
+            export const c = defineMigration({ id: "block", table: "t", up(doc) { return doc; } });
+            export const d = defineMigration({ id: "function", table: "t", up: function (doc) { return doc; } });
+            export const e = defineMigration({ id: "spread", table: "t", up: (doc) => ({ ...doc }) });
+            export const f = defineMigration({ id: "two-statements", table: "t", up: (doc) => { console.log(doc); return doc; } });
+            export const g = defineMigration({ id: "other-value", table: "t", up: (doc, context) => context });
+        `,
+            );
+
+            const result = discoverMigrations(newProject(), workdir);
+
+            expect(Object.fromEntries(result.map((migration) => [migration.id, migration.identity === true]))).toStrictEqual({
+                arrow: true,
+                block: true,
+                function: true,
+                "other-value": false,
+                parenthesized: true,
+                spread: false,
+                "two-statements": false,
+            });
+        });
+
         it("detects an aliased import — `import { defineMigration as dm }`", () => {
             expect.assertions(2);
 

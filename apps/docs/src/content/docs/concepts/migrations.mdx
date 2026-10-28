@@ -52,15 +52,46 @@ To fix:
     Scaffold the missing migration(s) — the generated `up` is an identity placeholder you must fill in:
       lunora migrate create backfill_users --table users
 
+  • If the stored rows already fit the new schema, `lunora deploy` goes ahead on its own: it reads the rows of each affected table from the deployed worker (`--migrate-url` or the project link, plus `LUNORA_ADMIN_TOKEN`) and names any row that does not fit.
   • For backward-compatible changes (e.g. adding an optional field): pass `--allow-schema-drift` to skip the block.
-  • To accept the new shape without a migration (you know data is compatible): pass `--update-schema-baseline`.
+  • To accept the new shape without a migration: pass `--update-schema-baseline`. `lunora deploy` first reads the stored rows a changed field affects and refuses if any does not fit.
 Docs: https://lunora.dev/docs/migrations
 ```
 
-<Callout type="warn">
-    The scaffolded `up` is `(document) => document` — an identity transform. It satisfies the gate immediately, so a scaffold you forget to fill in ships the schema
-    change with no backfill behind it.
-</Callout>
+The scaffolded `up` is `(document) => document`, an identity transform. A
+migration whose `up` only returns its document rewrites no row, so it does not
+cover anything: the gate names it and keeps blocking until you fill it in, or
+until the stored rows show the backfill is not needed.
+
+### When the stored rows already fit
+
+A tightening is often already true of the data: every stored row has the new
+required field, or every stored value already has the new type. `lunora deploy`
+checks that instead of asking for a migration. For each blocking change that
+concerns one field (a new required field, a field made required, a changed type
+or shape, a dropped field) it reads the stored rows of that table from the
+deployed worker, across every shard and the `.global()` plane, and runs the new
+validator on the changed fields:
+
+- every row fits: the deploy goes ahead, and the baseline advances when it succeeds;
+- a row does not fit: the deploy stays blocked and lists the first ten such rows by
+  table, `_id`, field and reason. Stored values, shard keys and record keys are
+  never printed.
+
+The rows are read through the deployed worker's admin export, from the URL
+`--migrate-url` names (or the [project link](/docs/concepts/environments#linking-a-checkout-to-a-deployment)
+for this `--env`), with `LUNORA_ADMIN_TOKEN` as the bearer. With no URL or no
+token the check does not run and the block stands. A celld deploy prints no
+worker URL to link, so record the fleet's URL once with `lunora link --url` or
+pass `--migrate-url`. The Node target has no `lunora deploy`.
+
+Some changes cannot be settled by reading rows, and keep their block: a new
+`.unique()` column or unique index (a duplicate is a property of two rows), a
+field that is no longer nullable or gained a refinement, a TTL change, and any
+changed field whose validator codegen could not resolve, that now points a
+`v.id()` or `v.storage()` somewhere else, or that carries a
+refinement other than a literal `.max(n)`. The export route holds each shard's
+rows in worker memory before streaming them, so the check is bounded by that.
 
 A migration only clears the drift on **the table it iterates**, so a backfill on
 `messages` will not wave through a required field added to `users`.
@@ -77,9 +108,14 @@ instead:
 | [Shard-mode flip](/docs/concepts/sharding#migrating-a-populated-table) | An export/import round trip; a per-shard transform cannot move rows between DOs   |
 | [Jurisdiction change](/docs/concepts/data-residency)                   | Export then import into the new region, or revert                                 |
 
-If you know the stored data is already compatible, `--allow-schema-drift` skips
-the block for one run and `lunora prepare --update-schema-baseline` accepts the
-new shape permanently.
+`--allow-schema-drift` skips the block for one run without checking anything.
+`--update-schema-baseline` accepts the new shape permanently. On `lunora deploy`
+it first runs the stored-row check above for every change rows can settle, and
+refuses while a row does not fit or the rows could not be read. Changes rows
+cannot settle (a dropped index, a new unique index) it accepts on your word.
+`lunora prepare` reads no deployment, so it refuses
+`--update-schema-baseline` for a change only stored rows can confirm and points
+you at `lunora deploy`.
 
 ## Schema migrations (global tables)
 

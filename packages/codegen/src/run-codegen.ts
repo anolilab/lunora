@@ -1018,6 +1018,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         queues,
         schemaSnapshot,
         schemaSnapshotPath,
+        schemaTables: schema.tables,
         workflows,
         writtenFiles,
     };

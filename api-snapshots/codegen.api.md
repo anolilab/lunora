@@ -152,6 +152,7 @@ interface CodegenResult {
     queues: ReadonlyArray<QueueIR>;
     schemaSnapshot: SchemaSnapshot;
     schemaSnapshotPath: string;
+    schemaTables: ReadonlyArray<TableIR>;
     workflows: ReadonlyArray<WorkflowIR>;
     writtenFiles: ReadonlyArray<string>;
 }
@@ -241,6 +242,7 @@ interface DriftChange {
     remediation: DriftRemediation;
     scope: DriftScope;
     severity: "breaking" | "safe";
+    field?: string;
     summary: string;
     table?: string;
     type: "addedFieldConstraint" | "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedCommitOrdering" | "changedFieldKind" | "changedFieldShape" | "changedIndex" | "changedJurisdiction" | "changedMemoryMode" | "changedShardMode" | "changedTtlPolicy" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "relaxedFieldConstraint" | "removedField" | "removedIndex" | "removedRelation" | "removedTable" | "widenedFieldShape";
@@ -578,6 +580,7 @@ interface MigrationIR {
     exportName: string;
     filePath: string;
     id: string;
+    identity?: true;
     table: string;
 }
 ```
@@ -874,6 +877,7 @@ interface SchemaDriftDecision {
     changes: ReadonlyArray<DriftChange>;
     newMigrationIds: ReadonlyArray<string>;
     reason: string;
+    uncovered: ReadonlyArray<DriftChange>;
 }
 ```
 
@@ -1520,7 +1524,7 @@ const evaluateSchemaDrift: (options: {
     baseline: SchemaSnapshot | undefined;
     command?: string;
     current: SchemaSnapshot;
-    migrations: ReadonlyArray<Pick<MigrationIR, "id" | "table">>;
+    migrations: ReadonlyArray<Pick<MigrationIR, "id" | "identity" | "table">>;
 }) => SchemaDriftDecision;
 ```
 

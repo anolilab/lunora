@@ -51,6 +51,48 @@ const stringProperty = (object: ObjectLiteralExpression, name: string): string |
     return initializer && Node.isStringLiteral(initializer) ? initializer.getLiteralValue() : undefined;
 };
 
+/** `node` with any wrapping parentheses removed. */
+const unparenthesized = (node: Node): Node => (Node.isParenthesizedExpression(node) ? unparenthesized(node.getExpression()) : node);
+
+/**
+ * Whether `up` returns its first parameter unchanged — `(document) => document`,
+ * `async (doc) => doc`, or a body that is a single `return doc;`. Anything else,
+ * including an `up` that is not a function literal, is treated as a real transform.
+ */
+const hasIdentityUp = (object: ObjectLiteralExpression): boolean => {
+    const property = findObjectProperty(object, "up");
+    const up = property !== undefined && Node.isPropertyAssignment(property) ? property.getInitializer() : property;
+
+    if (up === undefined || !(Node.isArrowFunction(up) || Node.isFunctionExpression(up) || Node.isMethodDeclaration(up))) {
+        return false;
+    }
+
+    const parameter = up.getParameters()[0]?.getNameNode();
+
+    if (parameter === undefined || !Node.isIdentifier(parameter)) {
+        return false;
+    }
+
+    const returnsParameter = (expression: Node | undefined): boolean => {
+        const returned = expression === undefined ? undefined : unparenthesized(expression);
+
+        return returned !== undefined && Node.isIdentifier(returned) && returned.getText() === parameter.getText();
+    };
+    const body = up.getBody();
+
+    if (body === undefined) {
+        return false;
+    }
+
+    if (!Node.isBlock(body)) {
+        return returnsParameter(body);
+    }
+
+    const [only, ...rest] = body.getStatements();
+
+    return rest.length === 0 && only !== undefined && Node.isReturnStatement(only) && returnsParameter(only.getExpression());
+};
+
 /**
  * Lift one `export const x = defineMigration({...})` declaration into
  * {@link MigrationIR}, or `undefined` when it isn't a recognised migration.
@@ -94,7 +136,13 @@ const migrationFromDeclaration = (declaration: VariableDeclaration, relativePath
         );
     }
 
-    return { exportName, filePath: relativePath, id, table: stringProperty(argument, "table") ?? "" };
+    return {
+        exportName,
+        filePath: relativePath,
+        id,
+        ...(hasIdentityUp(argument) ? { identity: true as const } : {}),
+        table: stringProperty(argument, "table") ?? "",
+    };
 };
 
 /** Reject duplicate migration ids — the registry keys on `id`, so collisions silently drop a migration. */

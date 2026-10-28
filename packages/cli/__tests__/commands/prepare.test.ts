@@ -296,7 +296,7 @@ export default crons;
     // `lunora/.lunora-schema.json`, and nothing exercised it end to end: the
     // gate's unit tests stop at the `rebless` thunk, so a break anywhere between
     // the flag and the file on disk went unnoticed by this suite.
-    it("re-blesses a stale schema baseline that would otherwise block, under --update-schema-baseline", async () => {
+    it("will not re-bless a stale baseline under --update-schema-baseline when only stored rows could confirm it", async () => {
         expect.assertions(4);
 
         writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
@@ -320,10 +320,11 @@ export default crons;
         expect(blocked.code).toBe(EXIT_CODE.USAGE);
         expect(blocked.schemaDrift?.blocked).toBe(true);
 
-        const reblessed = await runPrepareCommand({ cwd: workdir, logger, updateSchemaBaseline: true });
+        // A required field's presence is a question about stored rows, which prepare cannot read: it refuses to bless it unchecked.
+        const offline = await runPrepareCommand({ cwd: workdir, logger, updateSchemaBaseline: true });
 
-        expect(reblessed.code).toBe(0);
-        expect(JSON.parse(readFileSync(baselinePath, "utf8")).tables.users.fields.role).toBeDefined();
+        expect(offline.code).toBe(EXIT_CODE.USAGE);
+        expect(JSON.parse(readFileSync(baselinePath, "utf8")).tables.users.fields.role).toBeUndefined();
     });
 
     describe("advisory gate", () => {

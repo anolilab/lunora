@@ -378,6 +378,13 @@ export interface MigrationIR {
     filePath: string;
     /** Stable migration id — the registry key and per-shard run-state key. */
     id: string;
+
+    /**
+     * `true` when `up` returns its document unchanged (`(document) => document`, the
+     * shape `lunora migrate create` scaffolds). Such a migration rewrites no row, so it
+     * cannot by itself account for a schema change on its table.
+     */
+    identity?: true;
     /** Table the migration iterates; `""` when not a static string literal. */
     table: string;
 }

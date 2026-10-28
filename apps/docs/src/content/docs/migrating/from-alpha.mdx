@@ -222,10 +222,10 @@ row and throws a `VALIDATION_ERROR` for an amount outside ±(2^53 − 1) instead
 rounding it.
 
 **Migration:** a deploy that changes these columns from `bigint` to `number` is
-blocked by the schema-drift check until one of two things is true: a
-`payment_sessions` migration covers the change, or the schema baseline is
-re-blessed with `--update-schema-baseline`. Rows written before the upgrade still
-hold `bigint` values. The store reads them, but code that reads the columns
+blocked by the schema-drift check until a `payment_sessions` migration covers
+the change. `--update-schema-baseline` reads the stored rows first and refuses
+while any still holds a `bigint`, which every row written before the upgrade
+does. The store reads them, but code that reads the columns
 directly gets a `number` for new rows and a `bigint` for old ones, so arithmetic
 that mixes the two throws. `where` filters on these columns do not match the old
 rows either. Convert or backfill those rows before you rely on the columns outside

@@ -7,7 +7,7 @@ import type { Project } from "ts-morph";
 import type { ArchitectureManifest } from "../../../shared/architecture-manifest";
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { createCodegenProject, refreshCodegenProject } from "./codegen-project";
-import type { AgentIR, ContainerIR, MigrationIR, QueueIR, WorkflowIR, WranglerQueueProducerIR, WranglerVariableIR } from "./ir";
+import type { AgentIR, ContainerIR, MigrationIR, QueueIR, TableIR, WorkflowIR, WranglerQueueProducerIR, WranglerVariableIR } from "./ir";
 import type { PlatformDiagnostic } from "./platform-target";
 
 export interface CodegenOptions {
@@ -249,6 +249,13 @@ export interface CodegenResult {
 
     /** Absolute path of the committed baseline file (`lunora/.lunora-schema.json`). */
     schemaSnapshotPath: string;
+
+    /**
+     * The parsed tables this run's snapshot was built from. The snapshot keeps a
+     * field's kind but not whether its validator was resolvable, so a caller that
+     * checks stored rows against the schema reads the validators here.
+     */
+    schemaTables: ReadonlyArray<TableIR>;
 
     /**
      * Workflows discovered from `defineWorkflow` exports in

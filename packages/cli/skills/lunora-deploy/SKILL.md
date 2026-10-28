@@ -68,7 +68,7 @@ Flags worth knowing:
 | `--prebuilt`               | Skip codegen and the drift gate when `lunora prepare` already ran in this job.  |
 | `--migrate`                | Run every declared data migration (`up` is idempotent) against the live worker. |
 | `--allow-schema-drift`     | Deploy despite blocked drift; the baseline is not advanced.                     |
-| `--update-schema-baseline` | Accept the current schema as the new baseline.                                  |
+| `--update-schema-baseline` | Accept the current schema as the baseline; deploy checks stored rows first.     |
 
 `--migrate` is checked before wrangler runs, so a missing requirement aborts the
 whole deploy:
@@ -161,9 +161,12 @@ and every machine gate against the same shape. It is advanced only after a
 successful deploy, so a failed deploy never moves it past a change that didn't
 ship.
 
-Reach for `--allow-schema-drift` / `--update-schema-baseline` only when you know
-existing data is compatible. Otherwise stage the change with
-`lunora-migration-helper`.
+When the stored rows already fit a tightening, `lunora deploy` notices on its own:
+it reads the affected tables from the deployed worker (`--migrate-url` or the
+project link, plus `LUNORA_ADMIN_TOKEN`) and lets the change through, naming any
+row that does not fit otherwise. `--update-schema-baseline` runs the same check.
+`--allow-schema-drift` skips the gate for one run without checking. Otherwise
+stage the change with `lunora-migration-helper`.
 
 ## `.global()` table DDL
 
