@@ -3,7 +3,10 @@
  * behaviours against the same core and differ only in how they mount and
  * dispatch, so the data lives here once.
  */
-import type { ActivityRow, OrganizationRow, ProjectRow } from "../src/core";
+import type { Mock } from "vitest";
+import { vi } from "vitest";
+
+import type { ActivityRow, AdminSubscriptionRow, AdminUserRow, AdminUsersClient, OrganizationRow, Plan, ProjectRow } from "../src/core";
 
 const CREATED_SENTENCE = /created the project Website/u;
 const NOW = Date.UTC(2026, 8, 11, 12, 0, 0);
@@ -50,4 +53,40 @@ const organization = (name: string, plan: string, seats: number): OrganizationRo
     };
 };
 
-export { activity, CREATED_SENTENCE, HOUR, noop, NOW, organization, project };
+const adminUser = (id: string, overrides: Partial<AdminUserRow> = {}): AdminUserRow => {
+    return { createdAt: new Date(NOW - HOUR), email: `${id}@example.com`, id, name: id, role: "user", ...overrides };
+};
+
+type AdminClientMock = { [K in keyof AdminUsersClient]: Mock<AdminUsersClient[K]> };
+
+/** A stand-in for better-auth's `authClient.admin` that answers every call with success. */
+const adminClient = (users: ReadonlyArray<AdminUserRow>): AdminClientMock => {
+    return {
+        banUser: vi.fn<AdminUsersClient["banUser"]>(async () => {
+            return { data: {} };
+        }),
+        impersonateUser: vi.fn<AdminUsersClient["impersonateUser"]>(async () => {
+            return { data: {} };
+        }),
+        listUsers: vi.fn<AdminUsersClient["listUsers"]>(async () => {
+            return { data: { total: users.length, users } };
+        }),
+        stopImpersonating: vi.fn<AdminUsersClient["stopImpersonating"]>(async () => {
+            return { data: {} };
+        }),
+        unbanUser: vi.fn<AdminUsersClient["unbanUser"]>(async () => {
+            return { data: {} };
+        }),
+    };
+};
+
+const PLANS: Plan[] = [
+    { blurb: "", currency: "USD", features: [], id: "free", name: "Free", priceMinor: 0 },
+    { blurb: "", currency: "USD", features: [], id: "pro", name: "Pro", priceId: "price_pro", priceMinor: 2900 },
+];
+
+const adminSubscription = (referenceId: string, state: string): AdminSubscriptionRow => {
+    return { cancelAtPeriodEnd: false, priceId: "price_pro", providerSubscriptionId: `sub_${referenceId}`, quantity: 3, referenceId, state };
+};
+
+export { activity, adminClient, adminSubscription, adminUser, CREATED_SENTENCE, HOUR, noop, NOW, organization, PLANS, project };
