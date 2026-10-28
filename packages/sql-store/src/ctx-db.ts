@@ -1280,12 +1280,49 @@ const cdcAppendSql = (ts: number, table: string, id: string, op: CdcChange["op"]
     })`;
 
 /**
+ * How long a hole in the `.global()` changelog's `seq` holds the poll cursor
+ * back — see "Late commits" on {@link readSqlCdcChangedTables}. Far above an
+ * append's commit latency, well below `GLOBAL_SHAPE_RESYNC_MS`.
+ */
+const CDC_LATE_COMMIT_WINDOW_MS = 10_000;
+
+/** How far below the head a cold or resync poll looks for a hole. */
+// ponytail: fixed tail; an append overtaken by more than this many commits falls back to the resync.
+const CDC_LATE_COMMIT_SCAN_ROWS = 1000;
+
+/** The leading run of `rows` (ordered by `seq`) before the first hole whose next row was appended after `cutoff`. */
+const rowsBeforeLateCommit = (rows: Record<string, unknown>[], sinceSeq: number, cutoff: number): Record<string, unknown>[] => {
+    let previous = sinceSeq;
+
+    for (const [index, row] of rows.entries()) {
+        const seq = Number(row["seq"]);
+
+        if (seq > previous + 1 && Number(row["ts"]) > cutoff) {
+            return rows.slice(0, index);
+        }
+
+        previous = seq;
+    }
+
+    return rows;
+};
+
+/**
  * Read changelog entries newer than `sinceSeq` in commit order, up to `limit`
  * (clamped to [1, 10000]); plus the cursor to resume from.
+ *
+ * On Postgres and MySQL the page also stops at the first late-commit hole: an
+ * allocated `seq` not yet visible, followed by a row younger than
+ * {@link CDC_LATE_COMMIT_WINDOW_MS} (see "Late commits" on
+ * {@link readSqlCdcChangedTables}). The cursor is a consumer's only record of
+ * what it has seen, so handing out rows past an in-flight append would skip that
+ * append for good. Stopping the page instead of just the cursor keeps the
+ * cursor the `seq` of the last change returned. A permanent hole (a failed
+ * append) holds the page back for one window only.
  */
 const readSqlCdcChanges = async (
     exec: SqlCtxExec,
-    options: { limit?: number; sinceSeq?: number },
+    options: { limit?: number; now?: number; sinceSeq?: number },
     dialect: SqlDialect,
 ): Promise<{ changes: CdcChange[]; cursor: number }> => {
     const sinceSeq = options.sinceSeq ?? 0;
@@ -1353,7 +1390,8 @@ const readSqlCdcChanges = async (
         sql`SELECT seq, ts, ${sql.identifier("table")}, id, op, doc FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq} ORDER BY seq ASC LIMIT ${sql.raw(String(limit))}`,
     );
 
-    const changes = rows.map((row): CdcChange => {
+    const visible = dialect.name === "sqlite" ? rows : rowsBeforeLateCommit(rows, sinceSeq, (options.now ?? Date.now()) - CDC_LATE_COMMIT_WINDOW_MS);
+    const changes = visible.map((row): CdcChange => {
         const { doc } = row;
         const base = { id: String(row.id), op: String(row.op) as CdcChange["op"], seq: Number(row.seq), table: String(row.table), ts: Number(row.ts) };
 
@@ -1365,17 +1403,6 @@ const readSqlCdcChanges = async (
 
     return { changes, cursor: changes.at(-1)?.seq ?? sinceSeq };
 };
-
-/**
- * How long a hole in the `.global()` changelog's `seq` holds the poll cursor
- * back — see "Late commits" on {@link readSqlCdcChangedTables}. Far above an
- * append's commit latency, well below `GLOBAL_SHAPE_RESYNC_MS`.
- */
-const CDC_LATE_COMMIT_WINDOW_MS = 10_000;
-
-/** How far below the head a cold or resync poll looks for a hole. */
-// ponytail: fixed tail; an append overtaken by more than this many commits falls back to the resync.
-const CDC_LATE_COMMIT_SCAN_ROWS = 1000;
 
 /**
  * Two scalar columns locating the first live hole above `lower`: `gap` is the

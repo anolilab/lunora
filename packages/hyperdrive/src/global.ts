@@ -162,7 +162,7 @@ export const createHyperdriveGlobalIntrospector = (engine: HyperdriveEngine, exe
 export const readHyperdriveGlobalCdc = async (
     engine: HyperdriveEngine,
     exec: SqlExec,
-    request: { limit?: number; sinceSeq: number },
+    request: { limit?: number; now?: number; sinceSeq: number },
 ): Promise<{ changes: CdcChange[]; cursor: number }> => {
     const dialect = dialectFor(engine);
     const { params, sql: text } = dialect.render(dialect.tableExists(CDC_LOG_TABLE));

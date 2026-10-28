@@ -320,6 +320,7 @@ const readSqlCdcChangedTables: (exec: SqlCtxExec, sinceSeq: number, dialect: Sql
 ```ts
 const readSqlCdcChanges: (exec: SqlCtxExec, options: {
     limit?: number;
+    now?: number;
     sinceSeq?: number;
 }, dialect: SqlDialect) => Promise<{
     changes: CdcChange[];

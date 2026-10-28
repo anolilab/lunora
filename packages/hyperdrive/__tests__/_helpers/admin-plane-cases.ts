@@ -361,6 +361,26 @@ const cdcCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
     await expect(writer.get("extras", "x1")).resolves.toMatchObject({ label: "two" });
 };
 
+const lateCommitCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
+    const writer = writerFor(target, true);
+
+    await writer.insert("extras", { _id: "x1", label: "one" }, { allowExplicitId: true });
+    // `seq` 2 is allocated to an append that has not committed yet; 3 has, a moment ago.
+    await target.query(
+        `INSERT INTO __cdc_log (seq, ts, ${target.engine === "postgres" ? '"table"' : "`table`"}, id, op, doc) VALUES (3, ${String(CLOCK)}, 'extras', 'x3', 'insert', NULL)`,
+    );
+
+    // While the hole is fresh the page stops below it, so the cursor cannot pass the in-flight append.
+    const held = await readHyperdriveGlobalCdc(target.engine, target.exec, { now: CLOCK, sinceSeq: 0 });
+
+    expect({ cursor: held.cursor, seqs: held.changes.map((change) => change.seq) }).toStrictEqual({ cursor: 1, seqs: [1] });
+
+    // A hole older than the window is a burned `seq`, not a pending one: the page moves past it.
+    const passed = await readHyperdriveGlobalCdc(target.engine, target.exec, { now: CLOCK + 60_000, sinceSeq: 1 });
+
+    expect({ cursor: passed.cursor, seqs: passed.changes.map((change) => change.seq) }).toStrictEqual({ cursor: 3, seqs: [3] });
+};
+
 const adminPlaneCases = (target: AdminPlaneTarget): [string, () => Promise<void>][] => [
     ["exports then re-imports rows intact (bigint, bytes, unset optional)", roundTripCase(target)],
     ["dry-run import checks shapes and writes nothing, not even the table", dryRunCase(target)],
@@ -378,6 +398,7 @@ const adminPlaneCases = (target: AdminPlaneTarget): [string, () => Promise<void>
     ["lists and reads an external table whose name starts with d1_", d1PrefixedTableCase(target)],
     ["does not link a foreign key into another schema to a same-named local table", crossSchemaForeignKeyCase(target)],
     ["reads and replays the global changelog", cdcCase(target)],
+    ["holds the changelog page below a seq that has not committed yet", lateCommitCase(target)],
 ];
 
 /** Tables the cases create, child before parent, for a suite that shares one server across tests. */

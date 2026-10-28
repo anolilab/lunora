@@ -291,6 +291,7 @@ const postgresDialect: SqlDialect;
 ```ts
 const readHyperdriveGlobalCdc: (engine: HyperdriveEngine, exec: SqlExec, request: {
     limit?: number;
+    now?: number;
     sinceSeq: number;
 }) => Promise<{
     changes: CdcChange[];
