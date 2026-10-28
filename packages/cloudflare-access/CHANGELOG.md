@@ -1,3 +1,14 @@
+## @lunora/cloudflare-access [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.237...@lunora/cloudflare-access@1.0.0-alpha.238) (2026-10-28)
+
+### Performance Improvements
+
+* **cloudflare-access:** build the request verifier once per factory ([#1380](https://github.com/anolilab/lunora/issues/1380)) ([efc63d1](https://github.com/anolilab/lunora/commit/efc63d1520cc2480fba1974f2876f9dd250e8707))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.246
+
 ## @lunora/cloudflare-access [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.236...@lunora/cloudflare-access@1.0.0-alpha.237) (2026-10-27)
 
 
