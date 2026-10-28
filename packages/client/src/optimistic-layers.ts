@@ -102,12 +102,6 @@ export const notifySubscription = (state: SubscriptionState, value: unknown): vo
  * runs, so a listener reading a sibling query never sees it a frame behind.
  */
 export const withDeferredNotifications = (apply: () => void): void => {
-    if (deferredNotifications !== undefined) {
-        apply();
-
-        return;
-    }
-
     const moved = new Set<SubscriptionState>();
 
     deferredNotifications = moved;

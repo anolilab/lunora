@@ -3794,53 +3794,7 @@ class LunoraClient {
             this.resetRoomSends();
             this.reconnectCold();
         } else if (reconnect === "warm") {
-            this.reauthenticateShardSockets();
-        }
-    }
-
-    /**
-     * Hand a refreshed bearer to every open shard socket in place, so a token
-     * lifetime no longer costs a reconnect and a full re-seed. A socket the server
-     * will not re-authenticate — not yet named by its `identity` frame, held under
-     * different claims, or behind a server without the route — is bounced as before.
-     * Route and scheduled sockets carry their bearer on the upgrade too, and are
-     * bounced as before.
-     */
-    private reauthenticateShardSockets(): void {
-        const { authToken: token, fetchImpl } = this;
-
-        for (const conn of this.connections.values()) {
-            const { connectionId } = conn;
-
-            if (token === null || fetchImpl === undefined || conn.socket === undefined || connectionId === undefined || conn.retired === true) {
-                this.bounceShardSocket(conn);
-
-                continue;
-            }
-
-            const url = joinUrl(this.url, withQuery(SOCKET_REAUTH_PATH, { shard: conn.shardKey }));
-
-            fetchImpl(url, {
-                body: JSON.stringify({ connectionId }),
-                credentials: "include",
-                headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-                method: "POST",
-            })
-                .then((response) => response.ok)
-                .catch(() => false)
-                .then((reauthenticated) => {
-                    // A newer token, or a socket that has since been replaced, is already handled by whatever replaced it.
-                    if (!reauthenticated && !this.closed && this.authToken === token && conn.connectionId === connectionId) {
-                        this.bounceShardSocket(conn);
-                    }
-
-                    return undefined;
-                })
-                .catch(() => undefined);
-        }
-
-        for (const bounce of this.supplementaryBounces) {
-            bounce();
+            this.bounceShardSockets(true);
         }
     }
 
@@ -7009,8 +6963,10 @@ class LunoraClient {
         // the server's `TOKEN_EXPIRED` rejection arrives as one, immediately
         // before it closes with 4001, so counting it would restore the reconnect
         // storm this moved the reset out of `onOpen` to fix.
+        const conn = this.getConnection(shardKey);
+
         if (message.type !== "error") {
-            this.getConnection(shardKey)?.reconnect.reset();
+            conn?.reconnect.reset();
         }
 
         // ANY frame bearing a subscription's id proves the server has taken that
@@ -7018,57 +6974,33 @@ class LunoraClient {
         // `error` that refuses it, or a `data`/`resume`/`settled` that overtakes
         // its own ack. Releasing here rather than in each handler is what keeps a
         // frame shape nobody anticipated from stalling the drain.
-        const conn = this.getConnection(shardKey);
-
         if (conn && typeof (message as { id?: unknown }).id === "string") {
-            const { id } = message as { id: string };
-
-            this.settleSubscribeWatchdog(conn, id);
+            this.settleSubscribeWatchdog(conn, (message as { id: string }).id);
         }
 
         if (message.type === "batchStart") {
             if (conn) {
                 conn.heldFrames = [];
             }
+        } else if (message.type === "batchEnd") {
+            // Apply every frame held since `batchStart` in arrival order, then notify each
+            // subscription they moved once: without the hold, a write that changed a count
+            // and the list it counts rendered one of them a frame ahead of the other.
+            const held = conn?.heldFrames;
 
-            return;
-        }
-
-        if (message.type === "batchEnd") {
-            this.releaseHeldFrames(conn, shardKey);
-
-            return;
-        }
-
-        if (conn?.heldFrames !== undefined && isHeldInBatch(message)) {
-            conn.heldFrames.push(message);
-
-            return;
-        }
-
-        this.dispatchServerMessage(message, shardKey);
-    }
-
-    /**
-     * Apply every frame held since `batchStart`, in arrival order, then notify each
-     * subscription they moved once. Without the hold, a write that changed a count and
-     * the list it counts rendered one of them a frame ahead of the other.
-     */
-    private releaseHeldFrames(conn: ShardConnection | undefined, shardKey: string | undefined): void {
-        const held = conn?.heldFrames;
-
-        if (conn === undefined || held === undefined) {
-            return;
-        }
-
-        // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
-        conn.heldFrames = undefined;
-
-        withDeferredNotifications(() => {
-            for (const message of held) {
-                this.dispatchServerMessage(message, shardKey);
+            if (conn && held) {
+                conn.heldFrames = undefined;
+                withDeferredNotifications(() => {
+                    for (const frame of held) {
+                        this.dispatchServerMessage(frame, shardKey);
+                    }
+                });
             }
-        });
+        } else if (conn?.heldFrames && isHeldInBatch(message)) {
+            conn.heldFrames.push(message);
+        } else {
+            this.dispatchServerMessage(message, shardKey);
+        }
     }
 
     private dispatchServerMessage(message: ServerMessage, shardKey: string | undefined): void {
@@ -8666,12 +8598,44 @@ class LunoraClient {
      * subscriptions riding them survive, and the registered `close` handler
      * (`handleDisconnect`) schedules the retry and replays the subscribes. A
      * credential rides the upgrade, so this is how a socket moves to a new
-     * identity; a same-user refresh can instead go in place
-     * ({@link reauthenticateShardSockets}).
+     * identity.
+     *
+     * `inPlace` is a refreshed bearer for the same user: it is handed to each open
+     * shard socket (`SOCKET_REAUTH_PATH`), so a token lifetime no longer costs a
+     * reconnect and a full re-seed. A socket the server will not re-authenticate —
+     * not yet named by its `identity` frame, held under different claims, or behind a
+     * server without the route — is bounced. Route and scheduled sockets carry their
+     * bearer on the upgrade, so they are always bounced.
      */
-    private bounceShardSockets(): void {
+    private bounceShardSockets(inPlace = false): void {
+        const { authToken: token, fetchImpl } = this;
+
         for (const conn of this.connections.values()) {
-            this.bounceShardSocket(conn);
+            const { connectionId } = conn;
+
+            if (inPlace && token !== null && fetchImpl !== undefined && conn.socket !== undefined && connectionId !== undefined && conn.retired !== true) {
+                fetchImpl(joinUrl(this.url, withQuery(SOCKET_REAUTH_PATH, { shard: conn.shardKey })), {
+                    body: JSON.stringify({ connectionId }),
+                    credentials: "include",
+                    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+                    method: "POST",
+                })
+                    .then(
+                        (response) => response.ok,
+                        () => false,
+                    )
+                    .then((reauthenticated) => {
+                        // A newer token, or a socket that has since been replaced, is already handled by whatever replaced it.
+                        if (!reauthenticated && !this.closed && this.authToken === token && conn.connectionId === connectionId) {
+                            this.bounceShardSocket(conn);
+                        }
+
+                        return undefined;
+                    })
+                    .catch(() => undefined);
+            } else {
+                this.bounceShardSocket(conn);
+            }
         }
 
         // Route and scheduled sockets carry the same identity, so they reconnect too:
