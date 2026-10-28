@@ -28,34 +28,65 @@ const K = new Uint32Array([
 const rotr = (value: number, shift: number): number => (value >>> shift) | (value << (32 - shift));
 
 // Module-level singletons, reused across calls. `sha256Hex` is synchronous and
-// JS is single-threaded, so there is no reentrancy: the encoder is stateless
-// for `encode`, and the message schedule `w` is fully overwritten (indices
-// 0-15 from the block, 16-63 derived) before any entry is read each block.
-// This keeps every fingerprint from allocating a fresh encoder + 256-byte
-// scratch array — the hash is the floor of the whole package and runs once per
-// grouped row. (`K` above is already a module-level singleton for the same
-// reason.)
+// JS is single-threaded, so there is no reentrancy: the message schedule `w` is
+// fully overwritten (indices 0-15 from the block, 16-63 derived) before any
+// entry is read each block, and the scratch buffer's padding region is zeroed
+// before every use. The hash runs once per grouped row, and for the short
+// canonical strings fingerprinting feeds it, allocating an encoded copy, a
+// padded buffer and a DataView per call cost more than the compression itself.
 const textEncoder = new TextEncoder();
 const w = new Uint32Array(64);
 
-const toHex = (value: number): string => (value >>> 0).toString(16).padStart(8, "0");
+// Inputs above this get a one-off buffer, so a single huge message cannot pin
+// a multi-megabyte scratch for the life of the isolate.
+const SCRATCH_MAX = 64 * 1024;
+
+let scratch = new Uint8Array(1024);
+
+// Two hex digits per byte value: eight table reads beat eight
+// `toString(16).padStart(8, "0")` calls on the digest.
+const HEX = Array.from({ length: 256 }, (_, byte) => byte.toString(16).padStart(2, "0"));
+
+const toHex = (value: number): string =>
+    (HEX[value >>> 24] as string) + (HEX[(value >>> 16) & 0xff] as string) + (HEX[(value >>> 8) & 0xff] as string) + (HEX[value & 0xff] as string);
 
 export const sha256Hex = (message: string): string => {
-    const bytes = textEncoder.encode(message);
+    // UTF-8 never needs more than three bytes per UTF-16 code unit (a lone
+    // surrogate encodes as U+FFFD), plus room for the 0x80 marker, zero fill,
+    // and the 8-byte length.
+    const capacity = message.length * 3 + 72;
+    let buffer = scratch;
+
+    if (capacity > buffer.length) {
+        buffer = new Uint8Array(capacity);
+
+        if (capacity <= SCRATCH_MAX) {
+            scratch = buffer;
+        }
+    }
+
+    const length = textEncoder.encodeInto(message, buffer).written;
 
     // Padded length: message + 0x80 marker + zero fill + 8-byte length, rounded
     // up to a whole number of 64-byte blocks.
-    const bitLength = bytes.length * 8;
-    const paddedLength = (((bytes.length + 8) >> 6) + 1) << 6;
-    const buffer = new Uint8Array(paddedLength);
-    buffer.set(bytes);
-    buffer[bytes.length] = 0x80;
+    const paddedLength = (((length + 8) >> 6) + 1) << 6;
 
-    const view = new DataView(buffer.buffer);
-    // 64-bit big-endian bit length in the final 8 bytes. Lengths well below 2^32
-    // bits keep the high word zero (fingerprint inputs are short strings).
-    view.setUint32(paddedLength - 4, bitLength >>> 0, false);
-    view.setUint32(paddedLength - 8, Math.floor(bitLength / 0x1_0000_0000), false);
+    // The scratch still holds the previous message's bytes past `length`.
+    buffer.fill(0, length, paddedLength);
+    buffer[length] = 0x80;
+
+    // 64-bit big-endian bit length in the final 8 bytes.
+    const bitLength = length * 8;
+    const high = Math.floor(bitLength / 0x1_0000_0000);
+
+    buffer[paddedLength - 8] = high >>> 24;
+    buffer[paddedLength - 7] = high >>> 16;
+    buffer[paddedLength - 6] = high >>> 8;
+    buffer[paddedLength - 5] = high;
+    buffer[paddedLength - 4] = bitLength >>> 24;
+    buffer[paddedLength - 3] = bitLength >>> 16;
+    buffer[paddedLength - 2] = bitLength >>> 8;
+    buffer[paddedLength - 1] = bitLength;
 
     // First 32 bits of the fractional parts of the square roots of the first 8 primes.
     let h0 = 0x6a09e667;
@@ -69,7 +100,10 @@ export const sha256Hex = (message: string): string => {
 
     for (let offset = 0; offset < paddedLength; offset += 64) {
         for (let index = 0; index < 16; index += 1) {
-            w[index] = view.getUint32(offset + index * 4, false);
+            const at = offset + index * 4;
+
+            w[index] =
+                (((buffer[at] as number) << 24) | ((buffer[at + 1] as number) << 16) | ((buffer[at + 2] as number) << 8) | (buffer[at + 3] as number)) >>> 0;
         }
 
         for (let index = 16; index < 64; index += 1) {
