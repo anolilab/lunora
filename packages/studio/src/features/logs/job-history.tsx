@@ -44,17 +44,19 @@ export const JobHistory = ({ loadJobs }: JobHistoryProps = {}): ReactElement => 
         setLoadingOlder(true);
         setOlderError(undefined);
 
-        try {
-            const page = await load(nextCursor);
+        const page = await load(nextCursor).catch((error: unknown) => {
+            setOlderError(errorMessage(error));
 
+            return undefined;
+        });
+
+        if (page !== undefined) {
             setOlder((previous) => {
                 return { cursor: page.cursor, records: [...(previous?.records ?? []), ...page.records] };
             });
-        } catch (error: unknown) {
-            setOlderError(errorMessage(error));
-        } finally {
-            setLoadingOlder(false);
         }
+
+        setLoadingOlder(false);
     };
     const stateLabel = { canceled: t("canceled"), failed: t("failed"), pending: t("pending"), running: t("running"), succeeded: t("succeeded") };
 
@@ -117,7 +119,14 @@ export const JobHistory = ({ loadJobs }: JobHistoryProps = {}): ReactElement => 
 
             {nextCursor !== undefined && (
                 <div>
-                    <Button data-testid="job-history-load-more" disabled={loadingOlder} onClick={() => { fireAndForget(onLoadOlder()); }} variant="outline">
+                    <Button
+                        data-testid="job-history-load-more"
+                        disabled={loadingOlder}
+                        onClick={() => {
+                            fireAndForget(onLoadOlder());
+                        }}
+                        variant="outline"
+                    >
                         {loadingOlder ? t("Loading…") : t("Load more")}
                     </Button>
                 </div>
