@@ -216,8 +216,10 @@ Each scheduled job's dispatch records a `scheduler.lag_ms` histogram on the
 shard that runs it: the time from the job's due time to the moment it started,
 one series per function (the `function` attribute). It rides the same metric
 pipeline as `ctx.metrics`, so a configured sink exports it, and the Studio's
-Schedule → Pools view lists it per job. A lag that keeps climbing means the
-queue is falling behind. On the Node host the scheduler hands `scheduledFor`
+Schedule → Pools view lists it per job. A pooled job that waited for a free
+slot counts the wait from its original due time; a retry counts only its own
+attempt's lateness, not the backoff. A lag that keeps climbing means the queue
+is falling behind. On the Node host the scheduler hands `scheduledFor`
 to `onDispatch`; forward it in the dispatch body to get the same metric.
 
 ## See also
