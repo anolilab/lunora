@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { fingerprint, fingerprintError, fingerprintLog, messageBucketFor, normalizeMessage, sha256Hex } from "../src/index";
 import { parseFrames } from "../src/superlog";
@@ -12,7 +12,7 @@ describe("sha256Hex parity with node:crypto", () => {
     // implementation upstream superlog uses — over every padding boundary and
     // multi-byte UTF-8, not just the published NIST vectors.
     it("matches node:crypto across padding boundaries and UTF-8 inputs", () => {
-        expect.assertions(12);
+        expect.assertions(15);
 
         const inputs = [
             "",
@@ -23,7 +23,10 @@ describe("sha256Hex parity with node:crypto", () => {
             "x".repeat(63),
             "x".repeat(64), // exact block
             "x".repeat(65),
+            "x".repeat(119), // last two-block length
+            "x".repeat(120),
             "x".repeat(1000),
+            "\uD800 lone surrogate", // encodes as U+FFFD, 3 bytes for 1 code unit
             "héllo — 世界 🚀", // multi-byte UTF-8 through TextEncoder
             "\u0000\u0001\u0002",
             "Error::boom::foo@src/x.ts",
@@ -31,6 +34,67 @@ describe("sha256Hex parity with node:crypto", () => {
 
         for (const input of inputs) {
             expect(sha256Hex(input), `mismatch for ${JSON.stringify(input.slice(0, 20))}…`).toBe(nodeSha256(input));
+        }
+    });
+});
+
+describe("sha256Hex scratch-buffer reuse", () => {
+    it("does not leak a longer previous message into a shorter one's padding", () => {
+        expect.assertions(3);
+
+        // The scratch buffer is reused across calls, so a short input after a long
+        // one only hashes correctly if the stale bytes past it are zeroed.
+        expect(sha256Hex("y".repeat(900))).toBe(nodeSha256("y".repeat(900)));
+        expect(sha256Hex("abc")).toBe(nodeSha256("abc"));
+        expect(sha256Hex("z".repeat(70))).toBe(nodeSha256("z".repeat(70)));
+    });
+
+    it("hashes huge inputs above the scratch cap", () => {
+        expect.assertions(2);
+
+        const huge = "q".repeat(100_000);
+
+        expect(sha256Hex(huge)).toBe(nodeSha256(huge));
+        expect(sha256Hex("abc")).toBe(nodeSha256("abc"));
+    });
+
+    it("hashes huge multi-byte inputs that outgrow the optimistic buffer", () => {
+        expect.assertions(3);
+
+        const twoByte = "é".repeat(50_000);
+        const mixed = `${"a".repeat(70_000)}${"世".repeat(3000)}`;
+        const nearFull = `${"a".repeat(70_000)}${"é".repeat(30)}`;
+
+        expect(sha256Hex(twoByte)).toBe(nodeSha256(twoByte));
+        expect(sha256Hex(mixed)).toBe(nodeSha256(mixed));
+        expect(sha256Hex(nearFull)).toBe(nodeSha256(nearFull));
+    });
+
+    it("does not size a huge ASCII buffer for worst-case UTF-8", () => {
+        expect.assertions(2);
+
+        const huge = "q".repeat(100_000);
+        const encodeInto = vi.spyOn(TextEncoder.prototype, "encodeInto");
+
+        try {
+            expect(sha256Hex(huge)).toBe(nodeSha256(huge));
+            expect((encodeInto.mock.calls[0]?.[1] as Uint8Array).length).toBeLessThan(huge.length * 2);
+        } finally {
+            encodeInto.mockRestore();
+        }
+    });
+
+    it("encodes into the reused buffer instead of allocating a fresh copy per call", () => {
+        expect.assertions(1);
+
+        const encode = vi.spyOn(TextEncoder.prototype, "encode");
+
+        try {
+            sha256Hex("lunora::messages:list::user <n> not found");
+
+            expect(encode).not.toHaveBeenCalled();
+        } finally {
+            encode.mockRestore();
         }
     });
 });
