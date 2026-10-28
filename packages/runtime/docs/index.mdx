@@ -105,7 +105,8 @@ own emitted Cloudflare handler (`@sveltejs/adapter-cloudflare`, Nitro
 `cloudflare-module`, `@astrojs/cloudflare`) plus Lunora into one
 `{ fetch, scheduled }`. `host` may be a bare `fetch` function or a `{ fetch }`
 object, and `options` may be a plain object or an `(env) => options` factory
-(for per-request bindings). It is `WorkerOptions` minus `httpRouter` (the host
+(for bindings that only exist on `env`). The factory runs once per `env` object
+and the composed worker is reused for every request carrying it. It is `WorkerOptions` minus `httpRouter` (the host
 supplies that). When Lunora configures no cron surface, the host's own
 `scheduled` is preserved rather than dropped.
 
@@ -117,7 +118,8 @@ worker entry** (Hono, Nitro/h3, Elysia, any WinterCG host on Workers). Returns a
 (`/_lunora/rpc`, `/_lunora/ws`, `/_lunora/admin/*`); mount it under `/_lunora/*`
 in your router and everything else stays your framework's. `shardDO` defaults to
 `env.SHARD`, so the common case needs no options; pass a partial options object
-or an `(env) => options` factory for `auth`, `crons`, or a custom namespace.
+or an `(env) => options` factory for `auth`, `crons`, or a custom namespace. The
+worker is built on the first request for each `env` object and reused after that.
 
 ```ts
 import { Hono } from "hono";

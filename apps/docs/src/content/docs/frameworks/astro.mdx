@@ -141,7 +141,8 @@ export default withLunora(
     from `@astrojs/cloudflare/handler` (the adapter's built-in SSR fetch function) and wrap it at that boundary, as above.
 </Callout>
 
-The factory is rebuilt per request, so per-request bindings wire in correctly. If
+The factory runs once per `env` object, so its bindings wire in correctly and the
+composed worker is reused for every later request. If
 Astro's host handler carries its own `scheduled` and you configure no Lunora cron
 surface, that `scheduled` is preserved rather than silently dropped; configure
 Lunora crons and Lunora owns `scheduled` instead.
