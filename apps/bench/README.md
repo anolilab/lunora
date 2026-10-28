@@ -70,9 +70,10 @@ app runs.
 ## Scale it
 
 ```bash
-node scripts/generate.mjs --domains 12        # 12 generated domains
-node scripts/generate.mjs --preset customer   # 40 domains ≈ 970 functions / 131 tables with the core
-node scripts/generate.mjs --domains 0         # back to the committed core-only state
+node scripts/generate.mjs --domains 12                      # 12 generated domains
+node scripts/generate.mjs --domains 12 --heavy-share 0.5    # half of them with a heavy SDK
+node scripts/generate.mjs --preset customer                 # 40 domains, heavy share 0.5 ≈ the app behind #1166
+node scripts/generate.mjs --domains 0                       # back to the committed core-only state
 ```
 
 Domains are written to `lunora/domains/<name>/`, which is gitignored. The
@@ -86,14 +87,39 @@ Each domain mirrors the core:
   RLS and zod validators through `v.from`;
 - in some domains, a scheduler, queue or AI hook.
 
-Presets: `core` (0 domains), `small` (8), `customer` (40), `large` (80).
+`--heavy-share` gives that share of domains an `integrations.ts` action module on
+a real third-party SDK, taken in turn from `@aws-sdk/client-s3` (with the
+presigner), `e2b` (which brings `@connectrpc/connect` and `@bufbuild/protobuf`),
+`@bufbuild/protobuf`, `tldts` and `@ai-sdk/openai`. Only that module imports the
+SDK, so the function registry is its only importer. That is the profile that
+let a lazy registry help the app behind #1166, where 979 dependency modules were
+reachable only through the registry. Each action has a path that runs offline
+(presign, template spec, protobuf encode, domain parse, provider construction).
+The credentialed paths refuse until their keys are set; the keys are declared in
+`lunora/env.ts`, the contract that populates `ctx.env`.
+
+Presets: `core` (0 domains), `small` (8), `customer` (40, heavy share 0.5),
+`large` (80, heavy share 0.5).
 
 ## Benchmark it
+
+Three benches. Each one generates the size, builds it, measures, and then
+restores the core-only state (pass `--keep` to skip the restore). Each writes
+JSON with the load average and the git SHA to `.bench/results/` and prints a
+table. Run them on a quiet machine, one at a time.
+
+| Script                   | Measures                                                                                      | Typical run                                           |
+| ------------------------ | --------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `scripts/startup.mjs`    | Startup CPU (`wrangler check startup`) of the single-file bundle, eager vs `--lazy-functions` | `node scripts/startup.mjs --preset customer --runs 9` |
+| `scripts/cold-start.mjs` | Latency of the first call of each function in a fresh isolate, and warm calls                 | `node scripts/cold-start.mjs --preset customer`       |
+| `scripts/chunked.mjs`    | Startup CPU of chunked Vite (rolldown) builds next to the single-file esbuild bundle          | `node scripts/chunked.mjs --runs 7`                   |
+
+### Startup
 
 ```bash
 node scripts/startup.mjs                          # core, eager vs --lazy-functions, 7 runs each
 node scripts/startup.mjs --preset customer --runs 11
-node scripts/startup.mjs --domains 20 --modes eager --keep
+node scripts/startup.mjs --domains 20 --heavy-share 0.5 --modes eager --keep
 ```
 
 For each mode, the script:
@@ -104,10 +130,6 @@ For each mode, the script:
 3. Runs `wrangler check startup --workerBundle` with the modes interleaved, so
    machine load hits both modes equally.
 
-It prints a table and writes JSON to `.bench/results/`. The JSON includes the
-load average, the git SHA and the 20 largest packages in the eager graph.
-Unless `--keep` is passed, it then restores the core-only state.
-
 The figures, in the order to read them:
 
 - **Active ms** (median/min/max) is local CPU, not Cloudflare's. The only
@@ -116,18 +138,60 @@ The figures, in the order to read them:
   This number is deterministic.
 - **registry-only modules** is what a lazy registry can defer at most: modules
   reachable only through `_generated/functions.ts`, with the app's own `lunora/`
-  modules in brackets.
+  modules in brackets. The JSON names the largest packages in that part.
 - **packages**, in the JSON, shows which imports dominate startup. That list
   says which import to defer next.
 
-To check a framework change, build the changed package with `build:prod` and
-run the bench at `--preset customer`. Compare the eager graph first, since it is
-deterministic, and the Active time second. `scripts/worker-startup-measure.js` is
-the shared measurement code, the same one the CI gate (`check-worker-startup.js`)
-uses.
+### Cold start
 
-Further benches go beside `startup.mjs` as sibling scripts reusing the same
-helpers: cold-start p99 of the first call per function, a rolldown chunked build,
-and request throughput.
+```bash
+node scripts/cold-start.mjs --preset customer                  # 20 isolates per mode, 2 warm rounds
+node scripts/cold-start.mjs --preset customer --samples 30 --warm 1
+```
+
+A lazy registry moves module evaluation from startup to the first call of each
+function. This bench measures where that cost lands. Per sample, it:
+
+1. boots a fresh local runtime (`unstable_startWorker` on the frozen `lunora
+build` bundle) and waits on its `ready` promise;
+2. times `saas:me`, which gives the first response and the cold-to-first-response
+   time;
+3. wakes the tenant's shard;
+4. calls each sampled function once (cold), in a shuffled order;
+5. calls each again `--warm` times.
+
+The sample has one function per module: each domain's `queries:list`, plus the
+offline action of every heavy domain's integration module. Each isolate signs in
+as its own verified owner of its own organisation. The app's `read` rate limit
+(200 per 10 s per caller) is persisted, so a shared caller would be refused
+after the first isolate. The same limit caps `--warm`: one isolate makes
+`calls × (1 + warm)` reads, which must stay under 200.
+
+### Chunked builds
+
+```bash
+node scripts/chunked.mjs                    # customer preset, 7 runs
+node scripts/chunked.mjs --preset core --runs 5
+```
+
+This bench profiles six artifacts with interleaved runs: `lunora build`'s
+single-file esbuild bundle, `vite build --minify` (rolldown chunks), and the
+latter with rolldown's `output.strictExecutionOrder`, each eager and lazy. It
+reports JS module count and bytes from the frozen upload. If an artifact fails to
+start, the bench records its error and keeps going.
+
+A `vite build` leaves `.wrangler/deploy/config.json` behind. That file silently
+redirects every later wrangler command, `lunora build` included, to the Vite
+output in `dist/`. `chunked.mjs` removes it, and `startup.mjs` refuses to run
+while it exists (see FINDINGS.md).
+
+### Checking a framework change
+
+Build the changed package with `build:prod` and run the startup bench at
+`--preset customer`. Compare the eager graph first, since it is deterministic,
+and the Active time second. `scripts/worker-startup-measure.js` is the shared
+measurement code, the same one the CI gate (`check-worker-startup.js`) uses;
+`scripts/sized-app.mjs` holds the generate/build/restore steps the three benches
+share.
 
 Framework defects found while building this app are in [FINDINGS.md](./FINDINGS.md).
