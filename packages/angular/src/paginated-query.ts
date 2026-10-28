@@ -93,10 +93,29 @@ const usePaginatedCore = <F extends FunctionReference>(
     const resultsByKey = new Map<string, PaginationResult<PageItemOf<F>>>();
     const pendingPageKeys = new Set<string>();
 
+    /**
+     * Each page's key, derived once per `Page` object. Every frame on any page
+     * rebuilds `pageResults` for the whole feed, so re-serialising each page's
+     * args per frame made a frame cost one full `stableWireKey` pass per loaded
+     * page. `narrowedArgs` is fixed for this core's lifetime.
+     */
+    const pageKeys = new WeakMap<Page, string>();
+
+    const pageKeyOf = (page: Page): string => {
+        let key = pageKeys.get(page);
+
+        if (key === undefined) {
+            key = buildPageKey(functionPath, buildPageArgs(page, narrowedArgs));
+            pageKeys.set(page, key);
+        }
+
+        return key;
+    };
+
     const doRebuildPageResults = (): void => {
         const currentPages = pages();
         const items = currentPages.map((page) => {
-            const key = buildPageKey(functionPath, buildPageArgs(page, narrowedArgs));
+            const key = pageKeyOf(page);
             return resultsByKey.get(key);
         });
         pageResults.set(items);
@@ -111,10 +130,8 @@ const usePaginatedCore = <F extends FunctionReference>(
      * results to the new keys so visible data is preserved.
      */
     const migrateResultsForRebalance = (oldPages: Page[], newPages: Page[]): void => {
-        const keyOf = (page: Page): string => buildPageKey(functionPath, buildPageArgs(page, narrowedArgs));
-
         for (const newPage of newPages) {
-            const newKey = keyOf(newPage);
+            const newKey = pageKeyOf(newPage);
 
             if (resultsByKey.has(newKey)) {
                 continue;
@@ -123,7 +140,7 @@ const usePaginatedCore = <F extends FunctionReference>(
             const donor = oldPages.find((op) => op.lower === newPage.lower);
 
             if (donor) {
-                const carried = resultsByKey.get(keyOf(donor));
+                const carried = resultsByKey.get(pageKeyOf(donor));
 
                 if (carried) {
                     resultsByKey.set(newKey, carried);
@@ -136,7 +153,7 @@ const usePaginatedCore = <F extends FunctionReference>(
         const wantedKeys = new Set<string>();
 
         for (const page of currentPages) {
-            wantedKeys.add(buildPageKey(functionPath, buildPageArgs(page, narrowedArgs)));
+            wantedKeys.add(pageKeyOf(page));
         }
 
         // Close stale subscriptions.
@@ -153,7 +170,7 @@ const usePaginatedCore = <F extends FunctionReference>(
 
         for (const page of currentPages) {
             const pageArgs = buildPageArgs(page, narrowedArgs);
-            const key = buildPageKey(functionPath, pageArgs);
+            const key = pageKeyOf(page);
 
             if (coveredKeys.has(key)) {
                 continue;
@@ -202,7 +219,7 @@ const usePaginatedCore = <F extends FunctionReference>(
                         const current = pages();
                         const tail = current.at(-1);
 
-                        if (current.length > 1 && tail && !resultsByKey.has(key) && buildPageKey(functionPath, buildPageArgs(tail, narrowedArgs)) === key) {
+                        if (current.length > 1 && tail && !resultsByKey.has(key) && pageKeyOf(tail) === key) {
                             pages.set(current.slice(0, -1));
                             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after syncSubscriptions is defined
                             syncSubscriptions(pages());
@@ -309,8 +326,8 @@ const usePaginatedCore = <F extends FunctionReference>(
         const newPinnedPage = next.at(-2);
 
         if (oldTail && newPinnedPage) {
-            const oldKey = buildPageKey(functionPath, buildPageArgs(oldTail, narrowedArgs));
-            const newKey = buildPageKey(functionPath, buildPageArgs(newPinnedPage, narrowedArgs));
+            const oldKey = pageKeyOf(oldTail);
+            const newKey = pageKeyOf(newPinnedPage);
             const entry = activeSubs.get(oldKey);
 
             if (entry && oldKey !== newKey) {
