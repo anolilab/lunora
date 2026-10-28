@@ -7,8 +7,8 @@
             "allowanceBytes": 51200
         },
         "saas": {
-            "gzipBytes": 1800539,
-            "rawBytes": 7810835,
+            "gzipBytes": 1527544,
+            "rawBytes": 6757262,
             "allowanceBytes": 102400
         }
     }
