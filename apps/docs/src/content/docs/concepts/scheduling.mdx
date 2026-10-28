@@ -133,6 +133,14 @@ the action first:
 const { cancelled } = await ctx.scheduler.cancel(reminderId);
 ```
 
+`get(id)` reports where a job is in its life as `state`: `pending`, `running`,
+then how it ended — `succeeded` (the dispatch returned 2xx; for a workflow or
+agent target, that its instance started), `failed` (its retry budget ran out and
+it was dead-lettered, with the reason in `error`) or `canceled`. Finished jobs
+keep answering, with `completedAt`, for seven days; after that `get` returns
+`null`, as it does for an id that was never scheduled. Studio's Schedule tab
+lists them under **History**.
+
 You can also read pending jobs from a query via the `_scheduled_functions`
 [system table](/docs/concepts/function-context) (`ctx.db.system`), which is
 read-only and eventually consistent.

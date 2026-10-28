@@ -13,6 +13,90 @@ describe("createNodeSchedulerHost", () => {
         vi.useRealTimers();
     });
 
+    describe("job lifecycle (get)", () => {
+        it("reports running while the handler runs, succeeded after it, and canceled for a cancelled job", async () => {
+            expect.assertions(4);
+
+            vi.useFakeTimers();
+
+            const database = new Database(":memory:");
+            let finish: (() => void) | undefined;
+            const host = createNodeSchedulerHost(database, {
+                onDispatch: async () =>
+                    new Promise<void>((resolve) => {
+                        finish = resolve;
+                    }),
+            });
+
+            try {
+                const job = await host.scheduler.schedule("jobs:run", {}, { delayMs: 10 });
+                const cancelled = await host.scheduler.schedule("jobs:run", {}, { delayMs: 10_000 });
+
+                await host.scheduler.cancel(cancelled.id);
+                await vi.advanceTimersByTimeAsync(20);
+
+                await expect(host.scheduler.get?.(job.id)).resolves.toMatchObject({ state: "running" });
+
+                finish?.();
+                await vi.advanceTimersByTimeAsync(0);
+
+                await expect(host.scheduler.get?.(job.id)).resolves.toMatchObject({ attempts: 1, state: "succeeded" });
+                await expect(host.scheduler.get?.(cancelled.id)).resolves.toMatchObject({ state: "canceled" });
+                await expect(host.scheduler.list?.()).resolves.toHaveLength(0);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
+        it("forgets a finished job after seven days and deletes its row on the next construction", async () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+
+            const database = new Database(":memory:");
+            const host = createNodeSchedulerHost(database);
+            const job = await host.scheduler.schedule("jobs:run", {}, { delayMs: 10_000 });
+
+            await host.scheduler.cancel(job.id);
+
+            vi.setSystemTime(Date.now() + 604_800_000 - 1);
+
+            await expect(host.scheduler.get?.(job.id)).resolves.toMatchObject({ state: "canceled" });
+
+            vi.setSystemTime(Date.now() + 1);
+
+            await expect(host.scheduler.get?.(job.id)).resolves.toBeNull();
+
+            host.dispose();
+
+            const next = createNodeSchedulerHost(database);
+
+            expect(database.prepare("SELECT count(*) AS n FROM _lunora_scheduler_jobs").get()).toStrictEqual({ n: 0 });
+
+            next.dispose();
+            database.close();
+        });
+
+        it("adds the completion column to a database written before it existed", () => {
+            expect.assertions(1);
+
+            const database = new Database(":memory:");
+
+            database.exec(
+                "CREATE TABLE _lunora_scheduler_jobs (id TEXT PRIMARY KEY, function_path TEXT NOT NULL, args BLOB NOT NULL, scheduled_for INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, retry BLOB, state TEXT NOT NULL DEFAULT 'pending', claimed_at INTEGER)",
+            );
+
+            const host = createNodeSchedulerHost(database);
+            const columns = database.prepare<[], { name: string }>("PRAGMA table_info(_lunora_scheduler_jobs)").all();
+
+            expect(columns.some((column) => column.name === "completed_at")).toBe(true);
+
+            host.dispose();
+            database.close();
+        });
+    });
+
     it("delivers a pending job once when two hosts share one database file", async () => {
         expect.assertions(2);
 
@@ -370,8 +454,10 @@ describe("createNodeSchedulerHost", () => {
                 expect(delivered).toStrictEqual(["jobs:run"]);
                 await expect(host.scheduler.list?.()).resolves.toHaveLength(0);
 
-                // Nothing left claimed for a later host to redeliver.
-                expect(shard.database.prepare("SELECT count(*) AS n FROM _lunora_scheduler_jobs").get()).toStrictEqual({ n: 0 });
+                // Settled under the claim it took: nothing left pending for a later host to redeliver.
+                expect(shard.database.prepare("SELECT state, claimed_at FROM _lunora_scheduler_jobs").all()).toStrictEqual([
+                    { claimed_at: null, state: "succeeded" },
+                ]);
             } finally {
                 host.dispose();
                 shard.dispose();

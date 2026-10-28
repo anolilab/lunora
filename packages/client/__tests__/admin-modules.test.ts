@@ -6,7 +6,7 @@ import { listGlobalTables } from "../src/admin/global-tables";
 import type { AdminHost } from "../src/admin/host";
 import { deleteKvKey, listKvNamespaces } from "../src/admin/kv";
 import { queryLogArchive, shardTraffic } from "../src/admin/observability";
-import { cancelScheduledJob, listScheduledJobs } from "../src/admin/scheduler";
+import { cancelScheduledJob, getScheduledJob, listScheduledHistory, listScheduledJobs } from "../src/admin/scheduler";
 import { listStorageBuckets, uploadStorageObject } from "../src/admin/storage";
 import { listVectorIndexes } from "../src/admin/vector-indexes";
 import {
@@ -17,6 +17,8 @@ import {
     KV_VALUE_PATH,
     LOG_ARCHIVE_PATH,
     SCHEDULED_CANCEL_PATH,
+    SCHEDULED_HISTORY_PATH,
+    SCHEDULED_JOB_PATH,
     SCHEDULED_PATH,
     SHARD_TRAFFIC_PATH,
     STORAGE_BUCKETS_PATH,
@@ -70,6 +72,28 @@ describe("admin modules: request shape", () => {
 
         await expect(listScheduledJobs(host)).resolves.toStrictEqual([]);
         expect(calls[0]).toMatchObject({ method: "GET", path: SCHEDULED_PATH });
+    });
+
+    it("getScheduledJob gets one job by id and answers null on a miss", async () => {
+        expect.assertions(3);
+
+        const miss = recordingHost();
+
+        await expect(getScheduledJob(miss.host, "job 1")).resolves.toBeNull();
+        expect(miss.calls[0]).toMatchObject({ method: "GET", path: `${SCHEDULED_JOB_PATH}?id=job%201` });
+
+        const hit = recordingHost({ record: { args: {}, completedAt: 5, enqueuedAt: 1, id: "job-1", scheduledFor: 2, state: "succeeded" } });
+
+        await expect(getScheduledJob(hit.host, "job-1")).resolves.toMatchObject({ completedAt: 5, state: "succeeded" });
+    });
+
+    it("listScheduledHistory gets the finished jobs and defaults to none", async () => {
+        expect.assertions(2);
+
+        const { calls, host } = recordingHost();
+
+        await expect(listScheduledHistory(host)).resolves.toStrictEqual([]);
+        expect(calls[0]).toMatchObject({ method: "GET", path: SCHEDULED_HISTORY_PATH });
     });
 
     it("cancelScheduledJob posts the id and reports cancelled only on an explicit true", async () => {

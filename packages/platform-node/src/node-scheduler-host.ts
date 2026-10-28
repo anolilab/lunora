@@ -44,7 +44,7 @@
 import { randomUUID } from "node:crypto";
 import { deserialize, serialize } from "node:v8";
 
-import type { ScheduledJob, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "@lunora/platform";
+import type { ScheduledJob, ScheduledJobRecord, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "@lunora/platform";
 import { parse } from "@visulima/cron-parser";
 import type Database from "better-sqlite3";
 
@@ -94,16 +94,24 @@ const MIGRATION_RETRY_BASE_MS = 20;
  */
 const FOREIGN_TRANSACTION_RETRY_MS = 10;
 
+/**
+ * How long a `succeeded` or `canceled` row keeps answering `get()` before it is
+ * deleted — the same seven days `SchedulerDO` keeps its terminal records, so
+ * the answer to "did my job run?" does not depend on the host.
+ */
+const TERMINAL_RETENTION_MS = 604_800_000;
+
 /** Row shape of `_lunora_scheduler_jobs`. */
 interface JobRow {
     args: Buffer;
     attempts: number;
     claimed_at: number | null;
+    completed_at: number | null;
     function_path: string;
     id: string;
     retry: Buffer | null;
     scheduled_for: number;
-    state: "dead" | "pending";
+    state: "canceled" | "dead" | "pending" | "succeeded";
 }
 
 /** Row shape of `_lunora_scheduler_crons`. */
@@ -123,7 +131,7 @@ interface NodeSchedulerHostOptions {
      * A handler that **throws** marks the delivery failed, which is what drives
      * the retry/dead-letter machinery: the job's `attempts` increments and it is
      * either re-armed with backoff or parked. A handler that resolves marks the
-     * job delivered and removes it.
+     * job `succeeded`.
      *
      * Omitting it makes every delivery trivially succeed, which means a caller
      * who forgets to pass one gets a scheduler that quietly drops work — the
@@ -189,28 +197,28 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         )`,
     );
 
-    // Databases created before the claim lease existed lack the column.
-    const hasClaimColumn = (): boolean =>
+    // Databases created by an older build lack the later columns.
+    const hasColumn = (name: string): boolean =>
         database
             .prepare<[], { name: string }>("PRAGMA table_info(_lunora_scheduler_jobs)")
             .all()
-            .some((column) => column.name === "claimed_at");
+            .some((column) => column.name === name);
 
     // Construction is synchronous, so the back-off blocks the thread for the wait: bounded, and short.
     const sleepSync = (ms: number): void => {
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
     };
 
-    const addClaimColumn = (): void => {
+    const addColumn = (name: string): void => {
         for (let attempt = 0; ; attempt += 1) {
             try {
-                database.exec("ALTER TABLE _lunora_scheduler_jobs ADD COLUMN claimed_at INTEGER");
+                database.exec(`ALTER TABLE _lunora_scheduler_jobs ADD COLUMN ${name} INTEGER`);
 
                 return;
             } catch (error) {
                 // Another process sharing the file added it between our check and
                 // our ALTER: nothing left to do.
-                if (hasClaimColumn()) {
+                if (hasColumn(name)) {
                     return;
                 }
 
@@ -226,8 +234,10 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         }
     };
 
-    if (!hasClaimColumn()) {
-        addClaimColumn();
+    for (const column of ["claimed_at", "completed_at"]) {
+        if (!hasColumn(column)) {
+            addColumn(column);
+        }
     }
 
     database.exec(
@@ -244,19 +254,26 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     );
     const selectJob = database.prepare<[string], JobRow>("SELECT * FROM _lunora_scheduler_jobs WHERE id = ?");
     const selectByState = database.prepare<[string], JobRow>("SELECT * FROM _lunora_scheduler_jobs WHERE state = ? ORDER BY scheduled_for");
-    const deletePendingJob = database.prepare<[string]>("DELETE FROM _lunora_scheduler_jobs WHERE id = ? AND state = 'pending'");
-    const parkJob = database.prepare<[number, string]>("UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ?, claimed_at = NULL WHERE id = ?");
+    const cancelPendingJob = database.prepare<[number, string]>(
+        "UPDATE _lunora_scheduler_jobs SET state = 'canceled', completed_at = ?, claimed_at = NULL WHERE id = ? AND state = 'pending'",
+    );
+    const parkJob = database.prepare<[number, number, string]>(
+        "UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ?, completed_at = ?, claimed_at = NULL WHERE id = ?",
+    );
+    const sweepTerminal = database.prepare<[number]>("DELETE FROM _lunora_scheduler_jobs WHERE state IN ('succeeded', 'canceled') AND completed_at <= ?");
     // Settlement and renewal are conditional on still holding the claim: a handler
     // that outlived its lease must not delete or re-arm a row another host took.
-    const deleteClaimedJob = database.prepare<[string, number]>("DELETE FROM _lunora_scheduler_jobs WHERE id = ? AND claimed_at = ?");
+    const succeedClaimedJob = database.prepare<[number, number, string, number]>(
+        "UPDATE _lunora_scheduler_jobs SET state = 'succeeded', attempts = ?, completed_at = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ?",
+    );
     const renewClaimedJob = database.prepare<[number, string, number]>(
         "UPDATE _lunora_scheduler_jobs SET claimed_at = ? WHERE id = ? AND claimed_at = ? AND state = 'pending'",
     );
     const updateClaimedAttempt = database.prepare<[number, number, string, number]>(
         "UPDATE _lunora_scheduler_jobs SET attempts = ?, scheduled_for = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ?",
     );
-    const parkClaimedJob = database.prepare<[number, string, number]>(
-        "UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ?",
+    const parkClaimedJob = database.prepare<[number, number, string, number]>(
+        "UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ?, completed_at = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ?",
     );
     // One statement, so two processes on one file cannot both take the row: the
     // loser's WHERE no longer matches and it gets zero rows back. `scheduled_for`
@@ -266,7 +283,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         "UPDATE _lunora_scheduler_jobs SET claimed_at = ? WHERE id = ? AND state = 'pending' AND scheduled_for <= ? AND (claimed_at IS NULL OR claimed_at < ?) RETURNING *",
     );
     const requeueJob = database.prepare<[number, string]>(
-        "UPDATE _lunora_scheduler_jobs SET state = 'pending', attempts = 0, scheduled_for = ? WHERE id = ? AND state = 'dead'",
+        "UPDATE _lunora_scheduler_jobs SET state = 'pending', attempts = 0, completed_at = NULL, scheduled_for = ? WHERE id = ? AND state = 'dead'",
     );
     const upsertCron = database.prepare<[string, string, string, Buffer]>(
         `INSERT INTO _lunora_scheduler_crons (key, expression, function_path, args) VALUES (?, ?, ?, ?)
@@ -474,7 +491,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     };
 
     /**
-     * Deliver one job, then settle its row: removed on success, re-armed with
+     * Deliver one job, then settle its row: marked `succeeded` on success, re-armed with
      * backoff while attempts remain, parked in `dead` once they are exhausted.
      *
      * Every database touch is guarded on `database.open`, because a timer can
@@ -507,7 +524,10 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             await outsideForeignTransaction();
 
             if (isOpen() && !inTransaction()) {
-                deleteClaimedJob.run(id, claim.stamp());
+                const completedAt = Date.now();
+
+                succeedClaimedJob.run(attempts, completedAt, id, claim.stamp());
+                sweepTerminal.run(completedAt - TERMINAL_RETENTION_MS);
             }
         } catch {
             await outsideForeignTransaction();
@@ -524,7 +544,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             const maxAttempts = retry?.maxAttempts ?? DEFAULT_RETRY.maxAttempts;
 
             if (attempts >= maxAttempts) {
-                parkClaimedJob.run(attempts, id, claim.stamp());
+                parkClaimedJob.run(attempts, Date.now(), id, claim.stamp());
 
                 return;
             }
@@ -627,7 +647,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             // `false`. A dead-lettered job is no longer on its way — answering
             // `true` would tell a caller it stopped a delivery that had already
             // permanently failed.
-            return deletePendingJob.run(id).changes > 0;
+            return cancelPendingJob.run(Date.now(), id).changes > 0;
         },
 
         // eslint-disable-next-line @typescript-eslint/require-await -- see `cancel`
@@ -680,6 +700,27 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             },
         },
 
+        // eslint-disable-next-line @typescript-eslint/require-await -- see `cancel`
+        get: async (id) => {
+            const row = closed || !isOpen() ? undefined : selectJob.get(id);
+
+            if (row === undefined || (row.completed_at !== null && row.state !== "dead" && row.completed_at <= Date.now() - TERMINAL_RETENTION_MS)) {
+                // eslint-disable-next-line unicorn/no-null -- the contract answers `null` for an unknown or forgotten id
+                return null;
+            }
+
+            const states = { canceled: "canceled", dead: "failed", pending: "pending", succeeded: "succeeded" } as const;
+            // A live claim is a delivery in flight; one past its lease belongs to a claimer that died and is waiting to be retaken.
+            const running = row.state === "pending" && row.claimed_at !== null && row.claimed_at >= Date.now() - CLAIM_LEASE_MS;
+            const record: ScheduledJobRecord = { ...toStatus(row), state: running ? "running" : states[row.state] };
+
+            if (row.completed_at !== null) {
+                record.completedAt = row.completed_at;
+            }
+
+            return record;
+        },
+
         // Empty after `dispose()` rather than a query against a possibly-closed
         // connection: a disposed host has nothing on its way, and teardown code
         // that lists during shutdown must not get a `TypeError` from better-sqlite3.
@@ -715,6 +756,8 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             return job;
         },
     };
+
+    sweepTerminal.run(Date.now() - TERMINAL_RETENTION_MS);
 
     // Re-arm everything the last process left behind. This is the loop that
     // makes the durability claim true rather than aspirational — without it the
@@ -754,7 +797,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
 
             const retry = decodeRetry(row.retry);
 
-            parkJob.run((retry?.maxAttempts ?? DEFAULT_RETRY.maxAttempts) + 1, id);
+            parkJob.run((retry?.maxAttempts ?? DEFAULT_RETRY.maxAttempts) + 1, Date.now(), id);
 
             return true;
         },

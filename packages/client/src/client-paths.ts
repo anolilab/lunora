@@ -20,6 +20,10 @@ const SCHEDULED_DEAD_RETRY_PATH = "/_lunora/admin/scheduled/dead/retry";
 
 const SCHEDULED_DEAD_CANCEL_PATH = "/_lunora/admin/scheduled/dead/cancel";
 
+const SCHEDULED_HISTORY_PATH = "/_lunora/admin/scheduled/history";
+
+const SCHEDULED_JOB_PATH = "/_lunora/admin/scheduled/job";
+
 const WORKFLOWS_INSTANCES_PATH = "/_lunora/admin/workflows/instances";
 
 const WORKFLOWS_INSTANCE_PATH = "/_lunora/admin/workflows/instance";
@@ -235,6 +239,8 @@ export {
     SCHEDULED_DEAD_CANCEL_PATH,
     SCHEDULED_DEAD_PATH,
     SCHEDULED_DEAD_RETRY_PATH,
+    SCHEDULED_HISTORY_PATH,
+    SCHEDULED_JOB_PATH,
     SCHEDULED_PATH,
     SCHEDULED_STATUS_PATH,
     SCHEDULED_WS_PATH,

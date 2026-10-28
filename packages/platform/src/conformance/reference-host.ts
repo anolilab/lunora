@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import type {
     PlatformCapabilities,
+    ScheduledJobRecord,
     ScheduledJobStatus,
     ScheduleOptions,
     SchedulerHost,
@@ -838,6 +839,9 @@ const createReferenceHost = (): ReferenceHost => {
      */
     const dispatchedJobs = new Set<string>();
 
+    /** How each job that left the pending set ended. In-memory: this host lives for one test, so it needs no retention sweep. */
+    const finishedJobs = new Map<string, ScheduledJobRecord>();
+
     const toStatus = (id: string, job: ReferenceJob): ScheduledJobStatus => {
         return {
             attempts: job.attempts,
@@ -863,6 +867,7 @@ const createReferenceHost = (): ReferenceHost => {
 
             clearTimeout(job.timer);
             scheduledJobs.delete(id);
+            finishedJobs.set(id, { ...toStatus(id, job), completedAt: Date.now(), state: "canceled" });
 
             return true;
         },
@@ -883,6 +888,21 @@ const createReferenceHost = (): ReferenceHost => {
 
                 return true;
             },
+        },
+        get: async (id) => {
+            const pending = scheduledJobs.get(id);
+
+            if (pending !== undefined) {
+                return { ...toStatus(id, pending), state: "pending" };
+            }
+
+            const dead = deadJobs.get(id);
+
+            if (dead !== undefined) {
+                return { ...toStatus(id, dead), state: "failed" };
+            }
+
+            return finishedJobs.get(id) ?? null;
         },
         list: async () => [...scheduledJobs].map(([id, job]) => toStatus(id, job)),
         schedule: async (functionPath, args, options) => {
@@ -906,6 +926,7 @@ const createReferenceHost = (): ReferenceHost => {
 
                 if (job !== undefined) {
                     job.attempts += 1;
+                    finishedJobs.set(id, { ...toStatus(id, job), completedAt: Date.now(), state: "succeeded" });
                 }
 
                 dispatchedJobs.add(id);

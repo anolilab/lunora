@@ -47,8 +47,12 @@ interface ScheduledFunctionDoc {
     args: Record<string, unknown>;
     /** Number of dispatch attempts already made (absent until the first retry). */
     attempts?: number;
+    /** When the job reached a terminal state (epoch ms). Set only on a `get()` of a finished job. */
+    completedAt?: number;
     /** When the job was enqueued (epoch ms). */
     enqueuedAt: number;
+    /** Why a `failed` job was dead-lettered. */
+    error?: string;
 
     /**
      * Fully-qualified `ns:fn` path of the function to invoke. Absent when the job
@@ -64,6 +68,14 @@ interface ScheduledFunctionDoc {
     scheduledFor: number;
     /** Routing hint forwarded so dispatch lands on the right shard. */
     shardKey?: string;
+
+    /**
+     * Lifecycle state (`pending`, `running`, `succeeded`, `failed`, `canceled`).
+     * `get()` reports it, including a finished job's outcome for a bounded
+     * retention window; `query().collect()` lists pending jobs only, which carry
+     * no state field.
+     */
+    state?: "canceled" | "failed" | "pending" | "running" | "succeeded";
 
     /**
      * The workflow/agent class name (its `ctx.exports` key) a fresh durable instance is started from
@@ -200,6 +212,20 @@ const toScheduledFunctionDoc = (record: Record<string, unknown>): ScheduledFunct
 
     if (typeof record["workflow"] === "string") {
         doc.workflow = record["workflow"];
+    }
+
+    const { state } = record;
+
+    if (state === "canceled" || state === "failed" || state === "pending" || state === "running" || state === "succeeded") {
+        doc.state = state;
+    }
+
+    if (typeof record["completedAt"] === "number") {
+        doc.completedAt = record["completedAt"];
+    }
+
+    if (typeof record["error"] === "string") {
+        doc.error = record["error"];
     }
 
     return doc;

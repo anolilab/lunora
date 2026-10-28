@@ -116,6 +116,8 @@ export type {
     RowOp,
     RpcEnvelope,
     RpcResponseBody,
+    ScheduledJobState,
+    ScheduledJobView,
     ScheduleRecord,
     ScheduleRetryPolicy,
     SchedulerPoolStatus,

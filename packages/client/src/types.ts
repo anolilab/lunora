@@ -1171,6 +1171,8 @@ export interface ScheduleRecord {
      */
     attempts?: number;
     enqueuedAt: number;
+    /** Why the job was dead-lettered. Set on a parked record. */
+    error?: string;
 
     /**
      * The `ns:fn` path dispatched on fire. Absent when the job targets a durable
@@ -1195,6 +1197,21 @@ export interface ScheduleRecord {
      * of {@link ScheduleRecord.functionPath}.
      */
     workflow?: string;
+}
+
+/**
+ * Where a scheduled job is in its life. `succeeded` means its dispatch answered
+ * 2xx (for a workflow/agent target: its instance started); `failed`, that it
+ * exhausted its retry budget; `canceled`, that it was cancelled. Mirrors
+ * `@lunora/scheduler`'s `ScheduledJobState`.
+ */
+export type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+
+/** A scheduled job with its lifecycle state, as `getScheduledJob` / `listScheduledHistory` return it. */
+export interface ScheduledJobView extends ScheduleRecord {
+    /** When the job reached its terminal state (epoch ms). Absent while `pending`/`running`. */
+    completedAt?: number;
+    state: ScheduledJobState;
 }
 
 /**

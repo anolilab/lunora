@@ -64,6 +64,7 @@ import type {
     KvValueResult,
     PipelineLogPage,
     PipelineLogQuery,
+    ScheduledJobView,
     ScheduleRecord,
     SchedulerStatus,
     ShardTrafficResult,
@@ -81,8 +82,10 @@ import { deleteKvKey, getKvValue, listKvKeys, listKvNamespaces, putKvValue } fro
 import { queryLogArchive, shardTraffic } from "./observability";
 import {
     cancelScheduledJob,
+    getScheduledJob,
     getWorkflowInstance,
     listDeadJobs,
+    listScheduledHistory,
     listScheduledJobs,
     listWorkflowInstances,
     removeDeadJob,
@@ -145,6 +148,26 @@ class LunoraAdminClient extends LunoraClient {
      */
     public async schedulerStatus(): Promise<SchedulerStatus> {
         return schedulerStatus(this.adminHost);
+    }
+
+    /**
+     * One scheduled job with its lifecycle state — pending, running, or how it
+     * ended (succeeded, failed, canceled) for the scheduler's retention window.
+     * `null` for an id never scheduled or past retention. Hits the admin-gated
+     * `GET /_lunora/admin/scheduled/job?id=`.
+     */
+    public async getScheduledJob(id: string): Promise<ScheduledJobView | null> {
+        return getScheduledJob(this.adminHost, id);
+    }
+
+    /**
+     * The most recently finished scheduled jobs, newest first — one page of the
+     * scheduler's terminal records. Hits the admin-gated
+     * `GET /_lunora/admin/scheduled/history`. Powers `@lunora/studio`'s
+     * recent-jobs panel.
+     */
+    public async listScheduledHistory(): Promise<ScheduledJobView[]> {
+        return listScheduledHistory(this.adminHost);
     }
 
     /** Cancel a pending scheduled job by id. Returns whether a job was removed. */

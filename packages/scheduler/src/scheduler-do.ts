@@ -2,7 +2,7 @@ import { DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/
 import { signCanonical } from "../../../shared/hmac-url";
 import { jsonResponse } from "../../../shared/json-response";
 import resolveScheduleId from "./resolve-schedule-id";
-import type { RetryPolicy, ScheduleRecord } from "./types";
+import type { RetryPolicy, ScheduledJobState, ScheduledJobView, ScheduleRecord } from "./types";
 
 /**
  * Minimal projection of `DurableObjectState` for the SchedulerDO. Declared
@@ -90,6 +90,13 @@ const POOL_PREFIX = "pool:";
 // hex-encoded because it may contain `:` (pool `a` must not list pool `a:b`), and hex
 // takes any UTF-16 string, including the lone surrogates older builds persisted.
 const POOL_QUEUE_PREFIX = "pq:";
+// `done:<id>` holds a finished job's terminal record so `/get` stays one read.
+// `dt:<inverted completedAt>:<id>` indexes those rows newest-first, which is the
+// order `/history` pages in and puts every expired row at the END of the prefix
+// for the retention sweep. Neither may start with `t:`: every clock in this
+// class lists that prefix.
+const DONE_PREFIX = "done:";
+const DONE_INDEX_PREFIX = "dt:";
 // Durable Object `put` and `delete` take at most 128 keys per call.
 const MAX_STORAGE_BATCH = 128;
 
@@ -212,6 +219,18 @@ const MAX_CONCURRENT_DISPATCHES = 6;
  * overlapping one runs twice.
  */
 const DISPATCH_LEASE_MS = 900_000; // fifteen minutes
+
+/**
+ * How long a terminal (`succeeded` / `canceled` / purged `failed`) record keeps
+ * answering `/get` and `/history` after it settled. Expiry is enforced on read,
+ * so the window holds even when no alarm runs to sweep; the sweep only reclaims
+ * the storage.
+ */
+const TERMINAL_RETENTION_MS = 604_800_000; // seven days
+// Rows one sweep reclaims: each costs a `done:` and a `dt:` key in the same
+// delete, and a Durable Object delete takes at most MAX_STORAGE_BATCH keys.
+// ponytail: one bounded batch per alarm pass, so a backlog of expired rows drains over several passes.
+const TERMINAL_SWEEP_BATCH = 64;
 // Largest accepted `scheduledFor`, in epoch milliseconds: the biggest value
 // that still fits in TIME_PAD digits (999_999_999_999_999 = 1e15 - 1). Capping
 // here — rather than at the 8.64e15 ECMAScript `Date` max — guarantees EVERY
@@ -351,6 +370,12 @@ interface CancelRequestBody {
     id: string;
 }
 
+/** A `done:<id>` row: the job's last record plus how it ended. */
+interface TerminalRecord extends ScheduleRecord {
+    completedAt: number;
+    state: Extract<ScheduledJobState, "canceled" | "failed" | "succeeded">;
+}
+
 /**
  * Durable Object that stores pending scheduled invocations sorted by their
  * `scheduledFor` time and fires them via HTTP on alarm. Storage layout:
@@ -366,6 +391,10 @@ class SchedulerDO {
         // padTime()/TIME_PAD so the pad width has a single source of truth and
         // can't drift from the rest of the module (alarm()/rescheduleAlarm()).
         return `t:${padTime(scheduledFor)}:${id}`;
+    }
+
+    private static terminalIndexKey(completedAt: number, id: string): string {
+        return `${DONE_INDEX_PREFIX}${padTime(MAX_SCHEDULED_FOR_MS - completedAt)}:${id}`;
     }
 
     /** The record's `pq:` row key, or `undefined` for a job outside any pool. */
@@ -600,6 +629,9 @@ class SchedulerDO {
             case "GET /get": {
                 return this.handleGet(url);
             }
+            case "GET /history": {
+                return this.handleHistory(url);
+            }
             case "GET /list": {
                 return this.handleList(url);
             }
@@ -737,9 +769,13 @@ class SchedulerDO {
             }
         }
 
-        // Jobs fired (and were removed or moved to retry), so push the new list
-        // to live subscribers — this is the moment a studio wants to see.
         if (due.length > 0) {
+            // Reclaiming history is housekeeping; expiry is enforced on read, so a
+            // failed sweep only delays freeing the rows.
+            await this.sweepTerminal().catch(() => undefined);
+
+            // Jobs fired (and were removed or moved to retry), so push the new list
+            // to live subscribers — this is the moment a studio wants to see.
             await this.broadcastChange();
         }
     }
@@ -1187,6 +1223,12 @@ class SchedulerDO {
         }
 
         if (ok) {
+            try {
+                await this.writeTerminal(record, "succeeded");
+            } catch {
+                // History only: the job ran, and nothing here may make it re-fire.
+            }
+
             // The job was kicked (2xx). It must never re-fire, so the time-index
             // claim stays deleted regardless of what happens next. Clear the
             // header + retry rows in one batched delete; if THAT throws (a
@@ -1489,7 +1531,7 @@ class SchedulerDO {
      * schedulable time (see {@link isIndexableTime}).
      */
     private async parkDead(record: ScheduleRecord, attempts: number, reason: string): Promise<void> {
-        await this.state.storage.put(`${DEAD_PREFIX}${record.id}`, { ...record, attempts });
+        await this.state.storage.put(`${DEAD_PREFIX}${record.id}`, { ...record, attempts, error: `dead-lettered ${reason}` });
         // Park is terminal; clear the pending retry row AND the live header row
         // in one batched delete. Leaving `id:<id>` behind would keep the dead job
         // visible in `/list` (and the studio) as a scheduled job
@@ -1780,6 +1822,14 @@ class SchedulerDO {
 
         const id = resolved;
 
+        // A caller-chosen id is free again once its job finished, but `/get`
+        // reads the terminal row first — a reused id would keep answering the
+        // OLD job's outcome. Its `dt:` entry is left for the sweep, which checks
+        // the row it points at before deleting it.
+        if (body.id !== undefined) {
+            await this.state.storage.delete(`${DONE_PREFIX}${id}`);
+        }
+
         const record: ScheduleRecord = {
             // body is parsed from an untrusted request; args may be absent at runtime
             // despite the type, so the ?? fallback is a real guard.
@@ -1831,6 +1881,7 @@ class SchedulerDO {
         }
 
         await this.removeRecord(record);
+        await this.writeTerminal(record, "canceled");
         // NOTE: cancel never releases a pool slot. A queued job holds none; a
         // job whose dispatch is in flight (its header survives until the kick
         // returns) keeps its slot until drainRecord() releases it on a failed
@@ -1897,6 +1948,9 @@ class SchedulerDO {
         // concurrency gate on the next drain exactly like a fresh enqueue.
         const revived: ScheduleRecord = { ...dead, attempts: 0, scheduledFor };
 
+        // The park reason described the attempts this budget reset discards.
+        delete revived.error;
+
         await this.state.storage.put<ScheduleRecord | string>({
             ...SchedulerDO.pendingRows(revived),
             [SchedulerDO.indexKey(scheduledFor, dead.id)]: dead.id,
@@ -1920,16 +1974,31 @@ class SchedulerDO {
             return SchedulerDO.error(400, "INVALID_INPUT", "id is required");
         }
 
-        const removed = await this.state.storage.delete(`${DEAD_PREFIX}${body.id}`);
+        const dead = await this.state.storage.get<ScheduleRecord>(`${DEAD_PREFIX}${body.id}`);
 
-        return SchedulerDO.json({ removed: Boolean(removed) });
+        if (dead === undefined) {
+            return SchedulerDO.json({ removed: false });
+        }
+
+        // Purging the dead-letter row must not make the job read as "never
+        // existed": it failed, and `/get` keeps saying so for the retention window.
+        await this.writeTerminal(dead, "failed");
+        await this.state.storage.delete(`${DEAD_PREFIX}${body.id}`);
+
+        return SchedulerDO.json({ removed: true });
     }
 
     /**
-     * Resolve a single pending job by id via a direct `id:<id>` storage read —
-     * O(1), versus scanning the whole `/list` view. Responds `{ record }` on a
-     * hit and `{}` on a miss (an absent `record` field — JSON has no `undefined`
-     * — which the client reads back as `null`).
+     * `GET /get?id=` — one job with its lifecycle state, in O(1) reads. Responds
+     * `{ record }` on a hit and `{}` on a miss (JSON has no `undefined`; the
+     * client reads it back as `null`).
+     *
+     * The terminal row is read FIRST: a successful dispatch writes it before
+     * clearing the header, so a header that outlived a swallowed cleanup still
+     * reads as `succeeded`. A reused id cannot hit a stale terminal row, because
+     * `/schedule` deletes it. `running` is this instance's own lease set — the
+     * only instance that can be dispatching — so a lease orphaned by an eviction
+     * reads as `pending`, which is what it is until the lease lapses.
      */
     private async handleGet(url: URL): Promise<Response> {
         const id = url.searchParams.get("id");
@@ -1938,9 +2007,102 @@ class SchedulerDO {
             return SchedulerDO.error(400, "INVALID_INPUT", "id is required");
         }
 
-        const record = await this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${id}`);
+        const terminal = await this.readTerminal(id);
 
-        return SchedulerDO.json(record === undefined ? {} : { record });
+        if (terminal !== undefined) {
+            return SchedulerDO.json({ record: terminal });
+        }
+
+        const header = await this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${id}`);
+
+        if (header !== undefined) {
+            const record: ScheduledJobView = { ...header, state: this.activeLeases.has(id) ? "running" : "pending" };
+
+            return SchedulerDO.json({ record });
+        }
+
+        const dead = await this.state.storage.get<ScheduleRecord>(`${DEAD_PREFIX}${id}`);
+
+        return SchedulerDO.json(dead === undefined ? {} : { record: { ...dead, state: "failed" } satisfies ScheduledJobView });
+    }
+
+    /**
+     * `GET /history[?cursor=]` — one bounded page of finished jobs, newest first,
+     * within the retention window. Paged off the `dt:` index, then each page's
+     * rows are read; an index entry whose row was replaced (id reuse) or has
+     * expired is skipped rather than shown.
+     */
+    private async handleHistory(url: URL): Promise<Response> {
+        const cursor = url.searchParams.get("cursor") ?? undefined;
+        const entries = await this.state.storage.list<string>({
+            limit: DEFAULT_LIST_LIMIT + 1,
+            prefix: DONE_INDEX_PREFIX,
+            ...(cursor === undefined ? {} : { startAfter: cursor }),
+        });
+        const page = [...entries.entries()];
+        const truncated = page.length > DEFAULT_LIST_LIMIT;
+        const shown = page.slice(0, DEFAULT_LIST_LIMIT);
+        const rows = await Promise.all(shown.map(async ([key, id]) => this.readTerminal(id, key)));
+        const records = rows.filter((row) => row !== undefined);
+
+        return SchedulerDO.json(truncated ? { cursor: shown.at(-1)?.[0], records, truncated } : { records, truncated });
+    }
+
+    /**
+     * The unexpired terminal row for `id`, or `undefined`. With `indexKey`, only
+     * the row that index entry was written for — a newer outcome under the same
+     * id has its own entry.
+     */
+    private async readTerminal(id: string, indexKey?: string): Promise<TerminalRecord | undefined> {
+        const row = await this.state.storage.get<TerminalRecord>(`${DONE_PREFIX}${id}`);
+
+        if (row === undefined || row.completedAt <= Date.now() - TERMINAL_RETENTION_MS) {
+            return undefined;
+        }
+
+        if (indexKey !== undefined && SchedulerDO.terminalIndexKey(row.completedAt, id) !== indexKey) {
+            return undefined;
+        }
+
+        return row;
+    }
+
+    /** Record how `record` ended: its `done:` row and `dt:` index entry, in one put. */
+    private async writeTerminal(record: ScheduleRecord, state: TerminalRecord["state"]): Promise<void> {
+        const completedAt = Date.now();
+        const row: TerminalRecord = { ...record, completedAt, state };
+
+        await this.state.storage.put<TerminalRecord | string>({
+            [`${DONE_PREFIX}${record.id}`]: row,
+            [SchedulerDO.terminalIndexKey(completedAt, record.id)]: record.id,
+        });
+    }
+
+    /**
+     * Reclaim one batch of terminal rows past {@link TERMINAL_RETENTION_MS}. The
+     * index is newest-first, so every expired entry sorts after the horizon key.
+     * A `done:` row is deleted only when THIS entry is its index — an id reused
+     * since owns a newer row with its own entry.
+     */
+    private async sweepTerminal(): Promise<void> {
+        // `+ 1` makes the bound inclusive of a row exactly at the horizon, which
+        // `readTerminal` already treats as expired.
+        const horizon = SchedulerDO.terminalIndexKey(Date.now() - TERMINAL_RETENTION_MS + 1, "~");
+        const expired = await this.state.storage.list<string>({ limit: TERMINAL_SWEEP_BATCH, prefix: DONE_INDEX_PREFIX, startAfter: horizon });
+
+        if (expired.size === 0) {
+            return;
+        }
+
+        const owned = await Promise.all(
+            [...expired.entries()].map(async ([key, id]) => {
+                const row = await this.state.storage.get<TerminalRecord>(`${DONE_PREFIX}${id}`);
+
+                return row !== undefined && SchedulerDO.terminalIndexKey(row.completedAt, id) === key ? [key, `${DONE_PREFIX}${id}`] : [key];
+            }),
+        );
+
+        await this.state.storage.delete(owned.flat());
     }
 
     private async removeRecord(record: ScheduleRecord): Promise<void> {
@@ -2174,5 +2336,5 @@ class SchedulerDO {
     }
 }
 
-export { DISPATCH_LEASE_MS, MAX_CONCURRENT_DISPATCHES, MAX_RETRY_ATTEMPTS, MAX_SCHEDULED_FOR_MS, RETRY_BASE_DELAY_MS, SchedulerDO };
+export { DISPATCH_LEASE_MS, MAX_CONCURRENT_DISPATCHES, MAX_RETRY_ATTEMPTS, MAX_SCHEDULED_FOR_MS, RETRY_BASE_DELAY_MS, SchedulerDO, TERMINAL_RETENTION_MS };
 export type { SchedulerDOState, SchedulerEnv, SchedulerPoolStatus, SchedulerStatus };

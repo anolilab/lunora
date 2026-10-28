@@ -22,6 +22,8 @@ const SCHEDULED_STATUS_PATH = "/_lunora/admin/scheduled/status";
 const SCHEDULED_WS_PATH = "/_lunora/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_lunora/admin/scheduled/cancel";
 const SCHEDULED_DEAD_PATH = "/_lunora/admin/scheduled/dead";
+const SCHEDULED_HISTORY_PATH = "/_lunora/admin/scheduled/history";
+const SCHEDULED_JOB_PATH = "/_lunora/admin/scheduled/job";
 const SCHEDULED_DEAD_RETRY_PATH = "/_lunora/admin/scheduled/dead/retry";
 const SCHEDULED_DEAD_CANCEL_PATH = "/_lunora/admin/scheduled/dead/cancel";
 const SCHEDULED_POOL_RELEASE_PATH = "/_lunora/admin/scheduled/pool/release";
@@ -69,6 +71,26 @@ const buildScheduledAdminRoutes = (deps: ScheduledAdminRouteDeps): Record<string
 
             return resolveSchedulerStub(request).fetch(new Request(`https://scheduler.internal${doPath}${query}`, { method: "GET" }));
         };
+
+    /**
+     * `GET /job?id=` — one job with its lifecycle state (pending, running, or a
+     * terminal outcome within the scheduler's retention window), proxying the
+     * DO's `/get`. Forwarded verbatim for the same reason as {@link proxyGet}.
+     */
+    const handleJob = (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new LunoraError("Scheduled-job endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const stub = resolveSchedulerStub(request);
+        const id = new URL(request.url).searchParams.get("id");
+
+        if (id === null || id === "") {
+            throw new LunoraError("Scheduled-job endpoint requires an `id`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        return stub.fetch(new Request(`https://scheduler.internal/get?id=${encodeURIComponent(id)}`, { method: "GET" }));
+    };
 
     /**
      * Admin-gated `POST { id }` proxy to one SchedulerDO route — the shared
@@ -174,6 +196,8 @@ const buildScheduledAdminRoutes = (deps: ScheduledAdminRouteDeps): Record<string
         [SCHEDULED_DEAD_CANCEL_PATH]: proxyPost("/dead/cancel", "Scheduled dead-letter action"),
         [SCHEDULED_DEAD_PATH]: proxyGet("/dead", "Scheduled dead-letter"),
         [SCHEDULED_DEAD_RETRY_PATH]: proxyPost("/dead/retry", "Scheduled dead-letter action"),
+        [SCHEDULED_HISTORY_PATH]: proxyGet("/history", "Scheduled-history"),
+        [SCHEDULED_JOB_PATH]: handleJob,
         [SCHEDULED_PATH]: proxyGet("/list", "Scheduled-list"),
         [SCHEDULED_POOL_RELEASE_PATH]: handlePoolRelease,
         [SCHEDULED_STATUS_PATH]: proxyGet("/status", "Scheduler-status"),
@@ -188,6 +212,8 @@ export {
     SCHEDULED_DEAD_CANCEL_PATH,
     SCHEDULED_DEAD_PATH,
     SCHEDULED_DEAD_RETRY_PATH,
+    SCHEDULED_HISTORY_PATH,
+    SCHEDULED_JOB_PATH,
     SCHEDULED_PATH,
     SCHEDULED_POOL_RELEASE_PATH,
     SCHEDULED_STATUS_PATH,

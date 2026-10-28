@@ -212,6 +212,8 @@ export type {
     RunQueryOptions,
     ScheduledFunctionDoc,
     ScheduledJob,
+    ScheduledJobState,
+    ScheduledJobView,
     Scheduler,
     Schema,
     SearchFilterBuilder,

@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 import { assertScheduleDelay, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS } from "@lunora/scheduler";
-import type { ScheduledJob, Scheduler } from "@lunora/server";
+import type { ScheduledJob, ScheduledJobView, Scheduler } from "@lunora/server";
 import { decodeWire, encodeWire } from "@lunora/wire";
 
 /** A pending job entry in the fake scheduler queue. */
@@ -159,6 +159,12 @@ const createFakeScheduler = (
     /** All pending (not yet executed or cancelled) jobs, in enqueue order. */
     const pending = new Map<string, FakeScheduledJob>();
 
+    /** Jobs whose handler is executing right now, so `get` from inside one reads `running`. */
+    const running = new Map<string, FakeScheduledJob>();
+
+    /** How each finished job ended, as `get` reports it. The fake keeps them for the harness's lifetime instead of a retention window. */
+    const finished = new Map<string, ScheduledJobView>();
+
     /** Every captured TERMINAL job failure (retry budget exhausted), in execution order, across all sweeps. */
     const recordedFailures: ScheduledJobFailure[] = [];
 
@@ -192,6 +198,7 @@ const createFakeScheduler = (
         const id = requestedId ?? `fake-job-${String(nextId)}`;
 
         nextId += 1;
+        finished.delete(id);
 
         pending.set(id, {
             args: wireArgs,
@@ -224,15 +231,32 @@ const createFakeScheduler = (
 
     const scheduler: Scheduler = {
         cancel: (id: string) => {
-            const existed = pending.has(id);
+            const job = pending.get(id);
+            const existed = job !== undefined;
+
+            if (job !== undefined) {
+                finished.set(id, { ...job, completedAt: nowMs, state: "canceled" });
+            }
 
             pending.delete(id);
 
             return Promise.resolve({ cancelled: existed });
         },
 
-        // eslint-disable-next-line unicorn/no-null -- Scheduler.get returns null when absent (public API contract)
-        get: (id: string) => Promise.resolve(pending.get(id) ?? null),
+        get: (id: string) => {
+            const job = pending.get(id);
+            const active = running.get(id);
+            let view: ScheduledJobView | undefined = finished.get(id);
+
+            if (job !== undefined) {
+                view = { ...job, state: "pending" };
+            } else if (active !== undefined) {
+                view = { ...active, state: "running" };
+            }
+
+            // eslint-disable-next-line unicorn/no-null -- Scheduler.get returns null when absent (public API contract)
+            return Promise.resolve(view ?? null);
+        },
 
         list: () => Promise.resolve([...pending.values()]),
 
@@ -346,8 +370,10 @@ const createFakeScheduler = (
             executed += 1;
 
             try {
+                running.set(job.id, job);
                 // eslint-disable-next-line no-await-in-loop -- intentional sequential dispatch; jobs must run in order and may mutate shared state
                 await dispatchJob(job);
+                finished.set(job.id, { ...job, completedAt: nowMs, state: "succeeded" });
             } catch (error) {
                 // Mirrors SchedulerDO.recordRetry(): `attempts` counts THIS
                 // failure, so the very first failure sets it to 1 (not 0-indexed).
@@ -362,6 +388,13 @@ const createFakeScheduler = (
 
                     failed.push(failure);
                     recordedFailures.push(failure);
+                    finished.set(job.id, {
+                        ...job,
+                        attempts,
+                        completedAt: nowMs,
+                        error: error instanceof Error ? error.message : String(error),
+                        state: "failed",
+                    });
                 } else {
                     // Still within budget — re-enqueue with exponential backoff on
                     // the virtual clock (SchedulerDO's default "exponential"
@@ -372,6 +405,8 @@ const createFakeScheduler = (
 
                     pending.set(job.id, { ...job, attempts, scheduledFor: nowMs + delayMs });
                 }
+            } finally {
+                running.delete(job.id);
             }
         }
 

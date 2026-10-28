@@ -109,6 +109,12 @@ describe("scheduleRecord mirrors", () => {
         expect(membersOf(CLIENT_TYPES, "ScheduleRecord")).toStrictEqual(membersOf(SCHEDULER_TYPES, "ScheduleRecord"));
     });
 
+    it("this package's ScheduledJobView carries the scheduler's lifecycle fields", () => {
+        expect.assertions(1);
+
+        expect(membersOf(CLIENT_TYPES, "ScheduledJobView")).toStrictEqual(membersOf(SCHEDULER_TYPES, "ScheduledJobView"));
+    });
+
     it.each(["packages/shard-engine/src/system-reader.ts", "packages/server/src/types.ts"])(
         "%s's ScheduledFunctionDoc is a faithful subset of it",
         (mirror) => {
@@ -117,7 +123,14 @@ describe("scheduleRecord mirrors", () => {
             // The `ctx.db.system` view surfaces a subset, so this is containment
             // rather than equality — including optionality, which is where
             // `functionPath` had drifted to required and forced a `""` placeholder.
-            const source = new Set(membersOf(SCHEDULER_TYPES, "ScheduleRecord"));
+            // The lifecycle fields come from the `get()` view, and are optional on
+            // the doc because a `collect()` row is a pending job with no state.
+            const view = membersOf(SCHEDULER_TYPES, "ScheduledJobView");
+            const source = new Set([
+                ...membersOf(SCHEDULER_TYPES, "ScheduleRecord"),
+                ...view,
+                ...view.map((member) => (member.endsWith("?") ? member : `${member}?`)),
+            ]);
 
             expect(membersOf(mirror, "ScheduledFunctionDoc").filter((member) => !source.has(member))).toStrictEqual([]);
         },

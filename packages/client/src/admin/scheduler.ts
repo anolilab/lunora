@@ -6,13 +6,15 @@ import {
     SCHEDULED_DEAD_CANCEL_PATH,
     SCHEDULED_DEAD_PATH,
     SCHEDULED_DEAD_RETRY_PATH,
+    SCHEDULED_HISTORY_PATH,
+    SCHEDULED_JOB_PATH,
     SCHEDULED_PATH,
     SCHEDULED_STATUS_PATH,
     WORKFLOWS_INSTANCE_PATH,
     WORKFLOWS_INSTANCES_PATH,
     WORKFLOWS_STATUS_PATH,
 } from "../client-paths";
-import type { ScheduleRecord, SchedulerStatus, WorkflowInstanceDetail, WorkflowInstancePage, WorkflowInstanceStatus } from "../types";
+import type { ScheduledJobView, ScheduleRecord, SchedulerStatus, WorkflowInstanceDetail, WorkflowInstancePage, WorkflowInstanceStatus } from "../types";
 import type { LunoraAdminClient } from "./admin-client";
 import type { AdminHost } from "./host";
 
@@ -27,13 +29,32 @@ import type { AdminHost } from "./host";
  * encode exists to carry, so decoding on the way through would turn a job with a
  * `bigint` argument into a 500. Identity for pure-JSON args.
  */
-export const decodeRecordArgs = (record: ScheduleRecord): ScheduleRecord =>
+export const decodeRecordArgs = <T extends ScheduleRecord>(record: T): T =>
     "args" in record ? { ...record, args: decodeWire(record.args) as Record<string, unknown> } : record;
 
 export const listScheduledJobs = async (host: AdminHost): ReturnType<LunoraAdminClient["listScheduledJobs"]> => {
     host.assertOpen();
 
     const body = (await host.adminFetch(SCHEDULED_PATH, "GET")) as { records?: ScheduleRecord[] };
+
+    return (body.records ?? []).map((record) => decodeRecordArgs(record));
+};
+
+export const getScheduledJob = async (host: AdminHost, id: string): ReturnType<LunoraAdminClient["getScheduledJob"]> => {
+    host.assertOpen();
+
+    const body = (await host.adminFetch(`${SCHEDULED_JOB_PATH}?id=${encodeURIComponent(id)}`, "GET")) as { record?: ScheduledJobView };
+
+    // eslint-disable-next-line unicorn/no-null -- `null` is the documented "never scheduled, or past retention" answer
+    return body.record === undefined ? null : decodeRecordArgs(body.record);
+};
+
+export const listScheduledHistory = async (host: AdminHost): ReturnType<LunoraAdminClient["listScheduledHistory"]> => {
+    host.assertOpen();
+
+    // One page, newest first: history is a recent-activity view, and the
+    // retention window — not this read — is what bounds how much exists.
+    const body = (await host.adminFetch(SCHEDULED_HISTORY_PATH, "GET")) as { records?: ScheduledJobView[] };
 
     return (body.records ?? []).map((record) => decodeRecordArgs(record));
 };

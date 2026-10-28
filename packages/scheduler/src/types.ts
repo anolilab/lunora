@@ -154,6 +154,8 @@ export interface ScheduleRecord {
      */
     attempts?: number;
     enqueuedAt: number;
+    /** Why the job was dead-lettered. Set only on a parked (`/dead`) record. */
+    error?: string;
 
     /**
      * The `ns:fn` path of the function to dispatch on fire. Absent when the job
@@ -193,6 +195,32 @@ export interface ScheduleRecord {
     workflow?: string;
 }
 
+/**
+ * Where a job is in its life, as {@link Scheduler.get} reports it.
+ *
+ * - `pending` — waiting for its fire time, a pool slot, or a retry backoff.
+ * - `running` — its dispatch is in flight right now.
+ * - `succeeded` — the dispatch answered 2xx. For a function target the receiver
+ * answers only after the function returned, so this is the function's success;
+ * for a workflow/agent target it means the instance was STARTED, not finished —
+ * follow the instance (same id) for its outcome.
+ * - `failed` — the retry budget ran out and the job was dead-lettered
+ * ({@link Scheduler.dead}); `deadRetry` returns it to `pending`.
+ * - `canceled` — removed by {@link Scheduler.cancel}.
+ */
+export type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+
+/**
+ * A job as {@link Scheduler.get} sees it: the record plus its lifecycle state.
+ * Terminal states (`succeeded`, `canceled`, and a purged `failed`) are kept for
+ * a bounded retention window after `completedAt`, then answer `null`.
+ */
+export interface ScheduledJobView extends ScheduleRecord {
+    /** When the job reached its terminal state (epoch ms). Absent while `pending`/`running`. */
+    completedAt?: number;
+    state: ScheduledJobState;
+}
+
 export interface Scheduler {
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
 
@@ -210,8 +238,13 @@ export interface Scheduler {
      * recover is a no-op rather than an error.
      */
     deadRetry: (id: string) => Promise<boolean>;
-    /** Resolve a single pending job by id, or `null` when absent (derived from {@link Scheduler.list}). */
-    get: (id: string) => Promise<ScheduleRecord | null>;
+
+    /**
+     * Resolve a job by id with its lifecycle {@link ScheduledJobView.state} —
+     * pending, running, or (for a bounded retention window) its terminal outcome.
+     * `null` when the id was never scheduled or its terminal record has expired.
+     */
+    get: (id: string) => Promise<ScheduledJobView | null>;
     /** All pending scheduled jobs (the DO's `/list` view). */
     list: () => Promise<ScheduleRecord[]>;
 
