@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { runDeploymentsCommand } from "../../src/commands/cloudflare/deployments/handler";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
+import type { Spawner } from "../../src/util/spawn";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
 const silentLogger = (): { errors: string[]; logger: Logger } => {
@@ -32,6 +33,20 @@ const npmProjectCwd = (): string => {
 
     return dir;
 };
+
+/** A spawner that answers `deployments status` with `statusResult` and records every call. */
+const statusSpawner = (statusResult: { code: number; stdout?: string }): ReturnType<typeof createRecordingSpawner> => {
+    const { calls, spawner: recorder } = createRecordingSpawner();
+    const spawner: Spawner = async (descriptor) => {
+        await recorder(descriptor);
+
+        return descriptor.args.includes("status") ? statusResult : { code: 0 };
+    };
+
+    return { calls, spawner };
+};
+
+const liveDocument = JSON.stringify({ versions: [{ percentage: 100, version_id: "live1" }] });
 
 describe("lunora cloudflare deployments", () => {
     it("list spawns `wrangler deployments list` and forwards --format json/--env", async () => {
@@ -153,9 +168,9 @@ describe("lunora cloudflare deployments", () => {
     });
 
     it("promote --percent N --from <live> splits traffic as `versions deploy <id>@N% <live>@(100-N)%`", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
-        const { calls, spawner } = createRecordingSpawner();
+        const { calls, spawner } = statusSpawner({ code: 0, stdout: liveDocument });
         const { logger } = silentLogger();
 
         const result = await runDeploymentsCommand({
@@ -171,7 +186,36 @@ describe("lunora cloudflare deployments", () => {
         });
 
         expect(result.code).toBe(0);
-        expect(argsOf(calls)).toContain("wrangler versions deploy v9@10% live1@90% --yes");
+        expect(calls[0]?.descriptor.args.join(" ")).toContain("wrangler deployments status --json");
+        expect(calls[1]?.descriptor.args.join(" ")).toContain("wrangler versions deploy v9@10% live1@90% --yes");
+    });
+
+    it.each([
+        ["a --from that is not live", { code: 0, stdout: liveDocument }, "is not a live version"],
+        ["a status that exits non-zero", { code: 1 }, "could not read the live deployment"],
+        ["a status that is not JSON", { code: 0, stdout: "not json" }, "could not read the live deployment"],
+        ["a status without versions", { code: 0, stdout: "{}" }, "could not read the live deployment"],
+    ])("promote --from refuses %s and deploys nothing", async (_label, status, expected) => {
+        expect.assertions(3);
+
+        const { calls, spawner } = statusSpawner(status);
+        const { errors, logger } = silentLogger();
+
+        const result = await runDeploymentsCommand({
+            confirmSharedState: true,
+            cwd: "/tmp",
+            from: "stale9",
+            logger,
+            percent: 10,
+            spawner,
+            subcommand: "promote",
+            versionId: "v9",
+            yes: true,
+        });
+
+        expect(result.code).not.toBe(0);
+        expect(errors.join("\n")).toContain(expected);
+        expect(calls.some((call) => call.descriptor.args.includes("deploy"))).toBe(false);
     });
 
     it("promote --percent 100 keeps the single-version argv and needs no --from", async () => {

@@ -198,6 +198,59 @@ const buildArgs = (options: DeploymentsCommandOptions): ArgsResult => {
     }
 };
 
+/** The version ids in `wrangler deployments status --json` (`versions[].version_id`), or `undefined` when the document is not that shape. */
+const liveVersionIds = (stdout: string | undefined): string[] | undefined => {
+    let document: unknown;
+
+    try {
+        document = JSON.parse(stdout ?? "");
+    } catch {
+        return undefined;
+    }
+
+    const versions = (document as { versions?: unknown } | null)?.versions;
+
+    if (!Array.isArray(versions)) {
+        return undefined;
+    }
+
+    return versions.flatMap((entry: unknown) => {
+        const id = (entry as { version_id?: unknown } | null)?.version_id;
+
+        return typeof id === "string" ? [id] : [];
+    });
+};
+
+/**
+ * A partial promote hands `--from` the rest of the traffic, so it must be live now: a stale id
+ * would split traffic onto a version that no longer serves it. Refuses when the current
+ * deployment cannot be read, rather than splitting blind.
+ */
+const checkFromIsLive = async (options: DeploymentsCommandOptions, spawner: Spawner, cwd: string): Promise<DeploymentsCommandResult | undefined> => {
+    const exec = execArgsFor(detectPackageManager(cwd), "wrangler", withEnv(["deployments", "status", "--json"], options.env));
+    const status = await spawner({ args: exec.args, captureStdoutSilently: true, command: exec.command, cwd });
+    const live = status.code === 0 ? liveVersionIds(status.stdout) : undefined;
+
+    if (live === undefined) {
+        const error =
+            "deployments promote --from: could not read the live deployment (`wrangler deployments status`), so --from cannot be verified. Nothing was changed.";
+
+        options.logger.error(error);
+
+        return { code: EXIT_CODE.FAILURE, descriptor: undefined, error };
+    }
+
+    if (options.from !== undefined && !live.includes(options.from)) {
+        const error = `deployments promote --from ${options.from} is not a live version (live: ${live.join(", ") || "none"}). Check \`lunora cloudflare deployments status\`.`;
+
+        options.logger.error(error);
+
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error };
+    }
+
+    return undefined;
+};
+
 const runDeploymentsCommand = async (options: DeploymentsCommandOptions): Promise<DeploymentsCommandResult> => {
     // Only `list` and `status` have a document. Refused rather than ignored: a caller that
     // pipes `deployments rollback --format json` into a parser would otherwise
@@ -225,6 +278,15 @@ const runDeploymentsCommand = async (options: DeploymentsCommandOptions): Promis
     // is the only thing on stdout.
     const { logger } = options;
     const cwd = options.cwd ?? process.cwd();
+
+    if (options.subcommand === "promote" && options.from !== undefined) {
+        const refusal = await checkFromIsLive(options, options.spawner ?? defaultSpawner, cwd);
+
+        if (refusal !== undefined) {
+            return refusal;
+        }
+    }
+
     const exec = execArgsFor(detectPackageManager(cwd), "wrangler", args);
     const descriptor: SpawnDescriptor = { args: exec.args, command: exec.command, cwd };
 

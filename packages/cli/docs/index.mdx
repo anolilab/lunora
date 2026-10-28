@@ -990,7 +990,9 @@ lunora cloudflare deployments promote <version-id> --percent 10 --from <live-ver
 # send 10% to a version and keep 90% on the live one (partial rollout; both versions share one Durable Object database)
 ```
 
-`rollback` and `promote` change live traffic, so they require `--yes`.
+`rollback` and `promote` change live traffic, so they require `--yes`. A partial
+promote first reads `deployments status` and refuses when `--from` is not one of
+the live versions, or when the live deployment cannot be read.
 
 #### `lunora cloudflare profile`
 

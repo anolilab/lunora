@@ -132,7 +132,7 @@ const cloudflareCommand: Command = {
             type: String,
         },
         {
-            description: "deployments promote --percent below 100: the live version that keeps the remaining traffic",
+            description: "deployments promote --percent below 100: the live version that keeps the remaining traffic (checked against `deployments status`)",
             name: "from",
             type: String,
         },
