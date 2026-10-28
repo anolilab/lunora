@@ -34,6 +34,9 @@ const parseImportMode = (raw: string | undefined, fallback: ImportMode): ImportM
     return IMPORT_MODES.find((mode) => mode === raw);
 };
 
+/** Whether a mode overwrites a stored row whose `_id` the file carries. */
+const overwrites = (mode: ImportMode): boolean => mode === "upsert" || mode === "replace";
+
 /** The source file's rows per table, and the `_id`s they carry. */
 type SourceIndex = Map<string, { ids: Set<string>; rows: number }>;
 
@@ -116,7 +119,7 @@ const planImport = async (target: ExportTarget, index: SourceIndex, mode: Import
 
 /** Print the plan as one line per table. */
 const reportPlan = (logger: Logger, plan: ImportPlan, mode: ImportMode): void => {
-    const existingVerb = mode === "append" || mode === "require-empty" ? "left unchanged" : "replaced";
+    const existingVerb = overwrites(mode) ? "replaced" : "left unchanged";
 
     logger.info(`import plan (--mode ${mode}):`);
 
@@ -133,7 +136,7 @@ const reportPlan = (logger: Logger, plan: ImportPlan, mode: ImportMode): void =>
 
 /** Whether the plan overwrites or deletes a stored row, which is what a confirmation guards. */
 const planDestroysRows = (plan: ImportPlan, mode: ImportMode): boolean =>
-    (mode === "upsert" || mode === "replace") && plan.tables.some((table) => table.existing > 0 || table.delete > 0);
+    overwrites(mode) && plan.tables.some((table) => table.existing > 0 || table.delete > 0);
 
 export type { ImportMode, ImportPlan, SourceIndex, TablePlan };
-export { IMPORT_MODES, parseImportMode, planDestroysRows, planImport, recordSourceRow, reportPlan };
+export { IMPORT_MODES, overwrites, parseImportMode, planDestroysRows, planImport, recordSourceRow, reportPlan };

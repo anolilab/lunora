@@ -28,7 +28,8 @@ const ROW_CHECKABLE_CHANGES = new Set<DriftChange["type"]>([
     "removedField",
 ]);
 
-const isRowCheckable = (change: DriftChange): boolean => change.table !== undefined && change.field !== undefined && ROW_CHECKABLE_CHANGES.has(change.type);
+const isRowCheckable = (change: DriftChange): change is DriftChange & { field: string; table: string } =>
+    change.table !== undefined && change.field !== undefined && ROW_CHECKABLE_CHANGES.has(change.type);
 
 /** Rows named in a failing verdict. Enough to act on, few enough to read in a CI log. */
 const FAILURE_SAMPLE = 10;
@@ -286,8 +287,7 @@ const planCheck = (changes: ReadonlyArray<DriftChange>, tables: ReadonlyMap<stri
             return { reason: `"${change.summary}" is not something stored rows can confirm` };
         }
 
-        const name = change.table as string;
-        const field = change.field as string;
+        const { field, table: name } = change;
         const table = tables.get(name);
 
         if (table === undefined) {
@@ -397,5 +397,5 @@ const describeFailures = (verdict: Extract<StoredRowVerdict, { kind: "fails" }>)
         ...verdict.failures.map((failure) => `  - ${failure.table} ${failure.id}: ${failure.field} ${failure.reason}`),
     ].join("\n");
 
-export type { StoredRowFailure, StoredRowVerdict };
+export type { StoredRowVerdict };
 export { checkStoredRows, describeFailures, isRowCheckable };

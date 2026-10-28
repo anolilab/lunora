@@ -20,7 +20,7 @@ import { CONVEX_STORAGE_TABLE } from "../convex-snapshot";
 import type { ImportBatcher, ImportRowError, ImportShardFailure, ImportTotals } from "./import-batcher";
 import { createImportBatcher } from "./import-batcher";
 import type { ImportMode, ImportPlan, SourceIndex, TablePlan } from "./import-plan";
-import { planDestroysRows, planImport, recordSourceRow, reportPlan } from "./import-plan";
+import { overwrites, planDestroysRows, planImport, recordSourceRow, reportPlan } from "./import-plan";
 import { createRowTransformer } from "./import-rows";
 import type { ImportSource, ImportSourceName } from "./import-source";
 import { readConvexExport, resolveImportSource } from "./import-source";
@@ -912,9 +912,6 @@ const logUnreachedShards = (logger: Logger, shards: ImportShardFailure[]): void 
         );
     }
 };
-
-/** Whether a mode overwrites a stored row whose `_id` the file carries. */
-const overwrites = (mode: ImportMode): boolean => mode === "upsert" || mode === "replace";
 
 /**
  * Why the worker cannot check a file before writing it, or `undefined` when it can. A worker built before `?dryRun=true` existed ignores the
