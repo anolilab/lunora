@@ -3526,7 +3526,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * Throws a {@link LunoraError} on failure so both the scheduled-fire loop and
      * the manual `/cron-jobs/run` trigger surface the same error shape.
      */
-    const runOneCronJob = async (job: CronJobDispatch, env: unknown, context: ExecutionContextLike | undefined, traceparent?: string): Promise<void> => {
+    const runOneCronJob = async (
+        job: CronJobDispatch,
+        env: unknown,
+        context: ExecutionContextLike | undefined,
+        traceparent?: string,
+        scheduledFor?: number,
+    ): Promise<void> => {
         if (job.workflow) {
             await startWorkflowInstance(job.workflow, job.args ?? {}, { context, env }, `cron job "${job.name}"`);
 
@@ -3540,7 +3546,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             });
         }
 
-        const response = await dispatchToShard(job.functionPath, job.args ?? {}, job.shardKey ?? defaultShard, undefined, undefined, traceparent);
+        // The tick's planned time rides along so the shard records the job's start lag, as a scheduled job's does.
+        const response = await dispatchToShard(job.functionPath, job.args ?? {}, job.shardKey ?? defaultShard, undefined, undefined, traceparent, scheduledFor);
 
         if (!response.ok) {
             // A failed background job is operationally a 500-class "didn't run",
@@ -3626,6 +3633,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         errors: Error[],
         toError: (error: unknown) => Error,
         traceparent?: string,
+        scheduledTime?: number,
     ): Promise<number> => {
         const cronJobs = options.cronJobs?.[cron];
 
@@ -3645,7 +3653,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             try {
                 // eslint-disable-next-line no-await-in-loop -- see above
-                await runOneCronJob(job, env, context, traceparent);
+                await runOneCronJob(job, env, context, traceparent, scheduledTime);
                 // eslint-disable-next-line no-await-in-loop -- see above
                 await endCronRun(stub, job.name, gate);
             } catch (error: unknown) {
@@ -5875,7 +5883,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // Code-defined crons: run every job declared under the firing expression.
         // Failures join `errors` for the combined rethrow below. A workflow-targeting
         // job starts its instance off the Worker's `ctx.exports` (or `env`).
-        const ranJobs = await runCronJobs(controller.cron, env, context, errors, toError, traceparent);
+        const ranJobs = await runCronJobs(controller.cron, env, context, errors, toError, traceparent, controller.scheduledTime);
         const isBackupCron = Boolean(options.backupStore) && options.backupCron !== undefined && options.backupCron === controller.cron;
 
         if (isBackupCron) {

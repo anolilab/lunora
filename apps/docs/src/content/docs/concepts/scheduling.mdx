@@ -214,7 +214,8 @@ don't gate a scheduled function on `ctx.auth`.
 
 Each scheduled job's dispatch records a `scheduler.lag_ms` histogram on the
 shard that runs it: the time from the job's due time to the moment it started,
-one series per function (the `function` attribute). It rides the same metric
+one series per function (the `function` attribute). A code-defined cron job
+records it too, measured from the tick's planned time. It rides the same metric
 pipeline as `ctx.metrics`, so a configured sink exports it, and the Studio's
 Schedule → Pools view lists it per job. A pooled job that waited for a free
 slot counts the wait from its original due time; a retry counts only its own
