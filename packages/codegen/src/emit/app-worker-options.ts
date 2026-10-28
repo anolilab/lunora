@@ -518,6 +518,42 @@ ${options.voiceAgents
         : []),
 ];
 
+/**
+ * The push-consumer handler backing the worker's `queue(batch, …)` entry:
+ * routes each delivered batch to its `defineQueue` handler. Built from
+ * `@lunora/queue` here (keeping the runtime decoupled) and wired only when the
+ * app declares push queues in `lunora/queues.ts`. In a dev environment (or with
+ * `LUNORA_QUEUE_CAPTURE`), every consumed message is recorded into the studio's
+ * Queues log via the root shard's `recordQueueMessage` admin RPC.
+ * `ctx.live.publish` reaches the handler only for an app that declares a live
+ * stream the target serves: the runtime always offers the Worker's shard-forwarding
+ * publisher as the fifth argument, and this forwards it only when `liveStreams` is set.
+ * Otherwise the handler's `ctx.live` is absent, matching a target without live streams.
+ */
+const buildQueueConsumerLines = (options: ResolvedAppOptions): string[] =>
+    options.hasQueue
+        ? [
+              // The runtime hands the handler the Worker's shard-forwarding publisher (fifth)
+              // and the host's `ctx.run` fetch (sixth, `undefined` on Cloudflare).
+              // Lazy: the registry statically imports every queue-declaring module, so it loads on the
+              // first batch (all of them at once, cached by the module system) instead of at startup.
+              `            queue: ${options.lazyFunctions === true ? "async " : ""}(batch: unknown, queueEnv: unknown, _context: ExecutionContextLike, trigger: TriggerTrace, ${options.liveStreams ? "queueLive" : "_live"}: Parameters<typeof dispatchQueueBatch>[2]["live"], queueFetch: Parameters<typeof dispatchQueueBatch>[2]["fetchImpl"]): Promise<void> =>`,
+              `                dispatchQueueBatch(batch as Parameters<typeof dispatchQueueBatch>[0], ${options.lazyFunctions === true ? `(await import("./queues.js")).LUNORA_QUEUE_REGISTRY` : "LUNORA_QUEUE_REGISTRY"}, {`,
+              `                    capture: shouldCaptureQueue(queueEnv as Record<string, unknown>)`,
+              `                        ? createQueueCaptureSink(queueEnv as Record<string, unknown>${
+                  options.jurisdiction ? `, { jurisdiction: ${JSON.stringify(options.jurisdiction)} }` : ""
+              })`,
+              `                        : undefined,`,
+              `                    env: queueEnv as Record<string, unknown>,`,
+              // The consumer's `ctx.run` joins the queue invocation's trace instead
+              // of minting a fresh one per dispatched function.
+              `                    traceparent: trigger.traceparent,`,
+              `                    fetchImpl: queueFetch,`,
+              ...(options.liveStreams ? [`                    live: queueLive,`] : []),
+              `                }),`,
+          ]
+        : [];
+
 /** The `shardDO` + spec fields the worker always (or conditionally) carries. */
 const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
     `            cronJobs: LUNORA_CRONS,`,
@@ -534,36 +570,7 @@ const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
     ...(options.wantsArchitecture ? [`            architecture: deferred.architecture,`] : []),
     ...(options.wantsOpenApi ? [`            openApiSpec: deferred.openApiSpec,`] : []),
     ...(options.wantsOpenRpc ? [`            openRpcSpec: deferred.openRpcSpec,`] : []),
-    // The push-consumer handler backing the worker's `queue(batch, …)` entry:
-    // routes each delivered batch to its `defineQueue` handler. Built from
-    // `@lunora/queue` here (keeping the runtime decoupled) and wired only when the
-    // app declares push queues in `lunora/queues.ts`. In a dev environment (or with
-    // `LUNORA_QUEUE_CAPTURE`), every consumed message is recorded into the studio's
-    // Queues log via the root shard's `recordQueueMessage` admin RPC.
-    // `ctx.live.publish` reaches the handler only for an app that declares a live
-    // stream the target serves: the runtime always offers the Worker's shard-forwarding
-    // publisher as the fifth argument, and this forwards it only when `liveStreams` is set.
-    // Otherwise the handler's `ctx.live` is absent, matching a target without live streams.
-    ...(options.hasQueue
-        ? [
-              // The runtime hands the handler the Worker's shard-forwarding publisher (fifth)
-              // and the host's `ctx.run` fetch (sixth, `undefined` on Cloudflare).
-              `            queue: (batch: unknown, queueEnv: unknown, _context: ExecutionContextLike, trigger: TriggerTrace, ${options.liveStreams ? "queueLive" : "_live"}: Parameters<typeof dispatchQueueBatch>[2]["live"], queueFetch: Parameters<typeof dispatchQueueBatch>[2]["fetchImpl"]): Promise<void> =>`,
-              `                dispatchQueueBatch(batch as Parameters<typeof dispatchQueueBatch>[0], LUNORA_QUEUE_REGISTRY, {`,
-              `                    capture: shouldCaptureQueue(queueEnv as Record<string, unknown>)`,
-              `                        ? createQueueCaptureSink(queueEnv as Record<string, unknown>${
-                  options.jurisdiction ? `, { jurisdiction: ${JSON.stringify(options.jurisdiction)} }` : ""
-              })`,
-              `                        : undefined,`,
-              `                    env: queueEnv as Record<string, unknown>,`,
-              // The consumer's `ctx.run` joins the queue invocation's trace instead
-              // of minting a fresh one per dispatched function.
-              `                    traceparent: trigger.traceparent,`,
-              `                    fetchImpl: queueFetch,`,
-              ...(options.liveStreams ? [`                    live: queueLive,`] : []),
-              `                }),`,
-          ]
-        : []),
+    ...buildQueueConsumerLines(options),
     // Spread so an unset `.httpRouter()` leaves the key absent rather than
     // explicitly `undefined` — `createWorker` treats the two the same, but the
     // emitted options object reads as "not configured" either way.

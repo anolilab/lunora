@@ -102,6 +102,14 @@ interface EmitAppOptions {
     jurisdictionPinsAuth?: boolean;
 
     /**
+     * The lazy function registry is selected (`--lazy-functions`). The modules the
+     * worker reaches only from an event entry — the push-queue registry and the
+     * `onEmail` agent definitions — then load with `import()` on that event instead
+     * of at isolate startup. Absent or `false` keeps the eager output unchanged.
+     */
+    lazyFunctions?: boolean;
+
+    /**
      * Every `defineLiveStream` the app declares, read from its literals. With `liveStreams` set, the worker mounts
      * each stream's connect and control routes itself (`liveStreamRouter`), so the app mounts none.
      */

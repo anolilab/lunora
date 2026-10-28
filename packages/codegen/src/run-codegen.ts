@@ -840,6 +840,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         jurisdiction: schema.jurisdiction,
         // `{ pinAuth: true }` — only then is DO-backed auth pinned too.
         jurisdictionPinsAuth: schema.jurisdictionPinsAuth === true,
+        lazyFunctions,
         // Drives the emitted `listSchemaTables` and `resolveTableSharding`.
         tables: schema.tables.map((table) => {
             return { name: table.name, shardMode: table.shardMode };
