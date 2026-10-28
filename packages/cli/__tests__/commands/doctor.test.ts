@@ -1280,6 +1280,14 @@ describe("runDoctor", () => {
             expect(finding?.message).not.toContain("request logs");
         });
 
+        it("completes when an env block is null", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ env: { staging: null } }));
+
+            await expect(runDoctor({ cwd: workdir, logger: makeLogger().logger })).resolves.toHaveProperty("findings");
+        });
+
         it("is quiet when logging is disabled", async () => {
             expect.assertions(1);
 

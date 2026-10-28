@@ -54,9 +54,12 @@ const checkQueryStringRedaction = (parsed: WranglerConfig | undefined, findings:
     }
 
     for (const [name, environment] of Object.entries(parsed.env ?? {})) {
-        if (keepsQueryStrings(environment.observability)) {
+        // An env block is read as written, so a null entry must not throw out of the whole run.
+        const observability = (environment as WranglerConfig | null | undefined)?.observability;
+
+        if (keepsQueryStrings(observability)) {
             scopes.push(`env.${name}`);
-            signals.add(leakingSignals(environment.observability));
+            signals.add(leakingSignals(observability));
         }
     }
 
