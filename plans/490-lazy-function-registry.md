@@ -212,7 +212,9 @@ keeps those installed in the project, and `import()`s each one in workerd next t
 modules. It runs in eager builds too when there is at least one. Not covered: an SDK a package loads
 for itself (the MCP SDK inside `@lunora/mcp`; its workerd suite is the check there), and every
 project the smoke-load already skips (containers, a Hyperdrive binding with no local database, which
-includes the gate fixture).
+includes the gate fixture). A Cloudflare Vite plugin build (`.wrangler/deploy/config.json` present) runs
+against the source config with stub Durable Object / Workflow classes in place of the entry, which
+only builds inside Vite; its entry's own evaluation is therefore not smoke-checked.
 
 Durable Object input gate: `ctx.browser`, `ctx.payments` and `ctx.sql` are ActionCtx-only, and the
 loaders run inside the action body, immediately before the network call the action was about to
