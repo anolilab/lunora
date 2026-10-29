@@ -76,7 +76,7 @@ jobs:
   # Worker, Durable Objects, D1, KV and R2, never production's. One run per
   # pull request at a time, so a teardown never races a deploy.
   preview:
-    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     concurrency: lunora-preview-\${{ github.event.pull_request.number }}
     permissions:
@@ -98,7 +98,7 @@ jobs:
   # Closing or merging the pull request deletes the preview Worker and every
   # resource recorded for it.
   preview-delete:
-    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     concurrency: lunora-preview-\${{ github.event.pull_request.number }}
     permissions:
@@ -122,7 +122,7 @@ jobs:
   # A fork's or Dependabot's pull request gets no secrets, so it runs the
   # deploy pipeline, bundle included, and publishes nothing.
   check:
-    if: github.event_name == 'pull_request' && github.event.action != 'closed' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && (github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.login == 'dependabot[bot]')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -319,7 +319,7 @@ describe("ci-workflow", () => {
         // A closed, unmerged pull request's merge ref can be gone; the teardown checks out the base branch.
         expect(teardown).toContain("ref: ${{ github.event.pull_request.base.ref }}");
         // Dependabot's pull requests get no Actions secrets either: the dry-run check, not a preview.
-        expect(github.slice(github.indexOf("  check:"))).toContain("|| github.actor == 'dependabot[bot]')");
+        expect(github.slice(github.indexOf("  check:"))).toContain("|| github.event.pull_request.user.login == 'dependabot[bot]')");
         // A fork's merge request has no CI/CD variables: it gets the dry-run check, not a preview.
         expect(gitlab).toContain('"merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID\n  resource_group');
         expect(gitlab.slice(gitlab.indexOf("\ncheck:"))).toContain(

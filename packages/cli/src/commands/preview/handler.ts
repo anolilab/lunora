@@ -683,7 +683,8 @@ const deletePreview = async (context: PreviewContext, options: PreviewCommandOpt
     // The record is account data anyone with the token can edit: it is trusted only for what a preview could own.
     const collisions = productionCollisions(config, [record.worker, ...record.resources.flatMap((resource) => [resource.id, resource.name])]);
 
-    if (record.worker !== names.worker || record.production !== names.production || collisions.length > 0) {
+    // `name` and `production` form the key the record is later deleted under, so both must be the ones read.
+    if (record.worker !== names.worker || record.production !== names.production || record.name !== names.slug || collisions.length > 0) {
         return fail(
             logger,
             `the record for preview "${names.slug}" names ${collisions.length > 0 ? `production's ${collisions.join(", ")}` : `Worker "${record.worker}", not "${names.worker}"`}; refusing to delete anything`,

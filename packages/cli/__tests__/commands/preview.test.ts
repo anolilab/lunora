@@ -1281,6 +1281,24 @@ describe("lunora preview", () => {
             expect(account.d1.has("billing-db")).toBe(true);
         });
 
+        it("refuses a record that names another preview, whose registry key it would otherwise delete", async () => {
+            expect.assertions(2);
+
+            const account = await deployed();
+            const record = recordOf(account);
+
+            record.set({ ...record.value, name: "7" });
+            // The Worker is already gone, so its marker cannot catch the mismatch.
+            account.workers.clear();
+            account.kvValues.get([...account.kv].find(([, title]) => title === "lunora-preview-registry")?.[0] ?? "")?.set("lunora-app/7", "{}");
+            account.calls.length = 0;
+
+            const result = await deleteIt(account);
+
+            expect(result.error).toMatch(/refusing to delete anything/u);
+            expect(account.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+        });
+
         it("refuses a record with a resource this CLI could not have written", async () => {
             expect.assertions(2);
 

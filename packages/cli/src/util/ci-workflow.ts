@@ -165,7 +165,7 @@ ${githubSetupSteps(pm)}
   # Worker, Durable Objects, D1, KV and R2, never production's. One run per
   # pull request at a time, so a teardown never races a deploy.
   preview:
-    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     concurrency: lunora-preview-\${{ github.event.pull_request.number }}
     permissions:
@@ -179,7 +179,7 @@ ${githubSetupSteps(pm)}
   # Closing or merging the pull request deletes the preview Worker and every
   # resource recorded for it.
   preview-delete:
-    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     concurrency: lunora-preview-\${{ github.event.pull_request.number }}
     permissions:
@@ -193,7 +193,7 @@ ${githubSetupSteps(pm, `\${{ github.event.pull_request.base.ref }}`)}
   # A fork's or Dependabot's pull request gets no secrets, so it runs the
   # deploy pipeline, bundle included, and publishes nothing.
   check:
-    if: github.event_name == 'pull_request' && github.event.action != 'closed' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && (github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.login == 'dependabot[bot]')
     runs-on: ubuntu-latest
     permissions:
       contents: read
