@@ -45,13 +45,13 @@
  * cancelled at isolate teardown while the money has already moved on-chain.
  */
 import { LunoraError } from "@lunora/errors";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { JsonSchemaValidator } from "@modelcontextprotocol/sdk/validation";
-import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/cfworker";
+import type { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/cfworker";
 
 import { memoizePromise } from "../../../shared/promise-memo";
+import loadMcpSdk from "./sdk";
 import { readScreenedBody, serveStateless } from "./serve-stateless";
 import callToolName from "./tool-call";
 import { errorFromThrown, errorResult } from "./tool-result";
@@ -178,8 +178,13 @@ interface PaidMcpServer {
 interface RegisteredTool {
     definition: Tool;
     handler: ToolHandler;
-    /** `definition.inputSchema`, compiled once at registration. */
-    validate: JsonSchemaValidator<Record<string, unknown>>;
+
+    /**
+     * `definition.inputSchema`, compiled once on the first request that needs it
+     * ({@link compileValidators}), not at registration: registering runs at module
+     * scope, and the compiler is part of the MCP SDK.
+     */
+    validate?: JsonSchemaValidator<Record<string, unknown>>;
 }
 
 /**
@@ -188,18 +193,36 @@ interface RegisteredTool {
  */
 let schemaValidator: CfWorkerJsonSchemaValidator | undefined;
 
-const getSchemaValidator = (): CfWorkerJsonSchemaValidator => {
-    schemaValidator ??= new CfWorkerJsonSchemaValidator();
+const getSchemaValidator = async (): Promise<CfWorkerJsonSchemaValidator> => {
+    if (schemaValidator === undefined) {
+        const { CfWorkerJsonSchemaValidator: Validator } = await import("@modelcontextprotocol/sdk/validation/cfworker");
+
+        schemaValidator ??= new Validator();
+    }
 
     return schemaValidator;
+};
+
+/** Compile the `inputSchema` of every tool registered since the last request. */
+const compileValidators = async (tools: ReadonlyMap<string, RegisteredTool>): Promise<void> => {
+    const validator = await getSchemaValidator();
+
+    for (const entry of tools.values()) {
+        entry.validate ??= validator.getValidator(entry.definition.inputSchema);
+    }
 };
 
 /**
  * The `isError` result for a call whose arguments fail the tool's
  * `inputSchema`, or `undefined` when they pass. The ONE check both the
  * pre-charge dry run and the real dispatch apply, so they cannot disagree.
+ * Both run after {@link compileValidators}, so `validate` is set.
  */
 const argumentsRejection = (entry: RegisteredTool, name: string, arguments_: Record<string, unknown>): CallToolResult | undefined => {
+    if (entry.validate === undefined) {
+        return errorResult("INTERNAL", `the input schema of tool "${name}" was not compiled`);
+    }
+
     const result = entry.validate(arguments_);
 
     return result.valid ? undefined : errorResult("BAD_REQUEST", `invalid arguments for tool "${name}": ${result.errorMessage}`);
@@ -271,6 +294,7 @@ const transportRejection = async (
     // An object, not a `let`: the flag is flipped inside a callback, which flow
     // analysis cannot see, so a bare boolean reads as always-false here.
     const handler = { reached: false };
+    const { CallToolRequestSchema, Server } = await loadMcpSdk();
     const probe = new Server({ name: "lunora-paid-mcp-preflight", version: "0.0.0" }, { capabilities: { tools: {} } });
 
     probe.setRequestHandler(CallToolRequestSchema, (call): CallToolResult => {
@@ -320,7 +344,7 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
             name: options.name,
         };
 
-        tools.set(options.name, { definition, handler, validate: getSchemaValidator().getValidator(definition.inputSchema) });
+        tools.set(options.name, { definition, handler });
 
         if (price !== undefined) {
             prices.set(options.name, price);
@@ -328,7 +352,8 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
     };
 
     // Build a fresh registry-backed `Server` (the stateless transport connects one per request).
-    const buildServer = (): Server => {
+    const buildServer = async (): Promise<Server> => {
+        const { CallToolRequestSchema, ListToolsRequestSchema, Server } = await loadMcpSdk();
         const server = new Server(serverInfo, { capabilities: { tools: {} } });
 
         server.setRequestHandler(ListToolsRequestSchema, () => {
@@ -397,12 +422,14 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
 
         const { parsedBody } = screened;
 
+        await compileValidators(tools);
+
         // Hand the already-parsed body to the transport so it doesn't re-read the
         // consumed stream. `parsedBody` is `undefined` only for a GET/DELETE
         // handshake, which carries no body: `readScreenedBody` refuses a POST it
         // could not parse, so this module never has to guess whether an
         // unreadable body targeted a priced tool.
-        const dispatch = (): Promise<Response> => serveStateless(buildServer(), request, { maxRequestBytes: config.maxRequestBytes, parsedBody });
+        const dispatch = async (): Promise<Response> => serveStateless(await buildServer(), request, { maxRequestBytes: config.maxRequestBytes, parsedBody });
 
         if (Array.isArray(parsedBody)) {
             return parsedBody.some((message) => prices.has(callToolName(message) ?? "")) ? refuseBatch() : dispatch();

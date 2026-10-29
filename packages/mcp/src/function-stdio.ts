@@ -13,7 +13,7 @@ import { createFunctionMcpServer } from "./function-server";
  */
 // eslint-disable-next-line sonarjs/deprecation -- see the `Server` import above.
 const connectFunctionStdio = async (options: FunctionMcpServerOptions): Promise<Server> => {
-    const server = createFunctionMcpServer(options);
+    const server = await createFunctionMcpServer(options);
 
     await server.connect(new StdioServerTransport());
 

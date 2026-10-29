@@ -382,7 +382,7 @@ const localTools = (options: LocalMcpServerOptions, clientFor?: (deployment: Loc
 };
 
 /** Build the composed local server without connecting a transport. */
-const createLocalMcpServer = (options: LocalMcpServerOptions = {}): Server => {
+const createLocalMcpServer = async (options: LocalMcpServerOptions = {}): Promise<Server> => {
     // Resources come from the same docs index the tools read, so they appear
     // only when the documentation surface is enabled.
     const index = buildDocsIndex(options);
@@ -404,7 +404,7 @@ const createLocalMcpServer = (options: LocalMcpServerOptions = {}): Server => {
         resourceProviders.push(deploymentSpecResources(options.deployment, clientFor));
     }
 
-    return createToolServer(
+    return await createToolServer(
         { name: LOCAL_SERVER_NAME, version: options.version ?? "0.0.0" },
         localTools(options, clientFor),
         resourceProviders.length === 0 ? undefined : combineResourceProviders(resourceProviders),
@@ -417,7 +417,7 @@ const createLocalMcpServer = (options: LocalMcpServerOptions = {}): Server => {
  * the process then stays alive serving requests.
  */
 const connectLocalStdio = async (options: LocalMcpServerOptions = {}): Promise<Server> => {
-    const server = createLocalMcpServer(options);
+    const server = await createLocalMcpServer(options);
 
     await server.connect(new StdioServerTransport());
 

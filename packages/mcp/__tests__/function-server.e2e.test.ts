@@ -71,8 +71,8 @@ const connected = async (server: Server): Promise<Client> => {
     return client;
 };
 
-const serverFor = (fetch: (input: string | URL | Request, init?: RequestInit) => Promise<Response>): Server =>
-    createFunctionMcpServer({ allowWrites: true, fetch, openRpcSpec: SPEC, token: CALLER_TOKEN, url: "https://app.example" });
+const serverFor = async (fetch: (input: string | URL | Request, init?: RequestInit) => Promise<Response>): Promise<Server> =>
+    await createFunctionMcpServer({ allowWrites: true, fetch, openRpcSpec: SPEC, token: CALLER_TOKEN, url: "https://app.example" });
 
 describe("createFunctionMcpServer over a real SDK client", () => {
     it("lists one tool per function, and the query's outputSchema admits an error", async () => {
@@ -81,7 +81,7 @@ describe("createFunctionMcpServer over a real SDK client", () => {
         const deployed = deployment(() => {
             return { body: {}, status: 200 };
         });
-        const client = await connected(serverFor(deployed.fetch));
+        const client = await connected(await serverFor(deployed.fetch));
         const { tools } = await client.listTools();
 
         expect(tools.map((tool) => tool.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["billing_get", "messages_send"]);
@@ -97,7 +97,7 @@ describe("createFunctionMcpServer over a real SDK client", () => {
         const deployed = deployment(() => {
             return { body: { result: { id: "b1", total: 3 } }, status: 200 };
         });
-        const client = await connected(serverFor(deployed.fetch));
+        const client = await connected(await serverFor(deployed.fetch));
         const result = await client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" });
 
         expect(result.isError ?? false).toBe(false);
@@ -116,7 +116,7 @@ describe("createFunctionMcpServer over a real SDK client", () => {
             return { body: {}, status: 200 };
         });
         const client = await connected(
-            createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: optional, token: CALLER_TOKEN, url: "https://app.example" }),
+            await createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: optional, token: CALLER_TOKEN, url: "https://app.example" }),
         );
         const result = await client.callTool({ name: "notes_find" });
 
@@ -135,7 +135,7 @@ describe("createFunctionMcpServer over a real SDK client", () => {
             return { body: {}, status: 200 };
         });
         const client = await connected(
-            createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: optional, token: CALLER_TOKEN, url: "https://app.example" }),
+            await createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: optional, token: CALLER_TOKEN, url: "https://app.example" }),
         );
         const result = await client.callTool({ name: "notes_get" });
 
@@ -151,7 +151,7 @@ describe("createFunctionMcpServer over a real SDK client", () => {
         const deployed = deployment(() => {
             return { body: { error: { code: "FORBIDDEN", message: "no access to this billing account" } }, status: 403 };
         });
-        const client = await connected(serverFor(deployed.fetch));
+        const client = await connected(await serverFor(deployed.fetch));
         const result = await client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" });
 
         expect(result.isError).toBe(true);
@@ -166,7 +166,7 @@ describe("createFunctionMcpServer over a real SDK client", () => {
         const deployed = deployment(() => {
             return { body: { result: { id: "m1" } }, status: 200 };
         });
-        const client = await connected(serverFor(deployed.fetch));
+        const client = await connected(await serverFor(deployed.fetch));
         const result = await client.callTool({ arguments: { args: { text: "hi" } }, name: "messages_send" });
         const [first] = result.content as { text: string }[];
         const { nextStep } = JSON.parse(first?.text ?? "{}") as { nextStep: string };
@@ -186,7 +186,7 @@ describe("createFunctionMcpServer over a real SDK client", () => {
         const deployed = deployment(() => {
             return { body: { result: { id: "m1" } }, status: 200 };
         });
-        const client = await connected(serverFor(deployed.fetch));
+        const client = await connected(await serverFor(deployed.fetch));
         const proposal = await client.callTool({ arguments: { args: { text: "hi" } }, name: "messages_send" });
         const { actionDigest } = JSON.parse((proposal.content as { text: string }[])[0]?.text ?? "{}") as { actionDigest: string };
         const result = await client.callTool({
@@ -207,7 +207,7 @@ describe("createFunctionMcpServer over a real SDK client", () => {
         const deployed = deployment(() => {
             return { body: { result: { id: "b1", total: 3 } }, status: 200 };
         });
-        const client = await connected(serverFor(deployed.fetch));
+        const client = await connected(await serverFor(deployed.fetch));
 
         await client.callTool({ arguments: { args: { id: "b1" }, shardKey: "tenant-a" }, name: "billing_get" });
 
@@ -224,7 +224,7 @@ describe("createFunctionMcpServer over a real SDK client", () => {
             return { body: { result: ["$lunora.wire$", "bigint", "7"] }, status: 200 };
         });
         const client = await connected(
-            createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: counter, token: CALLER_TOKEN, url: "https://app.example" }),
+            await createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: counter, token: CALLER_TOKEN, url: "https://app.example" }),
         );
         const result = await client.callTool({ arguments: { args: { amount: "42" } }, name: "counter_add" });
         const [first] = result.content as { text: string }[];
@@ -242,7 +242,7 @@ describe("createFunctionMcpServer over a real SDK client", () => {
             return { body: {}, status: 200 };
         });
         const client = await connected(
-            createFunctionMcpServer({ allowWrites: true, fetch: deployed.fetch, openRpcSpec: codegenSpec, url: "https://app.example" }),
+            await createFunctionMcpServer({ allowWrites: true, fetch: deployed.fetch, openRpcSpec: codegenSpec, url: "https://app.example" }),
         );
         const { tools } = await client.listTools();
 
@@ -265,23 +265,25 @@ describe("createFunctionMcpServer over a real SDK client", () => {
             headers: { accept: "application/json, text/event-stream", "content-type": "application/json" },
             method: "POST",
         });
-        const response = await serveStateless(serverFor(deployed.fetch), request);
+        const response = await serveStateless(await serverFor(deployed.fetch), request);
         const body = (await response.json()) as { result: { tools: { name: string }[] } };
 
         expect(response.status).toBe(200);
         expect(body.result.tools.map((tool) => tool.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["billing_get", "messages_send"]);
     });
 
-    it("refuses to build a server from a document that is not OpenRPC, or whose names collide", () => {
+    it("refuses to build a server from a document that is not OpenRPC, or whose names collide", async () => {
         expect.assertions(2);
 
-        expect(() => createFunctionMcpServer({ openRpcSpec: { info: {} }, url: "https://app.example" })).toThrow(/openRpcSpec must be the OpenRPC document/);
-        expect(() =>
+        await expect(createFunctionMcpServer({ openRpcSpec: { info: {} }, url: "https://app.example" })).rejects.toThrow(
+            /openRpcSpec must be the OpenRPC document/,
+        );
+        await expect(
             createFunctionMcpServer({
                 openRpcSpec: { methods: [method("a/b:c", "query"), method("a_b:c", "query")] },
                 url: "https://app.example",
             }),
-        ).toThrow(/both map to the MCP tool name "a_b_c"/);
+        ).rejects.toThrow(/both map to the MCP tool name "a_b_c"/);
     });
 });
 
@@ -293,7 +295,7 @@ describe("createFunctionMcpServer when the deployment URL resolves per call", ()
         const deployed = deployment(() => {
             return { body: { result: { id: "b1", total: 3 } }, status: 200 };
         });
-        const client = await connected(createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: SPEC, token: CALLER_TOKEN, url: () => url }));
+        const client = await connected(await createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: SPEC, token: CALLER_TOKEN, url: () => url }));
 
         const before = await client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" });
 
@@ -317,7 +319,7 @@ describe("createFunctionMcpServer when the deployment URL resolves per call", ()
         const deployed = deployment(() => {
             return { body: { result: { id: "b1", total: 3 } }, status: 200 };
         });
-        const client = await connected(createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: SPEC, token: CALLER_TOKEN, url: () => url }));
+        const client = await connected(await createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: SPEC, token: CALLER_TOKEN, url: () => url }));
 
         await client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" });
 
@@ -339,7 +341,7 @@ describe("createFunctionMcpServer when the deployment URL resolves per call", ()
             return { body: { result: { id: "b1", total: 3 } }, status: 200 };
         });
         const client = await connected(
-            createFunctionMcpServer({
+            await createFunctionMcpServer({
                 fetch: deployed.fetch,
                 openRpcSpec: SPEC,
                 token: CALLER_TOKEN,
@@ -361,7 +363,7 @@ describe("createFunctionMcpServer when the deployment URL resolves per call", ()
         const deployed = deployment(() => {
             return { body: { result: { id: "b1", total: 3 } }, status: 200 };
         });
-        const server = serverFor(deployed.fetch);
+        const server = await serverFor(deployed.fetch);
         const client = await connected(server);
 
         await client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" });
@@ -385,7 +387,7 @@ describe("createFunctionMcpServer when the deployment URL resolves per call", ()
             return { body: { result: { id: "b1", total: 3 } }, status: 200 };
         });
         const close = vi.spyOn(LunoraClient.prototype, "close");
-        const client = await connected(createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: SPEC, token: CALLER_TOKEN, url: () => url }));
+        const client = await connected(await createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: SPEC, token: CALLER_TOKEN, url: () => url }));
 
         await client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" });
 
@@ -416,7 +418,7 @@ describe("createFunctionMcpServer when the OpenRPC document is rewritten while i
             return { body: { result: { id: "n1", total: 1 } }, status: 200 };
         });
         const client = await connected(
-            createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: () => spec, token: CALLER_TOKEN, url: "https://app.example" }),
+            await createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: () => spec, token: CALLER_TOKEN, url: "https://app.example" }),
         );
 
         const billing = method("billing:get", "query", { args: { id: { type: "string" } }, argsRequired: true, result: BILLING_OUTPUT });
@@ -450,7 +452,7 @@ describe("createFunctionMcpServer when the OpenRPC document is rewritten while i
             return { body: { result: { id: "b1", total: 3 } }, status: 200 };
         });
         const client = await connected(
-            createFunctionMcpServer({ fetch: deployed.fetch, onReloadError, openRpcSpec: () => spec, token: CALLER_TOKEN, url: "https://app.example" }),
+            await createFunctionMcpServer({ fetch: deployed.fetch, onReloadError, openRpcSpec: () => spec, token: CALLER_TOKEN, url: "https://app.example" }),
         );
 
         // `billing:get` and `billing/get` are different functions that map to one tool name, so the rewrite is refused.
@@ -490,7 +492,7 @@ describe("createFunctionMcpServer when the MCP call is cancelled", () => {
                 // Never settles: the request ends only when the cancellation reaches it.
             });
         });
-        const client = await connected(createFunctionMcpServer({ fetch, openRpcSpec: SPEC, token: CALLER_TOKEN, url: "https://app.example" }));
+        const client = await connected(await createFunctionMcpServer({ fetch, openRpcSpec: SPEC, token: CALLER_TOKEN, url: "https://app.example" }));
         const controller = new AbortController();
         const pending = client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" }, undefined, { signal: controller.signal });
 
@@ -523,7 +525,7 @@ describe("createFunctionMcpServer announcing a changed document", () => {
 
         let spec: unknown = SPEC;
         const client = await connected(
-            createFunctionMcpServer({ fetch: vi.fn<typeof fetch>(), openRpcSpec: () => spec, token: CALLER_TOKEN, url: "https://app.example" }),
+            await createFunctionMcpServer({ fetch: vi.fn<typeof fetch>(), openRpcSpec: () => spec, token: CALLER_TOKEN, url: "https://app.example" }),
         );
         const announced = new Promise<void>((resolve) => {
             client.setNotificationHandler(ToolListChangedNotificationSchema, () => {

@@ -120,7 +120,7 @@ describe("error results survive a real SDK client", () => {
     it("delivers a tool error whose outputSchema requires success fields", async () => {
         expect.assertions(2);
 
-        const client = await connected(createLocalMcpServer({ docs: false }));
+        const client = await connected(await createLocalMcpServer({ docs: false }));
         const result = await client.callTool({ arguments: {}, name: "lunora_explain_error" });
 
         expect(result.isError).toBe(true);
@@ -149,7 +149,7 @@ describe("error results survive a real SDK client", () => {
                 return okStructured({ code: 7 });
             },
         };
-        const client = await connected(createToolServer({ name: "numeric", version: "1.0.0" }, [numeric]));
+        const client = await connected(await createToolServer({ name: "numeric", version: "1.0.0" }, [numeric]));
 
         // The SDK client throws on a result that fails the output schema, so reaching
         // the assertions means both results validated.
