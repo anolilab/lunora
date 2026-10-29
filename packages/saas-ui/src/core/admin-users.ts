@@ -334,6 +334,13 @@ const createAdminUsersController = (client: AdminUsersClient, options: AdminUser
             // refused write has to stay on screen.
             if (reread) {
                 await load();
+
+                // The write landed but the rows on screen predate it: a suspended
+                // user would still read Active, with Suspend offered again. Drop
+                // them rather than show them as current; the error says why.
+                if (store.get().status === "error") {
+                    store.update({ total: undefined, users: undefined });
+                }
             }
 
             return true;

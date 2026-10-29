@@ -201,6 +201,18 @@ describe("createAdminUsersController", () => {
         expect(controller.getState().users?.map((row) => row.id)).toStrictEqual(["u1"]);
     });
 
+    it("drops the rows a write made stale when the re-read after it fails", async () => {
+        const client = createClient([user({ id: "u1" })]);
+        const controller = createAdminUsersController(client, { onSessionChange: vi.fn() });
+
+        await controller.actions.load();
+        client.listUsers.mockRejectedValueOnce(new Error("offline"));
+
+        await expect(controller.actions.suspend("u1")).resolves.toBe(true);
+
+        expect(controller.getState()).toMatchObject({ status: "error", users: undefined });
+    });
+
     it("keeps the page it is on when a write re-reads the list", async () => {
         const client = createClient(Array.from({ length: 3 }, (_, index) => user({ id: `u${String(index)}` })));
         const controller = createAdminUsersController(client, { limit: 2, onSessionChange: vi.fn() });
