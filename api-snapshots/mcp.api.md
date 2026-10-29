@@ -293,9 +293,7 @@ Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `createLunoraMcpServer` (const)
 
-```ts
-const createLunoraMcpServer: (options: LunoraMcpServerOptions) => Server;
-```
+Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `createMcpFetchHandler` (const)
 
@@ -618,7 +616,9 @@ const createLocalMcpServer: (options?: LocalMcpServerOptions) => Server;
 
 ### `createLunoraMcpServer` (const)
 
-Re-exported from `@lunora/mcp` — signature tracked in that section.
+```ts
+const createLunoraMcpServer: (options: LunoraMcpServerOptions) => Server;
+```
 
 ### `localTools` (const)
 
