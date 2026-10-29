@@ -97,7 +97,9 @@ function OrganizationBilling({ memberCount, orgRole }: OrganizationBillingProps)
 
     // Until the subscriptions arrive the organisation's plan is unknown, and an
     // empty list would read as "no plan" and offer a purchase to a paying one.
-    if (loadError !== undefined || subscriptions === undefined) {
+    // Gated on the data alone: a subscription that errors and then recovers
+    // delivers rows, and those must bring the page back.
+    if (subscriptions === undefined) {
         return (
             <main aria-busy={loadError === undefined} style={{ margin: "2rem auto", maxWidth: "56rem", padding: "0 1rem" }}>
                 {loadError === undefined ? undefined : (
