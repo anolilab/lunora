@@ -368,7 +368,7 @@ __PREPARE_FUNCTION__            this.ensureServable();
                 // frame returned, interleaved with unrelated dispatches, so
                 // \`buildCtx\`'s per-request fallback would run an \`rls()\` /
                 // \`ctx.auth\` stream as nobody — or as a concurrent RPC's caller.
-                iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath, identity }), args, signal),
+                iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity }), args, signal),
             };
         }`;
 /* eslint-enable no-secrets/no-secrets */

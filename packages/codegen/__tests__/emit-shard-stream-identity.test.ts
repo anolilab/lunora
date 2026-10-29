@@ -46,7 +46,7 @@ describe("emitted executeStream identity", () => {
         // base — naming the type is what makes `tsc` catch the drift.
         expect(shard).toContain("protected override executeStream(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity)");
         // Never a bare `buildCtx({ functionPath })` — that is the per-request fallback.
-        expect(shard).toContain("this.buildCtx({ functionPath, identity })");
+        expect(shard).toContain("this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity })");
     });
 
     it("builds ctx.ip from the threaded value, not the shared per-request field", () => {
