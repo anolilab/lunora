@@ -517,7 +517,7 @@ interface PortalInput {
 
 ```ts
 interface ProviderCapabilities {
-    readonly checkoutExpiry: boolean;
+    readonly checkoutExpiry?: boolean;
     readonly merchantOfRecord: boolean;
     readonly portal: boolean;
     readonly usageMetering: boolean;

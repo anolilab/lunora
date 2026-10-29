@@ -32,8 +32,11 @@ export type ProviderId = "autumn" | "creem" | "dodopayments" | "polar" | "stripe
  * What a provider can do — encoded in types so tax/UX assumptions aren't tribal knowledge.
  */
 export interface ProviderCapabilities {
-    /** Honours `CheckoutRequest.expiresAt`, so a hosted checkout stops being payable at a time the caller sets. */
-    readonly checkoutExpiry: boolean;
+    /**
+     * Honours `CheckoutRequest.expiresAt`, so a hosted checkout stops being payable at a time the
+     * caller sets. Optional so an adapter written before it still compiles; absent reads as `false`.
+     */
+    readonly checkoutExpiry?: boolean;
     /** True for Polar / Lemon Squeezy / Paddle; false for Stripe (PSP) and Autumn (runs on your own Stripe). Drives tax/invoice ownership. */
     readonly merchantOfRecord: boolean;
     /** Native hosted customer/billing portal. */
