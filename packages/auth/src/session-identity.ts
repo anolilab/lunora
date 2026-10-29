@@ -163,5 +163,5 @@ const resolveSessionIdentity = async (auth: LunoraAuth, headers: Headers): Promi
     return { ...verified, orgId, ...(team && teamMember ? { teamId } : {}) };
 };
 
-export type { SessionIdentity, SessionLike };
+export type { SessionIdentity };
 export { identityFromSession, resolveSessionIdentity };
