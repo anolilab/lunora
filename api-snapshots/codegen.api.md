@@ -2179,7 +2179,7 @@ const CAPABILITY_ROWS: readonly [
     {
         readonly appMethod: {
             readonly configKey: "browser";
-            readonly doc: "Build the `ctx.browser` helper, e.g. `(env) => createBrowser({ binding: env.BROWSER, launch })`. REQUIRED: unlike the binding-backed capabilities, `ctx.browser` is not auto-constructed — without this thunk every method throws, because the generated worker deliberately stays free of the optional `@cloudflare/playwright` peer.";
+            readonly doc: "Build the `ctx.browser` helper, e.g. `(env) => createBrowser({ binding: env.BROWSER, playwright: () => import('@cloudflare/playwright') })`. REQUIRED: unlike the binding-backed capabilities, `ctx.browser` is not auto-constructed — without this thunk every method throws, because the generated worker deliberately stays free of the optional `@cloudflare/playwright` peer. Load it through `playwright` rather than a static import, so it stays out of the Worker's startup graph.";
             readonly method: "browser";
         };
         readonly contextProperty: "browser";
@@ -2189,7 +2189,7 @@ const CAPABILITY_ROWS: readonly [
         readonly serverCtxField: "\n    /** Browser Rendering (screenshots/PDF/scrape). Non-deterministic — available only in actions. */\n    readonly browser: import(\"@lunora/browser\").Browser;";
         readonly shardBinding: {
             readonly clientType: "Browser";
-            readonly missingMessage: "ctx.browser: provide a `browser` config thunk, e.g. `browser: (env) => createBrowser({ binding: env.BROWSER, launch })` with `import { launch } from '@cloudflare/playwright'`. Session reuse (connect/sessions) additionally needs those two exports passed the same way.";
+            readonly missingMessage: "ctx.browser: provide a `browser` config thunk, e.g. `browser: (env) => createBrowser({ binding: env.BROWSER, playwright: () => import('@cloudflare/playwright') })`.";
             readonly stubMethods: readonly [
                 "cancelCrawl",
                 "connect",
@@ -2230,7 +2230,7 @@ const CAPABILITY_ROWS: readonly [
         readonly shardBinding: {
             readonly clientType: "SqlClient";
             readonly instrument: "instrumentSql";
-            readonly missingMessage: "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 }))`.";
+            readonly missingMessage: "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(async () => (await import('postgres')).default(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 }))`.";
             readonly stubMethods: readonly [
                 "query"
             ];
