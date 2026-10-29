@@ -227,6 +227,10 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     const startCheckout = async (input: CheckoutRequest): Promise<CheckoutResult> => {
         await ensureAuthorized(input.referenceId);
 
+        if (input.expiresAt !== undefined && !adapter.capabilities.checkoutExpiry) {
+            throw new LunoraPaymentError("PROVIDER_ERROR", `${adapter.identifier} does not support checkout expiry`);
+        }
+
         // `referenceId` is the tenant-isolation key and is framework-controlled: never let caller-supplied
         // checkout metadata smuggle a `referenceId` override that decouples the attributed owner from the
         // authorized one. Strip it here so the invariant holds regardless of adapter spread order.
@@ -253,6 +257,8 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             input.successUrl,
             input.cancelUrl ?? "",
             metadata ? JSON.stringify(metadata) : "",
+            // Only when set, so a checkout without one keeps the key it always had.
+            ...(input.expiresAt === undefined ? [] : [String(input.expiresAt)]),
         ]);
 
         return adapter.createCheckout({ ...input, customerId: customer?.id, idempotencyKey: key, metadata });

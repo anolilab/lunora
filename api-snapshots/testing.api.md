@@ -235,6 +235,7 @@ interface LunoraTestOptions {
     now?: number;
     queues?: ReadonlyArray<string>;
     services?: Record<string, object>;
+    shardKey?: string;
     topics?: ReadonlyArray<string>;
 }
 ```

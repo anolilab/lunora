@@ -120,6 +120,7 @@ interface ActionCtx {
     readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
+    readonly shardKey: string;
     readonly span: LunoraWideEvent;
     readonly storage: Storage;
     readonly trace: LunoraTracer;
@@ -1550,6 +1551,7 @@ interface MutationCtx {
     readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
+    readonly shardKey: string;
     readonly span: LunoraWideEvent;
     readonly storage: MutationStorage;
     readonly trace: LunoraTracer;
@@ -1833,6 +1835,7 @@ interface QueryCtx {
     readonly random: () => number;
     readonly runQuery: RunQuery;
     readonly secrets: Secrets;
+    readonly shardKey: string;
     readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
     readonly trace: LunoraTracer;
