@@ -54,6 +54,7 @@ export const JobHistory = ({ loadJobs }: JobHistoryProps = {}): ReactElement => 
             setLoadingOlder(false);
         } catch (error: unknown) {
             setOlderError(errorMessage(error));
+            // react-doctor-disable-next-line react-doctor/no-loading-flag-reset-outside-finally -- the try clears it too, so both paths reset; a finally is what React Compiler cannot lower
             setLoadingOlder(false);
         }
     };
@@ -81,6 +82,7 @@ export const JobHistory = ({ loadJobs }: JobHistoryProps = {}): ReactElement => 
                 <Card className="overflow-hidden py-0">
                     <CardContent className="px-0">
                         <Table data-testid="job-history-table">
+                            {/* react-doctor-disable-next-line react-doctor/duplicate-jsx-subtree -- the shared Card/Table/Header scaffolding is incidental; each panel's columns differ and change independently */}
                             <TableHeader>
                                 <TableRow>
                                     <TableHead>{t("function")}</TableHead>

@@ -64,6 +64,7 @@ export const CronRunHistory = ({ runs }: { runs: CronRunsResult["runs"] }): Reac
             <Card className="overflow-hidden py-0">
                 <CardContent className="px-0">
                     <Table>
+                        {/* react-doctor-disable-next-line react-doctor/duplicate-jsx-subtree -- the shared Card/Table/Header scaffolding is incidental; each panel's columns differ and change independently */}
                         <TableHeader>
                             <TableRow>
                                 <TableHead>{t("name")}</TableHead>
