@@ -38,7 +38,7 @@ import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import postgres from "postgres";
 
 const { connectionString } = createHyperdrive(env.HYPERDRIVE);
-const sql = fromPostgresJs(postgres(connectionString));
+const sql = fromPostgresJs(postgres(connectionString, { fetch_types: false, max: 5 }));
 const rows = await sql.query("select id, name from users where email = $1", [email]);
 ```
 

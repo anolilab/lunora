@@ -189,7 +189,7 @@ const tokenRowsSource = (dialect: SqlDialect, counts: ReadonlyArray<[string, num
             return sql`JSON_TABLE(${json}, '$[*]' COLUMNS (${sql.identifier("t")} VARCHAR(256) PATH '$.t', ${sql.identifier("o")} INT PATH '$.o')) AS ${sql.identifier("j")}`;
         }
         case "postgres": {
-            return sql`json_to_recordset(${json}::json) AS ${sql.identifier("j")}(${sql.identifier("t")} text, ${sql.identifier("o")} integer)`;
+            return sql`json_to_recordset(${json}::text::json) AS ${sql.identifier("j")}(${sql.identifier("t")} text, ${sql.identifier("o")} integer)`;
         }
         default: {
             // SQLite never uses this layout in production (D1 has FTS5); this branch exists for the node:sqlite tests.

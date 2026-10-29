@@ -101,7 +101,7 @@ import { defineApp } from "../../lunora/_generated/app";
 
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
-    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString)))
+    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 })))
     .build();
 
 export const ShardDO = app.ShardDO;
@@ -157,7 +157,7 @@ Supply the driver once, on the app builder — required, or every tick records `
 ```ts
 export default defineApp<Env>()
     .shard((env) => env.SHARD)
-    .sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)))
+    .sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString, { fetch_types: false, max: 5 })))
     .build();
 ```
 
@@ -176,14 +176,17 @@ Three things to know before you build on it:
 The `@lunora/hyperdrive/global` subpath is the opposite trade-off: Lunora **owns** the schema and a `.global()` table gets a real column-per-field layout on your Postgres/MySQL, with every write routed through the shared store core. Live queries stay reactive — identical to D1 — because the writer drives the same broadcast hook. Build the writer inside the Durable Object that hosts the `.global()` store and inject it as `globalDb`:
 
 ```ts
+import { fromPostgresJs } from "@lunora/hyperdrive";
 import { createPostgresGlobalCtxDb } from "@lunora/hyperdrive/global";
 import postgres from "postgres";
 
-// `sql` is a postgres.js client built from the HYPERDRIVE binding's connection string.
-const globalDb = createPostgresGlobalCtxDb({ query: (text, params) => sql.unsafe(text, params) }, { schema });
+const sql = postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 });
+const globalDb = createPostgresGlobalCtxDb(fromPostgresJs(sql), { schema });
 ```
 
-For MySQL use `createMysqlGlobalCtxDb` with a `mysql2/promise` pool created with `flags: ["FOUND_ROWS"]` — without `CLIENT_FOUND_ROWS` the affected-rows OCC guard sees changed (not matched) rows and raises spurious conflicts. Lower-level building blocks (`buildPgExec`, `buildMysqlExec`, `postgresDialect`, `mysqlDialect`, `createHyperdriveGlobalCtxDb`) are exported for custom wiring.
+For MySQL use `createMysqlGlobalCtxDb` with a `mysql2/promise` pool created with `disableEval: true` (required on Workers) and `flags: ["FOUND_ROWS"]` — without `CLIENT_FOUND_ROWS` the affected-rows OCC guard sees changed (not matched) rows and raises spurious conflicts. Lower-level building blocks (`buildPgExec`, `buildMysqlExec`, `postgresDialect`, `mysqlDialect`, `createHyperdriveGlobalCtxDb`) are exported for custom wiring.
+
+The Hyperdrive config behind `.global()` must have **query caching disabled** (`wrangler hyperdrive create … --caching-disabled`, or `wrangler hyperdrive update <id> --caching-disabled`). Hyperdrive caches reads for up to 75 s by default and writes don't invalidate them, so the store's OCC re-reads, change-log polls and live-query re-runs would see stale rows. `lunora deploy` sets this on the configs it creates when the schema has `.global({ backend: "hyperdrive" })` tables, and warns about an already-bound config that still caches (when Cloudflare API credentials are set).
 
 > This README covers the basics. For the full API and the determinism/realtime rationale, see the **[documentation](https://lunora.sh/docs/packages/hyperdrive)**.
 

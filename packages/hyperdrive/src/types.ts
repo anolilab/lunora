@@ -130,25 +130,34 @@ export interface NodePgLike {
  * direction, which is all bivariance asks for.
  */
 export interface PostgresJsLike {
-    unsafe(this: void, text: string, params?: ReadonlyArray<unknown>): Promise<unknown>;
+    unsafe(this: void, text: string, params?: ReadonlyArray<unknown>, options?: { prepare?: boolean }): Promise<unknown>;
 }
 
 /**
  * Structural projection of a `mysql2/promise` connection/pool. `mysql2`'s
- * `execute` resolves to a `[rows, fields]` tuple; the adapter takes the first
+ * `query` resolves to a `[rows, fields]` tuple; the adapter takes the first
  * element as the rows.
+ *
+ * `query`, not `execute`: `execute` is a protocol-level prepared statement
+ * (`COM_STMT_PREPARE` + the binary protocol), which Hyperdrive does not support
+ * for MySQL. `query` interpolates the `?` placeholders client-side and sends
+ * plain text. Strings are quoted with `''` for a quote and `\\` for a
+ * backslash, so a server whose `sql_mode` includes `NO_BACKSLASH_ESCAPES` is
+ * unsupported: there a backslash is stored twice. No value can end its literal
+ * under either mode. mysql2 skips a `?` inside a quoted string or comment, but
+ * reads `??` as an identifier placeholder.
  *
  * Method syntax, not an arrow property — see {@link PostgresJsLike} — but here
  * that is necessary and NOT sufficient, which is why `params` is `unknown`.
  *
- * mysql2 types its second argument as a single `ExecuteValues`: a union of
- * scalars, `ExecuteValues[]` and `{ [key: string]: ExecuteValues }`. Declared
+ * mysql2 types its second argument as a single `QueryValues`: a union of
+ * scalars, `QueryValues[]` and `{ [key: string]: QueryValues }`. Declared
  * `params?: ReadonlyArray<unknown>` this projection could never accept the
  * driver it projects — bivariance needs the two parameter types to relate in
  * ONE direction and they relate in neither (`readonly unknown[] | undefined` is
- * not an `ExecuteValues`, and a `string` is not an array).
+ * not a `QueryValues`, and a `string` is not an array).
  *
- * `unknown` is the narrowest supertype of `ExecuteValues` that does not restate
+ * `unknown` is the narrowest supertype of `QueryValues` that does not restate
  * mysql2's union here. Restating it would be the vacuous shim all over again —
  * a local copy that drifts from the package it mirrors and makes the gate pass
  * while a consumer fails.
@@ -160,6 +169,6 @@ export interface PostgresJsLike {
  * values at runtime regardless.
  */
 export interface Mysql2Like {
-    execute(this: void, text: string, params?: unknown): Promise<[unknown, unknown]>;
+    query(this: void, text: string, params?: unknown): Promise<[unknown, unknown]>;
 }
 /* eslint-enable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type */
