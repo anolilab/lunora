@@ -18,6 +18,7 @@ export type {
     AdminUsersController,
     AdminUsersOptions,
     AdminUsersPage,
+    AdminUsersPageData,
     AdminUsersState,
     AuthClientResult,
     ImpersonationSessionLike,

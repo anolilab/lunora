@@ -55,11 +55,20 @@ interface AdminUsersQuery {
     sortDirection?: "asc" | "desc";
 }
 
+/**
+ * What `listUsers` answers with: `{ users, total }`, or a bare array from
+ * better-auth versions and wrappers that return the rows alone — the shapes
+ * `@lunora/auth-ui`'s controller accepts too. A bare array carries no total.
+ */
+type AdminUsersPageData = ReadonlyArray<AdminUserRow> | { total?: number; users: ReadonlyArray<AdminUserRow> };
+
+const readUsersPage = (data: AdminUsersPageData): { total?: number; users: ReadonlyArray<AdminUserRow> } => ("users" in data ? data : { users: data });
+
 /** The slice of better-auth's `authClient.admin` these screens call. */
 interface AdminUsersClient {
     banUser: (input: { banReason?: string; userId: string }) => Promise<AuthClientResult<unknown>>;
     impersonateUser: (input: { userId: string }) => Promise<AuthClientResult<unknown>>;
-    listUsers: (input: { query: AdminUsersQuery }) => Promise<AuthClientResult<{ total?: number; users: ReadonlyArray<AdminUserRow> }>>;
+    listUsers: (input: { query: AdminUsersQuery }) => Promise<AuthClientResult<AdminUsersPageData>>;
     stopImpersonating: () => Promise<AuthClientResult<unknown>>;
     unbanUser: (input: { userId: string }) => Promise<AuthClientResult<unknown>>;
 }
@@ -256,7 +265,7 @@ const createAdminUsersController = (client: AdminUsersClient, options: AdminUser
 
         store.update({ error: undefined, status: "busy" });
 
-        let result: AuthClientResult<{ total?: number; users: ReadonlyArray<AdminUserRow> }>;
+        let result: AuthClientResult<AdminUsersPageData>;
 
         try {
             result = await client.listUsers({
@@ -285,7 +294,9 @@ const createAdminUsersController = (client: AdminUsersClient, options: AdminUser
             return;
         }
 
-        store.update({ offset, search: term, status: "idle", total: data.total, users: data.users });
+        const { total, users } = readUsersPage(data);
+
+        store.update({ offset, search: term, status: "idle", total, users });
     };
 
     /**
@@ -443,6 +454,7 @@ export type {
     AdminUsersController,
     AdminUsersOptions,
     AdminUsersPage,
+    AdminUsersPageData,
     AdminUsersState,
     AuthClientResult,
     ImpersonationSessionLike,

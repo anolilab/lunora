@@ -86,10 +86,7 @@ interface AdminUsersClient {
     }) => Promise<AuthClientResult<unknown>>;
     listUsers: (input: {
         query: AdminUsersQuery;
-    }) => Promise<AuthClientResult<{
-        total?: number;
-        users: ReadonlyArray<AdminUserRow>;
-    }>>;
+    }) => Promise<AuthClientResult<AdminUsersPageData>>;
     stopImpersonating: () => Promise<AuthClientResult<unknown>>;
     unbanUser: (input: {
         userId: string;
@@ -133,6 +130,15 @@ interface AdminUsersPage {
     hasPrevious: boolean;
     label: string;
 }
+```
+
+### `AdminUsersPageData` (type)
+
+```ts
+type AdminUsersPageData = ReadonlyArray<AdminUserRow> | {
+    total?: number;
+    users: ReadonlyArray<AdminUserRow>;
+};
 ```
 
 ### `AdminUsersState` (interface)

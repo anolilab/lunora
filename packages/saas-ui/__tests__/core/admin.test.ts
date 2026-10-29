@@ -220,6 +220,25 @@ describe("createAdminUsersController", () => {
         expect(adminUsersPage({ limit: 2, offset: 0, users: undefined }).hasNext).toBe(false);
     });
 
+    it("reads a bare array of users as well as a { users, total } page", async () => {
+        const client = createClient();
+        const controller = createAdminUsersController(client, { limit: 2, onSessionChange: vi.fn() });
+
+        client.listUsers.mockResolvedValueOnce(ok([user({ id: "a" }), user({ id: "b" })]));
+        await controller.actions.load();
+
+        expect(controller.getState()).toMatchObject({ status: "idle", total: undefined });
+        expect(controller.getState().users?.map((row) => row.id)).toStrictEqual(["a", "b"]);
+        // No total, so a full page is the only sign another may follow.
+        expect(adminUsersPage(controller.getState())).toMatchObject({ hasNext: true, label: "1–2" });
+
+        client.listUsers.mockResolvedValueOnce(ok({ total: 3, users: [user({ id: "c" })] }));
+        await controller.actions.load();
+
+        expect(controller.getState()).toMatchObject({ status: "idle", total: 3 });
+        expect(controller.getState().users?.map((row) => row.id)).toStrictEqual(["c"]);
+    });
+
     it("drops a slower answer to an older search", async () => {
         const client = createClient();
         const slow = deferred<AuthClientResult<{ users: AdminUserRow[] }>>();
