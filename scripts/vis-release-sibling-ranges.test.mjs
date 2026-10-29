@@ -35,13 +35,24 @@ test("restores a dependency range, and only the field it came from", () => {
     });
 });
 
-test("keeps the rewrite when the new version has outgrown the range", () => {
+test("re-floors an outgrown range and keeps its ceiling", () => {
     const restored = restoreSiblingRanges(
         { peerDependencies: { "@lunora/runtime": ">=1.0.0-alpha.76 <2.0.0-0" } },
         { peerDependencies: { "@lunora/runtime": ">=1.0.1-alpha.0" } },
     );
 
-    assert.equal(restored, undefined);
+    assert.deepEqual(restored, { peerDependencies: { "@lunora/runtime": ">=1.0.1-alpha.0 <2.0.0-0" } });
+});
+
+test("refuses a version past the range's ceiling", () => {
+    assert.throws(
+        () =>
+            restoreSiblingRanges(
+                { peerDependencies: { "@lunora/runtime": ">=1.0.0-alpha.76 <2.0.0-0" } },
+                { peerDependencies: { "@lunora/runtime": ">=2.0.0" } },
+            ),
+        /past the ceiling/,
+    );
 });
 
 test("lets a caret it wrote for an exact pin keep rising", () => {

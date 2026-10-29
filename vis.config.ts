@@ -1,6 +1,6 @@
 import { defineConfig } from "@visulima/vis/config";
 
-import { keepSiblingRanges } from "./scripts/vis-release-sibling-ranges.js";
+import { keepSiblingRanges } from "./scripts/vis-release-sibling-ranges";
 
 export default defineConfig({
     // `alpha` is the development branch, not `main`. vis only derives the

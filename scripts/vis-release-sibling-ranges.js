@@ -14,7 +14,9 @@
  * shape) and still admits the version vis just wrote is put back. Anything else —
  * an exact pin, or the `^<version>` vis wrote for one last time — keeps vis's
  * rewrite, so those floors keep rising in lockstep. A range the new version has
- * outgrown keeps the rewrite too, so the release never ships an unsatisfiable one.
+ * outgrown (a new prerelease tuple, `1.0.1-alpha.0`) gets that version as its floor
+ * and keeps its ceiling; one past its ceiling aborts the release before anything is
+ * published, so a range never ships unbounded.
  *
  * Wired up in vis.config.ts as `release.plugins`.
  */
@@ -29,8 +31,9 @@ const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "peerDependencies"
 const isSibling = (name) => name === "lunorash" || name.startsWith("@lunora/");
 
 /**
- * Returns `after` with every sibling specifier that was a satisfied bounded range
- * in `before` restored, or `undefined` when nothing needed restoring.
+ * Returns `after` with every sibling specifier that was a bounded range in
+ * `before` restored (or re-floored, see above), or `undefined` when nothing
+ * needed restoring.
  */
 export const restoreSiblingRanges = (before, after) => {
     let changed = false;
@@ -54,11 +57,23 @@ export const restoreSiblingRanges = (before, after) => {
             // vis writes `<operator><version>`; the bare version is what the range must admit.
             const written = semver.coerce(specifier, { includePrerelease: true })?.version;
 
-            if (written === undefined || !semver.satisfies(written, old)) {
+            if (written === undefined) {
                 continue;
             }
 
-            restored[field] = { ...restored[field], [name]: old };
+            let range = old;
+
+            if (!semver.satisfies(written, old)) {
+                const ceiling = old.slice(old.indexOf("<"));
+
+                if (!semver.satisfies(written, ceiling, { includePrerelease: true })) {
+                    throw new Error(`${name}@${written} is past the ceiling of "${old}" in ${field}; widen the range by hand.`);
+                }
+
+                range = `>=${written} ${ceiling}`;
+            }
+
+            restored[field] = { ...restored[field], [name]: range };
             changed = true;
         }
     }
