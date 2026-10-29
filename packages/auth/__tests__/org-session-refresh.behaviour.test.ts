@@ -1,5 +1,5 @@
 import { organization } from "better-auth/plugins/organization";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import CookieJar from "./helpers/cookie-jar";
 import createMemoryAuth from "./helpers/memory-auth";
@@ -66,8 +66,15 @@ describe("organization endpoints refresh the session cookie cache", () => {
         invitee.absorb(accepted.headers);
     };
 
+    /** The `session_data` cookies a response sets. */
+    const cacheCookies = (response: Response): string[] => response.headers.getSetCookie().filter((cookie) => cookie.includes("session_data="));
+
     beforeEach(() => {
         auth = buildAuth();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
     });
 
     it("shows a newly created organization as active on the next request", async () => {
@@ -143,5 +150,51 @@ describe("organization endpoints refresh the session cookie cache", () => {
 
         expect(refused.status).toBe(403);
         await expect(activeOrganization(invitee)).resolves.toBeNull();
+    });
+
+    it("keeps a committed organization write successful when the cache refresh fails", async () => {
+        expect.assertions(4);
+
+        const jar = await signUpAndIn("ada@example.com");
+        const { internalAdapter } = await auth.$context;
+        const findSession = vi.spyOn(internalAdapter, "findSession").mockRejectedValue(new Error("store unavailable"));
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const created: Response = await auth.api.createOrganization({ asResponse: true, body: { name: "Acme", slug: "acme" }, headers: jar.headers() });
+
+        expect(created.status).toBe(200);
+        expect(findSession).toHaveBeenCalledTimes(1);
+        expect(logged).toHaveBeenCalledTimes(1);
+
+        findSession.mockRestore();
+
+        await expect(auth.api.listOrganizations({ headers: jar.headers() })).resolves.toHaveLength(1);
+    });
+
+    it("does not re-issue the cache cookie when an organization write is rejected", async () => {
+        expect.assertions(2);
+
+        const jar = await signUpAndIn("ada@example.com");
+
+        const rejected: Response = await auth.api.leaveOrganization({ asResponse: true, body: { organizationId: "missing" }, headers: jar.headers() });
+
+        expect(rejected.ok).toBe(false);
+        expect(cacheCookies(rejected)).toStrictEqual([]);
+    });
+
+    it("does not re-issue the cache cookie for a session that has expired in the store", async () => {
+        expect.assertions(2);
+
+        const jar = await signUpAndIn("ada@example.com");
+        const current = await auth.api.getSession({ headers: jar.headers() });
+        const { internalAdapter } = await auth.$context;
+
+        // The cache cookie still vouches for the session, so the endpoint itself runs.
+        await internalAdapter.updateSession(current.session.token, { expiresAt: new Date(Date.now() - 1000) });
+
+        const created: Response = await auth.api.createOrganization({ asResponse: true, body: { name: "Acme", slug: "acme" }, headers: jar.headers() });
+
+        expect(created.status).toBe(200);
+        expect(cacheCookies(created)).toStrictEqual([]);
     });
 });

@@ -49,21 +49,30 @@ const orgSessionRefresh = (): BetterAuthPlugin => {
                             return undefined;
                         }
 
-                        // The endpoint's own view of the session predates its write (and may
-                        // itself have come from the stale cache), so the store is re-read.
-                        const fresh = await context.context.internalAdapter.findSession(token);
+                        // The endpoint has already committed its write; a failed refresh only leaves
+                        // the cache stale until `maxAge`, so it must not turn that success into an error
+                        // the client would retry.
+                        try {
+                            // The endpoint's own view of the session predates its write (and may
+                            // itself have come from the stale cache), so the store is re-read.
+                            const fresh = await context.context.internalAdapter.findSession(token);
 
-                        if (!fresh) {
-                            return undefined;
+                            // `findSession` does not filter expired rows that are not yet purged.
+                            if (!fresh || fresh.session.expiresAt.getTime() <= Date.now()) {
+                                return undefined;
+                            }
+
+                            const dontRememberMe = await context.getSignedCookie(context.context.authCookies.dontRememberToken.name, context.context.secret);
+
+                            // Only the cache cookie is stale; `setSessionCookie` would also re-sign the
+                            // token cookie and fire `setNewSession`, which other hooks read as a sign-in.
+                            // Appended after any cache cookie the endpoint wrote itself (accept-invitation's
+                            // single-team path writes one carrying the previous organization), so it wins.
+                            await setCookieCache(context, fresh, Boolean(dontRememberMe));
+                        } catch (error) {
+                            // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+                            console.error("@lunora/auth: organization session cache refresh failed", error);
                         }
-
-                        const dontRememberMe = await context.getSignedCookie(context.context.authCookies.dontRememberToken.name, context.context.secret);
-
-                        // Only the cache cookie is stale; `setSessionCookie` would also re-sign the
-                        // token cookie and fire `setNewSession`, which other hooks read as a sign-in.
-                        // Appended after any cache cookie the endpoint wrote itself (accept-invitation's
-                        // single-team path writes one carrying the previous organization), so it wins.
-                        await setCookieCache(context, fresh, Boolean(dontRememberMe));
 
                         // Any other value would replace the endpoint's response body.
                         return undefined;
@@ -73,7 +82,10 @@ const orgSessionRefresh = (): BetterAuthPlugin => {
                             return false;
                         }
 
-                        return MOVES_ACTIVE_ORGANIZATION.has(context.path) || (CLEARS_ON_FORBIDDEN.has(context.path) && isAPIError(context.context.returned));
+                        const failed = isAPIError(context.context.returned);
+
+                        // A rejected write moved nothing; only the reads clear state and then fail.
+                        return (MOVES_ACTIVE_ORGANIZATION.has(context.path) && !failed) || (CLEARS_ON_FORBIDDEN.has(context.path) && failed);
                     },
                 },
             ],
