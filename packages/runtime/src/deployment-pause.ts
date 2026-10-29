@@ -12,7 +12,7 @@
  * in its shard and never passes through the worker again, so it keeps serving
  * subscriptions until it reconnects (writes go over HTTP and are refused); jobs
  * on a separately named scheduler instance read their own instance's flag; HTTP
- * actions and SSR behind `httpRouter` are not gated; the built-in scheduled
+ * actions and SSR behind `httpRouter`, and custom `routes` handlers, are not gated; the built-in scheduled
  * backup keeps running (it executes no app code).
  *
  * **What stays reachable while paused:** the admin plane and any call carrying

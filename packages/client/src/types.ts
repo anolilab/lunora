@@ -1220,7 +1220,7 @@ export interface ScheduledHistoryPage {
     records: ScheduledJobView[];
 }
 
-/** How one cron fire ended; `skipped` is a tick that did not run because the previous run was still going. Mirrors `@lunora/scheduler`'s `CronRunStatus`. */
+/** How one cron fire ended; `skipped` is a tick that did not run because the previous run was still going or the deployment was paused. Mirrors `@lunora/scheduler`'s `CronRunStatus`. */
 export type CronRunStatus = "failed" | "skipped" | "succeeded";
 
 /** One recorded fire of a code-defined cron job. Mirrors `@lunora/scheduler`'s `CronRunRecord`. */
