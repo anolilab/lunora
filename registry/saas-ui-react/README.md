@@ -56,10 +56,26 @@ without a reload.
 `AdminUsers` is the one exception to "nothing here subscribes": users live in
 better-auth's tables, not in a Lunora query, so it loads them itself through the
 client you pass — better-auth's `authClient.admin`, from
-`createAuthClient({ plugins: [adminClient()] })` — and re-reads after every
-suspend or unsuspend.
+`createAuthClient({ plugins: [adminClient()] })` — a page of 50 at a time, and
+re-reads the current page after every suspend or unsuspend.
 
-Suspending is a better-auth ban, which better-auth enforces: the user's sessions
+**`AdminSubscriptions` needs a query this item does not ship.** Its rows are
+every tenant's subscriptions, and no function in the `payment` item returns
+those: they come from a query over `payment_subscriptions` that you write, and
+it has three jobs. It refuses anyone without the platform admin role (the
+`appRole` claim, better-auth's `user.role`). It refuses to run anywhere but the
+root shard — the payment tables are root-scoped, and a tenant shard holds an
+empty copy that would read as "no subscriptions". And it pages with
+`.paginate(paginationOpts)`, because the table only grows. The saas template
+has one to copy: `adminSubscriptions` in `templates/saas/lunora/payment/index.ts`,
+read in `templates/saas/src/routes/admin.tsx`. Read it with `usePaginatedQuery`,
+pass the loaded rows as `rows`, and pass `onLoadMore` while more pages remain;
+the totals in the header then say they cover only the rows loaded. The
+organisation names come from the `organizations` prop, so the query does not
+need to know the kit's tenancy table exists.
+
+Suspending asks first: the row opens an inline step with an optional reason,
+which better-auth stores and the status column shows. Suspending is a better-auth ban, which better-auth enforces: the user's sessions
 are revoked and their next sign-in is refused. Unsuspending lifts it. Two delays apply. `@lunora/auth` caches the session in a signed cookie for 60 s,
 so the user's next requests can still resolve for up to a minute. A live
 connection the user already has open keeps streaming until it reconnects or its
