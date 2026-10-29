@@ -55,7 +55,7 @@ import { env as workerEnv } from "cloudflare:workers";
 import { LunoraError } from "@lunora/errors";
 import type { SubscriptionState } from "@lunora/payment";
 import { internal } from "#lunora/_generated/internal.js";
-import { action, internalAction, internalMutation, mutation, query, v } from "#lunora/_generated/server.js";
+import { action, internalAction, internalMutation, query, v } from "#lunora/_generated/server.js";
 import type { CloudflareBindings } from "#lunora/_generated/server.js";
 
 import { API_CALLS, PLANS } from "../plans.js";
@@ -162,29 +162,36 @@ const billingPage = (outcome?: "cancel" | "success"): string => `${appOrigin()}/
 const PURCHASABLE_PRICE_IDS: ReadonlySet<string> = new Set(PLANS.flatMap((plan) => (plan.priceId === undefined ? [] : [plan.priceId])));
 
 /**
- * How long a started checkout blocks another one for the same organisation. A
- * customer who abandons the provider's page without coming back through the
- * cancel URL can start a new checkout after this; one who does come back is
- * released at once by {@link releaseCheckout}.
+ * How long a started checkout session stays payable. The provider is told to
+ * expire it then, so an abandoned session cannot be paid after a later one.
+ * Stripe accepts 30 minutes to 24 hours from creation; the extra five cover the
+ * time between taking the hold and the provider call.
  */
-const CHECKOUT_HOLD_MS = 30 * 60_000;
+const CHECKOUT_SESSION_MS = 35 * 60_000;
+
+/**
+ * The hold outlives the session it guards by this much, for clock skew between
+ * the Worker and the provider. It is never released early: coming back through
+ * the cancel URL leaves the provider's session payable until it expires.
+ */
+const CHECKOUT_HOLD_MARGIN_MS = 60_000;
 
 /**
  * Reserve the organisation's one in-flight checkout. The subscription check in
  * `checkout` cannot see a purchase whose webhook has not landed yet, so two
  * admins picking two plans at once would both pass it and be billed twice; this
  * mutation is the serialisation point. A repeat for the same price gets the
- * session already started back; a different price is refused until the hold is
- * released or expires.
+ * session already started back; a different price is refused until the hold
+ * expires, by when the provider has expired the session too.
  */
 export const holdCheckout = internalMutation
     .input({ priceId: v.string(), referenceId: v.string() })
-    .mutation(async ({ args: { priceId, referenceId }, ctx }): Promise<{ url?: string }> => {
+    .mutation(async ({ args: { priceId, referenceId }, ctx }): Promise<{ sessionExpiresAt: number } | { url: string }> => {
         const hold = await ctx.db
             .query("checkout_holds")
             .withIndex("byReference", (q) => q.eq("referenceId", referenceId))
             .first();
-        const expiresAt = ctx.now + CHECKOUT_HOLD_MS;
+        const sessionExpiresAt = ctx.now + CHECKOUT_SESSION_MS;
 
         if (hold && (hold["expiresAt"] as number) > ctx.now) {
             const url = hold["url"] as string | undefined;
@@ -193,7 +200,7 @@ export const holdCheckout = internalMutation
                 return { url };
             }
 
-            throw new LunoraError("CONFLICT", "a checkout for this organization is already in progress — finish or cancel it first");
+            throw new LunoraError("CONFLICT", "a checkout for this organization is already in progress — finish it, or pick another plan once it expires");
         }
 
         // A fresh row rather than a patch: the expired hold's `url` is a session the
@@ -202,9 +209,9 @@ export const holdCheckout = internalMutation
             await ctx.db.delete("checkout_holds", hold["_id"] as never);
         }
 
-        await ctx.db.insert("checkout_holds", { expiresAt, priceId, referenceId });
+        await ctx.db.insert("checkout_holds", { expiresAt: sessionExpiresAt + CHECKOUT_HOLD_MARGIN_MS, priceId, referenceId });
 
-        return {};
+        return { sessionExpiresAt };
     });
 
 /** Record the started session on the hold (`url`), or drop the hold when starting it failed (no `url`). */
@@ -222,23 +229,6 @@ export const settleCheckoutHold = internalMutation
 
         await (url === undefined ? ctx.db.delete("checkout_holds", hold["_id"] as never) : ctx.db.patch("checkout_holds", hold["_id"] as never, { url }));
     });
-
-/**
- * Lift the organisation's checkout hold. The billing page calls it when the
- * provider sends the customer back through the cancel URL, so picking another
- * plan straight away is not refused for the rest of {@link CHECKOUT_HOLD_MS}.
- */
-export const releaseCheckout = mutation.mutation(async ({ ctx }): Promise<void> => {
-    const referenceId = await billingReference(ctx, { adminOnly: true });
-    const hold = await ctx.db
-        .query("checkout_holds")
-        .withIndex("byReference", (q) => q.eq("referenceId", referenceId))
-        .first();
-
-    if (hold) {
-        await ctx.db.delete("checkout_holds", hold["_id"] as never);
-    }
-});
 
 /**
  * Start a checkout session and hand the client the redirect URL. The reference
@@ -265,7 +255,7 @@ export const checkout = action.input({ priceId: v.string().max(512) }).action(as
 
     const pending = await ctx.runMutation(internal.payment.holdCheckout, { priceId, referenceId });
 
-    if (pending.url !== undefined) {
+    if ("url" in pending) {
         return { url: pending.url };
     }
 
@@ -274,6 +264,7 @@ export const checkout = action.input({ priceId: v.string().max(512) }).action(as
     try {
         ({ url } = await ctx.payments.createCheckout({
             cancelUrl: billingPage("cancel"),
+            expiresAt: pending.sessionExpiresAt,
             mode: "subscription",
             priceId,
             referenceId,

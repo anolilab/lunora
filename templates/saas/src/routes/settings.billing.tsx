@@ -1,6 +1,6 @@
-import { useAction, useMutation, useQuery } from "@lunora/react";
+import { useAction, useQuery } from "@lunora/react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api";
 import { PLANS } from "../../lunora/plans";
@@ -67,7 +67,6 @@ function OrganizationBilling({ memberCount, orgRole }: OrganizationBillingProps)
     // shape as `useMutation` — destructure at the call site.
     const { call: checkout } = useAction(api.payment.checkout);
     const { call: portal } = useAction(api.payment.portal);
-    const { mutate: releaseCheckout } = useMutation(api.payment.releaseCheckout);
     const [error, setError] = useState<string>();
 
     // An organisation that cancelled and re-subscribed has both rows stored.
@@ -75,14 +74,6 @@ function OrganizationBilling({ memberCount, orgRole }: OrganizationBillingProps)
     // Only hides the controls — `checkout` and `portal` enforce the role
     // server-side either way.
     const canManageBilling = orgRole?.split(",").some((role) => BILLING_ADMIN_ROLES.has(role.trim())) ?? false;
-
-    // Back from an abandoned checkout: lift the hold `checkout` took, or picking
-    // another plan is refused until it expires.
-    useEffect(() => {
-        if (canManageBilling && new URLSearchParams(globalThis.location.search).get("checkout") === "cancel") {
-            releaseCheckout({}).catch((error_: unknown) => setError(message(error_)));
-        }
-    }, [canManageBilling, releaseCheckout]);
 
     const redirectTo = async (start: () => Promise<{ url: string }>) => {
         setError(undefined);

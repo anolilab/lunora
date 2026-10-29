@@ -361,13 +361,13 @@ describe("saas template checkout", () => {
 
     interface Payment {
         checkout: Checkout;
-        holdCheckout: Handler<{ priceId: string; referenceId: string }, { url?: string }>;
-        releaseCheckout: (invocation: { ctx: unknown }) => Promise<void>;
+        holdCheckout: Handler<{ priceId: string; referenceId: string }, { sessionExpiresAt: number } | { url: string }>;
         settleCheckoutHold: Handler<{ referenceId: string; url?: string }, void>;
     }
 
     const NOW = 1_700_000_000_000;
-    const HOLD_MS = 30 * 60_000;
+    const SESSION_MS = 35 * 60_000;
+    const HOLD_MS = SESSION_MS + 60_000;
 
     const setup = async (subscriptions: Row[]) => {
         env["APP_BASE_URL"] = "https://app.example.test";
@@ -375,7 +375,7 @@ describe("saas template checkout", () => {
         const payment = await load<Payment>("templates", "saas", "lunora", "payment", "index.ts");
         const database = createDatabase({ checkout_holds: [["referenceId"]] });
         let sessions = 0;
-        const createCheckout = vi.fn<() => Promise<{ url: string }>>(async () => {
+        const createCheckout = vi.fn<(input: { expiresAt?: number }) => Promise<{ url: string }>>(async () => {
             sessions += 1;
 
             return { url: `https://pay.example.test/session-${String(sessions)}` };
@@ -393,11 +393,7 @@ describe("saas template checkout", () => {
             payments: { createCheckout, listSubscriptions: vi.fn<() => Promise<Row[]>>(async () => subscriptions) },
             runMutation,
         };
-        const mutationCtx = () => {
-            return { auth, db: database.db, now: clock.now };
-        };
-
-        return { clock, createCheckout, ctx, database, mutationCtx, payment };
+        return { clock, createCheckout, ctx, database, payment };
     };
 
     it.each(["active", "trialing", "past_due", "paused"])("refuses a second subscription while one is %s", async (state) => {
@@ -416,6 +412,18 @@ describe("saas template checkout", () => {
 
         await expect(payment.checkout({ args: { priceId: "price_scale" }, ctx })).resolves.toStrictEqual({ url: "https://pay.example.test/session-1" });
         expect(createCheckout).toHaveBeenCalledTimes(1);
+    });
+
+    it("has the provider expire the session before the hold ends", async () => {
+        expect.assertions(1);
+
+        const { createCheckout, ctx, database, payment } = await setup([]);
+
+        await payment.checkout({ args: { priceId: "price_pro" }, ctx });
+
+        const sessionExpiresAt = createCheckout.mock.calls[0]![0].expiresAt;
+
+        expect([sessionExpiresAt, database.rows("checkout_holds")[0]!["expiresAt"]]).toStrictEqual([NOW + SESSION_MS, NOW + HOLD_MS]);
     });
 
     it("refuses a checkout for another plan while one is in flight, before either webhook lands", async () => {
@@ -440,19 +448,20 @@ describe("saas template checkout", () => {
         expect(createCheckout).toHaveBeenCalledTimes(1);
     });
 
-    it("lets another checkout start once the customer cancels, or the hold expires", async () => {
+    it("keeps the hold until it expires, and lets another plan start then", async () => {
         expect.assertions(2);
 
-        const { clock, ctx, mutationCtx, payment } = await setup([]);
+        const { clock, ctx, payment } = await setup([]);
 
         await payment.checkout({ args: { priceId: "price_pro" }, ctx });
-        await payment.releaseCheckout({ ctx: mutationCtx() });
+
+        clock.now += HOLD_MS - 1;
+
+        await expect(payment.checkout({ args: { priceId: "price_scale" }, ctx })).rejects.toMatchObject({ code: "CONFLICT" });
+
+        clock.now += 2;
 
         await expect(payment.checkout({ args: { priceId: "price_scale" }, ctx })).resolves.toMatchObject({ url: "https://pay.example.test/session-2" });
-
-        clock.now += HOLD_MS + 1;
-
-        await expect(payment.checkout({ args: { priceId: "price_pro" }, ctx })).resolves.toMatchObject({ url: "https://pay.example.test/session-3" });
     });
 
     it("starts a new session for the same plan once the hold has expired", async () => {
