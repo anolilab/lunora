@@ -525,11 +525,11 @@ const resolveWsCredential = async (credential: WsCredentialSource): Promise<stri
     typeof credential === "function" ? await credential() : credential;
 
 /**
- * One live-grant control POST, bounded by {@link LIVE_CONTROL_TIMEOUT_MS}. The clock starts when
- * the POST is sent, not when it was queued, and covers the body read too: a stalled response
- * must not hold the chain behind it.
+ * One control POST (a live grant, a socket re-auth), bounded by {@link LIVE_CONTROL_TIMEOUT_MS}.
+ * The clock starts when the POST is sent, not when it was queued, and covers the body read too: a
+ * stalled response must not hold the chain behind it, nor keep a re-auth from falling back.
  */
-const sendLiveControl = async (fetchImpl: typeof fetch, url: string, body: string, headers: Record<string, string>): Promise<number> => {
+const sendControl = async (fetchImpl: typeof fetch, url: string, body: string, headers: Record<string, string>): Promise<{ status: number; text: string }> => {
     const controller = new AbortController();
     const timer = setTimeout(() => {
         controller.abort();
@@ -538,9 +538,7 @@ const sendLiveControl = async (fetchImpl: typeof fetch, url: string, body: strin
     try {
         const response = await fetchImpl(url, { body, credentials: "include", headers, method: "POST", signal: controller.signal });
 
-        await response.text();
-
-        return response.status;
+        return { status: response.status, text: await response.text() };
     } finally {
         clearTimeout(timer);
     }
@@ -7760,8 +7758,8 @@ class LunoraClient {
         const headers = this.rpcRequestHeaders({}, shardKey);
 
         this.liveControlChain = this.liveControlChain
-            .then(() => sendLiveControl(fetchImpl, joinUrl(this.url, controlPath), payload, headers))
-            .then((status) => {
+            .then(() => sendControl(fetchImpl, joinUrl(this.url, controlPath), payload, headers))
+            .then(({ status }) => {
                 // 404 and 401 are transient: a reconnect registers the grant again.
                 if (status >= 400 && status < 500 && status !== 404 && status !== 401) {
                     onRefused?.(status);
@@ -8625,18 +8623,13 @@ class LunoraClient {
             const { connectionId } = conn;
 
             if (inPlace && token !== null && fetchImpl !== undefined && conn.socket !== undefined && connectionId !== undefined && conn.retired !== true) {
-                fetchImpl(joinUrl(this.url, withQuery(SOCKET_REAUTH_PATH, { shard: conn.shardKey })), {
-                    body: JSON.stringify({ connectionId }),
-                    credentials: "include",
-                    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-                    method: "POST",
+                sendControl(fetchImpl, joinUrl(this.url, withQuery(SOCKET_REAUTH_PATH, { shard: conn.shardKey })), JSON.stringify({ connectionId }), {
+                    authorization: `Bearer ${token}`,
+                    "content-type": "application/json",
                 })
                     // Only the route's own `{ ok: true }` counts: a catch-all 200 (an SPA fallback, a proxy) did not refresh anything.
-                    .then((response) => response.json())
-                    .then(
-                        (body: unknown) => (body as { ok?: unknown } | null)?.ok === true,
-                        () => false,
-                    )
+                    .then(({ text }) => (JSON.parse(text) as { ok?: unknown } | null)?.ok === true)
+                    .catch(() => false)
                     .then((reauthenticated) => {
                         // A newer token, or a socket that has since been replaced, is already handled by whatever replaced it.
                         if (!reauthenticated && !this.closed && this.authToken === token && conn.connectionId === connectionId) {

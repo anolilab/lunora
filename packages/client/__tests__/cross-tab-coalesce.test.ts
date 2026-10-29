@@ -217,6 +217,33 @@ describe("cross-tab fan-out coalescing", () => {
         leader.stop();
     });
 
+    it("drops a timed-out leader's unfinished flush", () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
+        const { deliver } = stubBroadcastChannel();
+        const applied: string[] = [];
+        const follower = new TabCoordinator({
+            leaderTimeout: 100,
+            onSubscriptionData: (key) => {
+                applied.push(key);
+            },
+        });
+
+        follower.start();
+        deliver({ tabId: "leader-a", ts: Date.now(), type: "heartbeat" });
+        deliver({ data: 1, key: "stale", more: true, tabId: "leader-a", type: "subscription-data" });
+        // The leader goes silent past its timeout; if it ever speaks again, its old flush stays dropped.
+        vi.advanceTimersByTime(250);
+        deliver({ data: 2, key: "fresh", tabId: "leader-a", type: "subscription-data" });
+
+        expect(applied).toStrictEqual(["fresh"]);
+
+        follower.stop();
+        vi.useRealTimers();
+    });
+
     it("keeps two leaders' flushes apart during a split brain", () => {
         expect.assertions(1);
 

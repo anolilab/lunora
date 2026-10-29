@@ -754,7 +754,8 @@ class TabCoordinator {
         const elapsed = Date.now() - this.lastHeartbeat;
 
         if (elapsed > this.leaderTimeout) {
-            // Leader is gone — attempt to claim.
+            // Leader is gone — attempt to claim. A flush it never closed is never released.
+            this.heldData.delete(this.knownLeader);
             this.knownLeader = undefined;
             this.claimAndPromote();
         }

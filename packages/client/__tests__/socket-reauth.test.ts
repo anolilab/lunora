@@ -4,13 +4,24 @@ import { LunoraClient } from "../src/lunora-client";
 import { createSocketHarness, fnRef, jsonResponse, settle } from "./lib/harness";
 
 /** A React Native-style client (bearer on the upgrade) with one open, identified socket. */
-const openClient = async (reauthStatus: number, reauthBody?: unknown) => {
+const openClient = async (reauthStatus: number, reauthBody?: unknown, hang = false) => {
     const { sockets, WebSocket } = createSocketHarness();
-    const fetchMock = vi.fn<typeof fetch>(async (input) =>
-        (input as string).includes("/_lunora/ws/reauth")
-            ? jsonResponse(reauthBody ?? { ok: reauthStatus === 200 }, { status: reauthStatus })
-            : jsonResponse({ result: { ok: true } }),
-    );
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+        if (!(input as string).includes("/_lunora/ws/reauth")) {
+            return jsonResponse({ result: { ok: true } });
+        }
+
+        if (hang) {
+            // A worker or proxy that never answers: only the client's own deadline ends the wait.
+            return new Promise<Response>((_resolve, reject) => {
+                init?.signal?.addEventListener("abort", () => {
+                    reject(new Error("aborted"));
+                });
+            });
+        }
+
+        return jsonResponse(reauthBody ?? { ok: reauthStatus === 200 }, { status: reauthStatus });
+    });
     const client = new LunoraClient({
         authTokenOnUpgrade: true,
         fetch: fetchMock,
@@ -93,6 +104,23 @@ describe("socket re-authentication on a token refresh", () => {
 
         client.setAuthToken("token-2", "user-1");
         await settle();
+
+        expect(sockets[0]?.readyState).toBe(3);
+
+        client.close();
+    });
+
+    it("falls back to a reconnect when the refresh never answers", async () => {
+        expect.assertions(2);
+
+        const { client, sockets } = await openClient(200, undefined, true);
+
+        client.setAuthToken("token-2", "user-1");
+        await settle();
+
+        expect(sockets[0]?.readyState).toBe(1);
+
+        await vi.advanceTimersByTimeAsync(10_000);
 
         expect(sockets[0]?.readyState).toBe(3);
 
