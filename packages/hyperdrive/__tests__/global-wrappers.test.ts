@@ -72,7 +72,7 @@ const recordingConnection = (): { calls: string[]; connection: Mysql2Client } =>
     return {
         calls,
         connection: {
-            // `CLIENT_FOUND_ROWS`; without it `buildMysqlExec` throws before recording anything.
+            // `CLIENT_FOUND_ROWS`; without it `buildMysqlExec` fails each statement before recording it.
             config: { clientFlags: 0x00_00_00_02 },
             query: async (sql: string) => {
                 calls.push(sql);
@@ -90,7 +90,7 @@ describe("createMysqlGlobalCtxDb", () => {
         expect.assertions(3);
 
         const { calls, connection } = recordingConnection();
-        const writer = createMysqlGlobalCtxDb(connection, { clock: () => FIXED_CLOCK, schema: todosSchema });
+        const writer = createMysqlGlobalCtxDb(() => connection, { clock: () => FIXED_CLOCK, schema: todosSchema });
 
         await writer.insert("todos", { _id: "t1", done: false, title: "write tests" }, { allowExplicitId: true });
 
@@ -126,7 +126,11 @@ describe("mySQL unique indexes cover the whole value", () => {
 
         const { calls, connection } = recordingConnection();
 
-        await runSqlGlobalTableMigrations(buildMysqlExec(connection), schemaWithUniqueIndex, mysqlDialect);
+        await runSqlGlobalTableMigrations(
+            buildMysqlExec(() => connection),
+            schemaWithUniqueIndex,
+            mysqlDialect,
+        );
 
         const create = calls.find((sql) => /create table/i.test(sql));
         const index = calls.find((sql) => /create[\s\S]*index/i.test(sql) && sql.includes("by_email"));
@@ -153,6 +157,12 @@ describe("mySQL unique indexes cover the whole value", () => {
 
         // Bounding both to 768 characters would overflow InnoDB's 3072-byte key,
         // and prefixing them would silently constrain something else.
-        await expect(runSqlGlobalTableMigrations(buildMysqlExec(connection), composite, mysqlDialect)).rejects.toThrow(/composite unique index/);
+        await expect(
+            runSqlGlobalTableMigrations(
+                buildMysqlExec(() => connection),
+                composite,
+                mysqlDialect,
+            ),
+        ).rejects.toThrow(/composite unique index/);
     });
 });

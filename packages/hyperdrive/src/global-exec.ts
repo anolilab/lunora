@@ -10,6 +10,7 @@
 import { LunoraError } from "@lunora/errors";
 import type { SqlExec, SqlRunResult } from "@lunora/sql-store";
 
+import { lazyValue } from "../../../shared/lazy-value";
 import toMysqlParams from "./mysql-params";
 import type { Mysql2Like, SqlClient } from "./types";
 
@@ -53,8 +54,8 @@ const readMysqlClientFlags = (connection: Mysql2Client): number | undefined => {
 };
 
 /**
- * Verify a MySQL connection/pool negotiated `CLIENT_FOUND_ROWS` — at
- * `buildMysqlExec` construction, never per statement (an extra round trip per
+ * Verify a MySQL connection/pool negotiated `CLIENT_FOUND_ROWS` — once, when
+ * `buildMysqlExec`'s loader resolves, never per statement (an extra round trip per
  * query would double the wire traffic for a static property of the connection).
  * Reads the driver's own in-memory client-flags bitmask; no query, no I/O, no
  * write, no permissions required.
@@ -227,7 +228,8 @@ export const buildPgExec = (client: RowClient): SqlExec => {
 };
 
 /**
- * Wrap a `mysql2/promise` connection/pool as a {@link SqlExec}. The core already
+ * Wrap a `mysql2/promise` connection/pool, built by `load` on the first statement,
+ * as a {@link SqlExec}. The core already
  * renders backtick identifiers and `?` placeholders for MySQL, so `all`/`run`
  * forward verbatim. MySQL has no `RETURNING`, so `run` surfaces `affectedRows`
  * for the store's affected-rows OCC guard.
@@ -239,7 +241,15 @@ export const buildPgExec = (client: RowClient): SqlExec => {
  * (mysql2: `createPool({ flags: ["FOUND_ROWS"] })`). Without it, `affectedRows`
  * counts *changed* rows, so an idempotent `patch`/`replace` that re-writes the
  * same values reports 0 and the OCC guard raises a spurious conflict. Verified
- * once here at construction — see {@link assertFoundRows} — never per statement.
+ * when the loader resolves — see {@link assertFoundRows} — never per statement. A
+ * connection without the flag fails that statement and is not kept, so every
+ * later statement fails the same way rather than running unguarded.
+ *
+ * `load` runs on the first statement, not here: `.hyperdriveGlobal`'s `exec(env)`
+ * is built with the request's ctx, which can precede the mutation's input-gated
+ * span. The `import("mysql2/promise")` inside the loader must start inside that
+ * span and finish there, as `buildPgExec(fromPostgresJs(load))` does, so a load
+ * begun outside the gate is never awaited inside it.
  *
  * Given a **pool** (anything with `getConnection`), `transaction` takes one
  * connection for the store's row + companion writes, so they commit together.
@@ -253,8 +263,14 @@ export const buildPgExec = (client: RowClient): SqlExec => {
  * at-least-once, and unordered between elements, safe only for statements
  * with no cross-effect (what every current caller batches).
  */
-export const buildMysqlExec = (connection: Mysql2Client): SqlExec => {
-    assertFoundRows(connection);
+export const buildMysqlExec = (load: () => Mysql2Client | Promise<Mysql2Client>): SqlExec => {
+    const connection = lazyValue(async () => {
+        const loaded = await load();
+
+        assertFoundRows(loaded);
+
+        return loaded;
+    });
 
     const pool = connection as Partial<MysqlPoolLike>;
     const { getConnection } = pool;
@@ -264,7 +280,8 @@ export const buildMysqlExec = (connection: Mysql2Client): SqlExec => {
             ? { transaction: async <T>(work: (tx: SqlExec) => Promise<T>): Promise<T> => await mysqlTransaction(pool as MysqlPoolLike, buildMysqlExec, work) }
             : {}),
         all: async (sql, params) => {
-            const [rows] = await connection.query(sql, toMysqlParams(params));
+            const driver = await connection();
+            const [rows] = await driver.query(sql, toMysqlParams(params));
 
             // mysql2 hands back a `ResultSetHeader`, not a row array, for a
             // statement that returns no rows. Normalised to `[]` here the same
@@ -274,10 +291,13 @@ export const buildMysqlExec = (connection: Mysql2Client): SqlExec => {
             return Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
         },
         batch: async (statements) => {
-            await Promise.all(statements.map((statement) => connection.query(statement.sql, toMysqlParams(statement.params))));
+            const driver = await connection();
+
+            await Promise.all(statements.map((statement) => driver.query(statement.sql, toMysqlParams(statement.params))));
         },
         run: async (sql, params): Promise<SqlRunResult> => {
-            const [result] = await connection.query(sql, toMysqlParams(params));
+            const driver = await connection();
+            const [result] = await driver.query(sql, toMysqlParams(params));
 
             return { rowsAffected: (result as { affectedRows?: number }).affectedRows ?? 0 };
         },
