@@ -140,6 +140,7 @@ export const SchedulerPoolsPanel = ({ initialShardKey, loadStatus }: SchedulerPo
                 <Card className="overflow-hidden py-0">
                     <CardContent className="px-0">
                         <Table data-testid="lag-table">
+                            {/* react-doctor-disable-next-line react-doctor/duplicate-jsx-subtree -- the shared Table markup every Studio list panel uses with its own columns; a wrapper would only re-wrap the primitives */}
                             <TableHeader>
                                 <TableRow>
                                     <TableHead>{t("function")}</TableHead>
