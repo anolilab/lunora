@@ -33,7 +33,7 @@
  *
  * Expiry: `.ttl("lastSeen", …)` has each Durable Object's alarm delete its own
  * expired rows. That is what reaches every shard — an organization's rooms live
- * in its shard, while a cron-dispatched `sweep` runs only on the root one. It
+ * in its shard, while a cron could only run `sweep` on the root one. It
  * also matches by `lastSeen` alone, so it reaches rows written before `tenantId`
  * existed, which every tenant-prefixed lookup misses. The engine keeps its own
  * index on `lastSeen` for the alarm, so the table declares none.

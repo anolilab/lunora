@@ -28,7 +28,7 @@ The functions surface in the generated `api` as `presence/heartbeat`, `presence/
 
 - **heartbeat** (mutation) upserts the caller's row for `(tenant, roomId, sessionId)` and stamps `lastSeen = now`. Re-heartbeats _patch_ the existing row, so subscribers receive a single-row delta rather than an insert/delete churn.
 - **listPresent** (query) returns the non-expired members of the caller's room, newest first. It filters `lastSeen > now - PRESENCE_TTL_MS` at read time, so a client that stops heart-beating silently drops out — **no reaper needed**.
-- **sweep** (internal mutation) hard-deletes expired rows to reclaim storage. It's _internal_ (server-only) so clients can't trigger bulk deletes; the table's `.ttl()` already deletes expired rows in every shard, so it is an on-demand pass (see [Expired rows](#expired-rows)).
+- **sweep** (internal mutation) hard-deletes expired rows to reclaim storage. It's _internal_ (server-only) so clients can't trigger bulk deletes; the table's `.ttl()` already deletes expired rows in every shard, so it is an on-demand tool, not something to schedule (see [Expired rows](#expired-rows)).
 
 ## Rooms are scoped to the caller's tenant
 
@@ -76,22 +76,17 @@ function Room({ roomId }: { roomId: string }) {
 
 `listPresent` never returns stale rows, so deleting them is purely about reclaiming storage, and the table does it on its own: `.ttl("lastSeen", { after: 30_000 })` in `lunora/presence/schema.ts` has every Durable Object's alarm delete its own expired rows. That matters in a sharded app — an organization's rooms live in its own shard, and nothing else reaches all of them. Keep that `after` equal to `PRESENCE_TTL_MS` when you change the TTL; codegen reads the literal, not the constant.
 
-The internal `sweep` mutation is an on-demand pass over **the shard it runs on**. Without arguments it deletes up to 500 expired rows across every tenant in that shard; with a `roomId` alone, up to 500 of that room's in every tenant (the shape crons written before rooms were tenant-scoped pass, so they keep working); with both `tenantId` (`""` for the app-wide tenant) and `roomId`, that one room's. A `tenantId` without a `roomId` is refused. A cron dispatches to the root shard, so a scheduled `sweep` cleans only rooms that live there:
+There is nothing to schedule. The internal `sweep` mutation is an on-demand tool — run it from another server function (`ctx.runMutation(internal.presence.sweep, …)`) when you want rows gone before the alarm gets to them — and it only reaches **the shard it runs on**:
 
-```ts
-// lunora/crons.ts
-import { cronJobs } from "@lunora/server";
+- `{ roomId, tenantId }` — every expired row of that one room (`""` is the app-wide tenant), read through the `byTenantRoomSession` index.
+- `{ roomId }` — up to 500 expired rows of that room in every tenant; the shape crons written before rooms were tenant-scoped pass, so they keep working until you remove them.
+- `{}` — up to 500 expired rows of every tenant and room.
 
-import { internal } from "./_generated/internal";
-
-const crons = cronJobs();
-
-crons.interval("sweep presence", { minutes: 5 }, internal.presence.sweep, {});
-
-export default crons;
-```
+The last two filter a scan of the whole table (the TTL's `lastSeen` index is the engine's own, which a query cannot name), so neither belongs on a schedule. A `tenantId` without a `roomId` is refused.
 
 ### Upgrading from untenanted rooms
+
+If your `lunora/crons.ts` schedules `internal.presence.sweep`, delete that entry: the table's `.ttl()` replaces it, in every shard, without scanning the table.
 
 Rows written before rooms were tenant-scoped have no `tenantId` — which is why the column is optional. Every heartbeat, `listPresent` and join-time cleanup looks rows up by tenant, so those rows are invisible to them: members re-appear with their next heartbeat as new rows, and the old ones sit in storage. The table's `.ttl()` alarm deletes them once they are past the TTL, in every shard.
 

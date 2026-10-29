@@ -37,7 +37,7 @@ const crons = cronJobs();
 // Illustrative: run the example internal mutation in lunora/crons/jobs.ts every
 // hour. Replace the function ref (and the schedule) with your own — e.g.
 //   crons.daily("send digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest, {});
-//   crons.interval("sweep presence", { minutes: 5 }, internal.presence.sweep, {});
+//   crons.interval("purge sessions", { minutes: 5 }, internal.sessions.purgeExpired, {});
 crons.interval("heartbeat", { hours: 1 }, internal.crons.jobs.run, {});
 
 export default crons;

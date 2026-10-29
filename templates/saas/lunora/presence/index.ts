@@ -23,8 +23,9 @@
  *   - **sweep** (internal mutation) — hard-delete expired rows in the shard it runs
  *     on, across every tenant by default or for one `(tenantId, roomId)` pair. Stale
  *     rows already vanish from `listPresent` via the read-time filter, and the
- *     table's `.ttl()` alarm deletes them in every shard; this is an on-demand pass
- *     on top. It's *internal* (server-only) so a client can't trigger bulk deletes.
+ *     table's `.ttl()` alarm deletes them in every shard — that is the scheduled
+ *     cleanup, so this is an on-demand tool, not a cron target. It's *internal*
+ *     (server-only) so a client can't trigger bulk deletes.
  *
  * The client half is `usePresence` in `@lunora/react`, which calls `heartbeat`
  * on an interval and subscribes to `listPresent`.
@@ -242,13 +243,14 @@ export const listPresent = query.input({ roomId: v.string().max(256) }).query(as
 });
 
 /**
- * Hard-delete expired rows in the shard this runs on — a cron dispatches to the
- * root shard only, so organization shards rely on the table's `.ttl()` alarm,
- * and this is an on-demand pass on top of it.
+ * Hard-delete expired rows in the shard this runs on, on demand. The table's
+ * `.ttl()` alarm is the scheduled cleanup and reaches every shard; a cron would
+ * reach only the root one, and the first two forms below scan the table.
  *
  *   - `{}` — up to {@link SWEEP_BATCH} expired rows of every tenant and room.
  *   - `{ roomId }` — up to {@link SWEEP_BATCH} expired rows of that room in every
- *     tenant: the shape crons written before rooms were tenant-scoped still pass.
+ *     tenant: the shape crons written before rooms were tenant-scoped pass, so
+ *     they keep working until they are removed.
  *   - `{ roomId, tenantId }` — every expired row of that one room (`""` is the
  *     app-wide tenant).
  *
