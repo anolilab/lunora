@@ -7,7 +7,8 @@
  * environment var next to a production-valued one is a production deploy.
  *
  * The items sit outside this package, so the packages they import are replaced by
- * pass-through stubs; what runs is each item's own `isDevEnvironment` and its send path.
+ * pass-through stubs, except `@lunora/auth`'s `isDevEnvironment`, which every item
+ * imports; what runs is that check and each item's send path.
  */
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -15,11 +16,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // eslint-disable-next-line vitest/prefer-import-in-mock -- the package is not a dependency of this one, so it cannot be resolved as a type
-vi.mock("@lunora/auth", () => {
+vi.mock("@lunora/auth", async () => {
+    // The items share `@lunora/auth`'s check, so the stub hands them the real one.
+    const { default: isDevEnvironment } = await import("../../../auth/src/environment");
+
     return {
         createAuth: (options: unknown) => options,
         DEFAULT_AUTH_BASE_PATH: "/api/auth",
         handleAuthRequest: vi.fn<() => void>(),
+        isDevEnvironment,
         lunoraD1Adapter: vi.fn<() => void>(),
     };
 });
@@ -162,5 +167,20 @@ describe("auth items log a credential only in a development deployment", () => {
             expect(calls).toBe(1);
             expect(String(log.mock.calls[0]?.[0])).toContain(LINK);
         });
+    });
+});
+
+describe("saas template session policy", () => {
+    // The generated worker memoises resolved identity per credential unless the
+    // cookie cache is off; the tenant claims come from the `member` row, which a
+    // removal or demotion changes without changing the credential.
+    it("turns the cookie cache off so a membership change applies on the next request", async () => {
+        expect.assertions(1);
+
+        const loaded = (await import(pathToFileURL(join(root, "templates", "saas", "lunora", "auth", "index.ts")).href)) as {
+            authOptions: (e: unknown) => { session?: { cookieCache?: { enabled?: boolean } } };
+        };
+
+        expect(loaded.authOptions({}).session?.cookieCache?.enabled).toBe(false);
     });
 });

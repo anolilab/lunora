@@ -19,36 +19,13 @@
  *     `resolveIdentity`, and the member count the organization hooks project.
  */
 import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
-import { createAuth, lunoraD1Adapter } from "@lunora/auth";
+import { createAuth, isDevEnvironment, lunoraD1Adapter } from "@lunora/auth";
 import { admin, organization, uiConfig } from "@lunora/auth/plugins";
 import { createMailerFromEnv } from "@lunora/mail";
 import type { ShardNamespaceLike } from "lunorash/runtime";
 import { createShardClient } from "lunorash/runtime";
 
-import { internal } from "../_generated/api.js";
-
-/**
- * Env-name values that mark a development deployment, and the vars they live in.
- * `lunora dev` sets `WORKER_ENV=development`; a real deploy that sets none of
- * these stays production (fail closed). Used to gate dev-only behaviour below —
- * console-logging auth links.
- */
-const DEV_ENVIRONMENT_PATTERN = /^(?:dev(?:elopment)?|local(?:host)?|test)$/iu;
-const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as const;
-
-/**
- * Whether the Worker is running in development. Defaults to FALSE so a real
- * deploy that sets none of {@link ENVIRONMENT_VARS} is treated as production —
- * dev-only conveniences (logging links) never leak there.
- */
-const isDevEnvironment = (env: Record<string, unknown>): boolean => {
-    // Every var that is set must say "development", and at least one must be set:
-    // a single non-dev value (`NODE_ENV=production`) vetoes it, so a deploy with
-    // mixed values never takes a dev-only path.
-    const values = ENVIRONMENT_VARS.map((key) => env[key]).filter((value): value is string => typeof value === "string" && value !== "");
-
-    return values.length > 0 && values.every((value) => DEV_ENVIRONMENT_PATTERN.test(value));
-};
+import { internal } from "../_generated/internal.js";
 
 /**
  * The Worker env bindings this module needs. Lunora generates a richer `Env`
@@ -270,5 +247,14 @@ export const authOptions = (env: AuthEnv): LunoraAuthOptions => {
             admin(),
         ],
         secret: env.BETTER_AUTH_SECRET,
+        /*
+         * No cookie cache. The tenant claims `resolveIdentity` derives from the
+         * `member` row are not part of the session cookie, so a removed or demoted
+         * member keeps presenting the same credential. With the cache on, the
+         * generated worker memoises the resolved identity per credential for up
+         * to 60s, and the old organisation and role would keep passing
+         * `authorizeShard` for that long. Off, identity resolves on every request.
+         */
+        session: { cookieCache: { enabled: false } },
     };
 };
