@@ -1122,7 +1122,11 @@ const planUnlessAppend = async (
     sourceIndex: SourceIndex,
     mode: ImportMode,
 ): Promise<{ plan: ImportPlan | undefined } | { stop: ImportCommandResult }> =>
-    mode === "append" && options.dryRun !== true ? { plan: undefined } : planAndConfirm(options, request, sourceIndex, mode);
+    // An upsert's plan only feeds its confirmation, so `--yes` skips it: reading every stored row of a large table to
+    // count `_id` matches nobody will be asked about is a full export for nothing.
+    (mode === "append" || (mode === "upsert" && options.yes === true)) && options.dryRun !== true
+        ? { plan: undefined }
+        : planAndConfirm(options, request, sourceIndex, mode);
 
 const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
     const cwd = options.cwd ?? process.cwd();

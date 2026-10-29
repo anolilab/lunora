@@ -247,6 +247,32 @@ describe("lunora import --mode", () => {
         expect(worker.stored.get("users")?.get("u2")).toStrictEqual({ _id: "u2", name: "added" });
     });
 
+    it("upsert with --yes reads no stored rows, since its plan would only feed a confirmation", async () => {
+        expect.assertions(2);
+
+        let exports = 0;
+        const worker = fakeWorker(
+            { users: [{ _id: "u1", name: "live" }] },
+            {
+                onExport: () => {
+                    exports += 1;
+                },
+            },
+        );
+
+        const result = await runImportCommand({
+            fetchImpl: worker.fetchImpl,
+            file: writeFile(SNAPSHOT),
+            logger: capture().logger,
+            mode: "upsert",
+            token: "t",
+            yes: true,
+        });
+
+        expect(result.code).toBe(0);
+        expect(exports).toBe(0);
+    });
+
     it("replace is refused before anything moves by a worker that cannot delete rows", async () => {
         expect.assertions(2);
 

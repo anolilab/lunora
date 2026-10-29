@@ -193,7 +193,8 @@ effect. `--mode` chooses what happens instead:
 
 Every mode except `append` reads the target's rows for the snapshot's tables
 first and prints how many rows it would add, overwrite and delete per table
-(`append` does this only under `--dry-run`). `--dry-run` stops there.
+(`append` does this only under `--dry-run`, and `upsert` skips it under `--yes`,
+where the plan would only feed a prompt). `--dry-run` stops there.
 Overwriting or deleting asks first, or needs `--yes` without a TTY or with
 `--format json`.
 `replace` is not atomic: it writes the snapshot's rows, and deletes only after

@@ -1394,7 +1394,9 @@ import plan (--mode replace):
 ```
 
 `--dry-run` stops there and writes nothing (it also prints the plan for
-`append`). A plan that overwrites or deletes a stored row asks before it writes;
+`append`). `upsert` with `--yes` skips the read: its plan only feeds the prompt,
+and reading every stored row of a large table to count matches costs a full
+export. A plan that overwrites or deletes a stored row asks before it writes;
 without a TTY or under `--format json` it needs `--yes`, as does any target that
 is not local.
 
