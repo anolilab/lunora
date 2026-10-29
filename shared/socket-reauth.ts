@@ -6,3 +6,20 @@
  * and claims are unchanged. The socket stays open and keeps its subscriptions.
  */
 export const SOCKET_REAUTH_PATH = "/_lunora/ws/reauth";
+
+/**
+ * How long an authenticated subscription socket may go without its identity being
+ * re-resolved through {@link SOCKET_REAUTH_PATH}. The shard cannot run
+ * `resolveIdentity`, so this is what bounds how long a revoked session or a changed
+ * tenant claim keeps receiving. Matches the default cross-request identity cache
+ * window, so a socket is never staler than an HTTP call may already be.
+ */
+export const SOCKET_REVALIDATE_MS = 60_000;
+
+/**
+ * Close code for a socket whose identity was not re-resolved in time, or was
+ * re-resolved to different claims. Deliberately not `4001`: nothing about the
+ * credential lapsed, so a client must reconnect (re-resolving identity on the
+ * upgrade) without signalling token expiry to the app.
+ */
+export const IDENTITY_STALE_CLOSE_CODE = 4005;

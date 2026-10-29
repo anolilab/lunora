@@ -284,6 +284,29 @@ describe("shardDO token-expiry", () => {
         expect(b.closes[0]).toEqual({ code: 4001, reason: "token_expired" });
     });
 
+    it("stops delivering presence to a socket whose identity went unrevalidated, closing it without a token-expired signal", async () => {
+        expect.assertions(3);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const joinedAt = Date.now();
+        // No credential expiry at all (a cookie session): only the revalidation window bounds it.
+        const b = new FakeSocket({ revalidateAt: joinedAt + 60_000, subs: {}, userId: "user-b" });
+        const shard = makeShard([a, b]);
+
+        await send(shard, a, { topic: "presence", type: "whisper_subscribe" });
+        await send(shard, b, { topic: "presence", type: "whisper_subscribe" });
+
+        const lapsed = vi.spyOn(Date, "now").mockReturnValue(joinedAt + 60_000);
+
+        await send(shard, a, { data: { online: true }, topic: "presence", type: "whisper" }).finally(() => {
+            lapsed.mockRestore();
+        });
+
+        expect(withoutAck(b)).toStrictEqual([]);
+        expect(b.closes[0]).toEqual({ code: 4005, reason: "identity_stale" });
+        expect(withoutAck(a)).toStrictEqual([]);
+    });
+
     it("processes a socket whose token has not yet expired", async () => {
         expect.assertions(1);
 

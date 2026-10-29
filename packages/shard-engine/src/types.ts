@@ -342,6 +342,16 @@ export interface SocketAttachment {
     refreshBatch?: boolean;
 
     /**
+     * Epoch ms by which an authenticated subscription socket must have its
+     * identity re-resolved through the worker's re-auth route. The shard cannot
+     * run `resolveIdentity`, so without this deadline a socket kept the identity
+     * of its upgrade for life: a revoked session or a removed organization member
+     * kept receiving. Past it the socket is closed with code `4005`, which every
+     * client treats as an ordinary reconnect. Absent on anonymous and route sockets.
+     */
+    revalidateAt?: number;
+
+    /**
      * Live shape subscriptions registered on this socket, keyed by the
      * client-supplied subscription id. The partial-replication parallel to
      * {@link SocketAttachment.subs}: the poke protocol fans membership diffs to

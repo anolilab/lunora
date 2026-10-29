@@ -2985,6 +2985,7 @@ interface SocketAttachment {
     pageDeltas?: boolean;
     pendingSince?: number;
     refreshBatch?: boolean;
+    revalidateAt?: number;
     shapes?: Record<string, ShapeSubscriptionQuery>;
     socketFunction?: string;
     socketPath?: string;

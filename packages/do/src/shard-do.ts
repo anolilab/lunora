@@ -309,7 +309,7 @@ import { BATCH_END_FRAME, BATCH_START_FRAME, REFRESH_BATCH_CAPABILITY } from "..
 import { parseRelayName } from "../../../shared/relay-name";
 import { parseReplicaName } from "../../../shared/replica-name";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
-import { SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
+import { IDENTITY_STALE_CLOSE_CODE, SOCKET_REAUTH_PATH, SOCKET_REVALIDATE_MS } from "../../../shared/socket-reauth";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { adminSocketBinding, verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -1733,6 +1733,13 @@ const countLiveConnections = (
 
 /** Claims a refreshed credential re-issues on every refresh; they say when it was minted and until when, not who it names. */
 const VOLATILE_CLAIMS = new Set(["exp", "expiresAtMs", "iat", "jti", "nbf"]);
+
+/**
+ * The revalidation deadline a newly accepted socket is held to. A route socket is the app's own protocol and has
+ * no re-auth channel, so only a subscription socket gets one; an anonymous socket has no identity to go stale.
+ */
+const revalidationStamp = (subscriptionSocket: boolean, userId: string | undefined, acceptedAt: number): Pick<SocketAttachment, "revalidateAt"> =>
+    subscriptionSocket && userId !== undefined ? { revalidateAt: acceptedAt + SOCKET_REVALIDATE_MS } : {};
 
 /** The claims a re-auth must leave unchanged, as one comparable key (`""` for none). */
 const credentialClaimsKey = (identity: Record<string, unknown> | undefined): string => {
@@ -6495,9 +6502,7 @@ abstract class ShardDO {
             // socket whose credential lapsed must not keep receiving its user's
             // rows. This path is subclass-driven (see the README's `broadcast`
             // hook), so nothing upstream of it has already checked.
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment)) {
                 continue;
             }
 
@@ -8083,9 +8088,7 @@ abstract class ShardDO {
         // Read once here and reused for the route check below.
         const inboundAttachment = this.readAttachment(ws);
 
-        if (isIdentityExpired(inboundAttachment.expiresAt)) {
-            this.dropExpiredSocket(ws);
-
+        if (this.dropIfLapsed(ws, inboundAttachment)) {
             return;
         }
 
@@ -8251,10 +8254,18 @@ abstract class ShardDO {
             // subscribe (`POST` to the stream's control route); the frame goes only to this socket.
             // `whisperAck` advertises that every live join is answered with `whisper_subscribed`, so a
             // client can hold a live grant until its join is acknowledged. An older shard omits it.
+            // `revalidateMs` is the window a client re-auths the socket within to keep it open; a relative
+            // duration, so the client's clock never has to agree with this one.
             this.sendFrame(
                 ws,
-                // eslint-disable-next-line unicorn/no-null -- `null` is the wire's "no user" value
-                JSON.stringify({ connectionId: attachment.connectionId, subject: attachment.userId ?? null, type: "identity", whisperAck: true }),
+                JSON.stringify({
+                    connectionId: attachment.connectionId,
+                    ...(attachment.revalidateAt === undefined ? {} : { revalidateMs: SOCKET_REVALIDATE_MS }),
+                    // eslint-disable-next-line unicorn/no-null -- `null` is the wire's "no user" value
+                    subject: attachment.userId ?? null,
+                    type: "identity",
+                    whisperAck: true,
+                }),
                 "control",
             );
 
@@ -13408,8 +13419,7 @@ abstract class ShardDO {
             // on the frame that STARTED this stream, and a pump can outlive
             // it indefinitely. Tear the iterator down rather than keep
             // pushing the user's data at an expired socket.
-            if (this.isSocketExpired(ws)) {
-                this.dropExpiredSocket(ws);
+            if (this.dropIfLapsed(ws)) {
                 controller.abort();
 
                 break;
@@ -13525,8 +13535,7 @@ abstract class ShardDO {
                 // Same mid-run expiry rule as the ephemeral pump. `false` is the
                 // sink contract's "this consumer is gone", so the runner drops it
                 // and the transcript keeps producing for whoever else is attached.
-                if (this.isSocketExpired(ws)) {
-                    this.dropExpiredSocket(ws);
+                if (this.dropIfLapsed(ws)) {
                     detach();
 
                     return false;
@@ -14060,9 +14069,7 @@ abstract class ShardDO {
             // the socket and skip its push.
             const attachment = this.readAttachment(ws);
 
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment)) {
                 return;
             }
 
@@ -14687,9 +14694,7 @@ abstract class ShardDO {
         const pokeOne = async (ws: ShardSocketLike): Promise<void> => {
             const attachment = this.readAttachment(ws);
 
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment)) {
                 return;
             }
             const { shapes } = attachment;
@@ -16145,9 +16150,7 @@ abstract class ShardDO {
         for (const ws of sockets) {
             const attachment = this.readAttachment(ws);
 
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment)) {
                 continue;
             }
 
@@ -16937,11 +16940,13 @@ abstract class ShardDO {
     }
 
     /**
-     * Move a socket's credential expiry to the refreshed one, keeping its
-     * subscriptions and memos. Refused — and the socket left to lapse at its old
-     * expiry with 4001 — when the credential is anonymous, already expired, older
-     * than the one the socket holds (a replay), or carries different claims; the
-     * client then reconnects, and a changed identity re-seeds there as on any upgrade.
+     * Move a socket's credential expiry to the refreshed one and restart its
+     * revalidation window, keeping its subscriptions and memos. Refused — and the
+     * socket left to lapse at its old expiry or window — when the credential is
+     * anonymous, already expired, or older than the one the socket holds (a replay).
+     * Different claims close the socket at once with `4005`: the caller's identity
+     * has changed (a role, an `orgId`), so the socket must not deliver another
+     * moment under the old one. The client reconnects and re-seeds under the new one.
      */
     private reauthenticateSocket(ws: ShardSocketLike, call: LiveSocketControlCall): Response {
         const attachment = this.readAttachment(ws);
@@ -16962,6 +16967,8 @@ abstract class ShardDO {
         }
 
         if (credentialClaimsKey(attachment.identity) !== credentialClaimsKey(identity)) {
+            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, "identity_changed");
+
             return jsonResponse({ error: { code: "IDENTITY_CHANGED", message: "the credential's claims differ from the socket's; reconnect" } }, 409);
         }
 
@@ -16977,6 +16984,10 @@ abstract class ShardDO {
             delete next.identity;
         } else {
             next.identity = identity;
+        }
+
+        if (attachment.revalidateAt !== undefined) {
+            next.revalidateAt = Date.now() + SOCKET_REVALIDATE_MS;
         }
 
         try {
@@ -17141,6 +17152,7 @@ abstract class ShardDO {
             ...(expiresAt === undefined ? {} : { expiresAt }),
             ...(identity === undefined ? {} : { identity }),
             ...(ip === undefined ? {} : { ip }),
+            ...revalidationStamp(route === undefined, userId, acceptedAt),
             ...(route === undefined ? {} : { socketFunction: route.functionPath, socketPath: url.pathname }),
             ...(routeTopic === undefined ? {} : { whispers: [routeTopic] }),
             ...(userId === undefined ? {} : { userId }),
@@ -17242,33 +17254,51 @@ abstract class ShardDO {
     }
 
     /**
-     * Whether `ws` carries a credential whose expiry (stamped at upgrade) is
-     * now past. Delegates to the shared boundary check `@lunora/agent`'s
-     * voice DO uses for the same decision, so the two DOs can never disagree
-     * about it.
+     * Drop `ws` when it may no longer receive: its credential lapsed (`TOKEN_EXPIRED` / `4001`, through the
+     * helper `@lunora/agent`'s voice DO shares) or its identity went unrevalidated past its window (`4005`, see
+     * `SocketAttachment.revalidateAt`).
+     * @returns whether the socket was dropped
      */
-    private isSocketExpired(ws: ShardSocketLike): boolean {
-        return isIdentityExpired(this.readAttachment(ws).expiresAt);
+    private dropIfLapsed(ws: ShardSocketLike, attachment: SocketAttachment = this.readAttachment(ws)): boolean {
+        if (isIdentityExpired(attachment.expiresAt)) {
+            this.dropLapsedSocket(ws, 4001, "token_expired");
+
+            return true;
+        }
+
+        if (isIdentityExpired(attachment.revalidateAt)) {
+            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, "identity_stale");
+
+            return true;
+        }
+
+        return false;
     }
 
-    /**
-     * Drop an expired-credential socket via the shared `TOKEN_EXPIRED`/`4001`
-     * helper `@lunora/agent`'s voice DO also calls, so both DOs send the
-     * client-facing wire shape from one place.
-     */
-    private dropExpiredSocket(ws: ShardSocketLike): void {
+    private dropLapsedSocket(ws: ShardSocketLike, code: number, reason: string): void {
         // The close this drop starts is not delivered back to `webSocketClose` (the runtime dispatches that event
         // for a peer's close, not a server-initiated one), so the whole teardown runs here instead: the route's
         // `onClose` or the connection's `onDisconnect`, the room leaves, the per-socket memos and the durable
         // shape-poke rows. Started before the close, so it reads the attachment first. `webSocketClose` runs at most
         // once per socket, so a runtime that does deliver a close finds nothing left to repeat.
-        const teardown = this.webSocketClose(ws as unknown as WebSocket, 4001, "token_expired", true).catch((error: unknown) => {
+        const teardown = this.webSocketClose(ws as unknown as WebSocket, code, reason, true).catch((error: unknown) => {
             // eslint-disable-next-line no-console -- server-side diagnostic: the socket is already closed, so there is nothing to propagate a teardown failure to
-            console.error("[@lunora/do] expired-socket teardown failed:", error);
+            console.error("[@lunora/do] lapsed-socket teardown failed:", error);
         });
 
         this.shardHost.waitUntil?.(teardown);
-        dropExpiredCredentialSocket(ws);
+
+        if (code === 4001) {
+            dropExpiredCredentialSocket(ws);
+
+            return;
+        }
+
+        try {
+            ws.close?.(code, reason);
+        } catch {
+            /* socket already gone */
+        }
     }
 
     /**
@@ -17700,9 +17730,7 @@ abstract class ShardDO {
             // check. Without this a lapsed socket keeps receiving every whisper
             // on its joined topics — including the sender's `from` userId — for
             // the rest of its life.
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment)) {
                 continue;
             }
 
@@ -18857,9 +18885,7 @@ abstract class ShardDO {
                 continue;
             }
 
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment)) {
                 continue;
             }
 

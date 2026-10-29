@@ -88,7 +88,7 @@
         "yielded": [{ "n": 1 }, { "n": 2 }, { "n": 3 }]
     },
     "closeSequences": {
-        "$comment": "Each case is a run of steps, in order: `attach` (the socket opens: the client sends `connect` first, under the session credential in force), `frame` (a server frame the open socket delivered), `close` (a close frame's code and reason), or `credentialChange` (the app sets a new session credential, which supersedes any socket open under the old one). The run registers one subscription, `sub_1`, before its first step. `tokenExpiredNotifications` counts how many times the token-expired listeners fire. This is the reference's rule (`@lunora/client`): a 4001 close always notifies; a TOKEN_EXPIRED error frame always notifies and is NOT routed to its subscription, and a 4001 close that follows it notifies again; a 4003 close notifies once per credential generation, and a `credentialChange` starts a new generation; a 4003 from a socket opened under an earlier generation notifies nothing, because it refused a credential no longer in force; a 4003 whose reason is exactly \"connect deadline\" refuses no credential and notifies nothing; any other close notifies nothing. An UNAUTHENTICATED error frame notifies nothing on its own and reaches its subscription like any other error. Every close leaves the client offline, and the reconnect loop runs as before.",
+        "$comment": "Each case is a run of steps, in order: `attach` (the socket opens: the client sends `connect` first, under the session credential in force), `frame` (a server frame the open socket delivered), `close` (a close frame's code and reason), or `credentialChange` (the app sets a new session credential, which supersedes any socket open under the old one). The run registers one subscription, `sub_1`, before its first step. `tokenExpiredNotifications` counts how many times the token-expired listeners fire. This is the reference's rule (`@lunora/client`): a 4001 close always notifies; a TOKEN_EXPIRED error frame always notifies and is NOT routed to its subscription, and a 4001 close that follows it notifies again; a 4003 close notifies once per credential generation, and a `credentialChange` starts a new generation; a 4003 from a socket opened under an earlier generation notifies nothing, because it refused a credential no longer in force; a 4003 whose reason is exactly \"connect deadline\" refuses no credential and notifies nothing; any other close notifies nothing, including a 4005 (an identity that went unrevalidated or changed: a plain reconnect). An UNAUTHENTICATED error frame notifies nothing on its own and reaches its subscription like any other error. Every close leaves the client offline, and the reconnect loop runs as before.",
         "cases": [
             { "name": "token_expired_close", "steps": [{ "attach": true }, { "close": { "code": 4001, "reason": "" } }], "tokenExpiredNotifications": 1 },
             {
@@ -126,6 +126,11 @@
             {
                 "name": "normal_close_notifies_nothing",
                 "steps": [{ "attach": true }, { "close": { "code": 1000, "reason": "" } }],
+                "tokenExpiredNotifications": 0
+            },
+            {
+                "name": "identity_stale_close_notifies_nothing",
+                "steps": [{ "attach": true }, { "close": { "code": 4005, "reason": "identity_stale" } }],
                 "tokenExpiredNotifications": 0
             },
             {

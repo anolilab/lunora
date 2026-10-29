@@ -240,7 +240,7 @@ created with `authTokenOnUpgrade: true` offers the bearer as a
 live query. `setAuthToken` always reconnects the sockets when a credential
 replaces another user's. When the bearer rides the upgrade, it also reconnects
 them when a bearer arrives on a signed-out client. A same-user refresh is handed
-to the open sockets in place, and bounces them warm only when the server refuses it. A cookie-session browser socket is left as it is.
+to the open sockets in place, and bounces them warm only when the server refuses it. A cookie-session browser socket is left open and re-authenticated with the cookie (see [Expired credentials](#expired-credentials)).
 `client.setWsToken(token)` sends its value in the next `connect` frame and closes
 the shard sockets to force a reconnect. A server gated by `LUNORA_WS_BEARER`
 accepts only its one shared value there, so a per-user session needs an ungated
@@ -313,6 +313,19 @@ seconds) or `expiresAtMs` (epoch milliseconds) that has already passed, the
 worker answers `401 TOKEN_EXPIRED` and nothing runs. This covers `/_lunora/rpc`,
 `/_lunora/rpc-batch`, the REST surface and `serverQuery`. A live subscription
 gets the same code as a socket close (`4001`) once its credential lapses.
+
+A credential that has not lapsed can still stop being valid: a session is
+revoked, a user signs out elsewhere, or a member is removed from the
+organization their `orgId` claim names. The shard cannot run `resolveIdentity`,
+so an authenticated subscription socket is held to a 60-second window. Within
+it, `@lunora/client` posts the socket's credential to `POST /_lunora/ws/reauth`,
+which re-resolves the identity and restarts the window, with no reconnect and
+no re-seed. If the re-resolved claims differ, or the window passes without a
+re-auth, the shard closes the socket with `4005`. The client reconnects, and the
+upgrade resolves the current identity. `4005` is not `4001`: nothing about the
+credential lapsed, so `onTokenExpired` does not fire. A client without the
+re-auth call reconnects once per window. A revoked socket stops receiving within
+one window, plus the identity cache window when the resolver is memoized.
 `@lunora/client` treats the code as a refusal of the credential, not of the
 write: a queued offline write stays queued, `onTokenExpired` fires, and the
 write is sent again after `setAuthToken`.

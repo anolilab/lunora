@@ -159,7 +159,6 @@ describe("socket re-authentication", () => {
     it.each([
         ["an expired credential", { claims: { role: "member" }, expiresAt: NOW - 1, userId: "user-1" }, 401, "TOKEN_EXPIRED"],
         ["a replayed older credential", { claims: { role: "member" }, expiresAt: NOW + HOUR - 1, userId: "user-1" }, 409, "STALE_CREDENTIAL"],
-        ["changed claims", { claims: { role: "admin" }, expiresAt: NOW + 2 * HOUR, userId: "user-1" }, 409, "IDENTITY_CHANGED"],
         ["a credential without an expiry", { claims: { role: "member" }, userId: "user-1" }, 409, "STALE_CREDENTIAL"],
         ["another user's credential", { claims: { role: "member" }, expiresAt: NOW + 2 * HOUR, userId: "user-2" }, 404, "LIVE_CONNECTION_NOT_FOUND"],
         ["no verified identity", { expiresAt: NOW + 2 * HOUR }, 404, "LIVE_CONNECTION_NOT_FOUND"],
@@ -218,7 +217,7 @@ describe("socket re-authentication", () => {
 
         const { shard, ws } = open();
 
-        await reauth(shard, { claims: { role: "admin" }, expiresAt: NOW + 2 * HOUR, userId: "user-1" });
+        await reauth(shard, { claims: { role: "member" }, expiresAt: NOW + HOUR - 1, userId: "user-1" });
         vi.setSystemTime(NOW + HOUR + 1);
         await shard.write();
 
@@ -241,6 +240,154 @@ describe("socket re-authentication", () => {
 
         expect(response.status).toBe(400);
         expect(ws.attachment?.expiresAt).toBe(NOW + HOUR);
+    });
+});
+
+const WINDOW = 60_000;
+
+/** An authenticated subscription socket held to its revalidation window, as the upgrade stamps it. */
+const openTenantSocket = (): { shard: ReauthShard; ws: FakeWebSocket } => {
+    const shard = new ReauthShard(createState(), {});
+    const ws = createFakeWebSocket();
+
+    shard.register(ws, {
+        connectionId: "conn-1",
+        expiresAt: NOW + HOUR,
+        identity: { orgId: "org-a", role: "member" },
+        revalidateAt: NOW + WINDOW,
+        subs: { "sub-1": { args: {}, functionPath: "messages:list" } },
+        userId: "user-1",
+    });
+
+    return { shard, ws };
+};
+
+const dataFrames = (ws: FakeWebSocket): string[] => ws.sent.filter((frame) => frame.includes('"type":"data"'));
+
+describe("socket identity revalidation", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("closes a socket whose identity was not re-resolved within its window, without a token-expired signal", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const { shard, ws } = openTenantSocket();
+
+        vi.setSystemTime(NOW + WINDOW);
+        await shard.write();
+
+        expect(ws.closes[0]).toBe(4005);
+        expect(dataFrames(ws)).toStrictEqual([]);
+        expect(ws.sent.some((frame) => frame.includes("TOKEN_EXPIRED"))).toBe(false);
+    });
+
+    it("restarts the window on a same-claims re-auth, so the socket keeps delivering past the first window", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const { shard, ws } = openTenantSocket();
+
+        vi.setSystemTime(NOW + WINDOW / 2);
+
+        const response = await reauth(shard, { claims: { orgId: "org-a", role: "member" }, expiresAt: NOW + HOUR, userId: "user-1" });
+
+        expect(response.status).toBe(200);
+        expect(ws.attachment?.revalidateAt).toBe(NOW + WINDOW / 2 + WINDOW);
+
+        vi.setSystemTime(NOW + WINDOW + 1);
+        await shard.write();
+
+        expect(ws.closes).toStrictEqual([]);
+        expect(dataFrames(ws)).toHaveLength(1);
+    });
+
+    it("closes the socket at once when the re-resolved identity lost its orgId, so the old tenant's rows stop", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const { shard, ws } = openTenantSocket();
+        // The member was removed from org-a: the resolver still knows the user but no longer the tenant.
+        const response = await reauth(shard, { claims: { role: "member" }, expiresAt: NOW + HOUR, userId: "user-1" });
+
+        expect(response.status).toBe(409);
+        expect(ws.closes[0]).toBe(4005);
+
+        await shard.write();
+
+        expect(dataFrames(ws)).toStrictEqual([]);
+        expect(ws.sent.some((frame) => frame.includes("TOKEN_EXPIRED"))).toBe(false);
+    });
+
+    it("stamps the window on an authenticated upgrade and announces it in the identity frame", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+
+        const sockets: FakeWebSocket[] = [];
+        const server = createFakeWebSocket();
+        const globalWithPair = globalThis as { WebSocketPair?: unknown };
+        const original = globalWithPair.WebSocketPair;
+
+        globalWithPair.WebSocketPair = function WebSocketPair() {
+            return { 0: {}, 1: server } as unknown;
+        };
+
+        const state = createState();
+        const shard = new ReauthShard(
+            { ...state, acceptWebSocket: (ws) => sockets.push(ws as unknown as FakeWebSocket), getWebSockets: () => sockets as unknown as WebSocket[] },
+            {},
+        );
+
+        try {
+            // `new Response(null, { status: 101 })` throws under Node once the socket is accepted.
+            await shard.fetch(new Request("https://shard.internal/_lunora/ws", { headers: { Upgrade: "websocket", "x-lunora-userid": "user-1" } }));
+        } catch (error) {
+            if (!(error instanceof RangeError)) {
+                throw error;
+            }
+        } finally {
+            globalWithPair.WebSocketPair = original;
+        }
+
+        expect(server.attachment?.revalidateAt).toBe(NOW + WINDOW);
+
+        await shard.webSocketMessage(server as unknown as WebSocket, JSON.stringify({ type: "connect" }));
+
+        const identity = server.sent.map((frame) => JSON.parse(frame) as { revalidateMs?: number; type: string }).find((frame) => frame.type === "identity");
+
+        expect(identity?.revalidateMs).toBe(WINDOW);
+        expect(server.closes).toStrictEqual([]);
+    });
+
+    it("holds an anonymous upgrade to no window", async () => {
+        expect.assertions(1);
+
+        const server = createFakeWebSocket();
+        const globalWithPair = globalThis as { WebSocketPair?: unknown };
+        const original = globalWithPair.WebSocketPair;
+
+        globalWithPair.WebSocketPair = function WebSocketPair() {
+            return { 0: {}, 1: server } as unknown;
+        };
+
+        const shard = new ReauthShard(createState(), {});
+
+        try {
+            await shard.fetch(new Request("https://shard.internal/_lunora/ws", { headers: { Upgrade: "websocket" } }));
+        } catch (error) {
+            if (!(error instanceof RangeError)) {
+                throw error;
+            }
+        } finally {
+            globalWithPair.WebSocketPair = original;
+        }
+
+        expect(server.attachment).not.toHaveProperty("revalidateAt");
     });
 });
 
@@ -316,7 +463,7 @@ describe("socket re-authentication through a relay", () => {
         expect(ws.attachment?.expiresAt).toBe(NOW + 2 * HOUR);
     });
 
-    it("carries the claims to the relay, which refuses a changed identity", async () => {
+    it("carries the claims to the relay, which refuses a changed identity and closes its socket", async () => {
         expect.assertions(3);
 
         vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
@@ -329,6 +476,6 @@ describe("socket re-authentication through a relay", () => {
         const body: { error: { code: string } } = await response.json();
 
         expect(body.error.code).toBe("IDENTITY_CHANGED");
-        expect(ws.attachment?.expiresAt).toBe(NOW + HOUR);
+        expect(ws.closes[0]).toBe(4005);
     });
 });
