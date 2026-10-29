@@ -617,8 +617,9 @@ abstract class ShardDO {
     protected invalidateCompanionMemo(): void;
     protected isCacheableQuery(_functionPath: string): boolean;
     protected transactionLimits(): Partial<TransactionLimits>;
-    protected transactionHeadroom(): TransactionHeadroomTracker;
+    protected transactionHeadroom(functionPath?: string): TransactionHeadroomTracker;
     protected subscriptionHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker;
+    protected streamHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker;
     protected alarmHeadroom(): TransactionHeadroomTracker;
     protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void;
     protected flushMigrationProgress(): Promise<void>;

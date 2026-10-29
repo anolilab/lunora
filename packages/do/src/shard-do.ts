@@ -7538,8 +7538,8 @@ abstract class ShardDO {
      * for the same reason — an ambient field says "a dispatch is in flight", not
      * "this caller is that dispatch".
      */
-    protected transactionHeadroom(): TransactionHeadroomTracker {
-        return this.mintHeadroom("transaction", { trace: this.currentRequestTrace, userId: this.getCurrentUserId() });
+    protected transactionHeadroom(functionPath = "transaction"): TransactionHeadroomTracker {
+        return this.mintHeadroom(functionPath, { trace: this.currentRequestTrace, userId: this.getCurrentUserId() });
     }
 
     /**
@@ -7565,6 +7565,16 @@ abstract class ShardDO {
     }
 
     /**
+     * A stream's budget, held for its whole life: rows stay capped as before, but
+     * bytes are not, since a long-lived stream's total is not one transaction's.
+     */
+    protected streamHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker {
+        return this.mintHeadroom(functionPath, { trace: undefined, userId: identity?.userId }, this.rerunNearLimitWarned, {
+            maxReadBytes: Number.POSITIVE_INFINITY,
+        });
+    }
+
+    /**
      * A fresh budget for one alarm-driven work item — one external-source
      * table's tick, or one TTL sweep pass.
      *
@@ -7577,6 +7587,7 @@ abstract class ShardDO {
      * in-flight `/rpc` dispatch, or a sibling alarm work item, clearing or
      * substituting the wrong tracker mid-flight.
      */
+
     protected alarmHeadroom(): TransactionHeadroomTracker {
         return this.mintHeadroom("alarm", { trace: undefined, userId: undefined });
     }
@@ -15967,8 +15978,9 @@ abstract class ShardDO {
         functionPath: string,
         pin: { trace: TraceAnchor | undefined; userId: string | undefined },
         warnedBefore?: Set<string>,
+        overrides?: Partial<TransactionLimits>,
     ): TransactionHeadroomTracker {
-        return new TransactionHeadroomTracker(this.transactionLimits(), (warning: TransactionLimitWarning) => {
+        return new TransactionHeadroomTracker({ ...this.transactionLimits(), ...overrides }, (warning: TransactionLimitWarning) => {
             const key = `${functionPath}\u0000${warning.kind}`;
 
             if (warnedBefore?.has(key)) {

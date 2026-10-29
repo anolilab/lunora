@@ -567,7 +567,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // frame returned, interleaved with unrelated dispatches, so
                 // `buildCtx`'s per-request fallback would run an `rls()` /
                 // `ctx.auth` stream as nobody — or as a concurrent RPC's caller.
-                iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity }), args, signal),
+                iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath, headroom: this.streamHeadroom(functionPath, identity), identity }), args, signal),
             };
         }
 
@@ -1197,7 +1197,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // reach it; `onConnect`/`onDisconnect` carry a verified identity and
                 // stay guarded like any request.
                 enforceRls: options.trusted !== true,
-                headroom: options.headroom ?? this.transactionHeadroom(),
+                headroom: options.headroom ?? this.transactionHeadroom(options.functionPath),
                 // A live predicate, not a flag: the transaction opens AFTER this ctx
                 // is built (a mutation dispatch wraps the handler), so only a call-time
                 // read reports the truth. `_commitSeq` reuses one sequence across

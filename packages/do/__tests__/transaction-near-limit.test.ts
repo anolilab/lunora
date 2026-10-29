@@ -43,7 +43,19 @@ class NearLimitShard extends ShardDO {
 
     /** Fill through a live-query re-run's tracker, as the generated `executeSubscription` mints it. */
     public async fillAsSubscription(functionPath: string, userId: string): Promise<void> {
-        const writer = createShardContextDatabase({ headroom: this.subscriptionHeadroom(functionPath, { userId }), schema, sql: this.sql as SqlExec });
+        await this.fillWith(this.subscriptionHeadroom(functionPath, { userId }));
+    }
+
+    public streamTracker(functionPath: string): TransactionHeadroomTracker {
+        return this.streamHeadroom(functionPath);
+    }
+
+    public fallbackTracker(functionPath: string): TransactionHeadroomTracker {
+        return this.transactionHeadroom(functionPath);
+    }
+
+    public async fillWith(headroom: TransactionHeadroomTracker): Promise<void> {
+        const writer = createShardContextDatabase({ headroom, schema, sql: this.sql as SqlExec });
 
         for (let index = 0; index < this.writes; index += 1) {
             // eslint-disable-next-line no-await-in-loop -- writes land in order against the one tracker under test
@@ -56,8 +68,8 @@ class NearLimitShard extends ShardDO {
     }
 
     // eslint-disable-next-line class-methods-use-this -- tiny so the threshold is reached in a handful of writes
-    protected override transactionLimits(): { maxWrittenRows: number } {
-        return { maxWrittenRows: 10 };
+    protected override transactionLimits(): { maxReadRows: number; maxWrittenRows: number } {
+        return { maxReadRows: 10, maxWrittenRows: 10 };
     }
 }
 
@@ -135,6 +147,32 @@ describe("transaction near-limit warning", () => {
         await shard.fillAsSubscription("items:list", "subscriber-2");
 
         expect(events).toHaveLength(1);
+    });
+
+    it("caps a stream's rows but not its lifetime bytes", () => {
+        expect.assertions(2);
+
+        const shard = createShard();
+        const stream = shard.streamTracker("items:tail");
+
+        expect(() => {
+            stream.recordReadBytes(64 * 1024 * 1024);
+        }).not.toThrow();
+        expect(() => {
+            stream.recordRead(11);
+        }).toThrow("over the 10-document limit");
+    });
+
+    it("names the function a fallback tracker was minted for", async () => {
+        expect.assertions(1);
+
+        const events: { functionPath?: string }[] = [];
+        const shard = createShard(events);
+
+        shard.writes = 9;
+        await shard.fillWith(shard.fallbackTracker("__shape__:items"));
+
+        expect(events.map((event) => event.functionPath)).toStrictEqual(["__shape__:items"]);
     });
 
     it("stays quiet for a dispatch well inside its ceilings", async () => {
