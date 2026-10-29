@@ -178,14 +178,14 @@ interface PaidMcpServer {
 interface RegisteredTool {
     definition: Tool;
     handler: ToolHandler;
-
-    /**
-     * `definition.inputSchema`, compiled once on the first request that needs it
-     * ({@link compileValidators}), not at registration: registering runs at module
-     * scope, and the compiler is part of the MCP SDK.
-     */
-    validate?: JsonSchemaValidator<Record<string, unknown>>;
 }
+
+/**
+ * Each tool's compiled `inputSchema`, built on its first call, not at
+ * registration: registering runs at module scope, and the compiler is part of
+ * the MCP SDK. Per tool, so a schema that fails to compile fails only its own calls.
+ */
+const compiledSchemas = new WeakMap<RegisteredTool, JsonSchemaValidator<Record<string, unknown>>>();
 
 /**
  * The SDK's eval-free JSON Schema provider. Its Ajv default compiles schemas
@@ -203,27 +203,22 @@ const getSchemaValidator = async (): Promise<CfWorkerJsonSchemaValidator> => {
     return schemaValidator;
 };
 
-/** Compile the `inputSchema` of every tool registered since the last request. */
-const compileValidators = async (tools: ReadonlyMap<string, RegisteredTool>): Promise<void> => {
-    const validator = await getSchemaValidator();
-
-    for (const entry of tools.values()) {
-        entry.validate ??= validator.getValidator(entry.definition.inputSchema);
-    }
-};
-
 /**
  * The `isError` result for a call whose arguments fail the tool's
  * `inputSchema`, or `undefined` when they pass. The ONE check both the
  * pre-charge dry run and the real dispatch apply, so they cannot disagree.
- * Both run after {@link compileValidators}, so `validate` is set.
  */
-const argumentsRejection = (entry: RegisteredTool, name: string, arguments_: Record<string, unknown>): CallToolResult | undefined => {
-    if (entry.validate === undefined) {
-        return errorResult("INTERNAL", `the input schema of tool "${name}" was not compiled`);
+const argumentsRejection = async (entry: RegisteredTool, name: string, arguments_: Record<string, unknown>): Promise<CallToolResult | undefined> => {
+    let validate = compiledSchemas.get(entry);
+
+    if (validate === undefined) {
+        const validator = await getSchemaValidator();
+
+        validate = validator.getValidator(entry.definition.inputSchema);
+        compiledSchemas.set(entry, validate);
     }
 
-    const result = entry.validate(arguments_);
+    const result = validate(arguments_);
 
     return result.valid ? undefined : errorResult("BAD_REQUEST", `invalid arguments for tool "${name}": ${result.errorMessage}`);
 };
@@ -297,10 +292,10 @@ const transportRejection = async (
     const { CallToolRequestSchema, Server } = await loadMcpSdk();
     const probe = new Server({ name: "lunora-paid-mcp-preflight", version: "0.0.0" }, { capabilities: { tools: {} } });
 
-    probe.setRequestHandler(CallToolRequestSchema, (call): CallToolResult => {
+    probe.setRequestHandler(CallToolRequestSchema, async (call): Promise<CallToolResult> => {
         // The arguments the SDK parsed out of the envelope, checked by the same
         // validator dispatch runs — a rejection here is answered unpaid.
-        const rejection = argumentsRejection(entry, name, call.params.arguments ?? {});
+        const rejection = await argumentsRejection(entry, name, call.params.arguments ?? {});
 
         handler.reached = rejection === undefined && call.params.name === name;
 
@@ -370,7 +365,7 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
             }
 
             const callArguments = request.params.arguments ?? {};
-            const rejection = argumentsRejection(entry, request.params.name, callArguments);
+            const rejection = await argumentsRejection(entry, request.params.name, callArguments);
 
             if (rejection !== undefined) {
                 return rejection;
@@ -421,8 +416,6 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
         }
 
         const { parsedBody } = screened;
-
-        await compileValidators(tools);
 
         // Hand the already-parsed body to the transport so it doesn't re-read the
         // consumed stream. `parsedBody` is `undefined` only for a GET/DELETE
