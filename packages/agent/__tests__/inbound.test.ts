@@ -320,7 +320,7 @@ describe(dispatchAgentEmail, () => {
     });
 
     it("never starts a run when resolveEmailShard throws or returns a non-string", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const support = fakeBinding();
         const onEmail: AgentEmailMapper = () => {
@@ -339,10 +339,14 @@ describe(dispatchAgentEmail, () => {
         ]);
         const junk = dispatchAgentEmail([{ agent: { onEmail, resolveEmailShard: (() => 42) as unknown as () => string }, className: "SupportAgentWorkflow" }]);
 
-        await Promise.allSettled([
-            throwing(fakeMessage().message, { SupportAgentWorkflow: support.binding }, {}),
-            junk(fakeMessage().message, { SupportAgentWorkflow: support.binding }, {}),
-        ]);
+        const thrown = fakeMessage();
+        const junked = fakeMessage();
+
+        await throwing(thrown.message, { SupportAgentWorkflow: support.binding }, {});
+        await junk(junked.message, { SupportAgentWorkflow: support.binding }, {});
+
+        // Both deliveries fail (bounced), rather than falling back to the default shard.
+        expect([...thrown.rejects, ...junked.rejects]).toHaveLength(2);
 
         expect(support.calls).toHaveLength(0);
     });
