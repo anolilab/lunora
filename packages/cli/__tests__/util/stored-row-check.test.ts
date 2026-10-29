@@ -214,4 +214,31 @@ describe(checkStoredRows, () => {
         expect(verdict).toMatchObject({ kind: "inconclusive" });
         expect(JSON.stringify(verdict)).not.toContain("SENTINEL");
     });
+
+    it("fails a stored geoPoint outside the latitude and longitude ranges", async () => {
+        expect.assertions(1);
+
+        const places = table("places", { at: { kind: "geoPoint" } });
+
+        await expect(
+            checkStoredRows({
+                changes: [change("places", "at")],
+                tables: [places],
+                target: target([
+                    { doc: { _id: "p1", at: { lat: 45, lng: 7 } }, table: "places" },
+                    { doc: { _id: "p2", at: { lat: 999, lng: 0 } }, table: "places" },
+                ]),
+            }),
+        ).resolves.toMatchObject({ failures: [{ id: "p2" }], kind: "fails" });
+    });
+
+    it("is inconclusive about a validator kind it does not know, rather than failing every row", async () => {
+        expect.assertions(1);
+
+        const things = table("things", { value: { kind: "mystery" } });
+
+        await expect(
+            checkStoredRows({ changes: [change("things", "value")], tables: [things], target: target([{ doc: { _id: "t1", value: 1 }, table: "things" }]) }),
+        ).resolves.toMatchObject({ kind: "inconclusive" });
+    });
 });

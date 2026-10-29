@@ -52,35 +52,6 @@ type StoredRowVerdict =
     | { kind: "conforms"; rows: number; tables: string[] }
     | { kind: "inconclusive"; reason: string };
 
-/** A validator whose accepted values this checker cannot reproduce, or `undefined` when it can. */
-const unverifiable = (validator: ValidatorIR, path: string): string | undefined => {
-    // `sourceText` marks an expression codegen could not resolve to a validator (it reads as `v.any()`), and a refinement
-    // other than a literal `.max(n)` is a closure the IR cannot run.
-    if (
-        validator.sourceText !== undefined ||
-        validator.unmodelledRefinement === true ||
-        (validator.hasRefinement === true && validator.stringMaxLength === undefined)
-    ) {
-        return `${path} has a validator or refinement that cannot be checked outside the worker`;
-    }
-
-    if (validator.kind === "from") {
-        return `${path} is a \`v.from()\` schema, which cannot be checked outside the worker`;
-    }
-
-    const children = [validator.inner, validator.keyType, validator.valueType, ...(validator.members ?? []), ...Object.values(validator.shape ?? {})];
-
-    for (const child of children) {
-        const found = child === undefined ? undefined : unverifiable(child, path);
-
-        if (found !== undefined) {
-            return found;
-        }
-    }
-
-    return undefined;
-};
-
 /** Whether `validator` holds a `v.id()` or `v.storage()` anywhere. */
 const referencesRow = (validator: ValidatorIR): boolean =>
     validator.kind === "id" ||
@@ -124,13 +95,16 @@ const literalOf = (text: string): unknown => {
 
 const isFiniteNumber = (value: unknown): boolean => typeof value === "number" && Number.isFinite(value);
 
+const inRange = (value: unknown, limit: number): boolean => isFiniteNumber(value) && Math.abs(value as number) <= limit;
+
 const SCALAR_CHECKS: Record<string, (value: unknown) => boolean> = {
     any: () => true,
     bigint: (value) => typeof value === "bigint",
     boolean: (value) => typeof value === "boolean",
     bytes: (value) => value instanceof ArrayBuffer || ArrayBuffer.isView(value),
     date: isFiniteNumber,
-    geoPoint: (value) => isPlainRecord(value) && isFiniteNumber(value["lat"]) && isFiniteNumber(value["lng"]),
+    // The ranges `v.geoPoint()` enforces on write.
+    geoPoint: (value) => isPlainRecord(value) && inRange(value["lat"], 90) && inRange(value["lng"], 180),
     id: (value) => typeof value === "string",
     null: (value) => value === null,
     number: isFiniteNumber,
@@ -237,6 +211,39 @@ const shapeMismatch = (document: Record<string, unknown>, shape: Record<string, 
 
     for (const [key, validator] of Object.entries(shape)) {
         const found = mismatch(document[key], validator, `${prefix}${key}`);
+
+        if (found !== undefined) {
+            return found;
+        }
+    }
+
+    return undefined;
+};
+
+/** A validator whose accepted values this checker cannot reproduce, or `undefined` when it can. */
+const unverifiable = (validator: ValidatorIR, path: string): string | undefined => {
+    // `sourceText` marks an expression codegen could not resolve to a validator (it reads as `v.any()`), and a refinement
+    // other than a literal `.max(n)` is a closure the IR cannot run.
+    if (
+        validator.sourceText !== undefined ||
+        validator.unmodelledRefinement === true ||
+        (validator.hasRefinement === true && validator.stringMaxLength === undefined)
+    ) {
+        return `${path} has a validator or refinement that cannot be checked outside the worker`;
+    }
+
+    if (validator.kind === "from") {
+        return `${path} is a \`v.from()\` schema, which cannot be checked outside the worker`;
+    }
+
+    if (validator.kind !== "optional" && SCALAR_CHECKS[validator.kind] === undefined && COMPOSITE_CHECKS[validator.kind] === undefined) {
+        return `${path} has a \`${validator.kind}\` validator this check does not know`;
+    }
+
+    const children = [validator.inner, validator.keyType, validator.valueType, ...(validator.members ?? []), ...Object.values(validator.shape ?? {})];
+
+    for (const child of children) {
+        const found = child === undefined ? undefined : unverifiable(child, path);
 
         if (found !== undefined) {
             return found;
