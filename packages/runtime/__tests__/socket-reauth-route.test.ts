@@ -61,6 +61,42 @@ describe("socket re-auth route", () => {
         expect(forwarded?.headers.get("authorization")).toBeNull();
     });
 
+    it("re-resolves a cookie session with no bearer, as the browser client's periodic re-auth sends it", async () => {
+        expect.assertions(3);
+
+        const seen: Request[] = [];
+        const namespace: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: (request: Request) => {
+                        seen.push(request);
+
+                        return Promise.resolve(Response.json({ ok: true }));
+                    },
+                };
+            },
+            idFromName: (name) => name,
+        };
+        const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
+            resolveIdentity: (request) => (request.headers.get("cookie") === "session=abc" ? { orgId: "org-a", userId: "user_42" } : null),
+            shardDO: namespace,
+        });
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/ws/reauth", {
+                body: JSON.stringify({ connectionId: "conn-1" }),
+                headers: { "content-type": "application/json", cookie: "session=abc", origin: "https://app.example" },
+                method: "POST",
+            }),
+            { SHARD: namespace },
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        expect(seen[0]?.headers.get("x-lunora-userid")).toBe("user_42");
+        expect(seen[0]?.headers.get("cookie")).toBeNull();
+    });
+
     it("drops identity headers the caller forged", async () => {
         expect.assertions(2);
 

@@ -244,6 +244,7 @@ describe("socket re-authentication", () => {
 });
 
 const WINDOW = 60_000;
+const ADMIN_FIXTURE = "revalidation-fixture-admin";
 
 /** An authenticated subscription socket held to its revalidation window, as the upgrade stamps it. */
 const openTenantSocket = (): { shard: ReauthShard; ws: FakeWebSocket } => {
@@ -364,7 +365,11 @@ describe("socket identity revalidation", () => {
         expect(server.closes).toStrictEqual([]);
     });
 
-    it("holds an anonymous upgrade to no window", async () => {
+    it.each([
+        ["an anonymous upgrade", {}, {}],
+        // The studio and `subscribeScheduledJobs` answer to the admin token, which a rotation already revokes.
+        ["an admin upgrade", { authorization: `Bearer ${ADMIN_FIXTURE}`, "x-lunora-userid": "user-1" }, { LUNORA_ADMIN_TOKEN: ADMIN_FIXTURE }],
+    ])("holds %s to no window", async (_name, headers, env) => {
         expect.assertions(1);
 
         const server = createFakeWebSocket();
@@ -375,10 +380,10 @@ describe("socket identity revalidation", () => {
             return { 0: {}, 1: server } as unknown;
         };
 
-        const shard = new ReauthShard(createState(), {});
+        const shard = new ReauthShard(createState(), env);
 
         try {
-            await shard.fetch(new Request("https://shard.internal/_lunora/ws", { headers: { Upgrade: "websocket" } }));
+            await shard.fetch(new Request("https://shard.internal/_lunora/ws", { headers: { Upgrade: "websocket", ...headers } }));
         } catch (error) {
             if (!(error instanceof RangeError)) {
                 throw error;
