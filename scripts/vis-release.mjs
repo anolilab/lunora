@@ -11,18 +11,10 @@
  *
  * The standalone `version` / `publish` commands cannot be chained instead:
  * `version` consumes the change files, and `publish` then finds nothing to do.
- *
- * The plugin is passed here, not in vis.config.ts: vis caches the loaded config as
- * JSON (node_modules/.cache/vis), which drops plugin functions on every later load.
  */
 import { release } from "@visulima/vis/release";
 
-import { keepSiblingRanges } from "./vis-release-sibling-ranges.js";
-
-const { publish, version } = await release({
-    config: { plugins: [keepSiblingRanges] },
-    skipPublish: process.argv.includes("--skip-publish"),
-});
+const { publish, version } = await release({ skipPublish: process.argv.includes("--skip-publish") });
 
 for (const { name, newVersion, oldVersion } of version.plan.releases) {
     console.log(`${name}: ${oldVersion} → ${newVersion}`);

@@ -22,7 +22,6 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { format, resolveConfig } from "prettier";
 import semver from "semver";
 
 const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
@@ -69,6 +68,8 @@ export const restoreSiblingRanges = (before, after) => {
 
 export const keepSiblingRanges = {
     applyDraft: async ({ cwd }) => {
+        // Imported here: vis.config.ts loads this module on every vis command.
+        const { format, resolveConfig } = await import("prettier");
         const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8" });
 
         for (const path of git("diff", "--name-only", "--", "packages/*/package.json").split("\n").filter(Boolean)) {

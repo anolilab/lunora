@@ -1,5 +1,7 @@
 import { defineConfig } from "@visulima/vis/config";
 
+import { keepSiblingRanges } from "./scripts/vis-release-sibling-ranges.js";
+
 export default defineConfig({
     // `alpha` is the development branch, not `main`. vis only derives the
     // affected base from CI env vars for `pull_request`/`push` events — it has
@@ -180,14 +182,12 @@ export default defineConfig({
         // The version step rewrites package.json, which Prettier does check
         // (CHANGELOG.md is in .prettierignore, so only the manifest matters).
         formatChangedFiles: true,
-        // Only feat, fix, perf, revert and breaking commits release, as they did under
-        // @anolilab/semantic-release-preset (no entry in any CHANGELOG.md was released by
-        // anything else). vis's `generate` maps every other type to a patch, so without this a
-        // docs or test commit — or a `ci:` commit touching every package dir — would release.
-        // The `!` form is not matched, so `chore!:` still releases as breaking; a
-        // `BREAKING CHANGE:` footer under one of these types is dropped with its commit.
+        // Only feat, fix, perf, revert and breaking commits release, as under the old
+        // semantic-release preset; vis maps every other type to a patch. Breaking commits
+        // (`!` or a BREAKING CHANGE footer) are exempt from this pattern.
         ignoreCommitPattern: ["^(build|chore|ci|deps|docs|refactor|security|style|test|translation)(\\([^)]*\\))?:"],
         gitUser: { email: "github-actions[bot]@users.noreply.github.com", name: "github-actions-shell" },
+        plugins: [keepSiblingRanges],
         publish: {
             catalogResolution: "auto",
             // Replaces @anolilab/semantic-release-clean-package-json.
