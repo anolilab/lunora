@@ -115,6 +115,8 @@ class TransactionHeadroomTracker {
     /** Kinds already warned about, so a loop near a ceiling warns once rather than once per row. */
     private readonly warned = new Set<TransactionLimitKind>();
 
+    private readonly chargedDocuments = new Set<string>();
+
     public constructor(limits: Partial<TransactionLimits> = {}, onNearLimit?: (warning: TransactionLimitWarning) => void) {
         this.limits = { ...DEFAULT_TRANSACTION_LIMITS, ...limits };
         this.onNearLimit = onNearLimit;
@@ -141,6 +143,17 @@ class TransactionHeadroomTracker {
     public recordReadBytes(bytes: number): void {
         this.readBytes += bytes;
         this.check("readBytes", this.readBytes);
+    }
+
+    /**
+     * Charge one stored document once per transaction, keyed by `key`: a write
+     * re-reads the row it updates, and charging it again would halve the cap.
+     */
+    public recordDocumentRead(key: string, bytes: number): void {
+        if (!this.chargedDocuments.has(key)) {
+            this.chargedDocuments.add(key);
+            this.recordReadBytes(bytes);
+        }
     }
 
     /** Charge one written document, sized by {@link estimateBytes}. */

@@ -2004,35 +2004,25 @@ const deriveSoftDeleteFields = (schema: SchemaLike): ReadonlyMap<string, string>
 };
 
 /**
- * Encoded size of the stored documents in `rows`, read off the JSON column the
- * row store already returned. A document whose id is already in `charged` is
- * skipped, and every one counted is added to it.
+ * Charge each stored document in `rows`, read off the JSON column the row store
+ * already returned. The key pairs the id with the length: an id repeats across
+ * tables only through an explicit or custom id, and the length keeps those apart.
  */
-const documentBytes = (rows: ReadonlyArray<unknown>, charged: Set<string>): number => {
-    let bytes = 0;
-
+const chargeDocuments = (rows: ReadonlyArray<unknown>, headroom: TransactionHeadroomTracker): void => {
     for (const row of rows) {
         const record = row as Record<string, unknown> | undefined;
         const raw = record?.[DOC_COLUMN];
 
-        if (typeof raw !== "string") {
-            continue;
-        }
+        if (typeof raw === "string") {
+            const id = record?.["id"];
 
-        const id = record?.["id"];
-
-        if (typeof id === "string") {
-            if (charged.has(id)) {
-                continue;
+            if (typeof id === "string") {
+                headroom.recordDocumentRead(`${id}\u0000${String(raw.length)}`, raw.length);
+            } else {
+                headroom.recordReadBytes(raw.length);
             }
-
-            charged.add(id);
         }
-
-        bytes += raw.length;
     }
-
-    return bytes;
 };
 
 /**
@@ -2044,10 +2034,8 @@ const documentBytes = (rows: ReadonlyArray<unknown>, charged: Set<string>): numb
  * search and geo candidates, rank pages, relation loads — and a byte cap that
  * one of them skips is no cap. The stored JSON is already a string in hand, so
  * its length costs nothing; nothing is re-serialized. Each document is charged
- * once per transaction: a write re-reads the row it updates, and charging that
- * pre-image again would halve the cap for a read-then-update loop, while a
- * document never read before is charged wherever it is first loaded — a write
- * path that hands its pre-image back cannot read past the cap. `toArray()`, `one()` and
+ * once per transaction (see `recordDocumentRead`), wherever it is first loaded.
+ * `toArray()`, `one()` and
  * iteration are each charged. A host whose `toArray`/`one` is built on its own
  * iterator would charge each row twice, so iteration inside those two is not
  * charged.
@@ -2057,7 +2045,6 @@ const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | und
         return sql;
     }
 
-    const charged = new Set<string>();
     const exec = <Row = Record<string, unknown>>(query: string, ...params: unknown[]): SqlCursor<Row> => {
         const cursor = sql.exec<Row>(query, ...params);
         const toArray = cursor.toArray.bind(cursor);
@@ -2075,11 +2062,7 @@ const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | und
         };
         const charge = (rows: ReadonlyArray<unknown>): void => {
             if (!exempt()) {
-                const bytes = documentBytes(rows, charged);
-
-                if (bytes > 0) {
-                    headroom.recordReadBytes(bytes);
-                }
+                chargeDocuments(rows, headroom);
             }
         };
 

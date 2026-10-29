@@ -260,6 +260,28 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
             expect(tracker.headroom().readBytes).toBe(stored?.__doc__.length);
         });
 
+        it("charges two different documents that share an id", () => {
+            expect.assertions(1);
+
+            const sharing: SqlExec = {
+                exec: <Row>() => {
+                    const rows = [
+                        { __doc__: "aaa", id: "same" },
+                        { __doc__: "bbbbb", id: "same" },
+                    ] as Row[];
+
+                    return { one: () => rows[0] as Row, [Symbol.iterator]: () => rows[Symbol.iterator](), toArray: () => rows };
+                },
+            };
+            const tracker = new TransactionHeadroomTracker();
+
+            meterReadBytes(sharing, tracker, () => false)
+                .exec("SELECT")
+                .toArray();
+
+            expect(tracker.headroom().readBytes).toBe(8);
+        });
+
         it("does not charge read bytes inside an unmetered deleteAll", async () => {
             expect.assertions(1);
 

@@ -13,10 +13,11 @@
  * is the consumer's decision.
  */
 import { LunoraError } from "@lunora/errors";
-import type { SchemaLike, SqlExec, TransactionHeadroom } from "@lunora/shard-engine";
-import { createShardCtxDb, RLS_UNWRAP_SYMBOL, runShardMigrations, TransactionHeadroomTracker } from "@lunora/shard-engine";
+import type { SchemaLike, SqlExec } from "@lunora/shard-engine";
+import { createShardCtxDb, RLS_UNWRAP_SYMBOL, runShardMigrations } from "@lunora/shard-engine";
 
 import { beginDeferredSchedules } from "./deferred-schedules";
+import DispatchHeadroom from "./dispatch-headroom";
 import type { FacadeEntry, FacadeWriterLike } from "./facade";
 import { bindTableFacade } from "./facade";
 import type { DatabaseWriter, Schema } from "./types";
@@ -62,41 +63,6 @@ const resolveInProcessIdentity = (identity: InProcessIdentity | null): ResolvedI
     // eslint-disable-next-line unicorn/no-null -- `getIdentity()`'s empty-claims sentinel is `null`, matching a shard with no `x-lunora-identity` header
     return { claims: Object.keys(extra).length > 0 ? extra : null, userId };
 };
-
-/**
- * A resource meter with a stable identity whose budget resets per dispatch.
- *
- * Production builds a fresh `createShardCtxDb` writer — and with it a fresh
- * {@link TransactionHeadroomTracker} — for every dispatch. The in-process
- * runtime builds one writer per identity view, so it hands that writer this
- * forwarder and swaps the tracker behind it at each top-level entry: every
- * dispatch gets its own budget, and the ceilings are the engine defaults rather
- * than "unmetered".
- */
-class DispatchHeadroom extends TransactionHeadroomTracker {
-    private current = new TransactionHeadroomTracker();
-
-    /** Begin a new dispatch with a full budget. */
-    public reset(): void {
-        this.current = new TransactionHeadroomTracker();
-    }
-
-    public override headroom(): TransactionHeadroom {
-        return this.current.headroom();
-    }
-
-    public override recordRead(count: number): void {
-        this.current.recordRead(count);
-    }
-
-    public override recordReadBytes(bytes: number): void {
-        this.current.recordReadBytes(bytes);
-    }
-
-    public override recordWrite(row: unknown): void {
-        this.current.recordWrite(row);
-    }
-}
 
 /** Options accepted by {@link createInProcessRuntime}. */
 interface InProcessRuntimeOptions {

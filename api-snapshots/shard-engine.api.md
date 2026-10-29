@@ -3441,6 +3441,7 @@ class TransactionHeadroomTracker {
     constructor(limits?: Partial<TransactionLimits>, onNearLimit?: (warning: TransactionLimitWarning) => void);
     recordRead(count: number): void;
     recordReadBytes(bytes: number): void;
+    recordDocumentRead(key: string, bytes: number): void;
     recordWrite(row: unknown): void;
     headroom(): TransactionHeadroom;
 }

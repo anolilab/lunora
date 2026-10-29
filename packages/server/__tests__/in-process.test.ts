@@ -4,6 +4,7 @@ import type { SqlExec } from "@lunora/shard-engine";
 import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
+import DispatchHeadroom from "../src/dispatch-headroom";
 import { createInProcessRuntime, resolveInProcessIdentity, runRegisteredFunction } from "../src/in-process";
 import { defineSchema, defineTable } from "../src/schema";
 
@@ -59,5 +60,19 @@ describe(createInProcessRuntime, () => {
 
         expect(() => runRegisteredFunction("mutation", internal, {}, {}, false)).toThrow("internal function");
         expect(() => runRegisteredFunction("query", internal, {}, {}, true)).toThrow("expected a registered query");
+    });
+});
+
+describe(DispatchHeadroom, () => {
+    it("charges a document again in the next dispatch", () => {
+        expect.assertions(1);
+
+        const headroom = new DispatchHeadroom();
+
+        headroom.recordDocumentRead("doc", 10);
+        headroom.reset();
+        headroom.recordDocumentRead("doc", 10);
+
+        expect(headroom.headroom().readBytes).toBe(10);
     });
 });
