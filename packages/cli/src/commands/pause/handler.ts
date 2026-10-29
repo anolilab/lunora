@@ -116,15 +116,34 @@ const runPauseCommand = async (options: PauseCommandOptions): Promise<PauseComma
     return { code: 0, result };
 };
 
+/**
+ * Why the positional arguments are not a valid `pause` / `resume` invocation,
+ * or `undefined`. Strict on purpose: a typo must fail rather than flip a
+ * production deployment.
+ */
+const pauseUsageError = (command: "pause" | "resume", argument: ReadonlyArray<string>): string | undefined => {
+    if (command === "resume") {
+        return argument.length === 0 ? undefined : `resume takes no arguments, got "${argument.join(" ")}"`;
+    }
+
+    if (argument.length > 1 || (argument.length === 1 && argument[0] !== "status")) {
+        return `unknown arguments "${argument.join(" ")}" — expected status, or none to pause`;
+    }
+
+    return undefined;
+};
+
 /** `lunora pause` handler (lazy-loaded via the command's `loader`). */
 const executePause: CommandHandler<PauseOptions> = defineHandler<PauseOptions, PauseStatus>(async ({ argument, cwd, format, logger, options }) => {
-    const [subcommand] = argument;
+    const usage = pauseUsageError("pause", argument);
 
-    if (subcommand !== undefined && subcommand !== "status") {
-        logger.error(`pause: unknown subcommand "${subcommand}" — expected status, or none to pause`);
+    if (usage !== undefined) {
+        logger.error(`pause: ${usage}`);
 
-        return { code: EXIT_CODE.USAGE, error: `unknown subcommand "${subcommand}"` };
+        return { code: EXIT_CODE.USAGE, error: usage };
     }
+
+    const [subcommand] = argument;
 
     const result = await runPauseCommand({
         action: subcommand === "status" ? "status" : "pause",
@@ -141,7 +160,15 @@ const executePause: CommandHandler<PauseOptions> = defineHandler<PauseOptions, P
 });
 
 /** `lunora resume` handler (lazy-loaded via the command's `loader`). */
-const executeResume: CommandHandler<PauseOptions> = defineHandler<PauseOptions, PauseStatus>(async ({ cwd, format, logger, options }) => {
+const executeResume: CommandHandler<PauseOptions> = defineHandler<PauseOptions, PauseStatus>(async ({ argument, cwd, format, logger, options }) => {
+    const usage = pauseUsageError("resume", argument);
+
+    if (usage !== undefined) {
+        logger.error(`resume: ${usage}`);
+
+        return { code: EXIT_CODE.USAGE, error: usage };
+    }
+
     const result = await runPauseCommand({
         action: "resume",
         cwd,
@@ -155,5 +182,5 @@ const executeResume: CommandHandler<PauseOptions> = defineHandler<PauseOptions, 
     return { code: result.code, data: result.result, error: result.error };
 });
 
-export { executePause, executeResume, runPauseCommand };
+export { executePause, executeResume, pauseUsageError, runPauseCommand };
 export type { PauseCommandOptions, PauseCommandResult, PauseStatus };

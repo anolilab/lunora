@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PauseStatus } from "../../src/commands/pause/handler";
-import { runPauseCommand } from "../../src/commands/pause/handler";
+import { pauseUsageError, runPauseCommand } from "../../src/commands/pause/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
@@ -37,6 +37,17 @@ const pauseFetch =
 const TARGET = { token: "t", url: "http://localhost:8787" };
 
 describe("lunora pause / resume", () => {
+    it("rejects stray arguments instead of pausing or resuming", () => {
+        expect.hasAssertions();
+
+        expect(pauseUsageError("resume", [])).toBeUndefined();
+        expect(pauseUsageError("resume", ["now"])).toBeDefined();
+        expect(pauseUsageError("pause", [])).toBeUndefined();
+        expect(pauseUsageError("pause", ["status"])).toBeUndefined();
+        expect(pauseUsageError("pause", ["status", "extra"])).toBeDefined();
+        expect(pauseUsageError("pause", ["stauts"])).toBeDefined();
+    });
+
     it("pauses with a reason and reports the new state", async () => {
         expect.assertions(3);
 
