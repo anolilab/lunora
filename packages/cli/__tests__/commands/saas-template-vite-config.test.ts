@@ -13,6 +13,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+/** What the template's `.env` files hold, for the `loadEnv` stub below. */
+const envFiles: Record<string, string> = {};
+
 // eslint-disable-next-line vitest/prefer-import-in-mock -- the package is not a dependency of this one, so it cannot be resolved as a type
 vi.mock("@lunora/vite", () => {
     return {
@@ -47,7 +50,13 @@ vi.mock("@vitejs/plugin-react", () => {
 });
 // eslint-disable-next-line vitest/prefer-import-in-mock -- the package is not a dependency of this one, so it cannot be resolved as a type
 vi.mock("vite", () => {
-    return { defineConfig: (config: unknown) => config };
+    return {
+        defineConfig: (config: unknown) => config,
+        // Vite's merge: the `.env` files, then any `VITE_*` already in `process.env` on top.
+        loadEnv: (): Record<string, string> => {
+            return { ...envFiles, ...(process.env["VITE_LUNORA_URL"] ? { VITE_LUNORA_URL: process.env["VITE_LUNORA_URL"] } : {}) };
+        },
+    };
 });
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
@@ -58,7 +67,9 @@ interface OriginResult {
     server?: { strictPort?: boolean };
 }
 
-const originPlugin = async (): Promise<{ apply?: string; config: (user: { server?: { port?: number } }) => OriginResult | undefined }> => {
+type Config = (user: { server?: { port?: number } }, env: { mode: string }) => OriginResult | undefined;
+
+const originPlugin = async (): Promise<{ apply?: string; config: Config }> => {
     const loaded = (await import(pathToFileURL(join(root, "templates", "saas", "vite.config.ts")).href)) as {
         default: { plugins: { config?: unknown; name: string }[] };
     };
@@ -68,8 +79,11 @@ const originPlugin = async (): Promise<{ apply?: string; config: (user: { server
 };
 
 describe("saas template dev origin", () => {
+    const serve = { mode: "development" };
+
     afterEach(() => {
         vi.unstubAllEnvs();
+        delete envFiles["VITE_LUNORA_URL"];
     });
 
     it("defines the origin for the server render only, never the client bundle", async () => {
@@ -78,7 +92,7 @@ describe("saas template dev origin", () => {
         vi.stubEnv("VITE_LUNORA_URL", "");
 
         const plugin = await originPlugin();
-        const result = plugin.config({ server: { port: 4321 } });
+        const result = plugin.config({ server: { port: 4321 } }, serve);
 
         expect(plugin.apply).toBe("serve");
         // eslint-disable-next-line no-secrets/no-secrets -- an env-var define key, not a secret
@@ -93,7 +107,7 @@ describe("saas template dev origin", () => {
         vi.stubEnv("VITE_LUNORA_URL", "");
 
         const plugin = await originPlugin();
-        const result = plugin.config({});
+        const result = plugin.config({}, serve);
 
         expect(result?.server?.strictPort).toBe(true);
     });
@@ -105,6 +119,17 @@ describe("saas template dev origin", () => {
 
         const plugin = await originPlugin();
 
-        expect(plugin.config({})).toBeUndefined();
+        expect(plugin.config({}, serve)).toBeUndefined();
+    });
+
+    it("leaves a VITE_LUNORA_URL set in a .env file alone", async () => {
+        expect.assertions(1);
+
+        vi.stubEnv("VITE_LUNORA_URL", "");
+        envFiles["VITE_LUNORA_URL"] = "https://api.example.com";
+
+        const plugin = await originPlugin();
+
+        expect(plugin.config({}, serve)).toBeUndefined();
     });
 });

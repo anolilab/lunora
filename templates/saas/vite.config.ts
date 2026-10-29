@@ -3,7 +3,7 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import react from "@vitejs/plugin-react";
 import type { Plugin } from "vite";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 
 /**
  * Tells the SSR render which origin to call Lunora on.
@@ -31,8 +31,10 @@ import { defineConfig } from "vite";
  */
 const ssrOrigin = (): Plugin => ({
     apply: "serve",
-    config(userConfig) {
-        if (process.env.VITE_LUNORA_URL) {
+    config(userConfig, { mode }) {
+        // `.env` files are not in `process.env` while the config is evaluated, so a
+        // URL set there would be overridden. `loadEnv` reads them, and `process.env`.
+        if (loadEnv(mode, userConfig.envDir ?? userConfig.root ?? process.cwd(), "VITE_")["VITE_LUNORA_URL"]) {
             return undefined;
         }
 
