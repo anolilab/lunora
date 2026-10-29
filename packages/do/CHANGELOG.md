@@ -1,3 +1,15 @@
+## @lunora/do [1.0.0-alpha.259](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.258...@lunora/do@1.0.0-alpha.259) (2026-10-29)
+
+### Performance Improvements
+
+* **shard-engine,do:** narrow by-id reads and share identical seeds ([#1393](https://github.com/anolilab/lunora/issues/1393)) ([9cec499](https://github.com/anolilab/lunora/commit/9cec499342aa0e6954dd9ffd2f8b12cb57069e71))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.181
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.168
+
 ## @lunora/do [1.0.0-alpha.258](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.257...@lunora/do@1.0.0-alpha.258) (2026-10-28)
 
 
