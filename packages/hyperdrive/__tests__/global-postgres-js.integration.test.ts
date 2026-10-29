@@ -109,6 +109,36 @@ describe("hyperdrive global — postgres.js (fetch_types: false) over the wire",
         ).resolves.toBeDefined();
     });
 
+    it("indexes and searches a search-indexed table through postgres.js", async () => {
+        expect.assertions(1);
+
+        const searchSchema = {
+            tables: {
+                notes: {
+                    indexes: [],
+                    searchIndexes: [{ field: "body", name: "by_body" }],
+                    shape: { body: v.string() },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as unknown as SchemaLike;
+
+        await runSqlGlobalTableMigrations(buildPgExec(fromPostgresJs(sql as never)), searchSchema, postgresDialect);
+
+        // The token rows go over as one JSON text param; a bare `::json` cast lets postgres.js
+        // encode that string a second time, and `json_to_recordset` then rejects a scalar.
+        const notes = createPostgresGlobalCtxDb(fromPostgresJs(sql as never), { clock: () => 1_700_000_000_000, schema: searchSchema });
+
+        await notes.insert("notes", { body: "hello wire world" });
+
+        const found = await notes
+            .query("notes")
+            .withSearchIndex("by_body", (q) => q.search("body", "wire"))
+            .collect();
+
+        expect(found.map((row) => row["body"])).toStrictEqual(["hello wire world"]);
+    }, 60_000);
+
     it("reads, filters and deletes pgvector rows through postgres.js", async () => {
         expect.assertions(3);
 
