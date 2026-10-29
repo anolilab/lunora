@@ -147,62 +147,36 @@ export default defineConfig({
     taskRunner: {
         parallel: 5,
     },
-    // Every publishable package is released from here; there is no per-package release
-    // config. CI runs it through scripts/vis-release.mjs (see its header for why not
-    // `vis release ci release`). `.github/workflows/semantic-release.yml` keeps that name
-    // because npm's trusted publishers are registered against the filename.
+    // CI runs this through scripts/vis-release.mjs, not `vis release ci release`.
     release: {
-        // The subsystem prints an unstable warning (RFC §21.2) on every invocation.
-        // Acknowledged deliberately, not silenced by accident.
         acknowledgeUnstable: true,
-        // `alpha` is the development branch here, not `main` — same reason as `defaultBase`
-        // above. This is what `vis release generate` merge-bases against on a PR branch.
+        // `vis release generate` merge-bases against this on a PR branch.
         baseBranch: "alpha",
-        // Neither built-in formatter matches what the first ~4,900 releases wrote, and
-        // `apps/docs` renders the public changelog feed by parsing that format — see the
-        // header of the formatter for the three things it needs. Keeping the format also
-        // means every CHANGELOG.md stays one document instead of two stacked styles.
+        // apps/docs parses the semantic-release CHANGELOG format for its public feed.
         changelog: "./scripts/vis-changelog-format.js",
-        // Mirrors the branch table of @anolilab/semantic-release-preset, so every package
-        // keeps publishing to the dist-tag it publishes to today.
         channels: {
             alpha: { mode: "auto-publish", prerelease: "alpha", tag: "alpha" },
             beta: { mode: "auto-publish", prerelease: "beta", tag: "beta" },
             main: { mode: "auto-publish", tag: "latest" },
             next: { mode: "auto-publish", tag: "next" },
         },
-        // Git tags were semantic-release's source of truth too, so every package continues
-        // its existing version stream instead of restarting from whatever `package.json`
-        // happens to hold. All 11,628 existing tags parse under the default
-        // `{name}@{version}` pattern, so nothing needs backfilling.
+        // Continues each package's existing `{name}@{version}` tag stream.
         currentVersionResolver: "git-tag",
-        // Every publishable package. Private ones (apps, examples, tests) are excluded by
-        // default and stay excluded — `privatePackages` is left off.
         defaultManaged: true,
-        // The version step rewrites package.json, which Prettier does check
-        // (CHANGELOG.md is in .prettierignore, so only the manifest matters).
         formatChangedFiles: true,
-        // Only feat, fix, perf, revert and breaking commits release, as under the old
-        // semantic-release preset; vis maps every other type to a patch. Breaking commits
-        // (`!` or a BREAKING CHANGE footer) are exempt from this pattern.
+        // vis would release every other type as a patch; breaking commits bypass this pattern.
         ignoreCommitPattern: ["^(build|chore|ci|deps|docs|refactor|security|style|test|translation)(\\([^)]*\\))?:"],
         gitUser: { email: "github-actions[bot]@users.noreply.github.com", name: "github-actions-shell" },
         plugins: [keepSiblingRanges],
         publish: {
             catalogResolution: "auto",
-            // Replaces @anolilab/semantic-release-clean-package-json.
             cleanPackageJson: true,
             packManager: "auto",
-            // Replaces @anolilab/semantic-release-pnpm: resolve `workspace:` / `catalog:`
-            // specifiers at pack time so the published manifest carries real ranges.
             protocolResolution: "pack",
             publishArgs: ["--provenance"],
             publishStrategy: "npm-publish-tarball",
         },
-        // Only cascades to a sibling whose specifier the new version no longer satisfies, so
-        // a promotion-safe peer RANGE (`>=1.0.0-alpha.24 <2.0.0-0`) does not release its
-        // consumer. It does NOT stop vis rewriting that range when the consumer releases
-        // anyway — scripts/vis-release-sibling-ranges.js undoes that. Both are asserted by
+        // A satisfied sibling peer range does not release its consumer; asserted by
         // scripts/check-sibling-peer-ranges.js.
         updateInternalDependencies: "out-of-range",
     },

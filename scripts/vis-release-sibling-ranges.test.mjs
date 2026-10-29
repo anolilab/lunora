@@ -1,8 +1,4 @@
-/**
- * vis's version step rewrites every sibling specifier to `<operator><new version>`;
- * these pin which of those rewrites the plugin undoes. The fixtures are the shapes
- * the first rehearsal under vis 6 produced for @lunora/client.
- */
+// Fixtures are the shapes the first vis 6 rehearsal produced for @lunora/client.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 

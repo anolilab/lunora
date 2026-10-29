@@ -1,9 +1,4 @@
-/**
- * The changelog format is a contract with `apps/docs/src/lib/changelog-source.ts`,
- * which parses every `packages/*​/CHANGELOG.md` to build the public changelog feed.
- * These assertions are that parser's three requirements, so a formatter change that
- * would silently empty the feed fails here instead.
- */
+// These are apps/docs/src/lib/changelog-source.ts's requirements; a miss silently empties the feed.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 

@@ -1,27 +1,5 @@
-/**
- * Changelog formatter for `vis release` that keeps writing the format
- * semantic-release wrote for the first ~4,900 releases in this repo.
- *
- * This is not nostalgia. `apps/docs/src/lib/changelog-source.ts` renders the
- * public changelog feed by parsing every `packages/../CHANGELOG.md`, and it needs
- * three things vis's built-in formatters do not emit:
- *
- *   1. `## <pkg> [<version>](<compare-url>) (<date>)` — the parser's heading regex
- *      requires the trailing `(YYYY-MM-DD)`; vis puts the date in a `<sub>` tag on
- *      the next line, so every new entry would be silently dropped from the feed.
- *   2. `### Features` / `### Bug Fixes` sections — the feed derives each release's
- *      kind from its leading section. A flat bullet list makes every release a
- *      "chore".
- *   3. A `### Dependencies` section — the feed collapses runs of dependency-only
- *      releases into a single row. Without it, the ~80% of releases that are pure
- *      cascade bumps each get a full entry and bury the substantive ones.
- *
- * It also drops the machine release commits that `vis release generate`
- * transcribes verbatim (upstream visulima#864) — see `RELEASE_COMMIT` below — so a
- * changelog entry never quotes an older changelog entry back at itself.
- *
- * Wired up in vis.config.ts as `release.changelog`.
- */
+// Keeps semantic-release's CHANGELOG format: apps/docs/src/lib/changelog-source.ts builds the public
+// feed from its `(YYYY-MM-DD)` heading, `### <type>` sections and `### Dependencies` section.
 
 const REPOSITORY_URL = "https://github.com/anolilab/lunora";
 
@@ -64,23 +42,8 @@ const SECTION_ORDER = [
 
 const BULLET = /^\s*[*-]\s+/;
 const CONVENTIONAL = /^(?<type>[a-z]+)(?:\((?<scope>[^)]*)\))?(?<breaking>!)?:\s*(?<subject>.+)$/i;
-// A commit this repo's release job wrote. `vis release generate` transcribes commit
-// subjects verbatim, and a release commit's subject carries the whole previous
-// changelog entry, so quoting one produces nested changelogs.
-//
-// Anchored on the machine-written type/scope, NOT on `[skip ci]`: hand-written
-// commits carry that marker too (`chore(studio): drop stale alpha.82 changelog
-// [skip ci]`, `feat: add export [skip ci]`) and belong in the changelog.
-//
-//   release(<channel>):  vis's version commit, whose subject lists the whole wave.
-//   chore(release):      vis's bookkeeping commits (publish lock, stage registry,
-//                        wave, pre-mode, dedupe) plus the ~4,900 historical
-//                        `chore(release): <pkg>@<version> [skip ci]` commits
-//                        semantic-release wrote. Machine-only by convention — see
-//                        "Never author `release` commits by hand" in AGENTS.md.
-//   chore(deps): sync pnpm-lock.yaml …
-//                        the release workflow's lockfile sync, pinned to that subject
-//                        so Renovate's other `chore(deps):` commits still render.
+// Release-job commits, which `vis release generate` would quote verbatim (visulima#864). Not keyed on
+// `[skip ci]`, which hand-written commits carry too; the lockfile sync keeps Renovate's `chore(deps):`.
 const RELEASE_COMMIT = /^\s*[*-]?\s*(?:release\([^)]+\):|chore\(release\):|chore\(deps\):\s*sync pnpm-lock\.yaml)/i;
 const ISSUE_REFERENCE = /\(#(?<number>\d+)\)\s*$/;
 
@@ -91,11 +54,7 @@ const compareUrl = (name, oldVersion, newVersion) => `${REPOSITORY_URL}/compare/
 /** `… (#607)` → `… ([#607](https://…/issues/607))`, the way semantic-release linked it. */
 const linkIssue = (subject) => subject.replace(ISSUE_REFERENCE, (_, number) => `([#${number}](${REPOSITORY_URL}/issues/${number}))`);
 
-/**
- * Splits a change-file body into `### <section>` buckets keyed by conventional
- * type. A line that is not a conventional commit still gets rendered — under
- * Miscellaneous Chores — rather than dropped, so nothing a human wrote is lost.
- */
+// A non-conventional line renders under Miscellaneous Chores rather than being dropped.
 const groupEntries = (bodies) => {
     const sections = new Map();
     const breaking = [];
@@ -160,9 +119,7 @@ const format = ({ date, release, target }) => {
         }
     }
 
-    // Cascade bumps carry no change file of their own; the sources are the whole
-    // story, and the docs feed keys its "dependency day" collapsing on this
-    // section being the only one present.
+    // The docs feed collapses releases whose only section is this one (cascade bumps).
     if (release.sources.length > 0) {
         const entries = release.sources.map((source) => `* **${source.name}:** upgraded to ${source.newVersion}`);
 
@@ -171,8 +128,7 @@ const format = ({ date, release, target }) => {
 
     const body = blocks.join("\n");
 
-    // The GitHub release body is already titled by its tag — a version heading
-    // there would render the name twice.
+    // The GitHub release is already titled by its tag.
     if (target === "github-release") {
         return body;
     }

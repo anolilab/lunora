@@ -11,22 +11,16 @@
  *
  * Two mechanisms interact here:
  *
- * 1. The release tool rewrites local sibling specifiers on every release (that
- *    is how @lunora/replica's original `>=1.0.0-alpha.17 <2.0.0` peer got
- *    clobbered to `1.0.0-alpha.24`). vis rewrites every specifier of a released
- *    sibling to `<operator><new version>`, so `>=1.0.0-alpha.76 <2.0.0-0` would
- *    become `>=1.0.0-alpha.252`; scripts/vis-release-sibling-ranges.js puts back
- *    every range the new version still satisfies, and this guard fails on a sibling
- *    peer range with no upper bound in case it ever stops running. Exact-pinned
- *    regular dependencies are left to vis (`^<new version>`). `vis.config.ts` also
- *    sets `release.updateInternalDependencies: "out-of-range"`, so a satisfied
- *    range does not cascade a release to its consumer.
+ * 1. vis rewrites every released sibling's specifier to `<operator><new version>`;
+ *    scripts/vis-release-sibling-ranges.js restores the ranges, and this guard fails
+ *    on an unbounded sibling peer range in case it ever stops running. Exact pins
+ *    become `^<new version>`. `updateInternalDependencies: "out-of-range"` (asserted
+ *    below) keeps a satisfied range from cascading a release to its consumer.
  *
  * 2. npm-semver prerelease matching is tuple-scoped: `>=1.0.0-alpha.24 <2.0.0-0`
  *    does NOT match a post-stable prerelease like `1.0.1-alpha.1`. If the alpha
- *    train continues past `1.0.0`, an in-range specifier becomes out-of-range and
- *    is pinned exactly again — this guard then fails the next install so a
- *    maintainer widens the range floor instead of shipping a fresh time bomb.
+ *    train continues past `1.0.0`, the release re-floors the range under its
+ *    ceiling (`>=1.0.1-alpha.0 <2.0.0-0`), and aborts on a version past the ceiling.
  *
  * A second, report-only mode covers exact sibling `dependencies` pins (as
  * opposed to `peerDependencies`). Exact-pinned regular dependencies are this
@@ -185,13 +179,8 @@ if (dependencyWarnings > 0) {
     );
 }
 
-// `updateInternalDependencies: "out-of-range"` cascades a release only to a consumer
-// whose sibling specifier the new version no longer satisfies. Under "patch" or
-// "minor" every release of a sibling also releases each package that peers on it
-// through a range. Fail if that config drifts.
-//
-// Read as text, not imported: vis.config.ts is TypeScript, and this runs from
-// `postinstall` where a failure turns every CI job red in its setup step.
+// Read as text: vis.config.ts is TypeScript, and this runs from `postinstall`, where a failure
+// turns every CI job red in its setup step.
 try {
     const visConfig = readFileSync(join(rootDir, "vis.config.ts"), "utf8");
 

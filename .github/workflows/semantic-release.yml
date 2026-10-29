@@ -1,10 +1,5 @@
-# Releases every publishable package with `vis release` — the `release` block in
-# vis.config.ts is the whole configuration.
-#
-# The FILENAME is load-bearing and must not change: npm's trusted publishers are
-# registered per package against `semantic-release.yml` (see
-# scripts/publish-name-placeholder.mjs), so renaming this file breaks publishing for
-# every package until all 57 trusted-publisher entries are updated.
+# Keep this filename: npm's trusted publishers are registered per package against
+# `semantic-release.yml` (see scripts/publish-name-placeholder.mjs).
 
 "name": "Release"
 
@@ -129,20 +124,8 @@
             - "name": "Disable git hooks for release commits"
               "run": "git config core.hooksPath /dev/null"
 
-            # `vis release` is change-file driven (changesets-style), so a commit-driven release
-            # writes one first. It stays uncommitted: the release step consumes it and the push
-            # step commits what that wrote.
-            #
-            # The range starts at this branch's last release tag, not at `github.event.before`.
-            # A new run only replaces a PENDING one in the concurrency group, so a burst of
-            # merges during a release cancels every queued run but the last — and with
-            # `before` as the baseline the cancelled pushes' commits would never get a change
-            # file. Every run tags the commit it checked out, so the last tag marks exactly
-            # what has been released; a run that released nothing leaves its range to the next.
-            #
-            # Channel-scoped, because a branch can reach another channel's tags (alpha merged
-            # into main). No tag at all — a channel's first release — fails rather than walk
-            # the whole history; dispatch with `base` then.
+            # From this channel's own last tag (alpha can reach main's), not `github.event.before`:
+            # cancelled queued runs would otherwise leave their commits without a change file.
             - "name": "Derive change files"
               "shell": "bash"
               "env":
@@ -179,10 +162,7 @@
 
                   pnpm exec vis release generate --from "${from}" --name "ci-$(git rev-parse --short HEAD)"
 
-            # Versions, writes changelogs, publishes, then tags the checked-out commit and
-            # pushes the tags — but commits nothing and never pushes the branch; the next
-            # step does that once. See the header of scripts/vis-release.mjs for why this is
-            # not `vis release ci release --auto-publish`.
+            # Tags the checked-out commit and commits nothing; the next step pushes the bumps.
             - "name": "Release"
               "env":
                   "GH_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
@@ -196,20 +176,9 @@
                   "GIT_COMMITTER_EMAIL": "github-actions[bot]@users.noreply.github.com"
               "run": "node scripts/vis-release.mjs"
 
-            # The release step only tags and publishes; its bumps are pushed here as ONE commit:
-            # each push to the branch rebuilds every merge-queue group, and a commit per package
-            # re-ran full CI ~40 times per release.
-            #
-            # The tags stay on the checked-out commit, which is already on the branch, so a lost
-            # push or a killed job can never leave a tag that `git tag --merged` misses (#1054).
-            #
-            # Retried against a re-fetched tip because the branch moves underneath the job:
-            # a release takes ~15 minutes, and a PR merged in that window makes a single
-            # push lose the race non-fast-forward. Resolving after the reset also means the
-            # lockfile matches whatever else landed meanwhile.
-            #
-            # `!cancelled()`, not `success()`: a release that failed partway still pushed the
-            # tags it completed, so their bumps need to land more then, not less.
+            # ONE commit, because each branch push rebuilds every merge-queue group; retried against
+            # a re-fetched tip because the branch moves during the ~15-minute release.
+            # `!cancelled()`: a release that failed partway still pushed the tags it completed.
             - "name": "Push the release commit"
               "if": "!cancelled()"
               "shell": "bash"
@@ -232,10 +201,8 @@
                       dir="$(dirname "${manifest}")"
                       tag="$(jq -r '"\(.name)@\(.version)"' "${manifest}")"
 
-                      # Only a bump whose tag exists. A package that failed to publish is NOT
-                      # retried by the next run — its change file was consumed — so the job fails
-                      # (see the release step) and someone re-dispatches with `base` set to this
-                      # run's baseline; the packages that did publish then release once more.
+                      # Only a bump whose tag exists; a failed publish needs a re-dispatch with `base`
+                      # (its change file was consumed).
                       if git diff --quiet -- "${dir}/package.json" || ! git rev-parse --quiet --verify "refs/tags/${tag}" > /dev/null; then
                           continue
                       fi

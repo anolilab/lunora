@@ -1,25 +1,5 @@
-/**
- * `vis release` plugin that keeps sibling version RANGES across a release.
- *
- * vis's version step rewrites every `@lunora/*` / `lunorash` specifier of every
- * released sibling, in every dependency field, to `<operator><new version>` —
- * `updateInternalDependencies` only decides which packages cascade, not what is
- * written. A promotion-safe peer range like `>=1.0.0-alpha.76 <2.0.0-0` comes out
- * as `>=1.0.0-alpha.252`: the floor ratchets to the newest alpha on every release
- * and the `<2.0.0-0` ceiling is gone. See scripts/check-sibling-peer-ranges.js for
- * why those ranges exist.
- *
- * So after the version step writes the manifests, every sibling specifier that was
- * a bounded range at HEAD (`>=<floor> <ceiling>`, the deliberate promotion-safe
- * shape) and still admits the version vis just wrote is put back. Anything else —
- * an exact pin, or the `^<version>` vis wrote for one last time — keeps vis's
- * rewrite, so those floors keep rising in lockstep. A range the new version has
- * outgrown (a new prerelease tuple, `1.0.1-alpha.0`) gets that version as its floor
- * and keeps its ceiling; one past its ceiling aborts the release before anything is
- * published, so a range never ships unbounded.
- *
- * Wired up in vis.config.ts as `release.plugins`.
- */
+// vis rewrites every released sibling's specifier to `<operator><new version>`, turning a
+// promotion-safe `>=1.0.0-alpha.76 <2.0.0-0` into `>=1.0.0-alpha.252`; this puts the range back.
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,11 +10,8 @@ const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "peerDependencies"
 
 const isSibling = (name) => name === "lunorash" || name.startsWith("@lunora/");
 
-/**
- * Returns `after` with every sibling specifier that was a bounded range in
- * `before` restored (or re-floored, see above), or `undefined` when nothing
- * needed restoring.
- */
+// Exact pins and carets keep vis's rewrite so they rise in lockstep; a version past the ceiling
+// throws before anything publishes, so a range never ships unbounded.
 export const restoreSiblingRanges = (before, after) => {
     let changed = false;
     const restored = { ...after };

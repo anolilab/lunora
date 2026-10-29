@@ -1,17 +1,6 @@
-/**
- * Versions and publishes the pending change files in ONE vis context, without
- * committing or pushing the branch.
- *
- * `vis release ci release --auto-publish` commits the bumps first and tags that
- * commit, then pushes the branch once with no retry. If the branch moved during
- * the ~15-minute run the push fails, the tags sit on a commit that never lands,
- * and every later run recomputes the same versions and dies on the tag collision.
- * Here nothing is committed, so vis tags the commit the job checked out (already
- * on the branch) and the workflow pushes the bumps as one commit, with retries.
- *
- * The standalone `version` / `publish` commands cannot be chained instead:
- * `version` consumes the change files, and `publish` then finds nothing to do.
- */
+// Versions and publishes without committing, so the tags land on the checked-out (already pushed)
+// commit: `vis release ci release` tags its own commit and pushes once, stranding the tags when the
+// branch moved. `version` + `publish` can't chain: `version` consumes the change files.
 import { release } from "@visulima/vis/release";
 
 const { publish, version } = await release({ skipPublish: process.argv.includes("--skip-publish") });
