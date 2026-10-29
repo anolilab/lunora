@@ -223,6 +223,18 @@ interface LunoraTestOptions {
     services?: Record<string, object>;
 
     /**
+     * The shard every context reports as `ctx.shardKey`. The harness runs one
+     * in-process database, so this only sets what a handler that checks its
+     * shard sees; it does not partition rows.
+     * @default "__root__"
+     * @example
+     * ```ts
+     * const t = lunoraTest(schema, { shardKey: "org_1" });
+     * ```
+     */
+    shardKey?: string;
+
+    /**
      * The export names of the topics in `lunora/queues.ts` (the keys of
      * `ctx.topics`). Each gets a recording publisher on mutation and action
      * contexts, built by `@lunora/queue`'s own `createTopicContext` — so the
@@ -766,6 +778,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             // Math.random, as production's unkeyed draw does, so a test that stubs it controls the value.
             // eslint-disable-next-line sonarjs/pseudo-random -- the unkeyed draw is Math.random by design; secrets use crypto.getRandomValues
             random: () => Math.random(),
+            shardKey: options?.shardKey ?? "__root__",
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -793,6 +806,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             // Math.random, as production's unkeyed draw does, so a test that stubs it controls the value.
             // eslint-disable-next-line sonarjs/pseudo-random -- the unkeyed draw is Math.random by design; secrets use crypto.getRandomValues
             random: () => Math.random(),
+            shardKey: options?.shardKey ?? "__root__",
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -852,6 +866,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             // Math.random, as production's unkeyed draw does, so a test that stubs it controls the value.
             // eslint-disable-next-line sonarjs/pseudo-random -- the unkeyed draw is Math.random by design; secrets use crypto.getRandomValues
             random: () => Math.random(),
+            shardKey: options?.shardKey ?? "__root__",
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
