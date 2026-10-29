@@ -2316,8 +2316,11 @@ class SchedulerDO {
 
         const pause = await this.pauseState();
 
+        // A skip's history row is best-effort: the decision is already made, and a
+        // failed write must not surface as an error the worker reads as "scheduler
+        // unreachable, run unguarded".
         if (pause.paused) {
-            await this.recordCronSkip(name, "paused", now);
+            await this.recordCronSkip(name, "paused", now).catch(() => undefined);
 
             return SchedulerDO.json({ acquired: false, reason: "paused" });
         }
@@ -2325,8 +2328,8 @@ class SchedulerDO {
         const lease = await this.state.storage.get<CronRunInFlight>(leaseKey);
 
         if (lease !== undefined && lease.startedAt > now - DISPATCH_LEASE_MS) {
-            await this.state.storage.put(leaseKey, { ...lease, skipped: lease.skipped + 1 });
-            await this.recordCronSkip(name, "in-flight", now);
+            await this.state.storage.put(leaseKey, { ...lease, skipped: lease.skipped + 1 }).catch(() => undefined);
+            await this.recordCronSkip(name, "in-flight", now).catch(() => undefined);
 
             return SchedulerDO.json({ acquired: false, reason: "in-flight", runningSince: lease.startedAt });
         }
@@ -2365,7 +2368,9 @@ class SchedulerDO {
 
         const now = Date.now();
 
-        await this.state.storage.delete(leaseKey);
+        // Record first, release second: a failed write keeps the lease, which a
+        // later tick or read then reconciles into a failed run instead of the run
+        // vanishing. The reverse order would lose it outright.
         await this.recordCronRun({
             durationMs: now - lease.startedAt,
             endedAt: now,
@@ -2376,6 +2381,7 @@ class SchedulerDO {
             startedAt: lease.startedAt,
             status: body.status,
         });
+        await this.state.storage.delete(leaseKey);
 
         return SchedulerDO.json({ recorded: true });
     }

@@ -210,6 +210,46 @@ describe("schedulerDO cron runs", () => {
         await expect(end(scheduler, { name: "digest", runId: lost, status: "succeeded" })).resolves.toStrictEqual({ recorded: false });
     });
 
+    it("still answers skip when recording the skipped tick fails", async () => {
+        expect.hasAssertions();
+
+        pinClock(1_700_000_000_000);
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, env);
+
+        await acquire(scheduler, "digest");
+
+        const put = state.storage.put.bind(state.storage);
+
+        vi.spyOn(state.storage, "put").mockImplementation(async (key: unknown, value?: unknown) => {
+            if (typeof key === "string") {
+                throw new TypeError("storage unavailable");
+            }
+
+            return put(key as never, value as never);
+        });
+
+        await expect(begin(scheduler, "digest")).resolves.toMatchObject({ acquired: false, reason: "in-flight" });
+    });
+
+    it("keeps the lease when recording a finished run fails, so the run is not lost", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, env);
+        const runId = await acquire(scheduler, "digest");
+        const put = vi.spyOn(state.storage, "put").mockRejectedValueOnce(new Error("storage unavailable"));
+
+        await scheduler.fetch(post("/cron/end", { name: "digest", runId, status: "succeeded" })).catch(() => undefined);
+        put.mockRestore();
+
+        setNow(1_700_000_000_000 + DISPATCH_LEASE_MS);
+
+        await expect(runs(scheduler)).resolves.toMatchObject({ inFlight: [], runs: [{ runId, status: "failed" }] });
+    });
+
     it("refuses a begin without a name and an end without a valid status", async () => {
         expect.hasAssertions();
 
