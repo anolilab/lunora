@@ -170,7 +170,7 @@ interface AdminUsersState {
     offset: number;
     /** The row a write is running against, so the view can mark that one row busy. */
     pendingUserId?: string;
-    /** The term the current list was loaded with. */
+    /** The term the current list was loaded with — set when its answer lands, not when it is asked. */
     search: string;
     status: FlowStatus;
     /** Matching rows on the server, which can exceed `users.length`. */
@@ -243,15 +243,16 @@ const createAdminUsersController = (client: AdminUsersClient, options: AdminUser
     let writing = false;
 
     /**
-     * Read the page at `offset`. The offset is stored with the rows it answered
-     * with, never ahead of them: a failed page turn leaves the table, its label
-     * and the page a write re-reads all on the page still on screen.
+     * Read the page at `offset` for the term `search`. Both are stored with the
+     * rows they answered with, never ahead of them: a failed page turn or search
+     * leaves the table, its label and the page a write re-reads all on the list
+     * still on screen.
      */
-    const load = async (offset = store.get().offset): Promise<void> => {
+    const load = async (offset = store.get().offset, term = store.get().search): Promise<void> => {
         ticket += 1;
 
         const mine = ticket;
-        const search = store.get().search.trim();
+        const search = term.trim();
 
         store.update({ error: undefined, status: "busy" });
 
@@ -284,7 +285,7 @@ const createAdminUsersController = (client: AdminUsersClient, options: AdminUser
             return;
         }
 
-        store.update({ offset, status: "idle", total: data.total, users: data.users });
+        store.update({ offset, search: term, status: "idle", total: data.total, users: data.users });
     };
 
     /**
@@ -342,12 +343,8 @@ const createAdminUsersController = (client: AdminUsersClient, options: AdminUser
                     await load(Math.max(0, offset - limit));
                 }
             },
-            search: async (term: string) => {
-                store.update({ search: term });
-
-                // A page number means nothing against a different result set.
-                return load(0);
-            },
+            // A page number means nothing against a different result set.
+            search: async (term: string) => load(0, term),
             suspend: async (userId: string, reason?: string) => {
                 const trimmed = reason?.trim();
                 const ok = await write(userId, async () => client.banUser({ userId, ...(trimmed ? { banReason: trimmed } : {}) }));

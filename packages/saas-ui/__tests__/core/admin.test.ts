@@ -159,6 +159,23 @@ describe("createAdminUsersController", () => {
         expect(client.listUsers.mock.lastCall?.[0].query.offset).toBe(0);
     });
 
+    it("keeps the term on screen when a search fails, and pages on with it", async () => {
+        const client = createClient(Array.from({ length: 5 }, (_, index) => user({ id: `u${String(index)}` })));
+        const controller = createAdminUsersController(client, { limit: 2, onSessionChange: vi.fn() });
+
+        await controller.actions.search("u");
+        await controller.actions.nextPage();
+        client.listUsers.mockRejectedValueOnce(new Error("offline"));
+        await controller.actions.search("zed");
+
+        expect(controller.getState()).toMatchObject({ offset: 2, search: "u", status: "error" });
+        expect(controller.getState().users?.map((row) => row.id)).toStrictEqual(["u2", "u3"]);
+
+        await controller.actions.nextPage();
+
+        expect(client.listUsers.mock.lastCall?.[0].query).toMatchObject({ offset: 4, searchValue: "u" });
+    });
+
     it("keeps the page it is on when a write re-reads the list", async () => {
         const client = createClient(Array.from({ length: 3 }, (_, index) => user({ id: `u${String(index)}` })));
         const controller = createAdminUsersController(client, { limit: 2, onSessionChange: vi.fn() });
