@@ -99,6 +99,16 @@ describe("hyperdrive global — postgres.js (fetch_types: false) over the wire",
         await expect(labelsWhere({ "profile.age": { in: list } })).resolves.toStrictEqual(["hit"]);
     }, 60_000);
 
+    it("still runs a parameter-free, multi-command statement", async () => {
+        expect.assertions(1);
+
+        // postgres.js sends a statement with no params over the simple protocol even with
+        // `prepare: true`, and only that protocol accepts several commands in one string.
+        await expect(
+            fromPostgresJs(sql as never).query("CREATE TEMP TABLE multi (n int); INSERT INTO multi VALUES (1); DROP TABLE multi"),
+        ).resolves.toBeDefined();
+    });
+
     it("reads, filters and deletes pgvector rows through postgres.js", async () => {
         expect.assertions(3);
 
