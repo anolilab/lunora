@@ -56,3 +56,14 @@ describe("emitApp — inbound-email (`onEmail`) route wiring", () => {
         expect(empty).not.toContain("dispatchAgentEmail");
     });
 });
+
+describe("emitApp — agent workflow class names", () => {
+    it("hands the worker every agent class, so a scheduled agent job takes its shard from the record", () => {
+        expect.assertions(2);
+
+        const output = emitApp({ ...baseOptions, agentWorkflows: ["SupportAgentWorkflow", "SalesAgentWorkflow"] });
+
+        expect(output).toContain('options.agentWorkflows = ["SupportAgentWorkflow","SalesAgentWorkflow"];');
+        expect(emitApp({ ...baseOptions, agentWorkflows: [] })).toStrictEqual(emitApp(baseOptions));
+    });
+});

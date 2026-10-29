@@ -21,6 +21,7 @@ import { regionHintFromRequest } from "../../../shared/region-hint";
 import { RELAY_NAME_INFIX, relayName } from "../../../shared/relay-name";
 import { parseMinSeq, REPLICA_NAME_INFIX, replicaName } from "../../../shared/replica-name";
 import type { RestExposure } from "../../../shared/rest-surface";
+import { withRunShard } from "../../../shared/run-shard";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import { checkBearerToken, isReservedRelationFunctionPath, SCHEDULER_DISPATCH_PATH, verifySchedulerDispatch } from "../../../shared/scheduler-dispatch";
@@ -940,6 +941,16 @@ interface WorkerOptions {
      * per-shard admin gate uses.
      */
     adminToken?: string;
+
+    /**
+     * The generated class names of the app's agent workflows (`SupportAgentWorkflow`).
+     * Codegen wires it. A scheduled job that starts one of them gets its run shard
+     * (`AgentRunInput.shardKey`) from the scheduler record, never from the job's args:
+     * the record's `shardKey` is stamped server-side by the scheduling shard and signed
+     * with the dispatch, while the args may carry a public mutation's client input. A
+     * plain workflow's params are passed through untouched.
+     */
+    agentWorkflows?: ReadonlyArray<string>;
 
     /**
      * Opt into an authorization-open posture for sharded and fan-out access.
@@ -3487,6 +3498,19 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     /**
+     * A scheduled agent run's shard is the record's, which the scheduling shard stamped and
+     * the dispatch signature covers; a `shardKey` in the args may be a client's (see
+     * {@link WorkerOptions.agentWorkflows}). A plain workflow's params are its own.
+     */
+    const scheduledWorkflowParams = (workflow: string, args: Record<string, unknown>, recordShard: unknown): Record<string, unknown> => {
+        if (options.agentWorkflows?.includes(workflow) !== true) {
+            return args;
+        }
+
+        return withRunShard(args, typeof recordShard === "string" && recordShard.length > 0 ? recordShard : undefined);
+    };
+
+    /**
      * Run one code-defined cron job: start its durable workflow instance, or
      * dispatch its function to the shard (a non-2xx response is a failure).
      * Throws a {@link LunoraError} on failure so both the scheduled-fire loop and
@@ -3745,7 +3769,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // as a string. The wire form IS JSON-safe, so it travels intact and
             // `@lunora/workflow`'s `createWorkflowRunContext` decodes it where the
             // handler reads `params`.
-            await startWorkflowInstance(candidate.workflow, args, { context, env }, "scheduled workflow", recordId);
+            await startWorkflowInstance(
+                candidate.workflow,
+                scheduledWorkflowParams(candidate.workflow, args, candidate.shardKey),
+                { context, env },
+                "scheduled workflow",
+                recordId,
+            );
 
             await releasePoolSlot(candidate);
 

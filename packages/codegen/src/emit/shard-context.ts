@@ -12,6 +12,8 @@ interface BuildContextParts {
     actionOnlyFields: ReadonlyArray<string>;
     agentsBuild: string;
     agentsContextField: string;
+    /** The expression the scheduler is built from — the agent wrapper's, when the app declares agents. */
+    agentsSchedulerSource: string;
     containersBuild: string;
     containersContextField: string;
     databaseOptions: string;
@@ -41,6 +43,7 @@ const renderBuildContext = ({
     actionOnlyFields,
     agentsBuild,
     agentsContextField,
+    agentsSchedulerSource,
     containersBuild,
     containersContextField,
     databaseOptions,
@@ -130,7 +133,7 @@ ${vectorsBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBu
             // reaches through, and pending jobs live in the SchedulerDO — nothing the
             // CDC changelog records — so reading them must forfeit a delta resume.
             // The scheduler's own \`runAfter\`/\`runAt\`/\`cancel\` are writes and stay unstamped.
-            const schedulerBase = markUnvouchableReads((config.scheduler?.(env) ?? schedulerStub) as SchedulerLike, options.onRead, ["get", "list"]);
+            const schedulerBase = markUnvouchableReads(${agentsSchedulerSource}, options.onRead, ["get", "list"]);
             // \`ctx.scheduler.runAfter(0, ...)\` is documented as the deterministic
             // equivalent of an \`afterCommit\` hook, and the SchedulerDO persists the
             // job the moment it is called — so inside a mutation the call is BUFFERED

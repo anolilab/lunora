@@ -111,6 +111,15 @@ const buildLiveStreamRouteLines = (options: ResolvedAppOptions): string[] =>
 const buildFrameworkHostLine = (options: ResolvedAppOptions): string =>
     hasLiveStreamMounts(options) ? `liveStreamRouter([\n${liveStreamMountEntries(options).join("\n")}\n            ], host)` : "host";
 
+/**
+ * Agent workflow class names: a scheduled job that starts one has its run shard stamped
+ * from the signed scheduler record, never from the job's args.
+ */
+const buildAgentWorkflowLines = (options: ResolvedAppOptions): string[] =>
+    options.agentWorkflows !== undefined && options.agentWorkflows.length > 0
+        ? [`        options.agentWorkflows = ${JSON.stringify(options.agentWorkflows)};`]
+        : [];
+
 /** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
 const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
     ...buildTableShardingLines(options),
@@ -499,6 +508,7 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
         }`,
           ]
         : []),
+    ...buildAgentWorkflowLines(options),
     // Voice-enabled agents: map each export name to its `VOICE_*` Durable Object
     // namespace so the runtime serves `/_lunora/voice/<exportName>`. Read off
     // `env` structurally (the binding is provisioned by the config layer's

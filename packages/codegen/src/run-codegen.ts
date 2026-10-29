@@ -778,6 +778,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         // parameter type reads `ShardConfig[configKey]` (e.g. `.kv()` reads
         // `ShardConfig["kv"]`), and the shard emits that config field on the
         // same usage set — so the method can never reference a missing type.
+        agentWorkflows: agents.map((agent) => agent.className),
         capabilities,
         // Inbound-email agents (`defineAgent({ onEmail })`) → wire the worker's
         // top-level `email()` handler to each agent's exported workflow so

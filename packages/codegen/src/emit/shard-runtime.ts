@@ -554,6 +554,9 @@ ${specEntries}
     };
 };
 
+/** The shard ctx's scheduler before the read-stamping and deferral facades wrap it. */
+const PLAIN_SCHEDULER_SOURCE = "(config.scheduler?.(env) ?? schedulerStub) as SchedulerLike";
+
 /**
  * The `ctx.agents` producer fragments, mirroring {@link emitQueueFragments}.
  * Every declared agent resolves off the shard DO's `ctx.exports` lazily
@@ -565,9 +568,9 @@ ${specEntries}
 const emitAgentFragments = (
     agents: ReadonlyArray<AgentIR>,
     hasSecretValues: boolean,
-): { build: string; contextField: string; importLines: string[]; specs: string } => {
+): { build: string; contextField: string; importLines: string[]; schedulerSource: string; specs: string } => {
     if (agents.length === 0) {
-        return { build: "", contextField: "", importLines: [], specs: "" };
+        return { build: "", contextField: "", importLines: [], schedulerSource: PLAIN_SCHEDULER_SOURCE, specs: "" };
     }
 
     for (const agent of agents) {
@@ -587,7 +590,9 @@ const emitAgentFragments = (
         // hold one and the app imports `requestSecretTool`. Left off otherwise, so the
         // secret mutations refuse with a typed error rather than reaching an undefined field.
         contextField: hasSecretValues ? `\n                agents,\n                agentSecrets: this.secretValues,` : `\n                agents,`,
-        importLines: [`import { createAgentContext } from "@lunora/agent";`, `import type { AgentBindingSpec } from "@lunora/agent";`],
+        importLines: [`import { createAgentContext, withAgentScheduleShard } from "@lunora/agent";`, `import type { AgentBindingSpec } from "@lunora/agent";`],
+        // A scheduled agent run starts on this shard, like `ctx.agents.<name>.run` from here.
+        schedulerSource: `withAgentScheduleShard(${PLAIN_SCHEDULER_SOURCE}, LUNORA_AGENTS, this.currentShardKey())`,
         // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
         specs: `
 /** Wiring specs for \`ctx.agents\` (codegen-derived from \`lunora/agents.ts\`). */

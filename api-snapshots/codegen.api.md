@@ -272,6 +272,7 @@ interface DurableObjectScheduledContainerIR extends ContainerIRBase {
 
 ```ts
 interface EmitAppOptions {
+    agentWorkflows?: ReadonlyArray<string>;
     capabilities: ReadonlySet<CapabilityKey>;
     emailAgents?: ReadonlyArray<{
         className: string;
