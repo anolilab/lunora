@@ -326,7 +326,7 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
             return subscriptionFromDodo(await client.subscriptions.update(subscriptionId, body));
         },
 
-        capabilities: { merchantOfRecord: true, portal: true, usageMetering: true },
+        capabilities: { checkoutExpiry: false, merchantOfRecord: true, portal: true, usageMetering: true },
 
         capturePayment: (_input: CaptureInput) => notSupported("manual capture"),
 

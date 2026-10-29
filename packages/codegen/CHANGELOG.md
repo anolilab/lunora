@@ -1,3 +1,37 @@
+## @lunora/codegen [1.0.0-alpha.371](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.370...@lunora/codegen@1.0.0-alpha.371) (2026-10-29)
+
+### Features
+
+* **saas-ui,templates:** add the composed SaaS kit ([#761](https://github.com/anolilab/lunora/issues/761)) ([35f662d](https://github.com/anolilab/lunora/commit/35f662d24e5992e606a86f989f55bda210dfdd11))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.270
+* **@lunora/agent:** upgraded to 1.0.0-alpha.261
+* **@lunora/platform:** upgraded to 1.0.0-alpha.76
+* **@lunora/queue:** upgraded to 1.0.0-alpha.132
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.156
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.141
+* **@lunora/client:** upgraded to 1.0.0-alpha.263
+* **@lunora/do:** upgraded to 1.0.0-alpha.261
+* **@lunora/payment:** upgraded to 1.0.0-alpha.252
+* **@lunora/server:** upgraded to 1.0.0-alpha.251
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.170
+
+## @lunora/codegen [1.0.0-alpha.370](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.369...@lunora/codegen@1.0.0-alpha.370) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.269
+* **@lunora/agent:** upgraded to 1.0.0-alpha.260
+* **@lunora/client:** upgraded to 1.0.0-alpha.262
+* **@lunora/do:** upgraded to 1.0.0-alpha.260
+* **@lunora/payment:** upgraded to 1.0.0-alpha.251
+* **@lunora/server:** upgraded to 1.0.0-alpha.250
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.169
+
 ## @lunora/codegen [1.0.0-alpha.369](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.368...@lunora/codegen@1.0.0-alpha.369) (2026-10-29)
 
 

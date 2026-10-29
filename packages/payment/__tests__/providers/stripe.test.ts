@@ -125,6 +125,22 @@ describe("stripe adapter", () => {
         expect((checkout?.args[0] as { metadata?: Record<string, string> }).metadata?.referenceId).toBe("user_1");
     });
 
+    it("forwards a checkout expiry in the seconds Stripe takes, and none when unset", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+        const request = { mode: "subscription" as const, priceId: "price_1", referenceId: "user_1", successUrl: "https://x/ok" };
+
+        await adapter.createCheckout({ ...request, expiresAt: 1_800_000_000_999 });
+        await adapter.createCheckout(request);
+
+        const sent = calls.filter((call) => call.name === "checkout").map((call) => (call.args[0] as { expires_at?: number }).expires_at);
+
+        expect(sent[0]).toBe(1_800_000_000);
+        expect(sent[1]).toBeUndefined();
+    });
+
     it("never lets caller metadata override the framework referenceId on checkout", async () => {
         expect.assertions(1);
 

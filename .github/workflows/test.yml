@@ -56,17 +56,9 @@
         "if": "needs.files-changed.outputs.packages == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
-        # 45, not 30. The 22.22 leg runs `test:affected:coverage`, and a change to
-        # pnpm-lock.yaml / pnpm-workspace.yaml makes *every* package affected -- so
-        # this leg runs the whole suite under v8 coverage. That is ~25 min for
-        # @lunora/codegen alone, which left no room for the studio step after it and
-        # cancelled the job at 30 min with every test passing.
-        #
-        # 90, not 60: by 2026-10 a full-suite 22.22 leg took 37-58 min when it
-        # passed, and a leg that also boots extra workerd projects was cancelled at
-        # 60 mid-suite with every test so far passing. Affected-only runs are
-        # far shorter and unaffected by the ceiling.
-        "timeout-minutes": 90
+        # Sized for a whole-suite plain run (lockfile change), which still carries codegen
+        # and cli at one vitest worker each: ~30 min.
+        "timeout-minutes": 60
         "strategy":
             "fail-fast": false
             "matrix":
@@ -95,13 +87,16 @@
                   "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "${{ matrix.node_version }}"
-                  "cache-prefix": "test"
+                  # The action's key already holds node-version; named per leg to make that explicit.
+                  "cache-prefix": "test-${{ matrix.node_version }}"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "enable-vis-cache": "true"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -172,11 +167,16 @@
             # hang. The budget is unconditional now (apps/playground/vitest.config.ts)
             # and the suite runs here, on the leg without coverage. It has no
             # `test:coverage` script, so the 22.22 leg simply has nothing to run for it.
+            #
+            # Coverage on PRs only; the merge queue re-tests what the PR already reported.
+            # The excluded projects must match the `test-coverage-shards` matrix.
             - "name": "Run affected tests"
               "shell": "bash"
+              "env":
+                  "COVERAGE": "${{ matrix.node_version == '22.22' && github.event_name != 'merge_group' }}"
               "run": |
-                  if [ "${{ matrix.node_version }}" = "22.22" ]; then
-                      pnpm run test:affected:coverage
+                  if [ "${COVERAGE}" = "true" ]; then
+                      pnpm exec vis affected test:coverage --query "project!=lunora-e2e && project!=codegen && project!=cli && project!=hyperdrive"
                   else
                       pnpm run test:affected
                   fi
@@ -193,7 +193,193 @@
                   pnpm --filter "@lunora/studio" run test
 
             - "name": "Upload coverage to Codecov"
-              "if": "matrix.node_version == '22.22' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
+              # Same-repo PRs only: forks have no token.
+              "if": "matrix.node_version == '22.22' && github.event.pull_request.head.repo.full_name == github.repository"
+              "continue-on-error": true
+              "uses": "codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac" # v5.5.5
+              "with":
+                  "token": "${{ secrets.CODECOV_TOKEN }}"
+                  "fail_ci_if_error": false
+
+    # The slowest coverage suites, sharded on their own runners. Under vis each vitest
+    # gets one worker; called directly it gets every core.
+    # Shards zero the thresholds (each covers part of `src`); `test-coverage-merge`
+    # enforces the real ones on the merged result.
+    "test-coverage-shards":
+        "name": "Coverage (${{ matrix.project }} ${{ matrix.shard }}/${{ matrix.shards }})"
+        "if": "needs.files-changed.outputs.packages == 'true' && github.event_name != 'merge_group'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "strategy":
+            "fail-fast": false
+            "matrix":
+                # Sized for ~5-10 min of tests per leg.
+                "include":
+                    - { "project": "codegen", "shard": 1, "shards": 3 }
+                    - { "project": "codegen", "shard": 2, "shards": 3 }
+                    - { "project": "codegen", "shard": 3, "shards": 3 }
+                    - { "project": "cli", "shard": 1, "shards": 2 }
+                    - { "project": "cli", "shard": 2, "shards": 2 }
+                    - { "project": "hyperdrive", "shard": 1, "shards": 1 }
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              # Full history so `vis affected` can resolve the PR base.
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "with":
+                  "fetch-depth": "0"
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "with":
+                  "node-version": "22.22"
+                  # Per leg: the vis cache key has the job id but not the matrix.
+                  "cache-prefix": "test-coverage-${{ matrix.project }}-${{ matrix.shard }}"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "enable-vis-cache": "true"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # Captured first: under pipefail an early-exiting `grep -q` SIGPIPEs vis.
+            # Unrecognised output fails the leg instead of skipping it.
+            - "name": "Check whether ${{ matrix.project }} is affected"
+              "id": "affected"
+              "shell": "bash"
+              "env":
+                  "PROJECT": "${{ matrix.project }}"
+              "run": |
+                  out="$(pnpm exec vis affected test:coverage --dry-run --no-color --query "project=${PROJECT}" 2>&1)"
+                  if grep -q '^Affected projects:' <<<"${out}"; then
+                      echo "run=true" >> "${GITHUB_OUTPUT}"
+                  elif grep -qE 'No projects affected|No files changed' <<<"${out}"; then
+                      echo "::notice::${PROJECT} is not affected; this shard has nothing to run."
+                      echo "run=false" >> "${GITHUB_OUTPUT}"
+                  else
+                      printf '%s\n' "${out}"
+                      echo "::error::Could not tell from vis whether ${PROJECT} is affected."
+                      exit 1
+                  fi
+
+            - "name": "Build ${{ matrix.project }} and its dependencies"
+              "if": "steps.affected.outputs.run == 'true'"
+              "env":
+                  "PROJECT": "${{ matrix.project }}"
+              "run": |
+                  pnpm exec vis run build --query "project=${PROJECT}"
+
+            # Non-hidden blob path: upload-artifact skips vitest's default `.vitest-reports/`.
+            - "name": "Run ${{ matrix.project }} shard ${{ matrix.shard }}/${{ matrix.shards }} under coverage"
+              "if": "steps.affected.outputs.run == 'true'"
+              "env":
+                  "PROJECT": "${{ matrix.project }}"
+                  "SHARD": "${{ matrix.shard }}"
+                  "SHARDS": "${{ matrix.shards }}"
+              "run": |
+                  echo "vitest workers: $(( $(nproc) - 1 )) (nproc $(nproc))"
+                  pnpm --filter "@lunora/${PROJECT}" exec vitest run \
+                      --shard="${SHARD}/${SHARDS}" \
+                      --coverage \
+                      --coverage.thresholds.lines=0 \
+                      --coverage.thresholds.functions=0 \
+                      --coverage.thresholds.branches=0 \
+                      --coverage.thresholds.statements=0 \
+                      --reporter=dot \
+                      --reporter=blob \
+                      --outputFile.blob="${GITHUB_WORKSPACE}/blob-reports/${PROJECT}/blob-${SHARD}-${SHARDS}.json"
+
+            - "name": "Upload the shard's blob report"
+              "if": "steps.affected.outputs.run == 'true'"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "blob-${{ matrix.project }}-${{ matrix.shard }}"
+                  "path": "blob-reports"
+                  "if-no-files-found": "error"
+                  # Long enough for "Re-run failed jobs" to still find the passing shards' blobs.
+                  "retention-days": 7
+                  # A re-run of one failed shard re-uploads under the same name.
+                  "overwrite": true
+
+    # Merges each project's shard blobs, enforcing its real coverage thresholds, and
+    # uploads to Codecov. Replays results only, so no build.
+    "test-coverage-merge":
+        "name": "Coverage merge"
+        "if": "needs.files-changed.outputs.packages == 'true' && github.event_name != 'merge_group'"
+        "needs": ["files-changed", "test-coverage-shards"]
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 15
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            # After checkout, which cleans the workspace. No blobs = nothing affected; the
+            # steps below skip.
+            - "name": "Download the shard blob reports"
+              "uses": "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093" # v4.3.0
+              "with":
+                  "pattern": "blob-*"
+                  "path": "blob-reports"
+                  "merge-multiple": true
+
+            # A missing blob would silently merge into a partial report.
+            - "name": "Assert every shard reported"
+              "if": "hashFiles('blob-reports/**') != ''"
+              "shell": "bash"
+              "run": |
+                  status=0
+                  for dir in blob-reports/*/; do
+                      project="$(basename "${dir}")"
+                      expected="$(find "${dir}" -name 'blob-*.json' | head -n 1 | sed -E 's/.*-([0-9]+)\.json$/\1/')"
+                      actual="$(find "${dir}" -name 'blob-*.json' | wc -l)"
+                      if [ "${actual}" -ne "${expected}" ]; then
+                          echo "::error::${project}: ${actual} of ${expected} shard blobs arrived."
+                          status=1
+                      fi
+                  done
+                  exit "${status}"
+
+            - "name": "Setup resources and environment"
+              "if": "hashFiles('blob-reports/**') != ''"
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "test"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Merge the blobs and check coverage thresholds"
+              "if": "hashFiles('blob-reports/**') != ''"
+              "shell": "bash"
+              # Check every package before failing, so one miss doesn't hide the others.
+              "run": |
+                  failed=()
+                  for dir in blob-reports/*/; do
+                      project="$(basename "${dir}")"
+                      pnpm --filter "@lunora/${project}" exec vitest --merge-reports "${GITHUB_WORKSPACE}/${dir}" --coverage --reporter=dot || failed+=("${project}")
+                  done
+                  if [ "${#failed[@]}" -gt 0 ]; then
+                      echo "::error::coverage check failed for: ${failed[*]}"
+                      exit 1
+                  fi
+
+            - "name": "Upload coverage to Codecov"
+              "if": "hashFiles('blob-reports/**') != '' && github.event.pull_request.head.repo.full_name == github.repository"
               "continue-on-error": true
               "uses": "codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac" # v5.5.5
               "with":
@@ -249,13 +435,14 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "test-workerd"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -333,13 +520,14 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "test-celld"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -401,13 +589,14 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "test-mysql"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -479,13 +668,14 @@
                   "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "e2e"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -582,13 +772,14 @@
             # Astro refuses to run below Node 22.23.4 and its check exits without a diagnostic on 22.22, which hid the
             # real result, so this job pins the first Node 22 release Astro accepts.
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "22.23.4"
                   "cache-prefix": "templates"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -639,13 +830,14 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "templates-expo"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -688,13 +880,14 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "worker-size"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -725,13 +918,14 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "client-size"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -762,13 +956,14 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "studio-size"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -803,13 +998,14 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "worker-startup"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -1039,12 +1235,13 @@
             # encode` on first invocation, Ruby one whose every method raised
             # NoMethodError — both with the compile gate green throughout.
             - "name": "Setup node"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "sdk-generate"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -1078,6 +1275,8 @@
             [
                 "files-changed",
                 "test",
+                "test-coverage-shards",
+                "test-coverage-merge",
                 "test-workerd",
                 "test-celld",
                 "test-mysql",

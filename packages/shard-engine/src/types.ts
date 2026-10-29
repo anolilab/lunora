@@ -73,8 +73,8 @@ export interface ShapeSubscriptionQuery {
 export interface SubscriptionEnvelope {
     /**
      * Optional capability tokens carried by the `connect` envelope, naming wire
-     * behaviours this client can handle that older ones cannot (currently only
-     * `"pageDelta"` — see `shared/page-result.ts`). Resolved to the decisions
+     * behaviours this client can handle that older ones cannot (`"pageDelta"`,
+     * see `shared/page-result.ts`, and `"refreshBatch"`, see `shared/refresh-batch.ts`). Resolved to the decisions
      * they gate and recorded on the attachment; an unrecognised token is simply
      * never matched, so a newer client talking to an older server degrades
      * silently. Strictly opt-in: absent means the server keeps to the wire
@@ -337,6 +337,9 @@ export interface SocketAttachment {
      * field is dropped with the flag once `connect` proves the credential.
      */
     pendingSince?: number;
+
+    /** `true` when `connect` announced `refreshBatch` (`shared/refresh-batch.ts`); persisted for the same reason as `pageDeltas`. */
+    refreshBatch?: boolean;
 
     /**
      * Live shape subscriptions registered on this socket, keyed by the

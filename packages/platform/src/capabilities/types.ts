@@ -83,7 +83,9 @@
  * a control.
  *
  * `ctx.random` and `ctx.newId` have no key for the same reason: each draws from
- * JavaScript on every target, with no host primitive to rate.
+ * JavaScript on every target, with no host primitive to rate. Nor does
+ * `ctx.shardKey`: it reads the key the shard host already routes by, which every
+ * target has by construction.
  *
  * The rest are advisory only because nobody wired them, and they are the ones
  * to watch: an app DOES declare the feature, codegen CAN see the declaration,

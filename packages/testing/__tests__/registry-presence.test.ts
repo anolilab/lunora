@@ -62,7 +62,7 @@ describe("presence registry item — heartbeat payload bounds", () => {
 
         // Stage the item next to a stand-in for the generated builder module, then
         // bundle — `@lunora/*` stays external so it resolves to this package's copies.
-        writeFileSync(join(outDirectory, "presence.ts"), source.replace(GENERATED_SERVER, "./generated-server.js"));
+        writeFileSync(join(outDirectory, "presence.ts"), source.replaceAll(GENERATED_SERVER, "./generated-server.js"));
         copyFileSync(join(itemDirectory, "schema.ts"), join(outDirectory, "schema.ts"));
         writeFileSync(
             join(outDirectory, "generated-server.ts"),

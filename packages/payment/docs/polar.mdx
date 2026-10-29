@@ -19,11 +19,12 @@ inject a client, so `@polar-sh/sdk` stays an optional peer dependency.
 
 The adapter advertises these capabilities:
 
-| Capability         | Value  | What it means                                                                        |
-| ------------------ | :----: | ------------------------------------------------------------------------------------ |
-| `merchantOfRecord` | `true` | Polar owns tax/VAT, invoices, and disputes. Manual authorize/capture is not a thing. |
-| `portal`           | `true` | Native hosted customer portal (`customerSessions.create`).                           |
-| `usageMetering`    | `true` | Usage-based billing via Polar's event ingestion (`events.ingest`).                   |
+| Capability         |  Value  | What it means                                                                        |
+| ------------------ | :-----: | ------------------------------------------------------------------------------------ |
+| `checkoutExpiry`   | `false` | `createCheckout` refuses an `expiresAt` with `PROVIDER_ERROR`.                       |
+| `merchantOfRecord` | `true`  | Polar owns tax/VAT, invoices, and disputes. Manual authorize/capture is not a thing. |
+| `portal`           | `true`  | Native hosted customer portal (`customerSessions.create`).                           |
+| `usageMetering`    | `true`  | Usage-based billing via Polar's event ingestion (`events.ingest`).                   |
 
 ## Polar vs. Stripe: when to choose it
 

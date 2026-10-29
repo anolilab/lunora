@@ -795,7 +795,7 @@ describe("lunoraClient", () => {
 
             const connect = JSON.parse(socket.sent[0]!);
 
-            expect(connect).toEqual({ caps: ["pageDelta"], clientId: "client-A", id: "connect", type: "connect" });
+            expect(connect).toEqual({ caps: ["pageDelta", "refreshBatch"], clientId: "client-A", id: "connect", type: "connect" });
             // The connect frame leads, then the subscribe — order matters so the
             // hook runs with any context in place before subscriptions replay.
             expect(JSON.parse(socket.sent[1]!).type).toBe("subscribe");
@@ -822,7 +822,7 @@ describe("lunoraClient", () => {
             socket.open();
 
             expect(JSON.parse(socket.sent[0]!)).toEqual({
-                caps: ["pageDelta"],
+                caps: ["pageDelta", "refreshBatch"],
                 clientId: "client-A",
                 context: { roomId: "room-1" },
                 id: "connect",

@@ -24,6 +24,7 @@ The adapter advertises this in its `capabilities`:
 
 <TypeTable
     type={{
+        checkoutExpiry: { type: "true", description: "createCheckout's expiresAt becomes the session's expires_at (30 minutes to 24 hours from creation)." },
         merchantOfRecord: { type: "false", description: "Stripe is a PSP — you own tax, invoicing, and remittance. Not a Merchant-of-Record." },
         portal: { type: "true", description: "Native hosted billing portal via billingPortal.sessions — createPortalSession works." },
         usageMetering: { type: "true", description: "Usage-based billing via Stripe Meter Events — track forwards usage upstream." },

@@ -298,7 +298,7 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
             // to the store's configured default, so pass it explicitly. Default (no `atPeriodEnd`) is
             // immediate, matching the other adapters. Creem reports the resulting state, which we return.
             subscriptionFromCreem(await client.subscriptions.cancel(subscriptionId, { mode: cancelOptions?.atPeriodEnd === true ? "scheduled" : "immediate" })),
-        capabilities: { merchantOfRecord: true, portal: true, usageMetering: false },
+        capabilities: { checkoutExpiry: false, merchantOfRecord: true, portal: true, usageMetering: false },
 
         capturePayment: (_input: CaptureInput) => notSupported("manual capture"),
 

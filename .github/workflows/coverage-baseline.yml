@@ -4,9 +4,8 @@
 # was producing one.
 #
 # `test.yml` runs on `pull_request` and `merge_group` only — never `push`, by
-# design — and its upload step is additionally gated on those two events. The
-# merge queue is not in use (every recent `Tests` run is a `pull_request`), so no
-# run has ever uploaded a report for an `alpha` commit. The baseline froze at
+# design — and uploads coverage from `pull_request` alone, so no `Tests` run
+# uploads a report for an `alpha` commit. The baseline froze at
 # `95d33d67` on 2026-08-08, and by 2026-08-27 every PR comment was diffing today's
 # tree against a snapshot 1177 commits behind: a reported ~11% coverage "drop"
 # that was really 140 files added in the interim.
@@ -49,13 +48,14 @@
             # 22.22 to match the leg that uploads from `test.yml`, so the base and the
             # PR reports are produced by the same runtime.
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "coverage"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 

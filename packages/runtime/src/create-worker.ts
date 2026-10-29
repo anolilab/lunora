@@ -24,6 +24,7 @@ import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import { checkBearerToken, isReservedRelationFunctionPath, SCHEDULER_DISPATCH_PATH, verifySchedulerDispatch } from "../../../shared/scheduler-dispatch";
+import { SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
 import { buildSystemDispatchHeaders, readForwardedDispatchIdentity } from "../../../shared/system-dispatch-headers";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -4550,6 +4551,55 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     /**
+     * Refresh an open socket's credential without reconnecting it. A socket's frames
+     * reach only its shard, which cannot run `resolveIdentity`, so the client posts
+     * the refreshed credential here instead; it is resolved like any HTTP call
+     * (a lapsed one is refused with `TOKEN_EXPIRED`) and like the upgrade it
+     * refreshes, then forwarded to the shard with the server-minted identity headers
+     * only. The shard checks the socket belongs to the same subject and carries the
+     * same claims before it moves the expiry.
+     */
+    const handleSocketReauth = async (request: Request, env: unknown, context: ExecutionContextLike | undefined, url: URL): Promise<Response> => {
+        assertMethod(request, "POST", "ws reauth");
+
+        const body = await readJsonBodyWithLimit(request);
+
+        if (typeof body["connectionId"] !== "string" || body["connectionId"].length === 0) {
+            throw new LunoraError("connectionId is required", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const shardKey = url.searchParams.get("shard") ?? defaultShard;
+        const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity, {
+            executionContext: context ?? executionContextByRequest.get(request),
+            url,
+        });
+
+        if (identity === null) {
+            throw new LunoraError("re-authenticating a socket requires a credential", { code: "UNAUTHENTICATED", status: 401 });
+        }
+
+        await assertShardAuthorized(identity, shardKey, false);
+
+        // A fresh request carrying nothing of the caller's but the body: the shard trusts these headers verbatim.
+        const headers = new Headers({ "content-type": "application/json" });
+
+        setIdentityHeaders(headers, forwardedHeaders);
+
+        // An owner woken by this call learns its namespace from it, as from an upgrade: without it the relay holding the socket is unreachable.
+        const binding = resolveShardBindingName(env, options.shardDO);
+
+        if (binding !== undefined) {
+            headers.set("x-lunora-shard-binding", binding);
+        }
+
+        return forwardToShard(
+            shardDO,
+            shardKey,
+            new Request(new URL(SOCKET_REAUTH_PATH, url.origin), { body: JSON.stringify({ connectionId: body["connectionId"] }), headers, method: "POST" }),
+        );
+    };
+
+    /**
      * Handle a voice-session WebSocket upgrade for `/_lunora/voice/<agentExportName>`.
      * Only registered when `options.voiceAgents` is provided (a voice-free app has
      * no route). Mirrors {@link handleWebSocketUpgrade}: enforce the WS origin
@@ -5804,6 +5854,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return Response.json({ ok: true }, { headers: { "cache-control": "no-store" } });
         },
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
+        [SOCKET_REAUTH_PATH]: (request, env, url, context) => handleSocketReauth(request, env, context, url),
         [RPC_PATH]: (request, env, url, context) => handleRpc(request, env, context, url),
         [RPC_BATCH_PATH]: (request, env, _url, context) => handleBatchRpc(request, env, context),
         [SCHEDULER_DISPATCH_PATH]: (request, env, _url, context) => handleSchedulerDispatch(request, env, context),
