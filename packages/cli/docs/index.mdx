@@ -648,6 +648,14 @@ an eager app with no such `import()` is not checked. An SDK a package loads for 
 (the MCP SDK inside `@lunora/mcp`) is not covered, and a project the check skips (see
 above) is not checked at all.
 
+The check evaluates one step per request, so one that never settles is named in the error
+(`did not finish evaluating import("stripe")`), and a Worker whose runtime never starts
+fails at once with wrangler's error lines. A project built by the Cloudflare Vite plugin
+(TanStack Start, React Router and the like) leaves `.wrangler/deploy/config.json` behind,
+and its entry only builds inside Vite. For such a project the check runs against the
+source `wrangler.jsonc` and stubs the Durable Object and Workflow classes, so the modules
+are evaluated but the entry itself is not; that entry is the Vite build's output.
+
 Runs codegen, validates `wrangler.jsonc`, then invokes `wrangler deploy`.
 Pass `--migrate` to apply pending data migrations against the live worker
 immediately after a successful deploy. It also requires `--migrate-yes` (an
