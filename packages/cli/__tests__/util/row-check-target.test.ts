@@ -62,6 +62,18 @@ describe(rowCheckTargetRefusal, () => {
         expect(rowCheckTargetRefusal(cwd, "staging", "https://elsewhere.acme.net")).toContain("routes to staging.acme.com");
     });
 
+    it.each(["https://[::ffff:127.0.0.1]", "https://[::ffff:10.0.0.1]", "https://[::ffff:c0a8:101]"])("refuses the IPv4-mapped private address %s", (url) => {
+        expect.assertions(1);
+
+        expect(rowCheckTargetRefusal(cwd, undefined, url)).toContain("local or private address");
+    });
+
+    it("accepts an IPv4-mapped public address as a custom host", () => {
+        expect.assertions(1);
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://[::ffff:8.8.8.8]")).toBeUndefined();
+    });
+
     it("takes a custom domain at its word when no routes are declared", () => {
         expect.assertions(1);
 

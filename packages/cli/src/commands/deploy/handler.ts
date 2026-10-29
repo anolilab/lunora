@@ -749,13 +749,15 @@ const celldToolchainError = async (options: DeployCommandOptions, target: string
 const storedRowChecker =
     (cwd: string, options: DeployCommandOptions, codegen: CodegenResult): StoredRowChecker =>
     async (changes) => {
-        const refusal = options.migrateUrl === undefined ? undefined : rowCheckTargetRefusal(cwd, options.env, options.migrateUrl);
+        // An empty `--migrate-url` is unset, and the link recorded for this `--env` stands in for a missing one.
+        const url = resolveWorkerUrl({ cwd, env: options.env, url: options.migrateUrl });
+        const refusal = url === undefined ? undefined : rowCheckTargetRefusal(cwd, options.env, url);
 
         if (refusal !== undefined) {
             return { kind: "inconclusive", reason: refusal };
         }
 
-        const baseUrl = options.migrateUrl === undefined ? undefined : resolveAdminBaseUrl(options.migrateUrl, options.logger, cwd);
+        const baseUrl = url === undefined ? undefined : resolveAdminBaseUrl(url, options.logger, cwd);
         const token = baseUrl === undefined ? undefined : resolveAdminBearer({ cwd, token: options.migrateToken, url: baseUrl }).token;
         const target = baseUrl === undefined || !token ? undefined : { baseUrl, fetchImpl: options.fetchImpl ?? adminFetch, token };
 

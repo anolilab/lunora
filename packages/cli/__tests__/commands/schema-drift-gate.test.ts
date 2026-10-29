@@ -401,6 +401,38 @@ describe("schema-drift gate", () => {
             expect(errors.join("\n")).toContain("this checkout is linked to https://app.acme.com");
         });
 
+        it("reads the stored rows from the link for this --env when no --migrate-url is given, and treats an empty one as unset", async () => {
+            expect.assertions(3);
+
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+            introduceBreakingDrift();
+
+            const { errors, logger } = silentLogger();
+            const unset = await runDeployCommand({
+                cwd: workdir,
+                logger,
+                migrateToken: "admin-token",
+                migrateUrl: "",
+                spawner: createRecordingSpawner().spawner,
+            });
+
+            expect(unset.schemaDrift?.blocked).toBe(true);
+            expect(errors.join("\n")).toContain("no deployed worker to read the stored rows from");
+
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
+            writeFileSync(join(workdir, ".lunora", "project.json"), JSON.stringify({ workerUrl: TARGET.migrateUrl }), "utf8");
+
+            const linked = await runDeployCommand({
+                cwd: workdir,
+                fetchImpl: deployedWorker([{ doc: { _id: "u1", name: 7 }, table: "users" }]).fetchImpl,
+                logger: silentLogger().logger,
+                migrateToken: "admin-token",
+                spawner: createRecordingSpawner().spawner,
+            });
+
+            expect(linked.code).toBe(0);
+        });
+
         it("does not let an identity migration (the scaffold's placeholder) cover a change on its own", async () => {
             expect.assertions(3);
 

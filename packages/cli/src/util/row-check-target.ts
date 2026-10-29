@@ -44,9 +44,36 @@ const isPrivateIpv4 = (host: string): boolean => {
     );
 };
 
+const IPV4_MAPPED_PREFIX = "[::ffff:";
+
+/**
+ * The IPv4 address an IPv4-mapped IPv6 host (`[::ffff:127.0.0.1]`) carries, which
+ * `URL` normalises to hex groups (`[::ffff:7f00:1]`); `undefined` for any other host.
+ */
+const mappedIpv4 = (host: string): string | undefined => {
+    if (!host.startsWith(IPV4_MAPPED_PREFIX) || !host.endsWith("]")) {
+        return undefined;
+    }
+
+    const rest = host.slice(IPV4_MAPPED_PREFIX.length, -1);
+
+    if (rest.includes(".")) {
+        return rest;
+    }
+
+    const [high = 0, low = 0] = rest.split(":").map((group) => Number.parseInt(group, 16));
+
+    return [Math.floor(high / 256), high % 256, Math.floor(low / 256), low % 256].join(".");
+};
+
 /** Whether `host` can only be a dev worker, never a deployed one. */
 const isPrivateHost = (host: string): boolean => {
     const lower = host.toLowerCase();
+    const mapped = mappedIpv4(lower);
+
+    if (mapped !== undefined) {
+        return isPrivateIpv4(mapped);
+    }
 
     return (
         PRIVATE_NAMES.has(lower) ||
