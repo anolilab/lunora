@@ -243,7 +243,7 @@ describe("createScheduler", () => {
     it("get() resolves a single record via the direct GET /get?id= route", async () => {
         expect.assertions(4);
 
-        const records = [{ args: {}, enqueuedAt: 1, functionPath: "messages.send", id: "a", scheduledFor: 10 }];
+        const records = [{ args: {}, enqueuedAt: 1, functionPath: "messages.send", id: "a", scheduledFor: 10, state: "pending" }];
         const { calls, namespace } = fakeNamespace({ "/list": { records } });
         const scheduler = createScheduler({ namespace });
 
@@ -289,7 +289,9 @@ describe("createScheduler", () => {
         expect.assertions(2);
 
         const args = { amount: 5n, when: new Date(0) };
-        const records = [{ args: encodeWire(args) as Record<string, unknown>, enqueuedAt: 1, functionPath: "messages.send", id: "a", scheduledFor: 10 }];
+        const records = [
+            { args: encodeWire(args) as Record<string, unknown>, enqueuedAt: 1, functionPath: "messages.send", id: "a", scheduledFor: 10, state: "pending" },
+        ];
         const { namespace } = fakeNamespace({ "/list": { records } });
         const scheduler = createScheduler({ namespace });
 

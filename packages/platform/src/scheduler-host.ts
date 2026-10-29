@@ -133,9 +133,10 @@ export interface SchedulerHost {
      *
      * The point is the terminal half: without it a delivered job and one that
      * never existed look the same once it leaves {@link SchedulerHost.list}.
-     * A host MUST keep `succeeded` and `canceled` (and report a parked job as
-     * `failed`) for a bounded retention window it chooses, and MUST NOT report a
-     * cancelled job as delivered. `running` means a delivery is in flight.
+     * A host MUST keep `succeeded` and `canceled` for a bounded retention window
+     * it chooses, MUST report a parked job as `failed` for as long as it stays
+     * parked (until requeued or purged), and MUST NOT report a cancelled job as
+     * delivered. `running` means a delivery is in flight.
      *
      * Optional for the same reason `list` is; the suite reports the gap.
      */
