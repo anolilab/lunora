@@ -400,6 +400,118 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
             },
             TEST_TIMEOUT,
         );
+
+        it(
+            "binds an object, an array and bytes as one value each, never as SQL fragments",
+            async () => {
+                expect.assertions(3);
+
+                // mysql2's `query` would expand an object into `key = value` pairs and
+                // an array into a comma list, changing the statement's shape.
+                await expect(harness.exec.all("SELECT ? AS v", [{ a: 1, "b` = 1 OR `1": 2 }])).resolves.toStrictEqual([{ v: '{"a":1,"b` = 1 OR `1":2}' }]);
+                await expect(harness.exec.all("SELECT ? AS v, ? AS w", [[1, 2], "x"])).resolves.toStrictEqual([{ v: "[1,2]", w: "x" }]);
+                await expect(harness.exec.all("SELECT HEX(?) AS v", [new Uint8Array([0, 255])])).resolves.toStrictEqual([{ v: "00FF" }]);
+            },
+            TEST_TIMEOUT,
+        );
+
+        it(
+            "keeps a quote-bearing value inside its literal when the session sets NO_BACKSLASH_ESCAPES",
+            async () => {
+                expect.assertions(3);
+
+                const [{ mode }] = (await harness.query("SELECT @@SESSION.sql_mode AS mode")) as [{ mode: string }];
+
+                await harness.query("SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',NO_BACKSLASH_ESCAPES')");
+
+                try {
+                    const injection = "a' OR '1'='1";
+                    const jsonDocument = { q: "it's" };
+
+                    await expect(harness.exec.all("SELECT ? AS v", [injection])).resolves.toStrictEqual([{ v: injection }]);
+                    await expect(harness.exec.all("SELECT ? AS v", [jsonDocument])).resolves.toStrictEqual([{ v: JSON.stringify(jsonDocument) }]);
+
+                    // Under this mode mysql2's `\'` would close the literal after `x\\\`
+                    // and run `OR 1=1` with the rest commented out; doubled quotes keep
+                    // the whole value one column (its backslashes do come back doubled).
+                    const [row] = await harness.exec.all("SELECT ? AS v", [String.raw`x\' OR 1=1 -- `]);
+
+                    expect(Object.keys(row ?? {})).toStrictEqual(["v"]);
+                } finally {
+                    await harness.query("SET SESSION sql_mode = ?", [mode]);
+                }
+            },
+            TEST_TIMEOUT,
+        );
+
+        it(
+            "round-trips quotes, backslashes and control characters, and compares with the connection collation",
+            async () => {
+                expect.assertions(2);
+
+                const tricky = "it's \\ \"q\" \\' \0 \n \r \u001A é";
+
+                await expect(harness.exec.all("SELECT ? AS v", [tricky])).resolves.toStrictEqual([{ v: tricky }]);
+                await expect(harness.exec.all("SELECT ? = 'x' AS same", ["X"])).resolves.toStrictEqual([{ same: 1 }]);
+            },
+            TEST_TIMEOUT,
+        );
+
+        it(
+            "leaves a ? inside a string literal alone when binding",
+            async () => {
+                expect.assertions(1);
+
+                await expect(harness.exec.all("SELECT 'why?' AS a, ? AS b", ["x"])).resolves.toStrictEqual([{ a: "why?", b: "x" }]);
+            },
+            TEST_TIMEOUT,
+        );
+
+        it(
+            "binds a string to ?? as a backtick-quoted identifier",
+            async () => {
+                expect.assertions(1);
+
+                await expect(harness.exec.all("SELECT ?? AS v FROM (SELECT 7 AS col) AS t", ["col"])).resolves.toStrictEqual([{ v: 7 }]);
+            },
+            TEST_TIMEOUT,
+        );
+
+        it("rejects an undefined bind value instead of binding NULL", async () => {
+            expect.assertions(1);
+
+            await expect(harness.exec.all("SELECT ? AS v", [undefined])).rejects.toThrow(/parameter 1 is undefined/u);
+        });
+
+        it(
+            "round-trips doubles exactly over the text protocol",
+            async () => {
+                // `buildMysqlExec` uses `query` (client-side interpolation, text
+                // results), not `execute`'s binary protocol, so a double travels
+                // as a decimal string both ways and must still come back bit-exact.
+                expect.assertions(5);
+
+                const doubles = [0.1 + 0.2, 1e-300, 1.797_693_134_862_315_7e308, -2.5e-8, 123_456_789.123_456_78];
+
+                await runSqlGlobalTableMigrations(harness.exec, typesSchema, mysqlDialect);
+                const writer = writerFor(typesSchema);
+
+                const read = await Promise.all(
+                    doubles.map(async (n) => {
+                        const id = await writer.insert("things", { big: 1n, blob: new Uint8Array([0]), flag: false, meta: {}, n, title: "d" });
+
+                        const row = await writer.findFirst("things", { where: { _id: id } });
+
+                        return row?.["n"];
+                    }),
+                );
+
+                for (const [index, n] of doubles.entries()) {
+                    expect(read[index]).toBe(n);
+                }
+            },
+            TEST_TIMEOUT,
+        );
     });
 
     describe("aggregate + rank companions", () => {

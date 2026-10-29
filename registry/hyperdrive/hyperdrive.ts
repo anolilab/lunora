@@ -10,7 +10,7 @@
  *   import postgres from "postgres";
  *
  *   const { connectionString } = createHyperdrive(env.HYPERDRIVE);
- *   const sql = fromPostgresJs(postgres(connectionString));
+ *   const sql = fromPostgresJs(postgres(connectionString, { fetch_types: false, max: 5 }));
  *   const rows = await sql.query("select id, name from users where org = $1", [orgId]);
  *
  * `fromPostgresJs` / `fromNodePg` / `fromMysql2` all return a `SqlClient`, whose
@@ -77,7 +77,7 @@ const connect = (): SqlClient => {
 
     const { connectionString } = createHyperdrive(binding);
 
-    return fromPostgresJs(postgres(connectionString));
+    return fromPostgresJs(postgres(connectionString, { fetch_types: false, max: 5 }));
 };
 
 /**

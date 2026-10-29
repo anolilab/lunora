@@ -47,8 +47,17 @@ your engine. Drivers are optional peer dependencies.
 ## Step 2: Create the Hyperdrive binding
 
 ```bash
-wrangler hyperdrive create my-db --connection-string="postgres://user:pass@host/db" # gitleaks:allow -- placeholder
+wrangler hyperdrive create my-db --connection-string="postgres://user:pass@host/db" --caching-disabled # gitleaks:allow -- placeholder
 ```
+
+**Query caching must be off** for the config behind `.global()`. Hyperdrive
+caches reads by default (60 s plus 15 s stale-while-revalidate) and a write does
+not invalidate them, so the store would read its own rows stale: OCC retries
+reread the cached version and fail with spurious conflicts, and live queries
+re-run onto old data. For a config that already exists, run
+`wrangler hyperdrive update <id> --caching-disabled`. When `lunora deploy`
+creates the config from `LUNORA_<BINDING>_URL`, it turns caching off itself. For a
+binding that already has an id, it only warns (given Cloudflare API credentials).
 
 ```jsonc
 {
@@ -95,7 +104,7 @@ const app = defineApp<Env>()
     .shard((env) => env.SHARD)
     .hyperdriveGlobal({
         engine: "postgres",
-        exec: (env) => buildPgExec(fromPostgresJs(postgres(env.HYPERDRIVE.connectionString))),
+        exec: (env) => buildPgExec(fromPostgresJs(postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 }))),
     })
     .build();
 
@@ -114,7 +123,8 @@ import mysql from "mysql2/promise";
 // inside the builder chain:
 .hyperdriveGlobal({
     engine: "mysql",
-    exec: (env) => buildMysqlExec(mysql.createPool({ uri: env.HYPERDRIVE.connectionString, flags: ["FOUND_ROWS"] })),
+    // disableEval: mysql2 needs it to run on Workers.
+    exec: (env) => buildMysqlExec(mysql.createPool({ uri: env.HYPERDRIVE.connectionString, disableEval: true, flags: ["FOUND_ROWS"] })),
 })
 ```
 
@@ -183,5 +193,12 @@ cutover is still in D1 afterwards, so remove those by hand.
 2. **Mixing D1 and Hyperdrive global tables.** Codegen rejects this.
 3. **Missing `FOUND_ROWS` on MySQL.** It causes spurious OCC conflicts on idempotent writes.
 4. **Stale-replica reads.** Point Hyperdrive at the primary.
-5. **Writing to the database directly.** Live queries won't see those writes. Route writes
+5. **Query caching left on.** Spurious OCC conflicts and live queries stuck up to
+   75 s behind writes. Disable caching on the config (`--caching-disabled`). Local dev
+   has no cache, so this shows up only once deployed.
+6. **MySQL with `NO_BACKSLASH_ESCAPES` in `sql_mode`.** Unsupported: statements are
+   sent as text and a backslash in a string is escaped as `\\`, which that mode stores as
+   two backslashes. Quotes are doubled, so no value can leave its literal under either
+   mode. MySQL's default `sql_mode` doesn't include it.
+7. **Writing to the database directly.** Live queries won't see those writes. Route writes
    through `ctx.db`.
