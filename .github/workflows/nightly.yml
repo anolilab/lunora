@@ -37,7 +37,7 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "${{ matrix.node_version }}"
                   "cache-prefix": "nightly"
@@ -100,7 +100,7 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "test-workerd"
@@ -164,7 +164,7 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "e2e"
@@ -233,7 +233,7 @@
             # Same pin as the PR template job: Astro refuses to run below Node 22.23.4 and its check exits
             # without a diagnostic on 22.22.
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
+              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "22.23.4"
                   "cache-prefix": "nightly-templates"
