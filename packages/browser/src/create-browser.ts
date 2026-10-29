@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { lazyValue } from "../../../shared/lazy-value";
 import { isPrivateHost, normalizeHost } from "../../../shared/ssrf-host";
 import type { SsrfResolution } from "../../../shared/ssrf-resolve";
 import { resolveHostSsrf } from "../../../shared/ssrf-resolve";
@@ -7,13 +8,13 @@ import createCrawlClient from "./crawl-client";
 import type {
     Browser,
     BrowserContextLike,
-    BrowserLaunchLike,
     BrowserLike,
     BrowserSession,
     LunoraBrowserOptions,
     NavigateOptions,
     PageLike,
     PdfOptions,
+    PlaywrightModuleLike,
     QuickActionName,
     QuickActionOptions,
     RouteLike,
@@ -469,27 +470,28 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         throw new TypeError("@lunora/browser: `binding` is required (env.BROWSER)");
     }
 
-    const getLaunch = (): BrowserLaunchLike => {
-        if (!options.launch) {
+    const loadPlaywright = options.playwright === undefined ? undefined : lazyValue(options.playwright);
+
+    /** The `@cloudflare/playwright` export `name`, loading the module on first use. */
+    const requirePeer = async <K extends keyof PlaywrightModuleLike>(name: K): Promise<NonNullable<PlaywrightModuleLike[K]>> => {
+        if (loadPlaywright === undefined) {
             throw new LunoraError(
                 "INTERNAL",
-                '@lunora/browser: `launch` is not available — install the `@cloudflare/playwright` peer dependency. The generated worker wires it for you; outside codegen pass it via createBrowser({ binding, launch }) (import { launch } from "@cloudflare/playwright").',
+                '@lunora/browser: `playwright` is not configured — install the `@cloudflare/playwright` peer dependency and pass createBrowser({ binding, playwright: () => import("@cloudflare/playwright") }).',
             );
         }
 
-        return options.launch;
-    };
+        const playwright = await loadPlaywright();
+        const peer = playwright[name];
 
-    /** Same injection contract as {@link getLaunch}, for the session surface. */
-    const requirePeer = <F>(function_: F | undefined, name: string): F => {
-        if (!function_) {
+        if (peer === undefined) {
             throw new LunoraError(
                 "INTERNAL",
-                `@lunora/browser: \`${name}\` is not available — install the \`@cloudflare/playwright\` peer dependency. The generated worker wires it for you; outside codegen pass it via createBrowser({ binding, ${name} }).`,
+                `@lunora/browser: the module \`playwright\` loaded has no \`${name}\` export — load "@cloudflare/playwright" itself.`,
             );
         }
 
-        return function_;
+        return peer;
     };
 
     // The allowlist doubles as Browser Run session guardrails, so Cloudflare
@@ -589,7 +591,7 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
             launchOptions["guardrails"] = guardrails;
         }
 
-        const browser = await getLaunch()(options.binding, Object.keys(launchOptions).length === 0 ? undefined : launchOptions);
+        const browser = await (await requirePeer("launch"))(options.binding, Object.keys(launchOptions).length === 0 ? undefined : launchOptions);
 
         if (keepAlive === undefined) {
             try {
@@ -1153,7 +1155,7 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
      * action invocations is the entire point.
      */
     const connect = async <T>(sessionId: string, function_: (browser: BrowserLike) => Promise<T>, connectOptions: { close?: boolean } = {}): Promise<T> => {
-        const browser = await requirePeer(options.connect, "connect")(options.binding, sessionId);
+        const browser = await (await requirePeer("connect"))(options.binding, sessionId);
 
         if (connectOptions.close !== true) {
             return await function_(await guardBrowser(browser, false));
@@ -1166,7 +1168,7 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         }
     };
 
-    const sessions = async (): Promise<ReadonlyArray<BrowserSession>> => await requirePeer(options.sessions, "sessions")(options.binding);
+    const sessions = async (): Promise<ReadonlyArray<BrowserSession>> => await (await requirePeer("sessions"))(options.binding);
 
     const quickAction = async (action: QuickActionName, url: string, quickOptions: QuickActionOptions = {}): Promise<Response> => {
         if (typeof options.binding.quickAction !== "function") {

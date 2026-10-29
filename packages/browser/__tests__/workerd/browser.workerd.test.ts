@@ -7,8 +7,8 @@
  * `test-worker.ts`), and every global `fetch` leaving workerd for a fake internet
  * (`fake-internet.ts`, wired as miniflare's `outboundService`).
  *
- * Verified here: the real `launch` / `connect` / `sessions` exports load in
- * workerd and put what `createBrowser` asked for on the wire to the binding
+ * Verified here: `import("@cloudflare/playwright")` loads in workerd and its real
+ * `launch` / `connect` / `sessions` exports put what `createBrowser` asked for on the wire to the binding
  * (`keep_alive` in milliseconds, `allowedHosts` as normalized session guardrails
  * at acquire, the session id on a re-attach); `quickAction` crosses the binding's
  * RPC boundary with the guarded URL; the DoH re-check and the `/crawl` REST
@@ -21,7 +21,6 @@
  * covered only by the Node suite's page doubles, and the provider's own
  * enforcement of guardrails and `keep_alive` only by Cloudflare.
  */
-import { connect, launch, sessions } from "@cloudflare/playwright";
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -47,7 +46,7 @@ describe("@lunora/browser (workerd)", () => {
         it("acquires with keep_alive in milliseconds and allowedHosts as normalized guardrails", async () => {
             expect.hasAssertions();
 
-            const browser = createBrowser({ allowedHosts: ["Example.COM."], binding, launch });
+            const browser = createBrowser({ allowedHosts: ["Example.COM."], binding, playwright: async () => await import("@cloudflare/playwright") });
             const run = vi.fn<(browser: BrowserLike) => Promise<void>>();
 
             // The fake has no Chrome, so the DevTools upgrade is refused and launch fails there.
@@ -69,7 +68,7 @@ describe("@lunora/browser (workerd)", () => {
         it("lists sessions through the binding", async () => {
             expect.hasAssertions();
 
-            const browser = createBrowser({ binding, sessions });
+            const browser = createBrowser({ binding, playwright: async () => await import("@cloudflare/playwright") });
 
             await expect(browser.sessions()).resolves.toStrictEqual([{ sessionId: SESSION_ID, startTime: 1 }]);
             await expect(fetchCalls()).resolves.toMatchObject([{ method: "GET", path: "/v1/sessions" }]);
@@ -78,7 +77,7 @@ describe("@lunora/browser (workerd)", () => {
         it("re-attaches to the named session on connect", async () => {
             expect.hasAssertions();
 
-            const browser = createBrowser({ binding, connect });
+            const browser = createBrowser({ binding, playwright: async () => await import("@cloudflare/playwright") });
 
             await expect(browser.connect(SESSION_ID, async () => undefined)).rejects.toThrow(/Unable to connect to browser/u);
             await expect(fetchCalls()).resolves.toMatchObject([{ path: `/v1/devtools/browser/${SESSION_ID}`, upgrade: "websocket" }]);
@@ -131,7 +130,13 @@ describe("@lunora/browser (workerd)", () => {
             expect.hasAssertions();
 
             const launchDouble = fakeLaunch({ page: { evaluate: async () => new Promise<never>(() => {}) } });
-            const browser = createBrowser({ allowedHosts: ["example.com"], binding, launch: launchDouble });
+            const browser = createBrowser({
+                allowedHosts: ["example.com"],
+                binding,
+                playwright: () => {
+                    return { launch: launchDouble };
+                },
+            });
 
             await expect(browser.scrape("https://example.com", () => document.title, { timeoutMs: 50 })).rejects.toMatchObject({
                 code: "BROWSER_TIMEOUT",
@@ -144,7 +149,12 @@ describe("@lunora/browser (workerd)", () => {
             expect.hasAssertions();
 
             const launchSpy = vi.fn<BrowserLaunchLike>();
-            const browser = createBrowser({ binding, launch: launchSpy });
+            const browser = createBrowser({
+                binding,
+                playwright: () => {
+                    return { launch: launchSpy };
+                },
+            });
 
             await expect(browser.content("https://rebind.example")).rejects.toMatchObject({
                 code: "FORBIDDEN",
@@ -157,7 +167,12 @@ describe("@lunora/browser (workerd)", () => {
             expect.hasAssertions();
 
             const launchSpy = vi.fn<BrowserLaunchLike>();
-            const browser = createBrowser({ binding, launch: launchSpy });
+            const browser = createBrowser({
+                binding,
+                playwright: () => {
+                    return { launch: launchSpy };
+                },
+            });
 
             await expect(browser.content("https://servfail.example")).rejects.toMatchObject({
                 code: "FORBIDDEN",
@@ -195,7 +210,12 @@ describe("@lunora/browser (workerd)", () => {
 
             const launchDouble = fakeLaunch();
 
-            await createBrowser({ binding, launch: launchDouble }).content("https://example.com");
+            await createBrowser({
+                binding,
+                playwright: () => {
+                    return { launch: launchDouble };
+                },
+            }).content("https://example.com");
 
             const started = Date.now();
 

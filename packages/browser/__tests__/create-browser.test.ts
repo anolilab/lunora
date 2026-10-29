@@ -28,7 +28,14 @@ describe("createBrowser SSRF navigation guard (finding #6)", () => {
         expect.assertions(1);
 
         const launch = fakeLaunch();
-        const browser = createBrowser({ allowedHosts: ["example.com"], allowPrivateTargets: true, binding, launch });
+        const browser = createBrowser({
+            allowedHosts: ["example.com"],
+            allowPrivateTargets: true,
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        });
 
         await browser.content("https://example.com/");
 
@@ -39,7 +46,13 @@ describe("createBrowser SSRF navigation guard (finding #6)", () => {
         expect.assertions(1);
 
         const launch = fakeLaunch();
-        const browser = createBrowser({ allowPrivateTargets: true, binding, launch });
+        const browser = createBrowser({
+            allowPrivateTargets: true,
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        });
 
         await browser.content("https://example.com/");
 
@@ -50,7 +63,14 @@ describe("createBrowser SSRF navigation guard (finding #6)", () => {
         expect.assertions(2);
 
         const launch = fakeLaunch();
-        const browser = createBrowser({ allowedHosts: ["example.com"], allowPrivateTargets: true, binding, launch });
+        const browser = createBrowser({
+            allowedHosts: ["example.com"],
+            allowPrivateTargets: true,
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        });
 
         await browser.content("https://example.com/");
 
@@ -64,7 +84,14 @@ describe("createBrowser SSRF navigation guard (finding #6)", () => {
         expect.assertions(2);
 
         const launch = fakeLaunch();
-        const browser = createBrowser({ allowedHosts: ["example.com"], allowPrivateTargets: true, binding, launch });
+        const browser = createBrowser({
+            allowedHosts: ["example.com"],
+            allowPrivateTargets: true,
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        });
 
         await browser.content("https://example.com/");
 
@@ -78,7 +105,12 @@ describe("createBrowser SSRF navigation guard (finding #6)", () => {
         expect.assertions(3);
 
         const launch = fakeLaunch();
-        const browser = createBrowser({ binding, launch });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        });
 
         await browser.content("https://example.com/");
 
@@ -106,7 +138,12 @@ describe("createBrowser SSRF navigation guard (finding #6)", () => {
             },
         });
 
-        await createBrowser({ binding, launch }).content("https://example.com/");
+        await createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
 
         const iframe = { frame: "child" };
         const allowed = await launch.dispatch("https://example.com/frame-public", { ...iframe, navigation: true });
@@ -124,7 +161,15 @@ describe("createBrowser SSRF navigation guard (finding #6)", () => {
 
         try {
             const launch = fakeLaunch();
-            const browser = createBrowser({ allowedHosts: ["example.com"], allowPrivateTargets: true, binding, launch, resolveDns: true });
+            const browser = createBrowser({
+                allowedHosts: ["example.com"],
+                allowPrivateTargets: true,
+                binding,
+                playwright: () => {
+                    return { launch };
+                },
+                resolveDns: true,
+            });
 
             await browser.content("https://example.com/");
 
@@ -149,7 +194,12 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
 
         const launch = fakeLaunch();
 
-        await createBrowser({ binding, launch }).content("https://example.com/");
+        await createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
 
         await expect(launch.dispatch("http://169.254.169.254/latest/meta-data/", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
     });
@@ -159,7 +209,12 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
 
         const launch = fakeLaunch();
 
-        await createBrowser({ binding, launch }).content("https://example.com/");
+        await createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
 
         await expect(launch.dispatch("http://localhost:6379/", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
         await expect(launch.dispatch("http://10.0.0.5/probe", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
@@ -170,7 +225,12 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
 
         const launch = fakeLaunch();
 
-        await createBrowser({ binding, launch }).content("https://example.com/");
+        await createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
 
         const outcome = await launch.dispatch("https://cdn.example.net/app.js", subresource);
 
@@ -188,7 +248,12 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
                 url === "https://attacker.example/r" ? { headers: { location: "http://169.254.169.254/latest/meta-data/" }, status: 302 } : { status: 200 },
         });
 
-        await createBrowser({ binding, launch }).content("https://example.com/");
+        await createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
 
         await expect(launch.dispatch("https://attacker.example/r", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
         expect(launch.requested).not.toContain("http://169.254.169.254/latest/meta-data/");
@@ -201,7 +266,12 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
             network: (url) => (url === "https://cdn.example.net/a.png" ? { headers: { location: "/b.png" }, status: 301 } : { status: 200 }),
         });
 
-        await createBrowser({ binding, launch }).content("https://example.com/");
+        await createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
 
         const outcome = await launch.dispatch("https://cdn.example.net/a.png", subresource);
 
@@ -217,7 +287,12 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
                 url === "https://cdn.example.net/a.png" ? { headers: { location: "http://cdn.example.net/a.png" }, status: 302 } : { status: 200 },
         });
 
-        await createBrowser({ binding, launch }).content("https://example.com/");
+        await createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
 
         await expect(launch.dispatch("https://cdn.example.net/a.png", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
     });
@@ -228,7 +303,12 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
         const doh = stubDohFetch();
         const launch = fakeLaunch();
 
-        await createBrowser({ binding, launch }).content("https://example.com/");
+        await createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
         doh.mockClear();
 
         for (let index = 0; index < 100; index += 1) {
@@ -245,7 +325,12 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
 
         const launch = fakeLaunch();
 
-        await createBrowser({ binding, launch }).content("https://example.com/");
+        await createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
 
         await expect(launch.dispatchSocket("ws://169.254.169.254/socket")).resolves.toMatchObject({ closed: { code: 1008 }, connected: false });
         await expect(launch.dispatchSocket("wss://chat.example.net/socket")).resolves.toMatchObject({ connected: true });
@@ -256,7 +341,12 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
 
         const launch = fakeLaunch();
 
-        await createBrowser({ binding, launch }).content("https://example.com/");
+        await createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
 
         await expect(launch.dispatch("data:image/png;base64,iVBORw0KGgo=", subresource)).resolves.toMatchObject({ continued: true });
         await expect(launch.dispatch("blob:https://example.com/9f8c-uuid", subresource)).resolves.toMatchObject({ continued: true });
@@ -267,7 +357,13 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
 
         const launch = fakeLaunch();
 
-        await createBrowser({ allowedHosts: ["example.com"], binding, launch }).content("https://example.com/");
+        await createBrowser({
+            allowedHosts: ["example.com"],
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
 
         await expect(launch.dispatch("https://cdn.other.net/app.js", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
         await expect(launch.dispatch("https://example.com/app.js", subresource)).resolves.toMatchObject({ continued: true });
@@ -282,7 +378,14 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
         // allowlisted host, so the render came back unstyled with no error.
         const launch = fakeLaunch();
 
-        await createBrowser({ allowedHosts: ["dashboard.internal"], allowPrivateTargets: true, binding, launch }).content("https://dashboard.internal/report");
+        await createBrowser({
+            allowedHosts: ["dashboard.internal"],
+            allowPrivateTargets: true,
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://dashboard.internal/report");
 
         for (const asset of ["app.css", "app.js", "logo.png"]) {
             // eslint-disable-next-line no-await-in-loop -- one request at a time, as the page issues them
@@ -296,7 +399,14 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
         // `allowPrivateTargets` relaxes the private-address arm, never the allowlist.
         const launch = fakeLaunch();
 
-        await createBrowser({ allowedHosts: ["dashboard.internal"], allowPrivateTargets: true, binding, launch }).content("https://dashboard.internal/report");
+        await createBrowser({
+            allowedHosts: ["dashboard.internal"],
+            allowPrivateTargets: true,
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://dashboard.internal/report");
 
         await expect(launch.dispatch("http://169.254.169.254/latest/meta-data/", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
     });
@@ -306,7 +416,12 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
 
         const launch = fakeLaunch();
 
-        await createBrowser({ binding, launch }).content("https://example.com/");
+        await createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
 
         await expect(launch.dispatch("://not a url", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
     });
@@ -329,7 +444,12 @@ describe("requests the guard sends for the browser", () => {
 
         const launch = redirecting("https://api.example.com/data", 302, "https://cdn.example.net/data");
 
-        await createBrowser({ binding, launch }).content("https://example.com/");
+        await createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
 
         const outcome = await launch.dispatch("https://api.example.com/data", {
             ...subresource,
@@ -349,7 +469,12 @@ describe("requests the guard sends for the browser", () => {
 
         const launch = redirecting("https://api.example.com/v1", 307, "https://api.example.com/v2");
 
-        await createBrowser({ binding, launch }).content("https://example.com/");
+        await createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
 
         const outcome = await launch.dispatch("https://api.example.com/v1", { ...subresource, headers: { authorization: "Bearer secret" } });
 
@@ -366,7 +491,12 @@ describe("requests the guard sends for the browser", () => {
 
         const launch = redirecting("https://api.example.com/form", status, "https://api.example.com/done");
 
-        await createBrowser({ binding, launch }).content("https://example.com/");
+        await createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
 
         const outcome = await launch.dispatch("https://api.example.com/form", { ...subresource, headers: { "content-type": "application/json" }, method });
         const follow = outcome.fetchOptions[1];
@@ -381,7 +511,12 @@ describe("requests the guard sends for the browser", () => {
 
         const launch = redirecting("https://cdn.example.net/a", 302, "https://cdn.example.net/b");
 
-        await createBrowser({ binding, launch }).content("https://example.com/");
+        await createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
 
         const asset = await launch.dispatch("https://cdn.example.net/a", subresource);
         const page = await launch.dispatch("https://example.com/next", { navigation: true });
@@ -395,7 +530,12 @@ describe("requests the guard sends for the browser", () => {
 
         const launch = redirecting("https://cdn.example.net/a", 302, "https://user:pass@cdn.example.net/b"); // gitleaks:allow -- a fixture the guard must refuse, not a credential
 
-        await createBrowser({ binding, launch }).content("https://example.com/");
+        await createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        }).content("https://example.com/");
 
         await expect(launch.dispatch("https://cdn.example.net/a", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
     });
@@ -404,7 +544,12 @@ describe("requests the guard sends for the browser", () => {
         expect.assertions(2);
 
         const launch = fakeLaunch();
-        const browser = createBrowser({ binding, launch });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        });
 
         await browser.content("https://example.com/");
         await browser.launch(async (raw) => {
@@ -422,7 +567,12 @@ describe("guard lifetime on a handed-out browser", () => {
 
     /** Open a page on the browser `launch()` hands out, and return the live objects. */
     const openHandedOut = async (launch: FakeLaunch) => {
-        const browser = createBrowser({ binding, launch });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        });
         let handles: { browser: Members; context: Members; page: Members } | undefined;
 
         await browser.launch(
@@ -519,7 +669,13 @@ describe("allowedHosts normalization", () => {
         expect.assertions(2);
 
         const launch = fakeLaunch();
-        const browser = createBrowser({ allowedHosts: ["bücher.example"], binding, launch });
+        const browser = createBrowser({
+            allowedHosts: ["bücher.example"],
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        });
 
         await expect(browser.content("https://bücher.example/")).resolves.toContain("hi");
         expect(launch.launchOptions[0]).toMatchObject({ guardrails: { allowedDomains: ["xn--bcher-kva.example"] } });
@@ -533,7 +689,12 @@ describe("createBrowser operation timeout (finding #1)", () => {
         // A hostile page that traps the evaluated function: `page.evaluate` never
         // resolves. `page.goto` returns fine, so only the outer deadline bounds it.
         const launch = fakeLaunch({ page: { evaluate: async () => new Promise<never>(() => {}) } });
-        const client = createBrowser({ binding, launch });
+        const client = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        });
 
         await expect(client.scrape("https://example.com/", () => 1, { timeoutMs: 10 })).rejects.toThrow(/exceeded the 10ms timeout budget/);
     });
@@ -542,7 +703,12 @@ describe("createBrowser operation timeout (finding #1)", () => {
         expect.assertions(2);
 
         const launch = fakeLaunch({ page: { content: async () => new Promise<never>(() => {}) } });
-        const client = createBrowser({ binding, launch });
+        const client = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        });
 
         await expect(client.content("https://example.com/", { timeoutMs: 10 })).rejects.toThrow(/timeout budget/);
         expect(launch.browsers[0]!.closed).toBe(1);
@@ -554,7 +720,12 @@ describe("createBrowser URL-boundary error codes (finding #2)", () => {
         expect.assertions(2);
 
         const launch = fakeLaunch();
-        const browser = createBrowser({ binding, launch });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch };
+            },
+        });
 
         await expect(browser.content("http://169.254.169.254/latest/meta-data/")).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
         expect(launch.browsers).toHaveLength(0);
@@ -563,7 +734,12 @@ describe("createBrowser URL-boundary error codes (finding #2)", () => {
     it("rejects a non-http(s) scheme as a BAD_REQUEST 400", async () => {
         expect.assertions(1);
 
-        const browser = createBrowser({ binding, launch: fakeLaunch() });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch: fakeLaunch() };
+            },
+        });
 
         await expect(browser.content("ftp://example.com/file")).rejects.toMatchObject({ code: "BAD_REQUEST", status: 400 });
     });
@@ -571,7 +747,12 @@ describe("createBrowser URL-boundary error codes (finding #2)", () => {
     it("rejects embedded credentials as a BAD_REQUEST 400", async () => {
         expect.assertions(1);
 
-        const browser = createBrowser({ binding, launch: fakeLaunch() });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch: fakeLaunch() };
+            },
+        });
 
         await expect(browser.content("https://user:pass@example.com/")).rejects.toMatchObject({ code: "BAD_REQUEST", status: 400 }); // gitleaks:allow -- test fixture asserting embedded-credential rejection, not a real secret
     });
@@ -620,7 +801,12 @@ describe("session reuse", () => {
         // driving navigate → click → extract as three separate action
         // invocations gets a blank page on step two — silently.
         const harness = makeSessionHarness();
-        const browser = createBrowser({ binding, launch: harness.launch });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch: harness.launch };
+            },
+        });
 
         await expect(browser.launch(async () => "done", { keepAlive: 600 })).resolves.toBe("done");
 
@@ -635,7 +821,12 @@ describe("session reuse", () => {
         // A leaked Browser Rendering session is billed and rate-limited, so the
         // default must stay always-close.
         const harness = makeSessionHarness();
-        const browser = createBrowser({ binding, launch: harness.launch });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch: harness.launch };
+            },
+        });
 
         await browser.launch(async () => "done");
 
@@ -658,7 +849,12 @@ describe("session reuse", () => {
         // sibling numeric inputs (`timeoutMs`, `viewport`) already reject
         // non-finite values; this one did not.
         const harness = makeSessionHarness();
-        const browser = createBrowser({ binding, launch: harness.launch });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch: harness.launch };
+            },
+        });
 
         await browser.launch(async () => "done", { keepAlive });
 
@@ -679,7 +875,12 @@ describe("session reuse", () => {
         // reach `launch`, since a partially-launched session is the billed leak
         // the whole surface is built around.
         const harness = makeSessionHarness();
-        const browser = createBrowser({ binding, launch: harness.launch });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch: harness.launch };
+            },
+        });
 
         await expect(browser.launch(async () => "done", { keepAlive })).rejects.toThrow(/keepAlive must be between 10 and 600 seconds/u);
 
@@ -694,7 +895,12 @@ describe("session reuse", () => {
         expect.assertions(2);
 
         const harness = makeSessionHarness();
-        const browser = createBrowser({ binding, launch: harness.launch });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch: harness.launch };
+            },
+        });
 
         await expect(browser.launch(async () => "done", { keepAlive })).resolves.toBe("done");
 
@@ -705,7 +911,12 @@ describe("session reuse", () => {
         expect.assertions(4);
 
         const harness = makeSessionHarness();
-        const browser = createBrowser({ binding, connect: harness.connect, launch: harness.launch });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { connect: harness.connect, launch: harness.launch };
+            },
+        });
 
         await expect(browser.connect("sess-1", async () => "attached")).resolves.toBe("attached");
         expect(harness.connect).toHaveBeenCalledWith(binding, "sess-1");
@@ -725,7 +936,12 @@ describe("session reuse", () => {
         // them all with no way to identify yours.
         const harness = makeSessionHarness();
         const withId = { ...harness.browser, sessionId: () => "sess-42" };
-        const browser = createBrowser({ binding, launch: async () => withId });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch: async () => withId };
+            },
+        });
 
         const captured = await browser.launch(async (b) => b.sessionId?.(), { keepAlive: 600 });
 
@@ -740,7 +956,12 @@ describe("session reuse", () => {
         // is billed until `keepAlive` lapses, so it is closed, and the error
         // still propagates.
         const harness = makeSessionHarness();
-        const browser = createBrowser({ binding, launch: harness.launch });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch: harness.launch };
+            },
+        });
 
         await expect(
             browser.launch(
@@ -758,7 +979,12 @@ describe("session reuse", () => {
         expect.assertions(3);
 
         const harness = makeSessionHarness();
-        const browser = createBrowser({ binding, connect: harness.connect });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { connect: harness.connect };
+            },
+        });
 
         await browser.connect("sess-1", async (attached) => {
             const context = await attached.newContext();
@@ -776,7 +1002,12 @@ describe("session reuse", () => {
         expect.assertions(1);
 
         const live = [{ sessionId: "sess-1" }, { connectionId: "conn-9", sessionId: "sess-2" }];
-        const browser = createBrowser({ binding, launch: makeSessionHarness().launch, sessions: async () => live });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch: makeSessionHarness().launch, sessions: async () => live };
+            },
+        });
 
         // `sess-2` carries a connectionId — already held by another worker, so a
         // caller picking a session to connect to must skip it.
@@ -786,9 +1017,14 @@ describe("session reuse", () => {
     it("names the missing peer export rather than failing obscurely", async () => {
         expect.assertions(2);
 
-        const browser = createBrowser({ binding, launch: makeSessionHarness().launch });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch: makeSessionHarness().launch };
+            },
+        });
 
-        await expect(browser.connect("sess-1", async () => "x")).rejects.toThrow(/`connect` is not available/u);
-        await expect(browser.sessions()).rejects.toThrow(/`sessions` is not available/u);
+        await expect(browser.connect("sess-1", async () => "x")).rejects.toThrow(/no `connect` export/u);
+        await expect(browser.sessions()).rejects.toThrow(/no `sessions` export/u);
     });
 });

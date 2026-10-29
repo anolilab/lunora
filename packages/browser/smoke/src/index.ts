@@ -15,8 +15,6 @@
  * inside Browser Run, `serviceWorkers: "block"`, and the abort reason Chromium
  * reports for a request the guard refused.
  */
-import { launch } from "@cloudflare/playwright";
-
 import { createBrowser } from "../../src/create-browser";
 import type { BrowserLike, PageLike } from "../../src/types";
 
@@ -134,9 +132,9 @@ const expectForbidden = async (run: () => Promise<unknown>): Promise<string> => 
 const report = async (url: URL, env: Env): Promise<Response> => {
     const { origin } = url;
     // The default mode: no allowedHosts, every request fetched and checked by the Worker-side guard.
-    const guarded = createBrowser({ binding: env.BROWSER, launch });
+    const guarded = createBrowser({ binding: env.BROWSER, playwright: async () => await import("@cloudflare/playwright") });
     // The production posture: Browser Run enforces the list on the session.
-    const pinned = createBrowser({ allowedHosts: [url.hostname], binding: env.BROWSER, launch });
+    const pinned = createBrowser({ allowedHosts: [url.hostname], binding: env.BROWSER, playwright: async () => await import("@cloudflare/playwright") });
 
     const checks = [
         await runCheck("default: guarded screenshot of a public page (route.fetch inside a real session)", async () => {
